@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import { TruncatedPath } from "@/components/ui/truncated-path";
 import { FileIcon } from "./FileIcon";
 import type { GitFileChange } from "@/lib/backend";
 import {
@@ -30,17 +31,13 @@ export function ChangedFileItem({ change, onClick, onReveal, onRevert, onDelete 
     >
       <FileIcon filename={change.filename} className="h-4 w-4 shrink-0" />
 
-      <div className="flex min-w-0 items-baseline overflow-hidden text-left text-xs">
-        {change.directory && (
-          <span className="min-w-0 shrink truncate text-left text-muted-foreground [direction:rtl]">
-            {change.directory}
-          </span>
-        )}
-        <span className="max-w-full min-w-0 shrink-0 truncate text-foreground">
-          {change.directory && "/"}
-          {change.filename}
-        </span>
-      </div>
+      <TruncatedPath
+        className="items-baseline text-left text-xs"
+        directory={change.directory}
+        filename={change.filename}
+        directoryClassName="text-muted-foreground"
+        filenameClassName="text-foreground"
+      />
 
       <div className="ml-2 flex shrink-0 items-center justify-end gap-1.5 font-mono text-xs tabular-nums">
         {change.additions > 0 && (

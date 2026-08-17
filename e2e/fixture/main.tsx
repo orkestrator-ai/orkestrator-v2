@@ -432,16 +432,30 @@ function MobileAppShellFixture() {
 const pathFixtures = {
   posix: "packages/a-very-long-directory-name/src/components/ImportantButton.tsx",
   windows: String.raw`packages\a-very-long-directory-name\src\components\ImportantPanel.tsx`,
+  // Both leading characters are bidi-neutral, so the RTL truncation direction
+  // reorders them to the visual end of the segment unless the directory text is
+  // kept in its own LTR isolate. The parens are additionally mirrored glyphs.
+  dotted: ".playwright-mcp/(a-very-long-group)/src/ImportantTrace.yml",
 } as const;
 
-const changedFileFixture = {
-  path: pathFixtures.posix,
-  directory: "packages/a-very-long-directory-name/src/components",
-  filename: "ImportantButton.tsx",
-  additions: 0,
-  deletions: 0,
-  status: "M",
-} satisfies GitFileChange;
+const changedFileFixtures = {
+  "changed-file-path-pane": {
+    path: pathFixtures.posix,
+    directory: "packages/a-very-long-directory-name/src/components",
+    filename: "ImportantButton.tsx",
+    additions: 0,
+    deletions: 0,
+    status: "M",
+  },
+  "changed-file-dotted-path-pane": {
+    path: pathFixtures.dotted,
+    directory: ".playwright-mcp/(a-very-long-group)/src",
+    filename: "ImportantTrace.yml",
+    additions: 0,
+    deletions: 0,
+    status: "M",
+  },
+} satisfies Record<string, GitFileChange>;
 
 function PathTruncationFixture() {
   window.orkestrator = {
@@ -460,13 +474,16 @@ function PathTruncationFixture() {
 
   return (
     <main className="min-h-screen bg-background p-4 text-foreground">
-      <section
-        data-testid="changed-file-path-pane"
-        className="mb-4 border border-border"
-        style={{ width: "640px" }}
-      >
-        <ChangedFileItem change={changedFileFixture} />
-      </section>
+      {Object.entries(changedFileFixtures).map(([pane, change]) => (
+        <section
+          key={pane}
+          data-testid={pane}
+          className="mb-4 border border-border"
+          style={{ width: "640px" }}
+        >
+          <ChangedFileItem change={change} />
+        </section>
+      ))}
       {Object.entries(pathFixtures).map(([kind, filePath]) => (
         <section
           key={kind}

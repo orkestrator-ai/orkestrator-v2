@@ -233,10 +233,85 @@ describe("host Claude credential resolution on macOS", () => {
   });
 
   test("extracts only the OAuth access token for the Claude bridge process", () => {
-    expect(getClaudeOAuthAccessToken(KEYCHAIN)).toBe("sk-ant-oat01-keychain");
+    const now = 1_700_000_000_000;
+    const live = JSON.stringify({
+      claudeAiOauth: { accessToken: "sk-ant-oat01-live", expiresAt: now + 3_600_000 },
+    });
+    expect(getClaudeOAuthAccessToken(live, now)).toBe("sk-ant-oat01-live");
     expect(getClaudeOAuthAccessToken(JSON.stringify({ claudeAiOauth: { refreshToken: "refresh" } })))
       .toBeUndefined();
     expect(getClaudeOAuthAccessToken("not-json")).toBeUndefined();
+  });
+
+  test("treats an expired OAuth token as no token at all", () => {
+    // The bridge reads this once and never refreshes it. A lapsed bearer token
+    // is still non-empty, so forwarding it replaces a clear "signed out" state
+    // with opaque authentication failures for the whole session.
+    const now = 1_700_000_000_000;
+    const withExpiry = (expiresAt: number): string =>
+      JSON.stringify({ claudeAiOauth: { accessToken: "sk-ant-oat01-example", expiresAt } });
+
+    expect(getClaudeOAuthAccessToken(withExpiry(now - 1), now)).toBeUndefined();
+    // Inside the startup grace period counts as expired.
+    expect(getClaudeOAuthAccessToken(withExpiry(now + 1_000), now)).toBeUndefined();
+    expect(getClaudeOAuthAccessToken(withExpiry(now + 3_600_000), now))
+      .toBe("sk-ant-oat01-example");
+  });
+
+  test("a credential that records no usable expiry is not treated as expired", () => {
+    const now = 1_700_000_000_000;
+    expect(getClaudeOAuthAccessToken(
+      JSON.stringify({ claudeAiOauth: { accessToken: "sk-ant-oat01-example" } }),
+      now,
+    )).toBe("sk-ant-oat01-example");
+    // A string or non-finite expiry is unreadable, not evidence of expiry.
+    expect(getClaudeOAuthAccessToken(
+      JSON.stringify({ claudeAiOauth: { accessToken: "sk-ant-oat01-example", expiresAt: "soon" } }),
+      now,
+    )).toBe("sk-ant-oat01-example");
+  });
+
+  test("retries the default search list for a host that is not an isolated profile", async () => {
+    await withTempDirAsync(async (dir) => {
+      // A production install may keep the record in a keychain other than
+      // `login.keychain-db`. Pinning the path unconditionally would report a
+      // logged-in user as signed out.
+      const argvLog = join(dir, "argv.log");
+      stubSecurity(dir, `#!/bin/sh
+printf '%s\\n' "$*" >> '${argvLog}'
+case "$*" in
+  *login.keychain-db*) exit 1 ;;
+  *) printf '%s' '${KEYCHAIN}' ;;
+esac
+`);
+      expect(await getHostClaudeCredentials("darwin", dir, undefined, {
+        allowDefaultKeychainSearchList: true,
+      })).toBe(KEYCHAIN);
+      expect(readFileSync(argvLog, "utf8").trim().split("\n")).toEqual([
+        `find-generic-password -s Claude Code-credentials -w ${join(dir, "Library", "Keychains", "login.keychain-db")}`,
+        "find-generic-password -s Claude Code-credentials -w",
+      ]);
+    });
+  });
+
+  test("an isolated profile never falls back to the session's default keychain", async () => {
+    await withTempDirAsync(async (dir) => {
+      // The isolated HOME has no Keychain preferences, so an unqualified lookup
+      // would resolve against whatever the launching session defaults to. That
+      // is exactly the host exposure this brokering exists to remove.
+      const argvLog = join(dir, "argv.log");
+      stubSecurity(dir, `#!/bin/sh
+printf '%s\\n' "$*" >> '${argvLog}'
+case "$*" in
+  *login.keychain-db*) exit 1 ;;
+  *) printf '%s' '${KEYCHAIN}' ;;
+esac
+`);
+      expect(await getHostClaudeCredentials("darwin", dir)).toBeUndefined();
+      expect(readFileSync(argvLog, "utf8").trim().split("\n")).toEqual([
+        `find-generic-password -s Claude Code-credentials -w ${join(dir, "Library", "Keychains", "login.keychain-db")}`,
+      ]);
+    });
   });
 
   test("falls back to disk when the Keychain lookup fails", async () => {
@@ -312,6 +387,23 @@ esac
     });
   });
 
+  test("does not consult the Keychain on a non-darwin platform", async () => {
+    await withTempDirAsync(async (dir) => {
+      const binDir = join(dir, "bin");
+      const argvLog = join(dir, "argv.log");
+      mkdirSync(binDir, { recursive: true });
+      writeFileSync(
+        join(binDir, "security"),
+        `#!/bin/sh\nprintf '%s\\n' "$*" >> '${argvLog}'\nprintf '%s' 'cursor-access'\n`,
+      );
+      chmodSync(join(binDir, "security"), 0o755);
+      process.env.PATH = `${binDir}${delimiter}${originalPath ?? ""}`;
+
+      expect(await getHostCursorCredentials("linux", dir)).toBeUndefined();
+      expect(() => statSync(argvLog)).toThrow();
+    });
+  });
+
   test("writes and revokes Cursor's owner-only process-specific file store", async () => {
     await withTempDirAsync(async (dir) => {
       const cursorHome = join(dir, "cursor-home");
@@ -330,6 +422,34 @@ esac
 
       await syncAgentTestCursorCredentials(cursorHome, undefined);
       expect(await fs.access(target).then(() => true, () => false)).toBe(false);
+    });
+  });
+
+  test("creates the process-specific home even when there is nothing to import", async () => {
+    await withTempDirAsync(async (dir) => {
+      // The bridge is launched with this directory as its HOME whether or not
+      // Cursor is authorized, so the revoke path must still leave it usable.
+      const cursorHome = join(dir, "cursor-home");
+      await syncAgentTestCursorCredentials(cursorHome, undefined);
+
+      expect((await fs.stat(cursorHome)).isDirectory()).toBe(true);
+      expect((await fs.stat(cursorHome)).mode & 0o777).toBe(0o700);
+      expect(await fs.access(join(cursorHome, ".cursor", "auth.json")).then(() => true, () => false))
+        .toBe(false);
+    });
+  });
+
+  test("refuses to write when the Cursor credential path is a regular file", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cursorHome = join(dir, "cursor-home");
+      await fs.mkdir(cursorHome, { recursive: true });
+      await fs.writeFile(join(cursorHome, ".cursor"), "not-a-directory");
+
+      await expect(syncAgentTestCursorCredentials(cursorHome, { accessToken: "token" }))
+        .rejects.toThrow("not a real directory");
+      await expect(syncAgentTestCursorCredentials(cursorHome, undefined))
+        .rejects.toThrow("not a real directory");
+      expect(await fs.readFile(join(cursorHome, ".cursor"), "utf8")).toBe("not-a-directory");
     });
   });
 

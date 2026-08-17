@@ -319,20 +319,36 @@ Keychain directory or its writable database into that tree. Instead, each
 authorized provider uses an explicit lookup against the host login Keychain path
 and its own fixed service names.
 
+Pinning the lookup to `<host home>/Library/Keychains/login.keychain-db` is what
+makes an isolated profile deterministic, because that profile's `HOME` holds no
+Keychain preferences for an unqualified lookup to resolve against. An ordinary
+install has no such isolation and may legitimately keep the record in another
+keychain, so only the non-agent-test container path retries the default search
+list after the pinned lookup misses. An agent-test profile never falls back.
+
 Claude's credential JSON is parsed and only its OAuth access token is added to
-the Claude bridge process as `ANTHROPIC_AUTH_TOKEN`. The general backend and
-terminal environments receive no Keychain path or OAuth token. Container sync
-uses the same explicit Claude service lookup and still sends the complete JSON
-over stdin so the container can retain refresh information. On hosts that keep
-credentials on disk, lookup prefers the recorded host `CLAUDE_CONFIG_DIR` before
-the host home fallback.
+the Claude bridge process as `ANTHROPIC_AUTH_TOKEN`. A recorded `expiresAt` that
+has already passed — or lapses within a 30-second startup grace period — yields
+no token, because the value is read once at bridge start and never refreshed; a
+stale bearer token would be preferred over every other source and turn an
+expired host login into opaque authentication failures rather than the
+signed-out state the agent reports clearly. The general backend and terminal
+environments receive no Keychain path or OAuth token. Container sync uses the
+same explicit Claude service lookup and still sends the complete JSON over stdin
+so the container can retain refresh information. On hosts that keep credentials
+on disk, lookup prefers the recorded host `CLAUDE_CONFIG_DIR` before the host
+home fallback.
 
 Cursor's supported `AGENT_CLI_CREDENTIAL_STORE=file` mode provides a narrower
 path. Startup reads only `cursor-access-token`, `cursor-refresh-token`, and
 `cursor-api-key` for account `cursor-user`, then atomically writes those fields
 mode `0600` beneath a Cursor-specific process HOME. The Cursor bridge alone gets
-that HOME. A missing host record or disabled Cursor source removes the prior
-snapshot before launch, so host logout and profile opt-out revoke access.
+that HOME, and that directory is created on every start — including the revoke
+path — so the bridge is never handed a `HOME` that does not exist. A missing host
+record or disabled Cursor source removes the prior snapshot before launch, so
+host logout and profile opt-out revoke access. Those record values are folded
+into the bridge's credential fingerprint, so a host rotation or logout restarts
+the bridge instead of leaving it running on a superseded token.
 
 Startup also removes the legacy `<isolated HOME>/Library/Keychains` symlink from
 profiles created by earlier builds. Real profile-owned directories at that path

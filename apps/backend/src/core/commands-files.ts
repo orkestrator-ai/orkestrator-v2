@@ -1164,27 +1164,41 @@ const HOST_CURSOR_KEYCHAIN_SERVICES = {
   apiKey: "cursor-api-key",
 } as const;
 
+/**
+ * Reads one named Keychain record, preferring an explicit login-Keychain path.
+ *
+ * The explicit path is what makes an isolated agent-test profile deterministic:
+ * its HOME holds no Keychain preferences, so an unqualified lookup would resolve
+ * against whatever the launching session happens to default to. A host that is
+ * not isolated has no such requirement and may legitimately keep the record in a
+ * keychain other than `login.keychain-db`, so it retries the default search list
+ * — which is what an unqualified lookup did before the path was pinned — rather
+ * than reporting a logged-in user as signed out.
+ */
 async function readMacKeychainPassword(
   service: string,
   homeDir: string,
   account?: string,
+  allowDefaultSearchList = false,
 ): Promise<string | undefined> {
   const args = ["find-generic-password"];
   if (account) args.push("-a", account);
-  args.push(
-    "-s",
-    service,
-    "-w",
-    path.join(homeDir, "Library", "Keychains", "login.keychain-db"),
-  );
-  try {
-    const { stdout } = await runCommand("security", args, { timeoutMs: 10_000 });
-    const value = stdout.trim();
-    if (!value || Buffer.byteLength(value) > MAX_HOST_AGENT_CREDENTIAL_BYTES) return undefined;
-    return value;
-  } catch {
-    return undefined;
+  args.push("-s", service, "-w");
+  const attempts = [[...args, path.join(homeDir, "Library", "Keychains", "login.keychain-db")]];
+  if (allowDefaultSearchList) attempts.push(args);
+  for (const attempt of attempts) {
+    try {
+      const { stdout } = await runCommand("security", attempt, { timeoutMs: 10_000 });
+      const value = stdout.trim();
+      // An empty or oversized payload is not a reason to stop looking; a second
+      // keychain may still hold the real record.
+      if (!value || Buffer.byteLength(value) > MAX_HOST_AGENT_CREDENTIAL_BYTES) continue;
+      return value;
+    } catch {
+      // A missing item and a declined access prompt look identical from here.
+    }
   }
+  return undefined;
 }
 
 /**
@@ -1198,6 +1212,7 @@ export async function getHostClaudeCredentials(
   platform: NodeJS.Platform = process.platform,
   homeDir: string = os.homedir(),
   configDir?: string,
+  options: { allowDefaultKeychainSearchList?: boolean } = {},
 ): Promise<string | undefined> {
   const isUsable = (value: string | undefined): string | undefined => {
     const trimmed = value?.trim();
@@ -1217,7 +1232,12 @@ export async function getHostClaudeCredentials(
 
   if (platform === "darwin") {
     const fromKeychain = isUsable(
-      await readMacKeychainPassword(HOST_CLAUDE_KEYCHAIN_SERVICE, homeDir),
+      await readMacKeychainPassword(
+        HOST_CLAUDE_KEYCHAIN_SERVICE,
+        homeDir,
+        undefined,
+        options.allowDefaultKeychainSearchList === true,
+      ),
     );
     if (fromKeychain) return fromKeychain;
   }
@@ -1238,14 +1258,44 @@ export async function getHostClaudeCredentials(
   return undefined;
 }
 
-export function getClaudeOAuthAccessToken(credentials: string | undefined): string | undefined {
+/**
+ * Grace period applied to a recorded OAuth expiry.
+ *
+ * The token is read once, at bridge start, and never refreshed. One that lapses
+ * during startup would be indistinguishable from a broken login, so treat the
+ * final moments of its life as already expired.
+ */
+const CLAUDE_OAUTH_EXPIRY_SKEW_MS = 30_000;
+
+/**
+ * Extracts the single OAuth access token that may be handed to one bridge.
+ *
+ * An expired token is treated as no token at all. It is a non-empty bearer
+ * credential that the CLI prefers over every other source, so forwarding a
+ * lapsed one turns a stale host login into opaque authentication failures
+ * instead of the signed-out state the agent reports clearly. A credential that
+ * records no expiry is not evidence of expiry, so only a real timestamp that has
+ * already passed rejects.
+ */
+export function getClaudeOAuthAccessToken(
+  credentials: string | undefined,
+  now: number = Date.now(),
+): string | undefined {
   if (!credentials) return undefined;
   try {
     const parsed = JSON.parse(credentials) as {
-      claudeAiOauth?: { accessToken?: unknown };
+      claudeAiOauth?: { accessToken?: unknown; expiresAt?: unknown };
     };
     const accessToken = parsed.claudeAiOauth?.accessToken;
     if (typeof accessToken !== "string") return undefined;
+    const expiresAt = parsed.claudeAiOauth?.expiresAt;
+    if (
+      typeof expiresAt === "number"
+      && Number.isFinite(expiresAt)
+      && expiresAt <= now + CLAUDE_OAUTH_EXPIRY_SKEW_MS
+    ) {
+      return undefined;
+    }
     const trimmed = accessToken.trim();
     return trimmed && Buffer.byteLength(trimmed) <= MAX_HOST_AGENT_CREDENTIAL_BYTES
       ? trimmed
@@ -1286,6 +1336,11 @@ export async function syncAgentTestCursorCredentials(
   cursorHome: string,
   credentials: HostCursorCredentials | undefined,
 ): Promise<void> {
+  // The bridge is launched with `cursorHome` as its HOME, and a signed-out or
+  // opted-out profile still launches it. Create the home on every path, not just
+  // the one that writes a snapshot, so the process is never handed a HOME that
+  // does not exist.
+  await fs.mkdir(cursorHome, { recursive: true, mode: 0o700 });
   const directory = path.join(cursorHome, ".cursor");
   const target = path.join(directory, "auth.json");
   const existingDirectory = await fs.lstat(directory).catch((error: NodeJS.ErrnoException) => {
@@ -1400,6 +1455,10 @@ export async function resolveContainerClaudeCredentials(
     process.env[AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV]?.trim()
       || process.env.CLAUDE_CONFIG_DIR?.trim()
       || undefined,
+    // Only an agent-test profile needs the lookup pinned to one keychain file.
+    // An ordinary install runs as the logged-in user and may keep the record
+    // outside `login.keychain-db`, so it keeps the default search list.
+    { allowDefaultKeychainSearchList: !agentTestHostHome },
   );
 }
 

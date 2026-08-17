@@ -6,11 +6,16 @@
     "lib": ["ES2022"],
     "outDir": "dist",
     "rootDir": "src",
-    "types": ["node"],
+    "types": ["node", "bun"],
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "dist", "src/**/*.test.ts"]
+  "exclude": [
+    "node_modules",
+    "dist",
+    "src/**/*.test.ts",
+    "src/acp-test-harness.ts"
+  ]
 }

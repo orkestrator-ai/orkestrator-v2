@@ -94,6 +94,11 @@ interface NativeChatShellProps<TMessage extends NativeMessageType> {
   /** Fetches heavy output/diff fields after a tool row is expanded. */
   loadToolDetails?: (detailRef: string) => Promise<NativeAgentToolDetails>;
   /**
+   * Stops a provider-owned background task from its transcript card. Must be
+   * referentially stable per the note on `messageActions`.
+   */
+  stopBackgroundTask?: (taskId: string) => Promise<boolean>;
+  /**
    * Extra content in the dock's top strip, beside the scroll-to-bottom button
    * — Claude's prompt-suggestion chip.
    */
@@ -153,6 +158,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
   messageActions,
   resolveModelLabel,
   loadToolDetails,
+  stopBackgroundTask,
   topAccessory,
   centerCompose,
   composer,
@@ -312,6 +318,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
               actions={messageActions?.(message)}
               resolveModelLabel={resolveModelLabel}
               loadToolDetails={loadToolDetails}
+              stopBackgroundTask={stopBackgroundTask}
               platform={platform}
             />
           )}

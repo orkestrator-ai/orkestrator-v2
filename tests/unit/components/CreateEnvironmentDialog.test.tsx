@@ -771,6 +771,110 @@ describe("resolveAgentDefaults", () => {
     });
   });
 
+  test("starts a new project's environment on the configured New projects default", async () => {
+    useCodexStore.setState({
+      models: [
+        { id: "codex-a", name: "Codex A", description: "First", reasoningEfforts: ["medium", "high"] },
+        { id: "codex-b", name: "Codex B", description: "Second", reasoningEfforts: ["medium", "high"] },
+      ],
+    });
+    const config = structuredClone(defaultConfig);
+    // Deliberately different from the New projects default, so the assertion
+    // distinguishes the two rather than passing on the app default agent.
+    config.global.defaultAgent = "claude";
+    config.global.enabledAgentPlatforms = ["claude", "codex"];
+    config.global.codexModel = "codex-a";
+    config.global.codexReasoningEffort = "medium";
+    config.global.actionDefaults = {
+      newProject: { platform: "codex", model: "codex-b", reasoningEffort: "high" },
+    };
+    useConfigStore.setState({ config });
+    const onCreate = mock(async () => {});
+
+    render(
+      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />,
+    );
+
+    await waitFor(() => expect(getAgentModelPicker().textContent).toContain("Codex B"));
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({
+      agentType: "codex",
+      model: "codex-b",
+      reasoningEffort: "high",
+    })));
+  });
+
+  test("keeps a project's remembered selection ahead of the New projects default", async () => {
+    useCodexStore.setState({
+      models: [
+        { id: "codex-a", name: "Codex A", description: "First", reasoningEfforts: ["medium", "high"] },
+        { id: "codex-b", name: "Codex B", description: "Second", reasoningEfforts: ["medium", "high"] },
+      ],
+    });
+    const config = structuredClone(defaultConfig);
+    config.global.defaultAgent = "claude";
+    config.global.enabledAgentPlatforms = ["claude", "codex"];
+    config.global.actionDefaults = {
+      newProject: { platform: "codex", model: "codex-b", reasoningEffort: "high" },
+    };
+    config.repositories["project-1"] = {
+      defaultBranch: "main",
+      prBaseBranch: "main",
+      lastEnvironmentAgentSelection: {
+        platform: "codex",
+        mode: "native",
+        model: "codex-a",
+        reasoningEffort: "medium",
+      },
+    };
+    useConfigStore.setState({ config });
+    const onCreate = mock(async () => {});
+
+    render(
+      <CreateEnvironmentDialog
+        open
+        projectId="project-1"
+        onOpenChange={() => {}}
+        onCreate={onCreate}
+      />,
+    );
+
+    await waitFor(() => expect(getAgentModelPicker().textContent).toContain("Codex A"));
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({
+      agentType: "codex",
+      model: "codex-a",
+      reasoningEffort: "medium",
+    })));
+  });
+
+  test("ignores a New projects default whose platform is no longer enabled", async () => {
+    const config = structuredClone(defaultConfig);
+    config.global.defaultAgent = "claude";
+    config.global.enabledAgentPlatforms = ["claude"];
+    config.global.claudeModel = "claude-sonnet-5";
+    config.global.actionDefaults = {
+      newProject: { platform: "codex", model: "codex-b", reasoningEffort: "high" },
+    };
+    useConfigStore.setState({ config });
+    const onCreate = mock(async () => {});
+
+    render(
+      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+    // The default is dropped whole rather than contributing its model, so the
+    // dialog opens on the app default agent and that agent's configured model.
+    await waitFor(() => expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({
+      agentType: "claude",
+      model: "sonnet",
+    })));
+  });
+
   test("offers the durable Cursor catalogue when creating a new environment", async () => {
     const config = structuredClone(defaultConfig);
     config.global.defaultAgent = "cursor";

@@ -1510,7 +1510,142 @@ describe("NativeAgentService", () => {
     });
   });
 
+  test("preserves a bounded background-task id when launch output is deferred", async () => {
+    const messages = [{
+      id: "assistant-background",
+      role: "assistant" as const,
+      content: "",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "Bash",
+          toolName: "Bash",
+          toolState: "success",
+          toolArgs: { command: "bun test", run_in_background: true },
+          toolOutput:
+            "Command running in background with ID: bg-suite. Output is being written elsewhere.",
+        },
+        {
+          type: "tool-invocation",
+          content: "Bash",
+          toolName: "Bash",
+          toolState: "success",
+          toolArgs: { command: "bun run dev", run_in_background: true },
+          toolOutput: `Command running in background with ID: ${"x".repeat(513)}.`,
+        },
+      ],
+      createdAt: "2026-08-15T10:00:00.000Z",
+    }];
+    const stub = createProviderStub("claude", {
+      interactiveSnapshot: async () => ({ status: "idle", messages }),
+    });
 
+    await withService({
+      prefix: "orkestrator-native-background-correlation-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "claude" as const,
+        logicalSessionKey: "env-env-1:tab-background",
+      };
+      await service.ensureSession(identity);
+      const projection = await service.getProjection(identity);
+      const parts = (projection?.messages[0] as {
+        parts: Array<{
+          backgroundTaskId?: string;
+          detailRef?: string;
+          toolOutput?: string;
+        }>;
+      }).parts;
+      const part = parts[0];
+
+      expect(part).toMatchObject({
+        backgroundTaskId: "bg-suite",
+        detailRef: expect.any(String),
+      });
+      expect(part?.toolOutput).toBeUndefined();
+      expect(parts[1]?.backgroundTaskId).toBeUndefined();
+    });
+  });
+
+  test("recovers a launch id a command was backgrounded into after it started", async () => {
+    /*
+     * Ctrl+B and a foreground timeout both background a command that was
+     * launched without `run_in_background`, so the argument cannot decide this.
+     * Since the projection strips every `toolOutput`, refusing to scan these
+     * rows would leave the renderer with no way to reach the id at all.
+     */
+    const messages = [{
+      id: "assistant-backgrounded",
+      role: "assistant" as const,
+      content: "",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "Bash",
+          toolName: "Bash",
+          toolState: "success",
+          toolArgs: { command: "bun run dev" },
+          toolOutput: "Command was manually backgrounded by user with ID: bg-dev",
+        },
+        {
+          type: "tool-invocation",
+          content: "Bash",
+          toolName: "Bash",
+          toolState: "success",
+          toolArgs: { command: "bun run build" },
+          toolOutput:
+            "Command exceeded its timeout and was moved to the background (ID: bg-build). Use BashOutput.",
+        },
+        {
+          type: "tool-invocation",
+          content: "Bash",
+          toolName: "Bash",
+          toolState: "success",
+          toolArgs: { command: "bun test" },
+          toolOutput: '{"task_id":"bg-json"}',
+        },
+        {
+          // Reading a file that quotes the note is not a launch. Decorating it
+          // would put a stop control on an id naming somebody else's work.
+          type: "tool-invocation",
+          content: "Read",
+          toolName: "Read",
+          toolState: "success",
+          toolArgs: { file_path: "/repo/native-message-adapters.ts" },
+          toolOutput: "Command running in background with ID: bg-suite. …",
+        },
+      ],
+      createdAt: "2026-08-15T10:00:00.000Z",
+    }];
+    const stub = createProviderStub("claude", {
+      interactiveSnapshot: async () => ({ status: "idle", messages }),
+    });
+
+    await withService({
+      prefix: "orkestrator-native-background-late-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "claude" as const,
+        logicalSessionKey: "env-env-1:tab-late-background",
+      };
+      await service.ensureSession(identity);
+      const projection = await service.getProjection(identity);
+      const parts = (projection?.messages[0] as {
+        parts: Array<{ backgroundTaskId?: string }>;
+      }).parts;
+
+      expect(parts.map((part) => part.backgroundTaskId)).toEqual([
+        "bg-dev",
+        "bg-build",
+        "bg-json",
+        undefined,
+      ]);
+    });
+  });
 
   test("rejects a blank or oversized tool detail reference", async () => {
     const stub = createProviderStub("codex", {

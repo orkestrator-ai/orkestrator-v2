@@ -20,6 +20,13 @@
  * Either way the probe is throttled per session rather than run on every
  * supervisor tick, and only a fixed-size digest of the tail is retained.
  *
+ * The digest is also persisted on the workflow. After a restart the in-memory
+ * map is empty, but the next successful probe compares against that durable
+ * digest instead of treating the session as never-before-seen. A failed or
+ * throttled probe reports that nothing was learned about the fingerprint; the
+ * caller still evaluates the durable stall clock (`progressAt` / `startedAt`)
+ * because a wedged session whose transcript cannot be read is still wedged.
+ *
  * It reads a tab-facing route, which is a liveness touch. That is deliberate and
  * safe here, unlike in a background reconciler: the supervisor owns these
  * sessions and already reads their status every tick, so they were never
@@ -51,13 +58,17 @@ const MAX_TRACKED_SESSIONS = 512;
 export interface ProgressObservation {
   /**
    * False when nothing was learned — the probe was throttled, or the read
-   * failed. Neither is evidence of a stall, so the caller must not count it.
+   * failed. Neither is evidence of a stall or of progress, so the caller must
+   * not treat it as a fingerprint comparison. The durable stall clock still
+   * ticks; a failed read is not a reason to pause it.
    */
   probed: boolean;
   /** True when this successful probe created the first comparable baseline. */
   baselineEstablished: boolean;
   /** True when this probe saw the transcript change since the previous one. */
   changed: boolean;
+  /** Present on a successful probe so the caller can persist the digest. */
+  digest?: string;
 }
 
 const NOT_PROBED: ProgressObservation = {
@@ -83,11 +94,9 @@ export function progressFingerprint(messages: unknown[]): string {
 /**
  * Throttled transcript-change detector.
  *
- * Fixed-size fingerprint digests are held in memory only. The durable half of
- * the clock (`progressAt`) is a timestamp in the workflow store. After tracker
- * state is lost, the caller treats the first successful read as a new baseline
- * and persists a fresh grace clock because activity during downtime cannot be
- * compared safely.
+ * Fixed-size fingerprint digests are held in memory and, separately, on the
+ * workflow. After tracker state is lost, the caller passes the persisted digest
+ * so the first successful read is a comparison rather than a new baseline.
  */
 /** `fingerprint` is undefined until a read succeeds; there is no baseline yet. */
 interface TrackedSession {
@@ -105,10 +114,8 @@ export class MultiReviewProgressTracker {
 
   /**
    * Read the session's transcript at most once per probe interval and report
-   * whether it changed. The first observation of a session establishes the
-   * baseline and reports no change. The separate `baselineEstablished` signal
-   * lets the caller grant restart grace without claiming that a comparison
-   * actually observed progress.
+   * whether it changed. The first observation of a session with no in-memory
+   * and no persisted digest establishes the baseline and reports no change.
    *
    * A failed read answers "nothing learned" rather than propagating. The caller
    * runs inside a per-reviewer failure boundary, so a transient transcript read
@@ -119,6 +126,7 @@ export class MultiReviewProgressTracker {
   async observe(
     sessionId: string,
     readTranscript: () => Promise<unknown[]>,
+    persistedDigest?: string,
   ): Promise<ProgressObservation> {
     const timestamp = this.now();
     const existing = this.entries.get(sessionId);
@@ -132,21 +140,25 @@ export class MultiReviewProgressTracker {
       return NOT_PROBED;
     }
     const fingerprint = progressFingerprint(messages);
+    const priorFingerprint = existing?.fingerprint ?? persistedDigest;
     // Re-read after the await: a concurrent probe for the same session may have
     // recorded a newer entry, and the older read must not overwrite it.
     const current = this.entries.get(sessionId);
     if (current && current.probedAt > timestamp) {
+      const currentBaseline = current.fingerprint ?? persistedDigest;
       return {
         probed: true,
-        baselineEstablished: current.fingerprint === undefined,
-        changed: changedFrom(current.fingerprint, fingerprint),
+        baselineEstablished: currentBaseline === undefined,
+        changed: changedFrom(currentBaseline, fingerprint),
+        digest: fingerprint,
       };
     }
     this.record(sessionId, { fingerprint, probedAt: this.now() });
     return {
       probed: true,
-      baselineEstablished: existing?.fingerprint === undefined,
-      changed: changedFrom(existing?.fingerprint, fingerprint),
+      baselineEstablished: priorFingerprint === undefined,
+      changed: changedFrom(priorFingerprint, fingerprint),
+      digest: fingerprint,
     };
   }
 
@@ -186,28 +198,4 @@ export function noProgressElapsedMs(
 
 export function stalledMinutes(elapsedMs: number): number {
   return Math.max(1, Math.round(elapsedMs / 60_000));
-}
-
-/**
- * The progress timestamp granted to a session whose in-memory baseline was lost.
- *
- * The first read after a restart cannot be compared against activity made while
- * the process was down, so the newly observed state is given grace rather than
- * being judged against an unknowably old digest. The grace is bounded to one
- * warning interval and never moves an existing clock forward past that floor: a
- * session that was already wedged for hours keeps everything beyond the floor,
- * so restarting the backend cannot postpone the abandon backstop indefinitely.
- *
- * A session with no durable clock yet has nothing to bound and starts from now;
- * `noProgressElapsedMs` still falls back to `startedAt`, which is the later of
- * the two for a session that has only just begun.
- */
-export function baselineProgressAt(
-  progressAt: string | undefined,
-  stallWarningMs: number,
-  now: number = Date.now(),
-): string {
-  const existing = progressAt ? Date.parse(progressAt) : Number.NaN;
-  if (!Number.isFinite(existing)) return new Date(now).toISOString();
-  return new Date(Math.max(existing, now - Math.max(0, stallWarningMs))).toISOString();
 }

@@ -43,9 +43,9 @@ import {
   DEFAULT_STALL_WARNING_MS,
   MultiReviewProgressTracker,
   PROGRESS_TRANSCRIPT_TAIL_MESSAGES,
-  baselineProgressAt,
   noProgressElapsedMs,
   stalledMinutes,
+  type ProgressObservation,
 } from "./multi-review-progress.js";
 
 type CommandInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
@@ -408,6 +408,7 @@ export class MultiReviewService {
           delete reviewer.schemaRepairPrompt;
           delete reviewer.idleResultPolls;
           delete reviewer.progressAt;
+          delete reviewer.progressDigest;
           delete reviewer.stalledSince;
           delete reviewer.completedAt;
         }
@@ -466,6 +467,7 @@ export class MultiReviewService {
         // The session id is kept so the read-only transcript stays reachable.
         delete reviewer.idleResultPolls;
         delete reviewer.stalledSince;
+        delete reviewer.progressDigest;
         delete reviewer.schemaRepairPrompt;
         delete reviewer.dispatchState;
         const saved = await this.save(workflow, token);
@@ -870,6 +872,7 @@ export class MultiReviewService {
       reviewer.status = "running";
       reviewer.startedAt = nowIso();
       delete reviewer.progressAt;
+      delete reviewer.progressDigest;
       delete reviewer.stalledSince;
       await this.save(workflow, token);
     }
@@ -978,6 +981,7 @@ export class MultiReviewService {
     delete reviewer.idleResultPolls;
     delete reviewer.stalledSince;
     if (reviewer.providerSessionId) this.progress.forget(reviewer.providerSessionId);
+    delete reviewer.progressDigest;
     await this.save(workflow, token);
     return "continue";
   }
@@ -994,6 +998,12 @@ export class MultiReviewService {
    *
    * The warning is durable so the tab can show it; the abandon is what stops one
    * stuck reviewer from halting consolidation and the fix stage for good.
+   *
+   * A failed or throttled probe is not a fingerprint comparison, but it is not
+   * a pause of the stall clock either: `progressAt` / `startedAt` still decide
+   * whether the session has been silent too long. A restart compares against
+   * the persisted digest so it cannot invent a new baseline or move the clock
+   * forward.
    */
   private async observeReviewerProgress(
     workflow: MultiReviewWorkflow,
@@ -1003,35 +1013,23 @@ export class MultiReviewService {
   ): Promise<"continue"> {
     const providerSessionId = reviewer.providerSessionId;
     if (!providerSessionId) return "continue";
+    const previousDigest = reviewer.progressDigest;
     const observation = await this.progress.observe(
       providerSessionId,
       () => provider.messages(providerSessionId, { limit: PROGRESS_TRANSCRIPT_TAIL_MESSAGES }),
+      reviewer.progressDigest,
     );
     await this.assertFence(workflow.id, token);
-    if (!observation.probed) return "continue";
-    if (observation.baselineEstablished) {
-      // The first read after a backend restart may already contain progress made
-      // while this process was down, so the newly observed state gets grace
-      // instead of being judged against an unknowably old digest. The grace is
-      // bounded to one warning interval: a reviewer that was already wedged for
-      // hours keeps the rest of its elapsed time, so a restart cannot postpone
-      // the abandon backstop indefinitely.
-      reviewer.progressAt = baselineProgressAt(reviewer.progressAt, this.stallWarningMs());
-      // Only observed progress retires a durable warning. A restart is not
-      // evidence of progress, so a still-stalled reviewer keeps its notice.
-      const graced = noProgressElapsedMs(reviewer.progressAt, reviewer.startedAt);
-      if (graced === null || graced < this.stallWarningMs()) delete reviewer.stalledSince;
-      await this.save(workflow, token);
-      return "continue";
-    }
-    if (observation.changed) {
-      reviewer.progressAt = nowIso();
-      delete reviewer.stalledSince;
+    const decision = this.commitProgressObservation(reviewer, observation);
+    if (decision === "reset" || decision === "hold") {
       await this.save(workflow, token);
       return "continue";
     }
     const elapsedMs = noProgressElapsedMs(reviewer.progressAt, reviewer.startedAt);
-    if (elapsedMs === null) return "continue";
+    if (elapsedMs === null) {
+      if (reviewer.progressDigest !== previousDigest) await this.save(workflow, token);
+      return "continue";
+    }
     if (elapsedMs >= this.stallAbandonMs()) {
       // Best-effort, like every other abandon: the session is unresponsive, so
       // waiting for it to confirm the abort would reproduce the stall.
@@ -1048,7 +1046,9 @@ export class MultiReviewService {
     if (elapsedMs >= this.stallWarningMs() && reviewer.stalledSince === undefined) {
       reviewer.stalledSince = nowIso();
       await this.save(workflow, token);
+      return "continue";
     }
+    if (reviewer.progressDigest !== previousDigest) await this.save(workflow, token);
     return "continue";
   }
 
@@ -1064,30 +1064,25 @@ export class MultiReviewService {
     provider: BuildPipelineProvider,
     session: NonNullable<MultiReviewWorkflow["fixSession"]>,
   ): Promise<void> {
+    const previousDigest = session.progressDigest;
     const observation = await this.progress.observe(
       session.providerSessionId,
       () => provider.messages(session.providerSessionId, {
         limit: PROGRESS_TRANSCRIPT_TAIL_MESSAGES,
       }),
+      session.progressDigest,
     );
     await this.assertFence(workflow.id, token);
-    if (!observation.probed) return;
-    if (observation.baselineEstablished) {
-      // Bounded restart grace, for the same reason as a reviewer's.
-      session.progressAt = baselineProgressAt(session.progressAt, this.stallWarningMs());
-      const graced = noProgressElapsedMs(session.progressAt, session.startedAt);
-      if (graced === null || graced < this.stallWarningMs()) delete session.stalledSince;
-      await this.save(workflow, token);
-      return;
-    }
-    if (observation.changed) {
-      session.progressAt = nowIso();
-      delete session.stalledSince;
+    const decision = this.commitProgressObservation(session, observation);
+    if (decision === "reset" || decision === "hold") {
       await this.save(workflow, token);
       return;
     }
     const elapsedMs = noProgressElapsedMs(session.progressAt, session.startedAt);
-    if (elapsedMs === null) return;
+    if (elapsedMs === null) {
+      if (session.progressDigest !== previousDigest) await this.save(workflow, token);
+      return;
+    }
     if (elapsedMs >= this.stallAbandonMs()) {
       await this.abandonSession(workflow, workflow.fixModel, session.providerSessionId);
       this.progress.forget(session.providerSessionId);
@@ -1098,7 +1093,42 @@ export class MultiReviewService {
     if (elapsedMs >= this.stallWarningMs() && session.stalledSince === undefined) {
       session.stalledSince = nowIso();
       await this.save(workflow, token);
+      return;
     }
+    if (session.progressDigest !== previousDigest) await this.save(workflow, token);
+  }
+
+  /**
+   * Apply a probe to the durable progress clocks.
+   *
+   * `reset` — the transcript moved; the stall clock starts from now.
+   * `hold` — first comparable sample of a session that has no clock yet; the
+   * caller must not treat it as "unchanged" or a `stallAbandonMs: 0` test would
+   * fail a reviewer on its first successful read.
+   * `evaluate` — unchanged, failed, throttled, or a restart of a session that
+   * already has a durable clock. The caller then applies the stall thresholds.
+   */
+  private commitProgressObservation(
+    target: {
+      progressAt?: string;
+      stalledSince?: string;
+      progressDigest?: string;
+    },
+    observation: ProgressObservation,
+  ): "reset" | "hold" | "evaluate" {
+    if (observation.probed && observation.digest) {
+      target.progressDigest = observation.digest;
+    }
+    if (observation.changed) {
+      target.progressAt = nowIso();
+      delete target.stalledSince;
+      return "reset";
+    }
+    if (observation.baselineEstablished && target.progressAt === undefined) {
+      target.progressAt = nowIso();
+      return "hold";
+    }
+    return "evaluate";
   }
 
   /**

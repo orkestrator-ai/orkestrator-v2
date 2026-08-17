@@ -38,6 +38,11 @@ export interface MultiReviewReviewer extends MultiReviewModelSelection {
   idleResultPolls?: number;
   /** Last time the supervisor observed this reviewer's transcript change. */
   progressAt?: string;
+  /**
+   * SHA-256 of the last progress probe. Survives a backend restart so the next
+   * probe can compare against known state instead of inventing a new baseline.
+   */
+  progressDigest?: string;
   /** Set once the reviewer has produced no transcript activity for too long. */
   stalledSince?: string;
   report?: StructuredReviewReport;
@@ -82,6 +87,11 @@ export interface MultiReviewFixSession extends MultiReviewModelSelection {
   startedAt: string;
   /** Last time the supervisor observed this session's transcript change. */
   progressAt?: string;
+  /**
+   * SHA-256 of the last progress probe. Survives a backend restart so the next
+   * probe can compare against known state instead of inventing a new baseline.
+   */
+  progressDigest?: string;
   /** Set once the session has produced no transcript activity for too long. */
   stalledSince?: string;
   completedAt?: string;
@@ -203,6 +213,10 @@ function optionalPollCount(value: unknown): boolean {
   return value === undefined || (Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= 5);
 }
 
+function optionalProgressDigest(value: unknown): boolean {
+  return value === undefined || (typeof value === "string" && /^[0-9a-f]{64}$/.test(value));
+}
+
 function optionalRepairAttempts(value: unknown): boolean {
   return value === undefined
     || (Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= 3);
@@ -212,8 +226,8 @@ function isFixSession(value: unknown): boolean {
   return record(value)
     && hasOnlyKeys(value, [
       "agent", "model", "reasoningEffort", "sessionKey", "providerSessionId",
-      "requestIds", "status", "startedAt", "progressAt", "stalledSince",
-      "completedAt", "error",
+      "requestIds", "status", "startedAt", "progressAt", "progressDigest",
+      "stalledSince", "completedAt", "error",
     ])
     && isMultiReviewModelSelectionFields(value)
     && nonBlank(value.sessionKey)
@@ -225,6 +239,7 @@ function isFixSession(value: unknown): boolean {
     && optionalDate(value.startedAt)
     && typeof value.startedAt === "string"
     && optionalDate(value.progressAt)
+    && optionalProgressDigest(value.progressDigest)
     && optionalDate(value.stalledSince)
     && optionalDate(value.completedAt)
     && optionalString(value.error, 4_096);
@@ -316,7 +331,7 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
       "agent", "model", "reasoningEffort", "id", "status", "sessionKey",
       "providerSessionId", "requestId", "dispatchState", "idleResultPolls", "report",
       "schemaRepairAttempts", "schemaRepairPrompt", "error", "progressAt",
-      "stalledSince", "startedAt", "completedAt",
+      "progressDigest", "stalledSince", "startedAt", "completedAt",
     ])
     && isMultiReviewModelSelectionFields(entry)
     && nonBlank(entry.id)
@@ -330,6 +345,7 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
     && optionalPollCount(entry.idleResultPolls)
     && optionalString(entry.error, 4_096)
     && optionalDate(entry.progressAt)
+    && optionalProgressDigest(entry.progressDigest)
     && optionalDate(entry.stalledSince)
     && optionalDate(entry.startedAt)
     && optionalDate(entry.completedAt)

@@ -1,7 +1,6 @@
 import { expect, test } from "bun:test";
 import {
   MultiReviewProgressTracker,
-  baselineProgressAt,
   noProgressElapsedMs,
   progressFingerprint,
   stalledMinutes,
@@ -14,12 +13,18 @@ function clock(start = 0): { now: () => number; advance: (ms: number) => void } 
 
 test("the first observation establishes a baseline instead of claiming progress", async () => {
   const tracker = new MultiReviewProgressTracker(1_000, clock().now);
+  const messages = [{ id: "a" }];
 
   // An unseen transcript is not evidence that anything moved. The distinct
-  // baseline signal lets the service grant restart grace without reporting a
+  // baseline signal lets the caller persist a digest without reporting a
   // transcript comparison that never happened.
-  await expect(tracker.observe("session-1", async () => [{ id: "a" }]))
-    .resolves.toEqual({ probed: true, baselineEstablished: true, changed: false });
+  await expect(tracker.observe("session-1", async () => messages))
+    .resolves.toEqual({
+      probed: true,
+      baselineEstablished: true,
+      changed: false,
+      digest: progressFingerprint(messages),
+    });
 });
 
 test("a changed transcript is reported once the probe interval has elapsed", async () => {
@@ -37,11 +42,21 @@ test("a changed transcript is reported once the probe interval has elapsed", asy
 
   time.advance(1_000);
   await expect(tracker.observe("session-1", read))
-    .resolves.toEqual({ probed: true, baselineEstablished: false, changed: true });
+    .resolves.toEqual({
+      probed: true,
+      baselineEstablished: false,
+      changed: true,
+      digest: progressFingerprint(messages),
+    });
 
   time.advance(1_000);
   await expect(tracker.observe("session-1", read))
-    .resolves.toEqual({ probed: true, baselineEstablished: false, changed: false });
+    .resolves.toEqual({
+      probed: true,
+      baselineEstablished: false,
+      changed: false,
+      digest: progressFingerprint(messages),
+    });
 });
 
 test("a rewritten streaming entry counts as progress", async () => {
@@ -55,7 +70,12 @@ test("a rewritten streaming entry counts as progress", async () => {
   // currently streaming. Length alone would miss the second case entirely.
   messages = [{ id: "a", content: "Reading src/a.ts" }];
   await expect(tracker.observe("session-1", read))
-    .resolves.toEqual({ probed: true, baselineEstablished: false, changed: true });
+    .resolves.toEqual({
+      probed: true,
+      baselineEstablished: false,
+      changed: true,
+      digest: progressFingerprint(messages),
+    });
 });
 
 test("a failed transcript read answers nothing learned and keeps the baseline", async () => {
@@ -76,7 +96,12 @@ test("a failed transcript read answers nothing learned and keeps the baseline", 
 
   time.advance(1_000);
   await expect(tracker.observe("session-1", async () => messages))
-    .resolves.toEqual({ probed: true, baselineEstablished: false, changed: false });
+    .resolves.toEqual({
+      probed: true,
+      baselineEstablished: false,
+      changed: false,
+      digest: progressFingerprint(messages),
+    });
 });
 
 test("a read that only ever fails never invents a baseline", async () => {
@@ -87,18 +112,57 @@ test("a read that only ever fails never invents a baseline", async () => {
   time.advance(1_000);
   // The first successful read is still a baseline, not a change: comparing it
   // against a failure would report progress that was never observed.
-  await expect(tracker.observe("session-1", async () => [{ id: "a" }]))
-    .resolves.toEqual({ probed: true, baselineEstablished: true, changed: false });
+  const messages = [{ id: "a" }];
+  await expect(tracker.observe("session-1", async () => messages))
+    .resolves.toEqual({
+      probed: true,
+      baselineEstablished: true,
+      changed: false,
+      digest: progressFingerprint(messages),
+    });
 });
 
-test("forgetting a session drops its baseline", async () => {
+test("forgetting a session drops its in-memory baseline", async () => {
   const tracker = new MultiReviewProgressTracker(0, clock().now);
   const read = async () => [{ id: "a" }];
 
   await tracker.observe("session-1", read);
   tracker.forget("session-1");
   await expect(tracker.observe("session-1", read))
-    .resolves.toEqual({ probed: true, baselineEstablished: true, changed: false });
+    .resolves.toEqual({
+      probed: true,
+      baselineEstablished: true,
+      changed: false,
+      digest: progressFingerprint([{ id: "a" }]),
+    });
+});
+
+test("a persisted digest is compared after in-memory state is lost", async () => {
+  const tracker = new MultiReviewProgressTracker(0, clock().now);
+  const messages = [{ id: "a" }];
+  const digest = progressFingerprint(messages);
+
+  const first = await tracker.observe("session-1", async () => messages);
+  expect(first).toEqual({
+    probed: true, baselineEstablished: true, changed: false, digest,
+  });
+  tracker.forget("session-1");
+
+  // Restart: the workflow still holds the digest, so this is a comparison,
+  // not a new baseline, and an unchanged tail is not evidence of progress.
+  await expect(tracker.observe("session-1", async () => messages, digest))
+    .resolves.toEqual({
+      probed: true, baselineEstablished: false, changed: false, digest,
+    });
+
+  const moved = [{ id: "b" }];
+  await expect(tracker.observe("session-1", async () => moved, digest))
+    .resolves.toEqual({
+      probed: true,
+      baselineEstablished: false,
+      changed: true,
+      digest: progressFingerprint(moved),
+    });
 });
 
 test("progress fingerprints retain a fixed-size digest instead of transcript content", () => {
@@ -125,27 +189,4 @@ test("the stall clock falls back to the start time until progress is seen", () =
 test("stalled minutes never round a real stall down to zero", () => {
   expect(stalledMinutes(1_000)).toBe(1);
   expect(stalledMinutes(45 * 60_000)).toBe(45);
-});
-
-test("restart grace is bounded so repeated restarts cannot postpone the backstop", () => {
-  const now = Date.parse("2026-08-17T02:00:00.000Z");
-  const warningMs = 10 * 60_000;
-
-  // A session with no durable clock has nothing to bound: `noProgressElapsedMs`
-  // falls back to `startedAt`, which is the later timestamp for a new session.
-  expect(baselineProgressAt(undefined, warningMs, now)).toBe("2026-08-17T02:00:00.000Z");
-  expect(baselineProgressAt("not-a-date", warningMs, now)).toBe("2026-08-17T02:00:00.000Z");
-
-  // A session that was already wedged for two hours keeps everything beyond one
-  // warning interval, so a restart costs the backstop 10 minutes, not 2 hours.
-  expect(baselineProgressAt("2026-08-17T00:00:00.000Z", warningMs, now))
-    .toBe("2026-08-17T01:50:00.000Z");
-  // A clock newer than the floor is never moved forward.
-  expect(baselineProgressAt("2026-08-17T01:59:00.000Z", warningMs, now))
-    .toBe("2026-08-17T01:59:00.000Z");
-  // A zero or negative warning interval grants no grace at all.
-  expect(baselineProgressAt("2026-08-17T00:00:00.000Z", 0, now))
-    .toBe("2026-08-17T02:00:00.000Z");
-  expect(baselineProgressAt("2026-08-17T00:00:00.000Z", -1_000, now))
-    .toBe("2026-08-17T02:00:00.000Z");
 });

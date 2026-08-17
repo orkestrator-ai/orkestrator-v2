@@ -71,13 +71,14 @@ describe("multi review protocol", () => {
       reviewers: [{
         id: "reviewer-1", agent: "claude", model: "opus", status: "running",
         providerSessionId: "provider-1", startedAt: timestamp,
-        progressAt: timestamp, stalledSince: timestamp,
+        progressAt: timestamp, progressDigest: "a".repeat(64), stalledSince: timestamp,
       }],
       fixModel: { agent: "codex", model: "gpt-5.6" },
       fixSession: {
         agent: "codex", model: "gpt-5.6", sessionKey: "fix-session",
         providerSessionId: "provider-fix", requestIds: ["request-1"], status: "running",
-        startedAt: timestamp, progressAt: timestamp, stalledSince: timestamp,
+        startedAt: timestamp, progressAt: timestamp, progressDigest: "b".repeat(64),
+        stalledSince: timestamp,
       },
       phase: "reviewing",
       createdAt: timestamp, updatedAt: timestamp,
@@ -89,6 +90,10 @@ describe("multi review protocol", () => {
     expect(isMultiReviewWorkflow({
       ...workflow,
       reviewers: [{ ...workflow.reviewers[0], progressAt: "soon" }],
+    })).toBe(false);
+    expect(isMultiReviewWorkflow({
+      ...workflow,
+      reviewers: [{ ...workflow.reviewers[0], progressDigest: "not-a-digest" }],
     })).toBe(false);
     expect(isMultiReviewWorkflow({
       ...workflow,

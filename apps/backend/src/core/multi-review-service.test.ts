@@ -455,6 +455,20 @@ async function waitUntil(predicate: () => boolean | Promise<boolean>, timeoutMs 
   }
 }
 
+async function mutateStoredWorkflow(
+  storage: StorageService,
+  workflowId: string,
+  mutate: (workflow: MultiReviewWorkflow) => void,
+): Promise<void> {
+  const record = await storage.getMultiReviewWorkflow(workflowId);
+  if (!record) throw new Error(`missing multi review workflow: ${workflowId}`);
+  const snapshot = record.snapshot as MultiReviewWorkflow;
+  mutate(snapshot);
+  await storage.saveMultiReviewWorkflow(
+    workflowId, snapshot.environmentId, snapshot.version, snapshot, record.revision,
+  );
+}
+
 test("MultiReviewService keeps environment activity working until its agents settle", async () => {
   const provider = new Provider();
   provider.statusValue = "running";
@@ -1813,6 +1827,7 @@ test("MultiReviewService gives a fresh reviewer baseline a grace clock", async (
 
     const running = (await snapshot(started.id))!;
     expect(running.reviewers[0]?.status).toBe("running");
+    expect(running.reviewers[0]?.progressDigest).toHaveLength(64);
     expect(provider.aborted).toEqual([]);
     expect(provider.messageOptions).toContainEqual({ limit: 1 });
   }, { serviceOptions: { progressProbeIntervalMs: 0, stallAbandonMs: 0 } });
@@ -1933,4 +1948,131 @@ test("MultiReviewService gives a fresh consolidation baseline a grace clock", as
     expect(provider.aborted).not.toContain("session-2");
     expect(provider.messageOptions).toContainEqual({ limit: 1 });
   }, { serviceOptions: { progressProbeIntervalMs: 0, stallAbandonMs: 0 } });
+});
+
+test("MultiReviewService still abandons a reviewer when transcript reads fail", async () => {
+  const provider = new Provider();
+  provider.statusValue = "running";
+  provider.messages = async () => {
+    throw new Error("transcript is oversized");
+  };
+  await withService("env-stall-read-failure", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.reviewers[0]?.status === "failed";
+    });
+
+    // A wedged session whose /messages route is failing is still wedged: the
+    // durable clock keeps ticking even though the fingerprint cannot be read.
+    expect((await snapshot(started.id))?.reviewers[0]?.error).toContain("produced no activity");
+    expect(provider.aborted).toContain("session-1");
+  }, { serviceOptions: { progressProbeIntervalMs: 0, stallAbandonMs: 0 } });
+});
+
+test("MultiReviewService still fails a consolidation session when transcript reads fail", async () => {
+  const provider = new Provider();
+  provider.statusOverrides.set("session-2", "running");
+  const originalMessages = provider.messages.bind(provider);
+  provider.messages = async (sessionId, options) => {
+    if (sessionId === "session-2") throw new Error("transcript is oversized");
+    return originalMessages(sessionId, options);
+  };
+  await withService("env-stall-consolidation-read-failure", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "failed";
+    });
+    expect((await snapshot(started.id))?.error).toContain("consolidation session produced no activity");
+    expect(provider.aborted).toContain("session-2");
+  }, { serviceOptions: { progressProbeIntervalMs: 0, stallAbandonMs: 0 } });
+});
+
+test("MultiReviewService abandons a backdated reviewer after restart instead of granting grace", async () => {
+  const provider = new Provider(false);
+  provider.statusValue = "running";
+  provider.messagesValue = [{ id: "assistant-1", role: "assistant", content: "Reading" }];
+  await withService("env-stall-restart-abandon", provider, async ({ service, storage, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () =>
+      (await snapshot(started.id))?.reviewers[0]?.progressDigest !== undefined);
+    const digest = (await snapshot(started.id))!.reviewers[0]!.progressDigest!;
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60_000).toISOString();
+    await service.shutdown();
+    await mutateStoredWorkflow(storage, started.id, (workflow) => {
+      workflow.reviewers[0]!.startedAt = twoHoursAgo;
+      workflow.reviewers[0]!.progressAt = twoHoursAgo;
+    });
+
+    const restarted = new MultiReviewService(
+      storage,
+      async () => { throw new Error("unexpected command"); },
+      {
+        autoAdvance: false,
+        provider: async () => provider,
+        progressProbeIntervalMs: 0,
+        stallAbandonMs: 30 * 60_000,
+      },
+    );
+    try {
+      await waitUntil(async () => {
+        await restarted.advanceNow(started.id);
+        return (await snapshot(started.id))?.reviewers[0]?.status === "failed";
+      });
+    } finally {
+      await restarted.shutdown();
+    }
+
+    // Ten minutes of restart grace would leave elapsed under 30 minutes and
+    // keep the reviewer running. The persisted digest must compare instead.
+    const failed = (await snapshot(started.id))!.reviewers[0]!;
+    expect(failed.error).toContain("produced no activity");
+    expect(failed.progressAt).toBe(twoHoursAgo);
+    expect(failed.progressDigest).toBe(digest);
+  }, { serviceOptions: { progressProbeIntervalMs: 0, stallAbandonMs: 60 * 60_000 } });
+});
+
+test("MultiReviewService does not move a durable stall clock forward across restarts", async () => {
+  const provider = new Provider(false);
+  provider.statusValue = "running";
+  provider.messagesValue = [{ id: "assistant-1", role: "assistant", content: "Reading" }];
+  await withService("env-stall-restart-clock", provider, async ({ service, storage, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () =>
+      (await snapshot(started.id))?.reviewers[0]?.progressDigest !== undefined);
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60_000).toISOString();
+    await service.shutdown();
+    await mutateStoredWorkflow(storage, started.id, (workflow) => {
+      workflow.reviewers[0]!.startedAt = twoHoursAgo;
+      workflow.reviewers[0]!.progressAt = twoHoursAgo;
+    });
+
+    const restart = async () => {
+      const next = new MultiReviewService(
+        storage,
+        async () => { throw new Error("unexpected command"); },
+        {
+          autoAdvance: false,
+          provider: async () => provider,
+          progressProbeIntervalMs: 0,
+          stallWarningMs: 0,
+          stallAbandonMs: 24 * 60 * 60_000,
+        },
+      );
+      try {
+        await next.advanceNow(started.id);
+      } finally {
+        await next.shutdown();
+      }
+    };
+
+    await restart();
+    await restart();
+
+    // Each restart used to slide progressAt to now-minus-one-warning-interval,
+    // which postponed abandon indefinitely. The durable clock must stay put.
+    expect((await snapshot(started.id))?.reviewers[0]?.progressAt).toBe(twoHoursAgo);
+    expect((await snapshot(started.id))?.reviewers[0]?.status).toBe("running");
+  }, { serviceOptions: { progressProbeIntervalMs: 0, stallAbandonMs: 60 * 60_000 } });
 });

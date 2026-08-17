@@ -24,15 +24,23 @@ import { reconcileStaleToolParts } from "./acp-reconciliation.js";
 import { schedulePersist } from "./acp-persist-writer.js";
 import { failAllActiveSubagents, finishSubagentTool } from "./acp-tools.js";
 
-export const RESOURCE_EXHAUSTED_ERROR = /\[resource_exhausted\]\s+Error/i;
+// Transient provider codes the bridge auto-retries. `resource_exhausted` is
+// Cursor's capacity signal; `unavailable` is a dropped connection / PING
+// timeout. The trailing detail is whatever the provider wrote (`Error`,
+// `PING timed out`, …) — matching only the word `Error` would leave the
+// latter dead in the transcript.
+export const RETRIABLE_PROVIDER_CODE = String.raw`\[(?:resource_exhausted|unavailable)\]`;
+export const RESOURCE_EXHAUSTED_ERROR = new RegExp(`${RETRIABLE_PROVIDER_CODE}\\s+\\S`, "i");
 // The class name is whatever the provider's own error carried — `RetriableError`
 // is only the one Cursor happens to emit today. Matching a single character here
 // would silently exclude every other name and leave the turn dead, so the
 // identifier is quantified and the flag set matches `RESOURCE_EXHAUSTED_ERROR`.
-export const FLATTENED_RESOURCE_EXHAUSTED_SUFFIX =
-  /(?:^|\n\n)Error: [A-Za-z_$][\w$]*: \[resource_exhausted\] Error\s*$/i;
+export const FLATTENED_RESOURCE_EXHAUSTED_SUFFIX = new RegExp(
+  `(?:^|\\n\\n)Error: [A-Za-z_$][\\w$]*: ${RETRIABLE_PROVIDER_CODE} [^\\n]+\\s*$`,
+  "i",
+);
 export const RESOURCE_EXHAUSTED_CONTINUATION =
-  "Continue from where the interrupted turn stopped. A transient provider capacity error ended the previous attempt. Do not repeat work or tool calls that already completed; inspect the session history and finish the original request.";
+  "Continue from where the interrupted turn stopped. A transient provider error ended the previous attempt. Do not repeat work or tool calls that already completed; inspect the session history and finish the original request.";
 
 export function flattenedResourceExhaustedTail(state: SessionState): {
   message: BridgeMessage;
@@ -126,7 +134,7 @@ export async function requestPromptWithResourceExhaustedRetries(
     }
     if (retries >= RESOURCE_EXHAUSTED_MAX_RETRIES) {
       throw new Error(
-        `${provider} remained resource exhausted after ${RESOURCE_EXHAUSTED_MAX_RETRIES} retries`,
+        `${provider} remained in a retriable provider error after ${RESOURCE_EXHAUSTED_MAX_RETRIES} retries`,
         requestError ? { cause: requestError } : undefined,
       );
     }

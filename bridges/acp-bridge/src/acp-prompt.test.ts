@@ -3,6 +3,10 @@ import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { resolve } from "node:path";
 
+// Must precede every bridge import below: `acp-prompt.js` pulls in
+// `acp-context.js`, which resolves `ACP_PROVIDER` at module scope and throws
+// without it. Keep this first.
+import "./testing/unit-test-env.js";
 import {
   ONE_PIXEL_PNG,
   nativeFetch,
@@ -11,9 +15,39 @@ import {
   temporaryDirectory,
   waitFor,
 } from "./acp-test-harness.js";
+import {
+  FLATTENED_RESOURCE_EXHAUSTED_SUFFIX,
+  RESOURCE_EXHAUSTED_ERROR,
+  resourceExhaustedError,
+} from "./acp-prompt.js";
 
 
 describe("ACP bridge", () => {
+
+
+
+  test("classifies resource_exhausted and unavailable provider errors as retriable", () => {
+    expect(RESOURCE_EXHAUSTED_ERROR.test("RetriableError: [resource_exhausted] Error")).toBe(true);
+    expect(RESOURCE_EXHAUSTED_ERROR.test("RetriableError: [unavailable] PING timed out")).toBe(true);
+    expect(RESOURCE_EXHAUSTED_ERROR.test("GoogleGenerativeAIFetchError: [unavailable] PING timed out"))
+      .toBe(true);
+    expect(RESOURCE_EXHAUSTED_ERROR.test("permission denied: [invalid_argument] Error")).toBe(false);
+    expect(resourceExhaustedError(new Error("RetriableError: [unavailable] PING timed out"))).toBe(true);
+    expect(resourceExhaustedError(new Error("cursor ACP session/prompt timed out"))).toBe(false);
+
+    expect(FLATTENED_RESOURCE_EXHAUSTED_SUFFIX.test(
+      "Completed the first safe step.\n\nError: RetriableError: [unavailable] PING timed out",
+    )).toBe(true);
+    expect(FLATTENED_RESOURCE_EXHAUSTED_SUFFIX.test(
+      "Error: GoogleGenerativeAIFetchError: [resource_exhausted] Error",
+    )).toBe(true);
+    expect(FLATTENED_RESOURCE_EXHAUSTED_SUFFIX.test(
+      "Error: RetriableError: [invalid_argument] Error",
+    )).toBe(false);
+    expect(FLATTENED_RESOURCE_EXHAUSTED_SUFFIX.test(
+      "Error: RetriableError: [unavailable] PING timed out\n\nMore assistant text",
+    )).toBe(false);
+  });
 
 
 

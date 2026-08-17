@@ -275,7 +275,7 @@ export interface SessionState {
   currentTurnUsage?: AcpTurnUsage;
   /** Wall clock of the in-flight turn, used for the elapsed metric. */
   turnStartedAt?: number;
-  /** A user cancellation suppresses any resource-exhaustion retry still in backoff. */
+  /** A user cancellation suppresses any retriable-provider retry still in backoff. */
   retryCancelledPromptSequence?: number;
   /** `available_commands_update` size; both agents advertise their commands. */
   commandCount?: number;
@@ -522,6 +522,7 @@ export const MAX_CURSOR_CHILD_PROMPT_BYTES = 4 * 1024;
 /** Leading records of a child transcript scanned for that prompt. */
 export const MAX_CURSOR_CHILD_PROMPT_RECORDS = 8;
 export const CURSOR_BACKGROUND_CONTINUATION_PREFIX = "Background subagent finished.";
+/** Auto-retries for transient provider errors (`resource_exhausted`, `unavailable`). */
 export const RESOURCE_EXHAUSTED_MAX_RETRIES = 3;
 export const RESOURCE_EXHAUSTED_RETRY_BASE_MS = parseDuration(
   process.env.ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS,

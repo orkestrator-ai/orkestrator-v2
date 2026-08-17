@@ -297,13 +297,93 @@ describe("ACP bridge", () => {
       (value) => value.status === "error",
     );
 
-    expect(session.error).toBe("cursor remained resource exhausted after 3 retries");
+    expect(session.error).toBe("cursor remained in a retriable provider error after 3 retries");
     expect(session.messages.filter((message) => message.role === "user")).toHaveLength(1);
     expect(session.messages.at(-1)?.content).toContain(
       "Error: RetriableError: [resource_exhausted] Error",
     );
     // Initial dispatch plus exactly three retries.
     expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toHaveLength(4);
+  });
+
+
+
+  test("retries a flattened unavailable PING timeout with exponential backoff", async () => {
+    const directory = await temporaryDirectory();
+    const counterFile = resolve(directory, "unavailable-retry-prompts.log");
+    const { base, headers } = await spawnBridge({ env: {
+      ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS: "10",
+      FAKE_ACP_COUNTER_FILE: counterFile,
+      FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS: "2",
+      FAKE_ACP_RETRIABLE_CODE: "unavailable",
+      FAKE_ACP_RETRIABLE_DETAIL: "PING timed out",
+    } });
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
+      .then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        prompt: "RESOURCEEXHAUSTED: finish after the ping timeout",
+        requestId: "unavailable-retry-1",
+      }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          error?: string;
+          messages: Array<{ role: string; content: string }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+
+    expect(session.error).toBeUndefined();
+    expect(session.messages.filter((message) => message.role === "user")).toHaveLength(1);
+    expect(session.messages.at(-1)?.content).toContain("Recovered and finished the original request.");
+    expect(session.messages.at(-1)?.content).not.toContain("[unavailable]");
+    expect(session.messages.at(-1)?.content).not.toContain("PING timed out");
+    expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toHaveLength(3);
+  });
+
+
+
+  test("retries a structured ACP unavailable PING timeout", async () => {
+    const directory = await temporaryDirectory();
+    const counterFile = resolve(directory, "unavailable-rpc-retry-prompts.log");
+    const { base, headers } = await spawnBridge({ env: {
+      ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS: "10",
+      FAKE_ACP_COUNTER_FILE: counterFile,
+      FAKE_ACP_RPC_RESOURCE_EXHAUSTED_ATTEMPTS: "2",
+      FAKE_ACP_RETRIABLE_CODE: "unavailable",
+      FAKE_ACP_RETRIABLE_DETAIL: "PING timed out",
+    } });
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers })
+      .then((response) => response.json()) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        prompt: "RESOURCEEXHAUSTEDRPC: retry the ping timeout",
+        requestId: "unavailable-rpc-retry-1",
+      }),
+    });
+    const session = await waitFor(
+      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+        .then((response) => response.json()) as Promise<{
+          status: string;
+          error?: string;
+          messages: Array<{ role: string; content: string }>;
+        }>,
+      (value) => value.status === "idle",
+    );
+
+    expect(session.error).toBeUndefined();
+    expect(session.messages.filter((message) => message.role === "user")).toHaveLength(1);
+    expect(session.messages.at(-1)?.content).toBe("Recovered from the structured RPC error.");
+    expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toHaveLength(3);
   });
 
 

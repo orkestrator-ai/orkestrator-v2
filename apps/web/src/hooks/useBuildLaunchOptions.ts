@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { buildLaunchDefaults } from "@/lib/build-launch-options";
 import {
   buildReviewModelCatalog,
+  includeMissingOpenCodeModels,
   includeOpenCodeDefaultModel,
 } from "@/lib/review-launch-options";
 import {
@@ -14,6 +15,10 @@ import {
   EMPTY_OPENCODE_MODEL_PREFERENCES,
   openCodeModelRefToId,
 } from "@/lib/opencode-model-preferences";
+import {
+  normalizeOpenCodeModelProviders,
+  openCodeModelDisplayLabel,
+} from "@orkestrator/protocol/native-agent";
 import {
   useConfigStore,
   useEnvironmentStore,
@@ -55,6 +60,10 @@ export function useProjectModelCatalog(projectId: string, enabled: boolean) {
   const cursorModels = useAgentModelCatalogStore((state) => state.cursorModels);
   const grokModels = useAgentModelCatalogStore((state) => state.grokModels);
   const environments = useEnvironmentStore((state) => state.environments);
+  const favoriteModels = useConfigStore((state) => state.config.global.favoriteModels);
+  const openCodeModelProviders = useConfigStore(
+    (state) => state.config.global.openCodeModelProviders,
+  );
   const [cachedOpenCodeCatalog, setCachedOpenCodeCatalog] = useState<{
     projectId: string;
     models: CachedOpenCodeModel[];
@@ -102,17 +111,31 @@ export function useProjectModelCatalog(projectId: string, enabled: boolean) {
     // `null` retains the standard Claude/Codex catalogs and the unpinned
     // OpenCode placeholder without aggregating another project's models.
     const baseCatalog = buildReviewModelCatalog(null);
-    if (projectOpenCodeModels.length === 0) return baseCatalog;
+    const allowedProviders = normalizeOpenCodeModelProviders(openCodeModelProviders);
+    const favoriteOpenCodeIds = (favoriteModels ?? [])
+      .filter((favorite) => favorite.platform === "opencode")
+      .map((favorite) => favorite.modelId);
+    const mapped = projectOpenCodeModels.length === 0
+      ? baseCatalog.opencode
+      : projectOpenCodeModels.map((model) => ({
+          id: model.id,
+          name: openCodeModelDisplayLabel(model.id, model.name),
+          description: model.provider,
+          reasoningEfforts: [...(model.variants ?? [])],
+        }));
     return {
       ...baseCatalog,
-      opencode: projectOpenCodeModels.map((model) => ({
-        id: model.id,
-        name: model.name,
-        description: model.provider,
-        reasoningEfforts: [...(model.variants ?? [])],
-      })),
+      opencode: includeMissingOpenCodeModels(mapped, favoriteOpenCodeIds, allowedProviders),
     };
-  }, [claudeModels, codexModels, cursorModels, grokModels, projectOpenCodeModels]);
+  }, [
+    claudeModels,
+    codexModels,
+    cursorModels,
+    favoriteModels,
+    grokModels,
+    openCodeModelProviders,
+    projectOpenCodeModels,
+  ]);
 
   return catalog;
 }

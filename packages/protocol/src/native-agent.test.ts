@@ -11,8 +11,11 @@ import {
   isSelectableOpenCodeProvider,
   migrateOpenCodeModelProviders,
   normalizeOpenCodeModelProviders,
+  openCodeModelDisplayLabel,
+  openCodeModelLocalId,
   openCodeModelProviderId,
   openCodeModelProvidersKey,
+  synthesizedOpenCodeAgentModel,
   nativeAgentCapabilities,
   resolveReasoningId,
   BACKGROUND_TASK_ID_MAX_LENGTH,
@@ -168,6 +171,30 @@ describe("opencode model provider allowlist", () => {
     expect(openCodeModelProviderId("opencode-go/openai/gpt-5")).toBe("opencode-go");
     expect(openCodeModelProviderId("no-separator")).toBe("");
     expect(openCodeModelProviderId("/leading")).toBe("");
+  });
+
+  test("strips a duplicated provider prefix from the picker label", () => {
+    expect(openCodeModelLocalId("opencode-go/deepseek-v4-flash"))
+      .toBe("deepseek-v4-flash");
+    expect(openCodeModelDisplayLabel(
+      "opencode-go/deepseek-v4-flash",
+      "opencode-go/deepseek-v4-flash",
+    )).toBe("deepseek-v4-flash");
+    expect(openCodeModelDisplayLabel(
+      "opencode-go/deepseek-v4-pro",
+      "DeepSeek V4 Pro",
+    )).toBe("DeepSeek V4 Pro");
+    expect(synthesizedOpenCodeAgentModel("opencode-go/deepseek-v4-flash")).toEqual({
+      platform: "opencode",
+      id: "opencode-go/deepseek-v4-flash",
+      label: "deepseek-v4-flash",
+      providerLabel: "opencode-go",
+      reasoning: [{ id: "default", label: "Default" }],
+      defaultReasoningId: "default",
+      supportsSpeed: false,
+      supportsMode: false,
+    });
+    expect(synthesizedOpenCodeAgentModel("not-a-model")).toBeNull();
   });
 
   test("selects model ids by their provider half", () => {

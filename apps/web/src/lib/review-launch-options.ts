@@ -4,6 +4,11 @@ import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
+import {
+  isSelectableOpenCodeModelId,
+  openCodeModelDisplayLabel,
+  openCodeModelProviderId,
+} from "@orkestrator/protocol/native-agent";
 import type { DefaultAgent, Environment, GlobalConfig, RepositoryConfig } from "@/types";
 
 /**
@@ -66,6 +71,40 @@ export function includeOpenCodeDefaultModel(
   ];
 }
 
+/**
+ * Add OpenCode ids that a picker already knows about (favourites, TUI recents)
+ * but that the live/cached catalogue has not listed yet.
+ *
+ * A catalogue that is only the synthetic "Default" placeholder is replaced so
+ * launchers do not keep offering a sentinel once concrete models exist.
+ */
+export function includeMissingOpenCodeModels(
+  models: ReviewModelOption[],
+  modelIds: readonly string[],
+  allowedProviders: readonly string[],
+): ReviewModelOption[] {
+  const extras: ReviewModelOption[] = [];
+  const existing = new Set(models.map((model) => model.id));
+  for (const modelId of modelIds) {
+    if (existing.has(modelId)) continue;
+    if (!isSelectableOpenCodeModelId(modelId, allowedProviders)) continue;
+    const providerId = openCodeModelProviderId(modelId);
+    if (!providerId) continue;
+    existing.add(modelId);
+    extras.push({
+      id: modelId,
+      name: openCodeModelDisplayLabel(modelId),
+      description: providerId,
+      reasoningEfforts: [],
+    });
+  }
+  if (extras.length === 0) return models;
+  const withoutPlaceholder = models.length === 1 && models[0]?.id === "default"
+    ? []
+    : models;
+  return [...withoutPlaceholder, ...extras];
+}
+
 export function buildReviewModelCatalog(
   environmentId: string | null | undefined,
 ): ReviewModelCatalog {
@@ -106,7 +145,7 @@ export function buildReviewModelCatalog(
         );
   const opencode = liveOpenCodeModels.map((model) => ({
     id: model.id,
-    name: model.name,
+    name: openCodeModelDisplayLabel(model.id, model.name),
     description: model.provider,
     reasoningEfforts: [...(model.variants ?? [])],
   }));

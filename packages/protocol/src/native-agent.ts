@@ -134,6 +134,60 @@ export function openCodeModelProviderId(modelId: string): string {
 }
 
 /**
+ * The model half of `providerID/modelID`. Empty when the id names no provider.
+ */
+export function openCodeModelLocalId(modelId: string): string {
+  const providerId = openCodeModelProviderId(modelId);
+  return providerId ? modelId.slice(providerId.length + 1) : "";
+}
+
+/**
+ * First-line picker label for an OpenCode model.
+ *
+ * OpenCode often reports `name` as the fully qualified id (`opencode-go/deepseek-v4-flash`).
+ * The provider belongs on the second line, so that prefix is stripped when present.
+ */
+export function openCodeModelDisplayLabel(
+  modelId: string,
+  name?: string | null,
+): string {
+  const localId = openCodeModelLocalId(modelId);
+  const raw = name?.trim() || localId || modelId;
+  const providerId = openCodeModelProviderId(modelId);
+  if (!providerId) return raw;
+  const prefix = `${providerId}/`;
+  return raw.length > prefix.length
+    && raw.toLowerCase().startsWith(prefix.toLowerCase())
+    ? raw.slice(prefix.length) || localId || raw
+    : raw;
+}
+
+/**
+ * A picker row for an OpenCode id that is not yet in a live or cached catalogue.
+ *
+ * Favourites and TUI recents have to be selectable before an OpenCode server
+ * has listed models, otherwise they render as disabled placeholders whose
+ * first line is the raw id and whose second line is the generic "OpenCode"
+ * platform name.
+ */
+export function synthesizedOpenCodeAgentModel(modelId: string): AgentModel | null {
+  const trimmed = modelId.trim();
+  const providerId = openCodeModelProviderId(trimmed);
+  const localId = openCodeModelLocalId(trimmed);
+  if (!providerId || !localId) return null;
+  return {
+    platform: "opencode",
+    id: trimmed,
+    label: openCodeModelDisplayLabel(trimmed),
+    providerLabel: providerId,
+    reasoning: [{ id: DEFAULT_REASONING_ID, label: "Default" }],
+    defaultReasoningId: DEFAULT_REASONING_ID,
+    supportsSpeed: false,
+    supportsMode: false,
+  };
+}
+
+/**
  * Coerce a stored/user-supplied allowlist into canonical form. An absent or
  * unusable value falls back to the default pair; an explicitly empty list is
  * preserved so "show everything" stays expressible.

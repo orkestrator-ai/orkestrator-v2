@@ -804,6 +804,25 @@ describe("AgentModelPicker", () => {
     expect(screen.getByPlaceholderText("Search models...")).toBeTruthy();
   });
 
+  test("offers a selectable OpenCode favourite with the provider on the second line", () => {
+    setMobileViewport(false);
+    const { onModelChange } = renderPicker({
+      models: [{ platform: "codex", id: "codex-model", label: "Codex model" }],
+      enabledPlatforms: ["codex", "opencode"],
+      selectedPlatform: "codex",
+      selectedModelId: "codex-model",
+      favorites: [{ platform: "opencode", modelId: "opencode-go/deepseek-v4-flash" }],
+    });
+    openPicker();
+
+    const row = screen.getByRole("menuitemradio", { name: /deepseek-v4-flash/ });
+    expect(row.getAttribute("aria-disabled") === "true").toBe(false);
+    expect(row.textContent).toContain("opencode-go");
+    expect(row.textContent).not.toContain("opencode-go/deepseek-v4-flash");
+    fireEvent.click(row);
+    expect(onModelChange).toHaveBeenCalledWith("opencode-go/deepseek-v4-flash");
+  });
+
   test("keeps identical provider model ids distinct in the cross-platform favorites view", () => {
     setMobileViewport(false);
     const onPlatformChange = mock(() => {});

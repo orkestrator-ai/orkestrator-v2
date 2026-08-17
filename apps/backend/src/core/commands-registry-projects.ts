@@ -1,5 +1,5 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
-import { parseStoredDesktopConnections, isResourceGeneration, isResourceManifestKind, isResourceSnapshotRevision, createProject, parseUpdateObject, runCommand, isAgentPlatform, fallbackReasoningId, isSelectableOpenCodeModelId, isSelectableOpenCodeProvider, normalizeOpenCodeModelProviders } from "./commands-dependencies.js";
+import { parseStoredDesktopConnections, isResourceGeneration, isResourceManifestKind, isResourceSnapshotRevision, createProject, parseUpdateObject, runCommand, isAgentPlatform, fallbackReasoningId, isSelectableOpenCodeModelId, isSelectableOpenCodeProvider, normalizeOpenCodeModelProviders, openCodeModelDisplayLabel, synthesizedOpenCodeAgentModel } from "./commands-dependencies.js";
 import type { ResourceRevisionMap, AppConfig, AgentModel, AgentReasoningOption } from "./commands-dependencies.js";
 import { syncDiffStatsTracking, asString, asRecord, assertOnlyKeys, asAgentModelConfigKey, redactGlobalConfig, redactAppConfig, stripRendererCredentials, asOptionalString, asStringArray, asNonBlankString, asCachedCodexModels, peekLocalAgentBridge, peekContainerAgentBridge, fetchAcpNormalizedModels, parseClaudeBridgeModelCatalog, projectPathKey, duplicateLocalPathGuard, readOriginUrl, createProjectFromScratch } from "./commands-helpers.js";
 
@@ -88,8 +88,9 @@ export function registerProjectCommands(
     // The live catalogue is already filtered by the provider, but a cache
     // written before the allowlist changed is not. Filter here too so the
     // renderer never receives a provider the user excluded.
+    const config = await storage.loadConfig();
     const openCodeModelProviders = normalizeOpenCodeModelProviders(
-      (await storage.loadConfig()).global.openCodeModelProviders,
+      config.global.openCodeModelProviders,
     );
     const openCodeModels = ((await storage.getOpenCodeModelCatalog(environment.projectId))
       ?.models ?? []).filter((model) =>
@@ -155,6 +156,42 @@ export function registerProjectCommands(
     };
     const reasoning = (ids: readonly string[]): AgentReasoningOption[] =>
       ids.map((effort) => ({ id: effort, label: effortLabel(effort) }));
+    const cataloguedOpenCodeModels = selectableLiveOpenCodeModels.length > 0
+      ? selectableLiveOpenCodeModels
+      : openCodeModels.map((model): AgentModel => {
+          const reasoningOptions = [
+            { id: "default", label: "Default" },
+            ...reasoning(model.variants ?? []),
+          ];
+          return {
+            platform: "opencode",
+            id: model.id,
+            label: openCodeModelDisplayLabel(model.id, model.name),
+            providerLabel: model.provider,
+            reasoning: reasoningOptions,
+            defaultReasoningId: fallbackReasoningId(reasoningOptions) ?? "default",
+            supportsSpeed: false,
+            // OpenCode has primary agents, not a Build/Plan permission mode.
+            supportsMode: false,
+            ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
+            ...(typeof model.supportsImageInput === "boolean"
+              ? { supportsImageInput: model.supportsImageInput }
+              : {}),
+          };
+        });
+    const cataloguedOpenCodeIds = new Set(cataloguedOpenCodeModels.map((model) => model.id));
+    // Favourites (and TUI-chosen ids stored as favourites) have to appear in
+    // the empty-tab picker before an OpenCode server has listed models.
+    // Otherwise they render as disabled placeholders labelled with the raw id.
+    const favoriteOpenCodeModels = (config.global.favoriteModels ?? []).flatMap((favorite) => {
+      if (favorite.platform !== "opencode") return [];
+      if (cataloguedOpenCodeIds.has(favorite.modelId)) return [];
+      if (!isSelectableOpenCodeModelId(favorite.modelId, openCodeModelProviders)) return [];
+      const synthesized = synthesizedOpenCodeAgentModel(favorite.modelId);
+      if (!synthesized) return [];
+      cataloguedOpenCodeIds.add(favorite.modelId);
+      return [synthesized];
+    });
     const result: AgentModel[] = [
       ...claudeModels.map((model): AgentModel => {
         const efforts = model.supportedEffortLevels ?? ["low", "medium", "high"];
@@ -186,29 +223,8 @@ export function registerProjectCommands(
           supportsMode: true,
         };
       }),
-      ...(selectableLiveOpenCodeModels.length > 0
-        ? selectableLiveOpenCodeModels
-        : openCodeModels.map((model): AgentModel => {
-          const reasoningOptions = [
-            { id: "default", label: "Default" },
-            ...reasoning(model.variants ?? []),
-          ];
-          return {
-            platform: "opencode",
-            id: model.id,
-            label: model.name,
-            providerLabel: `OpenCode/${model.provider}`,
-            reasoning: reasoningOptions,
-            defaultReasoningId: fallbackReasoningId(reasoningOptions) ?? "default",
-            supportsSpeed: false,
-            // OpenCode has primary agents, not a Build/Plan permission mode.
-            supportsMode: false,
-            ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
-            ...(typeof model.supportsImageInput === "boolean"
-              ? { supportsImageInput: model.supportsImageInput }
-              : {}),
-          };
-        })),
+      ...cataloguedOpenCodeModels,
+      ...favoriteOpenCodeModels,
       ...(cursorModels.length > 0 ? cursorModels : cache.cursor?.models ?? []),
       ...(grokModels.length > 0 ? grokModels : cache.grok?.models ?? []),
     ];

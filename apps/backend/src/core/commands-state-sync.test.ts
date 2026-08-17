@@ -343,8 +343,8 @@ describe("native agent model catalogue command", () => {
         "grok-cached",
       ]);
       expect(models.slice(2, 4).map((model) => model.providerLabel)).toEqual([
-        "OpenCode/opencode-go",
-        "OpenCode/opencode",
+        "opencode-go",
+        "opencode",
       ]);
 
       // Storage stays the complete durable record; only the reads narrow.
@@ -466,6 +466,31 @@ describe("native agent model catalogue command", () => {
         "hpc-ai/b",
         "opencode/a",
       ]);
+    });
+  });
+
+  test("surfaces favourited OpenCode models before a live catalogue exists", async () => {
+    await withCommands(async (invoke, storage) => {
+      const config = await storage.loadConfig();
+      await storage.updateGlobalConfig({
+        ...config.global,
+        favoriteModels: [
+          { platform: "opencode", modelId: "opencode-go/deepseek-v4-flash" },
+          { platform: "codex", modelId: "gpt-codex" },
+        ],
+      });
+
+      const models = await invoke("get_native_agent_model_catalog", {
+        environmentId: "e1",
+      }) as Array<Record<string, unknown>>;
+      expect(models).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          platform: "opencode",
+          id: "opencode-go/deepseek-v4-flash",
+          label: "deepseek-v4-flash",
+          providerLabel: "opencode-go",
+        }),
+      ]));
     });
   });
 });

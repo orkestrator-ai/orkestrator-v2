@@ -40,6 +40,7 @@ import { cn } from "@/lib/utils";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { AgentModel, AgentModelRef, AgentReasoningOption } from "@orkestrator/protocol/native-agent";
+import { synthesizedOpenCodeAgentModel } from "@orkestrator/protocol/native-agent";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 
 interface AgentModelPickerProps {
@@ -133,6 +134,23 @@ function ModelListLabel({ reorderMode }: { reorderMode?: FavoriteReorderMode }) 
 
 function modelRowKey(model: AgentModel): string {
   return `${model.platform}:${model.id}`;
+}
+
+function favoritePlaceholder(favorite: AgentModelRef): AgentModel {
+  if (favorite.platform === "opencode") {
+    return synthesizedOpenCodeAgentModel(favorite.modelId) ?? {
+      platform: favorite.platform,
+      id: favorite.modelId,
+      label: favorite.modelId,
+      description: "Unavailable in the current catalog",
+    };
+  }
+  return {
+    platform: favorite.platform,
+    id: favorite.modelId,
+    label: favorite.modelId,
+    description: "Unavailable in the current catalog",
+  };
 }
 
 function preferredCatalogView(
@@ -590,12 +608,7 @@ export function AgentModelPicker({
   const visibleModels = useMemo(() => {
     const byKey = new Map(models.map((model) => [`${model.platform}:${model.id}`, model]));
     const ordered = catalogView === "favorites"
-      ? favorites.map((favorite) => byKey.get(`${favorite.platform}:${favorite.modelId}`) ?? {
-          platform: favorite.platform,
-          id: favorite.modelId,
-          label: favorite.modelId,
-          description: "Unavailable in the current catalog",
-        })
+      ? favorites.map((favorite) => byKey.get(`${favorite.platform}:${favorite.modelId}`) ?? favoritePlaceholder(favorite))
       : models.filter((model) => model.platform === catalogView);
     if (!normalizedSearch) return ordered;
     return ordered.filter((model) =>

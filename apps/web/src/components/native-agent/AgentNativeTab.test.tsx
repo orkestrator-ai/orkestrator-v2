@@ -731,13 +731,13 @@ describe("AgentNativeTab", () => {
         id: "opencode/model-a",
         platform: "opencode",
         label: "OpenCode A",
-        providerLabel: "OpenCode/opencode",
+        providerLabel: "opencode",
       },
       {
         id: "opencode-go/model-b",
         platform: "opencode",
         label: "OpenCode Go B",
-        providerLabel: "OpenCode/opencode-go",
+        providerLabel: "opencode-go",
       },
     ]);
 
@@ -756,8 +756,10 @@ describe("AgentNativeTab", () => {
 
     expect(screen.getByRole("menuitemradio", { name: /OpenCode A/ })).toBeTruthy();
     expect(screen.getByRole("menuitemradio", { name: /OpenCode Go B/ })).toBeTruthy();
-    expect(screen.getByText("OpenCode/opencode")).toBeTruthy();
-    expect(screen.getByText("OpenCode/opencode-go")).toBeTruthy();
+    expect(within(screen.getByRole("menuitemradio", { name: /OpenCode A/ })).getByText("opencode"))
+      .toBeTruthy();
+    expect(within(screen.getByRole("menuitemradio", { name: /OpenCode Go B/ })).getByText("opencode-go"))
+      .toBeTruthy();
   });
 
   test("renders the cached Cursor catalogue without starting its ACP bridge", async () => {

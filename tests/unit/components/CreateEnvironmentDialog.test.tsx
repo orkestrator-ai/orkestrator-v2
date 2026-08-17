@@ -1826,13 +1826,15 @@ describe("resolveAgentDefaults", () => {
     );
     await waitFor(() => {
       expect(getAgentModelPicker().textContent)
-        .toContain("configured/missing-model");
+        .toContain("missing-model");
+      expect(getAgentModelPicker().textContent)
+        .not.toContain("configured/missing-model");
       expect(getAgentModelPicker().textContent)
         .toContain("Turbo");
     });
     openAgentModelPicker();
     const configuredOption = await screen.findByRole("menuitemradio", {
-      name: /configured\/missing-model/,
+      name: /missing-model/,
     });
     expect(configuredOption).toBeTruthy();
     expect(
@@ -2029,10 +2031,12 @@ describe("resolveAgentDefaults", () => {
       />,
     );
 
-    await waitFor(() =>
+    await waitFor(() => {
       expect(getAgentModelPicker().textContent)
-        .toContain("provider/configured")
-    );
+        .toContain("configured");
+      expect(getAgentModelPicker().textContent)
+        .not.toContain("provider/configured");
+    });
 
     await act(async () => {
       resolveCache({

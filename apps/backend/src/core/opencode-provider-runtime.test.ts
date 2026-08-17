@@ -327,7 +327,7 @@ describe("OpenCode provider runtime", () => {
         platform: "opencode",
         id: "opencode/claude-sonnet",
         label: "Claude Sonnet",
-        providerLabel: "OpenCode",
+        providerLabel: "opencode",
         reasoning: [
           { id: "default", label: "Default" },
           { id: "high", label: "High" },
@@ -620,6 +620,50 @@ describe("OpenCode provider runtime", () => {
         "opencode/claude-sonnet-5",
         "opencode-go/grok-code",
       ]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("shares the picker budget so an allowlisted sibling cannot hide opencode-go", async () => {
+    const fake = openCodeFake();
+    Object.assign(fake.client as object, {
+      provider: {
+        list: mock(async () => ({
+          data: {
+            providers: [
+              {
+                id: "opencode",
+                name: "OpenCode",
+                models: Object.fromEntries(
+                  Array.from({ length: 600 }, (_unused, index) => [
+                    `zen-${index}`,
+                    { name: `Zen ${index}` },
+                  ]),
+                ),
+              },
+              {
+                id: "opencode-go",
+                name: "OpenCode",
+                models: {
+                  "deepseek-v4-flash": { name: "opencode-go/deepseek-v4-flash" },
+                  "deepseek-v4-pro": { name: "opencode-go/deepseek-v4-pro" },
+                },
+              },
+            ],
+          },
+        })),
+      },
+    });
+    const provider = openCodeActivityProvider(fake);
+    try {
+      const models = await provider.modelCatalog?.();
+      expect(models?.some((model) => model.id === "opencode-go/deepseek-v4-flash")).toBe(true);
+      expect(models?.some((model) => model.id === "opencode-go/deepseek-v4-pro")).toBe(true);
+      expect(models?.find((model) => model.id === "opencode-go/deepseek-v4-flash")).toMatchObject({
+        label: "deepseek-v4-flash",
+        providerLabel: "opencode-go",
+      });
     } finally {
       await provider.dispose?.();
     }

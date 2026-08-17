@@ -47,8 +47,11 @@ describe("ACP Cursor background continuation", () => {
     )).toMatchObject({
       toolState: "success",
       agentState: "active",
-      toolArgs: { agentId: "child-wait-1", durationMs: 31 },
+      toolArgs: { agentId: "child-wait-1" },
     });
+    expect((launched.messages.flatMap((message) => message.parts).find((part) =>
+      part.toolUseId === "cursor-subagent-1"
+    )?.toolArgs as { durationMs?: unknown } | undefined)?.durationMs).toBeUndefined();
     expect(await nativeFetch(`${base}/session/${created.id}/activity`, { headers })
       .then((response) => response.json())).toEqual({ activity: "working" });
 
@@ -66,7 +69,11 @@ describe("ACP Cursor background continuation", () => {
     );
     expect(settled.messages.flatMap((message) => message.parts).find((part) =>
       part.toolUseId === "cursor-subagent-1"
-    )).toMatchObject({ toolState: "success", agentState: "finished" });
+    )).toMatchObject({
+      toolState: "success",
+      agentState: "finished",
+      toolArgs: { durationMs: 84 },
+    });
     expect(await nativeFetch(`${base}/session/${created.id}/activity`, { headers })
       .then((response) => response.json())).toEqual({ activity: "idle" });
   });

@@ -272,12 +272,12 @@ describe("ACP bridge", () => {
 
 
   for (const terminal of [
-    { prompt: "FINISHCURSORSUBAGENT", agentState: "finished", toolState: "success" },
-    { prompt: "FINISHCURSORSUBAGENTSTATUS", agentState: "finished", toolState: "success" },
-    { prompt: "FINISHCURSORTASK", agentState: "finished", toolState: "success" },
-    { prompt: "FAILCURSORTASK", agentState: "failed", toolState: "success" },
-    { prompt: "REJECTCURSORTASK", agentState: "failed", toolState: "success" },
-    { prompt: "FAILCURSORSUBAGENT", agentState: "failed", toolState: "failure" },
+    { prompt: "FINISHCURSORSUBAGENT", agentState: "finished", toolState: "success", durationMs: 84 },
+    { prompt: "FINISHCURSORSUBAGENTSTATUS", agentState: "finished", toolState: "success", durationMs: 84 },
+    { prompt: "FINISHCURSORTASK", agentState: "finished", toolState: "success", durationMs: 84 },
+    { prompt: "FAILCURSORTASK", agentState: "failed", toolState: "success", durationMs: 12 },
+    { prompt: "REJECTCURSORTASK", agentState: "failed", toolState: "success", durationMs: 12 },
+    { prompt: "FAILCURSORSUBAGENT", agentState: "failed", toolState: "failure", durationMs: null },
   ] as const) {
     test(`settles Cursor's in-process child via ${terminal.prompt} as ${terminal.agentState}`, async () => {
       const { base, headers } = await spawnBridge();
@@ -316,9 +316,21 @@ describe("ACP bridge", () => {
             part.toolUseId === "cursor-subagent-1" && part.agentState === terminal.agentState
           )),
       );
-      expect(settled.messages.flatMap((message) => message.parts).find((part) =>
+      const settledPart = settled.messages.flatMap((message) => message.parts).find((part) =>
         part.toolUseId === "cursor-subagent-1"
-      )).toMatchObject({ toolState: terminal.toolState, agentState: terminal.agentState });
+      );
+      expect(settledPart).toMatchObject({
+        toolState: terminal.toolState,
+        agentState: terminal.agentState,
+      });
+      const settledDurationMs = (settledPart?.toolArgs as { durationMs?: unknown } | undefined)
+        ?.durationMs;
+      if (terminal.durationMs === null) {
+        expect(typeof settledDurationMs).toBe("number");
+        expect(settledDurationMs as number).toBeGreaterThanOrEqual(0);
+      } else {
+        expect(settledDurationMs).toBe(terminal.durationMs);
+      }
       expect(await nativeFetch(`${base}/session/${created.id}/activity`, { headers })
         .then((response) => response.json())).toEqual({ activity: "idle" });
     });

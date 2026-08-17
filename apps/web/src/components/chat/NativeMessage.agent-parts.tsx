@@ -20,7 +20,12 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
-import { formatElapsed } from "@/lib/format-elapsed";
+import { useElapsedTimer } from "@/hooks/useElapsedTimer";
+import { parseBackendTurnStartedAt } from "@/lib/session-timer";
+import {
+  formatAgentDurationMs,
+  formatNativeAgentElapsed,
+} from "@/lib/chat/native-agent-duration";
 import {
   getToolDisplayName,
   getToolTitleDisplayName,
@@ -143,11 +148,29 @@ function numberToolArg(
   return undefined;
 }
 
-function formatAgentDurationMs(ms: number): string {
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  const seconds = ms / 1000;
-  if (seconds < 10) return `${seconds.toFixed(1).replace(/\.0$/, "")}s`;
-  return formatElapsed(Math.round(seconds));
+/**
+ * Live elapsed label for an agent card. The start clock is the backend launch
+ * timestamp; vendor spawn-echo `durationMs` is ignored while the child is
+ * still running. Settled cards use the duration the backend stamped at settle.
+ */
+function useAgentRuntimeLabel(
+  status: NativeAgentStatus,
+  startedAt: string | undefined,
+  settledDurationMs: number | undefined,
+  tickKey: string,
+): string | undefined {
+  const isActive = status === "active";
+  const { elapsedSeconds } = useElapsedTimer(
+    isActive,
+    tickKey,
+    parseBackendTurnStartedAt(startedAt),
+  );
+  return formatNativeAgentElapsed({
+    status,
+    elapsedMs: isActive
+      ? (elapsedSeconds === null ? undefined : elapsedSeconds * 1000)
+      : settledDurationMs,
+  });
 }
 
 function usefulAgentOutput(output?: string): string | undefined {
@@ -184,10 +207,13 @@ function shouldShowTokenOnlyAgentUsage(part: NativeMessagePart): boolean {
 function agentMetaEntries(
   toolArgs: Record<string, unknown> | undefined,
   displayName: string,
+  options: { includeDuration?: boolean } = {},
 ): Array<{ label: string; value: string }> {
   const role = stringToolArg(toolArgs, "subagent_type", "subagentType", "role");
   const model = stringToolArg(toolArgs, "model");
-  const durationMs = numberToolArg(toolArgs, "durationMs");
+  const durationMs = options.includeDuration === false
+    ? undefined
+    : numberToolArg(toolArgs, "durationMs");
   const agentId = stringToolArg(toolArgs, "agentId", "agent_id");
   return [
     ...(role && role !== displayName ? [{ label: "Type", value: role }] : []),
@@ -249,20 +275,17 @@ function AgentUsageStats({
   tokenCountText,
   toolCount,
   updateCount,
-  durationMs,
+  durationLabel,
 }: {
   hasExternalUsage: boolean;
   tokenOnlyUsage: boolean;
   tokenCountText?: string;
   toolCount: number;
   updateCount: number;
-  durationMs?: number;
+  durationLabel?: string;
 }) {
   const hideCounts = useContext(AgentPlatformContext) === "cursor";
   if (hideCounts) {
-    const durationLabel = durationMs === undefined
-      ? undefined
-      : formatAgentDurationMs(durationMs);
     if (!durationLabel && !tokenCountText) return null;
     return (
       <div className="shrink-0 text-right text-[11px] text-muted-foreground/70">
@@ -642,7 +665,12 @@ export function SubagentPart({
   const status = getNativeAgentStatus(part);
   const statusLabel = getSubagentStatusLabel(status);
   const hideCounts = useContext(AgentPlatformContext) === "cursor";
-  const durationMs = numberToolArg(part.toolArgs, "durationMs");
+  const durationLabel = useAgentRuntimeLabel(
+    status,
+    part.createdAt,
+    numberToolArg(part.toolArgs, "durationMs"),
+    part.toolUseId ?? part.subagentId ?? partKey,
+  );
   // Agent output runs to the bridge's 512 KiB cap and `usefulAgentOutput`
   // parses it, so keep that off every unrelated re-render.
   const result = useMemo(() => usefulAgentOutput(part.toolOutput), [part.toolOutput]);
@@ -699,7 +727,7 @@ export function SubagentPart({
             tokenCountText={part.tokenCountText}
             toolCount={toolCount}
             updateCount={subagentActions.length}
-            durationMs={durationMs}
+            durationLabel={durationLabel}
           />
           <ChevronRight
             className={cn(
@@ -725,7 +753,11 @@ export function SubagentPart({
               />
             </div>
           ) : null}
-          <AgentMetaRows entries={agentMetaEntries(part.toolArgs, displayName)} />
+          <AgentMetaRows
+            entries={agentMetaEntries(part.toolArgs, displayName, {
+              includeDuration: isTerminalAgentStatus(status),
+            })}
+          />
           <AgentResultBlock result={result} />
 
           <div className="space-y-1">
@@ -885,7 +917,12 @@ export function TaskGroupPart({
   ).length;
   const toolCount = part.task.toolUseCount ?? capturedToolCount;
   const hideCounts = useContext(AgentPlatformContext) === "cursor";
-  const durationMs = numberToolArg(part.task.toolArgs, "durationMs");
+  const durationLabel = useAgentRuntimeLabel(
+    status,
+    part.task.createdAt ?? part.createdAt,
+    numberToolArg(part.task.toolArgs, "durationMs"),
+    part.task.toolUseId ?? partKey,
+  );
   // See `SubagentPart`: the parse is proportional to the 512 KiB output cap.
   // The projection defers every tool result, so the launch output an agent card
   // shows is fetched on first expansion rather than read off the part.
@@ -908,7 +945,9 @@ export function TaskGroupPart({
         : "Waiting for activity."
     );
   }, [description, displayName, hideCounts, part, prompt, status]);
-  const metaEntries = agentMetaEntries(part.task.toolArgs, displayName);
+  const metaEntries = agentMetaEntries(part.task.toolArgs, displayName, {
+    includeDuration: isTerminalAgentStatus(status),
+  });
 
   if (standaloneBackgroundTask) {
     return (
@@ -969,14 +1008,14 @@ export function TaskGroupPart({
                 </div>
               ) : null}
             </div>
-            {backgroundPresentation?.live ? null : (
+            {backgroundPresentation?.live && !hideCounts ? null : (
               <AgentUsageStats
                 hasExternalUsage={hasExternalUsage}
                 tokenOnlyUsage={tokenOnlyUsage}
                 tokenCountText={part.task.tokenCountText}
                 toolCount={toolCount}
                 updateCount={childCount}
-                durationMs={durationMs}
+                durationLabel={durationLabel}
               />
             )}
             <ChevronRight

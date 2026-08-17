@@ -216,6 +216,21 @@ export function handlePromptTools(
       return true;
     }
     if (prompt.startsWith("FINISHCURSORTASK")) {
+      // Cursor first publishes the terminal tool result, then sends the
+      // cursor/task extension frame carrying the same real child duration.
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "cursor-subagent-1",
+            status: "completed",
+            rawOutput: { durationMs: 84, isBackground: true, status: "completed" },
+          },
+        },
+      });
       write({
         jsonrpc: "2.0",
         method: "cursor/task",
@@ -1587,4 +1602,3 @@ export function handlePromptTools(
 
     return handlePromptCursor(message, params, prompt);
 }
-

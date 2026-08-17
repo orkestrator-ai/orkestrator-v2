@@ -2710,6 +2710,67 @@ describe("NativeMessage task list rendering", () => {
     expect(screen.queryByText("No child actions yet.") === null).toBe(true);
   });
 
+  test("ticks a Cursor agent card from the backend launch time instead of spawn duration", () => {
+    const startedAt = "2026-03-21T10:00:00.000Z";
+    const originalNow = Date.now;
+    Date.now = () => Date.parse(startedAt) + 125_000;
+    try {
+      render(<NativeMessage message={makeMessage([
+        {
+          type: "task-group",
+          content: "Task: Run review validation",
+          task: {
+            type: "tool-invocation",
+            content: "Task: Run review validation",
+            toolName: "task",
+            toolTitle: "Task: Run review validation",
+            toolState: "success",
+            agentState: "active",
+            createdAt: startedAt,
+            toolArgs: {
+              description: "Run review validation",
+              prompt: "You are running validation for a code review.",
+              subagent_type: "generalPurpose",
+              durationMs: 28,
+            },
+          },
+          childTools: [],
+        },
+      ])} platform="cursor" />);
+
+      expect(screen.getByText("Active")).toBeTruthy();
+      expect(screen.getByText("2m 5s")).toBeTruthy();
+      expect(screen.queryByText("28ms") === null).toBe(true);
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
+  test("does not show Cursor spawn duration on an active card without a launch clock", () => {
+    render(<NativeMessage message={makeMessage([
+      {
+        type: "task-group",
+        content: "Task: Run review validation",
+        task: {
+          type: "tool-invocation",
+          content: "Task: Run review validation",
+          toolName: "task",
+          toolTitle: "Task: Run review validation",
+          toolState: "success",
+          agentState: "active",
+          toolArgs: {
+            description: "Run review validation",
+            durationMs: 28,
+          },
+        },
+        childTools: [],
+      },
+    ])} platform="cursor" />);
+
+    expect(screen.getByText("Active")).toBeTruthy();
+    expect(screen.queryByText("28ms") === null).toBe(true);
+  });
+
   test("renders Cursor JSONL-hydrated child activity inside the expanded Task card", () => {
     const message = makeMessage([
       {

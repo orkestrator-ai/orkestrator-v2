@@ -15,6 +15,23 @@ const pathCases = [
     separator: "\\",
     filename: "ImportantPanel.tsx",
   },
+  {
+    // A leading "." and a leading "(" are bidi-neutral. Under the RTL truncation
+    // direction the bidi algorithm resolves them to the embedding level and moves
+    // them to the visual end — ".playwright-mcp" renders as "playwright-mcp." —
+    // unless the directory text sits in its own LTR isolate. Both segments are
+    // shorter than the posix case, so a wide pane must not truncate this one.
+    kind: "dotted",
+    fullPath: ".playwright-mcp/(a-very-long-group)/src/ImportantTrace.yml",
+    directory: ".playwright-mcp/(a-very-long-group)/src",
+    separator: "/",
+    filename: "ImportantTrace.yml",
+  },
+] as const;
+
+const changedFilePanes = [
+  { pane: "changed-file-path-pane", pathCase: pathCases[0] },
+  { pane: "changed-file-dotted-path-pane", pathCase: pathCases[2] },
 ] as const;
 
 async function setPaneWidth(pane: Locator, width: number) {
@@ -28,13 +45,11 @@ async function pathGeometry(
   directory: string,
   separator: string,
   filename: string,
-  renderer: "changed-file" | "diff-header",
 ) {
   return path.evaluate(
     (element, expected) => {
-      const visualPath = expected.renderer === "diff-header"
-        ? element.querySelector('[aria-hidden="true"]')
-        : element.children[1];
+      // Both renderers delegate to the same TruncatedPath component.
+      const visualPath = element.querySelector('[data-slot="truncated-path"]');
       if (!visualPath) throw new Error("Missing visual path");
 
       const [directoryElement, filenameElement] = Array.from(visualPath.children);
@@ -92,7 +107,7 @@ async function pathGeometry(
           directoryElement.scrollWidth > directoryElement.clientWidth,
       };
     },
-    { directory, separator, filename, renderer },
+    { directory, separator, filename },
   );
 }
 
@@ -102,7 +117,6 @@ async function expectPathLayout({
   directory,
   separator,
   filename,
-  renderer,
   wideWidth,
   narrowWidth,
 }: {
@@ -111,7 +125,6 @@ async function expectPathLayout({
   directory: string;
   separator: string;
   filename: string;
-  renderer: "changed-file" | "diff-header";
   wideWidth: number;
   narrowWidth: number;
 }) {
@@ -129,7 +142,7 @@ async function expectPathLayout({
 
   await setPaneWidth(pane, wideWidth);
   await expect
-    .poll(() => pathGeometry(path, directory, separator, filename, renderer))
+    .poll(() => pathGeometry(path, directory, separator, filename))
     .toEqual({
       ...expectedBase,
       directoryIsTruncated: false,
@@ -137,7 +150,7 @@ async function expectPathLayout({
 
   await setPaneWidth(pane, narrowWidth);
   await expect
-    .poll(() => pathGeometry(path, directory, separator, filename, renderer))
+    .poll(() => pathGeometry(path, directory, separator, filename))
     .toEqual({
       ...expectedBase,
       directoryIsTruncated: true,
@@ -153,7 +166,7 @@ async function expectAccessibleFullPath(path: Locator, fullPath: string) {
 
 async function changedFileTypography(path: Locator) {
   return path.evaluate((element) => {
-    const visualPath = element.children[1];
+    const visualPath = element.querySelector('[data-slot="truncated-path"]');
     if (!(visualPath instanceof HTMLElement)) {
       throw new Error("Missing changed-file visual path");
     }
@@ -192,20 +205,25 @@ test("wide and narrow paths preserve filename order and changed-file typography"
   );
   await page.goto("/path-truncation");
 
-  const changedFilePane = page.getByTestId("changed-file-path-pane");
-  const changedFilePath = changedFilePane.getByTitle(pathCases[0].fullPath);
-  await expect(changedFilePath).toBeVisible();
-  await expectPathLayout({
-    path: changedFilePath,
-    pane: changedFilePane,
-    directory: pathCases[0].directory,
-    separator: pathCases[0].separator,
-    filename: pathCases[0].filename,
-    renderer: "changed-file",
-    wideWidth: 640,
-    narrowWidth: 260,
-  });
-  await expectAccessibleFullPath(changedFilePath, pathCases[0].fullPath);
+  for (const { pane: paneId, pathCase } of changedFilePanes) {
+    const pane = page.getByTestId(paneId);
+    const path = pane.getByTitle(pathCase.fullPath);
+    await expect(path).toBeVisible();
+    await expectPathLayout({
+      path,
+      pane,
+      directory: pathCase.directory,
+      separator: pathCase.separator,
+      filename: pathCase.filename,
+      wideWidth: 640,
+      narrowWidth: 260,
+    });
+    await expectAccessibleFullPath(path, pathCase.fullPath);
+  }
+
+  const changedFilePath = page
+    .getByTestId(changedFilePanes[0].pane)
+    .getByTitle(changedFilePanes[0].pathCase.fullPath);
   const typography = await changedFileTypography(changedFilePath);
   expect(typography).toMatchObject({
     alignItems: "baseline",
@@ -224,7 +242,6 @@ test("wide and narrow paths preserve filename order and changed-file typography"
       directory: pathCase.directory,
       separator: pathCase.separator,
       filename: pathCase.filename,
-      renderer: "diff-header",
       wideWidth: 900,
       narrowWidth: 440,
     });

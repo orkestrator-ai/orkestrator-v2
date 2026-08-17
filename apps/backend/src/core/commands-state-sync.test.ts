@@ -2656,6 +2656,7 @@ describe("native agent and looped-review controller commands", () => {
         expectedProviderSessionId: "provider-old",
         model: "provider/model",
         reasoningEffort: "high",
+        executionProfileId: "plan",
       })).resolves.toMatchObject({ operation: "adopt" });
       expect(adoptSession).toHaveBeenCalledWith({
         environmentId: "e1",
@@ -2669,6 +2670,7 @@ describe("native agent and looped-review controller commands", () => {
         model: "provider/model",
         reasoningEffort: "high",
         phase: undefined,
+        executionProfileId: "plan",
       });
 
       const schema = { type: "object" };

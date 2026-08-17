@@ -25,7 +25,10 @@ import { dispatchResourceChange } from "@/lib/resource-sync";
 // any suite that runs after this file in the same module registry.
 const realBackendSnapshot = { ...realBackend };
 const realPaneLayoutPersistenceSnapshot = { ...realPaneLayoutPersistence };
-const flushPaneLayoutNowMock = mock(async () => {});
+const flushPaneLayoutNowMock = mock(async (
+  _environmentId: string,
+  _layout: unknown,
+) => {});
 const getNativeAgentModelCatalogMock = mock(
   async (_environmentId: string): ReturnType<typeof realBackend.getNativeAgentModelCatalog> => [],
 );
@@ -274,6 +277,7 @@ function PaneBackedAgentNativeTab({ tabId = "tab-resume" }: { tabId?: string }) 
       initialReasoningEffort={tab?.initialReasoningEffort}
       initialConversationMode={tab?.initialConversationMode}
       initialFastMode={tab?.initialFastMode}
+      initialExecutionProfileId={tab?.initialExecutionProfileId}
     />
   );
 }
@@ -342,7 +346,10 @@ function seedUnassignedPane(tabId: string) {
 
 function seedAssignedPane(
   tabId: string,
-  initial: Pick<TabInfo, "initialConversationMode" | "initialFastMode">,
+  initial: Pick<
+    TabInfo,
+    "initialConversationMode" | "initialFastMode" | "initialExecutionProfileId"
+  >,
 ) {
   usePaneLayoutStore.setState({
     environments: new Map([
@@ -432,9 +439,7 @@ describe("AgentNativeTab", () => {
     expect(screen.getByTestId("unassigned-native-compose-bar").className).toContain("rounded-2xl");
   });
 
-  test("disables the mode control on an unassigned tab whose platform has no conversation mode", async () => {
-    // OpenCode receives `mode` as the SDK agent name, so a Build/Plan pin from
-    // the pre-lock composer would silently choose an agent.
+  test("uses an execution profile for OpenCode's first prompt without carrying a stale mode", async () => {
     getNativeAgentModelCatalogMock.mockImplementation(async () => [
       {
         platform: "opencode",
@@ -453,38 +458,89 @@ describe("AgentNativeTab", () => {
     ] as never);
     useEnvironmentStore.setState({
       environments: [{
-        id: "env-1", projectId: "project-1", name: "Mode gate", order: 0,
+        id: "env-1",
+        projectId: "project-1",
+        name: "Mode gate",
+        order: 0,
+        setupPhase: "ready",
       } as never],
     });
     useConfigStore.getState().updateGlobalConfig({
       enabledAgentPlatforms: ["opencode", "codex"],
       favoriteModels: [],
     } as never);
-    const sessionKey = createSessionKey("env-1", "tab-mode-capability");
+    const tabId = "tab-opencode-initial-profile";
+    seedUnassignedPane(tabId);
+    const sessionKey = createSessionKey("env-1", tabId);
+    // Simulate a persisted Plan conversation-mode draft from Codex. OpenCode's
+    // execution profile has its own field, so this must start at Build instead
+    // of displaying Plan while dispatching Build.
+    useNativeComposeStore.getState().updateDraft(sessionKey, {
+      platform: "codex",
+      modelId: "codex-m",
+      mode: "plan",
+    });
     useNativeComposeStore.getState().updateDraft(sessionKey, {
       platform: "opencode",
       modelId: "opencode/sonnet",
     });
-
-    render(
-      <AgentNativeTab
-        tabId="tab-mode-capability"
-        data={{ environmentId: "env-1" }}
-        isActive
-      />,
-    );
-
-    const modeButton = await screen.findByRole("button", { name: "Conversation mode" });
-    expect((modeButton as HTMLButtonElement).disabled).toBe(true);
-
-    // Codex owns a real permission mode, so the same control stays live there.
-    useNativeComposeStore.getState().updateDraft(sessionKey, {
-      platform: "codex",
-      modelId: "codex-m",
+    getNativeAgentProjectionMock.mockImplementation(async (input) => {
+      const projection = await defaultProjection(input);
+      if (input.agent !== "opencode") return projection;
+      return {
+        ...projection,
+        composer: {
+          models: projection.composer?.models ?? [],
+          fastModeEnabled: projection.composer?.fastModeEnabled ?? false,
+          fastModeAvailable: projection.composer?.fastModeAvailable ?? false,
+          modes: [],
+          selectedModeId: undefined,
+          executionProfiles: [
+            { id: "build", label: "Build agent" },
+            { id: "plan", label: "Plan agent" },
+          ],
+          selectedExecutionProfileId: "plan",
+        },
+        capabilities: {
+          ...projection.capabilities,
+          composer: {
+            ...projection.capabilities.composer,
+            mode: false,
+            executionProfile: true,
+          },
+        },
+      };
     });
-    await waitFor(() => expect(
-      (screen.getByRole("button", { name: "Conversation mode" }) as HTMLButtonElement).disabled,
-    ).toBe(false));
+
+    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+
+    expect(screen.queryByRole("button", { name: "Conversation mode" }) === null).toBe(true);
+    const profileButton = await screen.findByRole("button", { name: "Execution profile" });
+    expect(profileButton.textContent).toContain("Build agent");
+    fireEvent.pointerDown(profileButton);
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "Plan agent" }));
+
+    const input = screen.getByRole("textbox");
+    fireEvent.input(input, { target: { textContent: "Plan the change" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: "opencode",
+        executionProfileId: "plan",
+        sessionMode: undefined,
+      }),
+    ));
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: "opencode",
+        prompt: "Plan the change",
+        executionAgent: "plan",
+        mode: undefined,
+      }),
+    ));
+    expect(JSON.stringify(flushPaneLayoutNowMock.mock.calls[0]?.[1]))
+      .toContain('"initialExecutionProfileId":"plan"');
   });
 
   test("drops the previous platform's effort when one click also switches platform", async () => {

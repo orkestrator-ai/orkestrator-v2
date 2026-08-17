@@ -111,6 +111,7 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
     initialReasoningEffort: optionalString(value.initialReasoningEffort),
     initialConversationMode,
     initialFastMode: optionalBoolean(value.initialFastMode),
+    initialExecutionProfileId: nonEmptyString(value.initialExecutionProfileId) ?? undefined,
     agentHandoffId: nonEmptyString(value.agentHandoffId) ?? undefined,
     consumedAgentHandoffId: nonEmptyString(value.consumedAgentHandoffId) ?? undefined,
   };

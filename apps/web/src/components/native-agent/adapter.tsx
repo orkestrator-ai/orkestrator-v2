@@ -16,6 +16,7 @@ export interface AgentNativeTabProps {
   initialReasoningEffort?: string;
   initialConversationMode?: "build" | "plan";
   initialFastMode?: boolean;
+  initialExecutionProfileId?: string;
   agentHandoffId?: string;
   consumedAgentHandoffId?: string;
   refreshRequestId?: number;

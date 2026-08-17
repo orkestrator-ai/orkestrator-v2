@@ -231,6 +231,7 @@ export function UnassignedNativeAgentComposer({
       reasoningId?: string;
       fastMode: boolean;
       mode?: "build" | "plan";
+      executionProfileId?: string;
     },
   ) => void;
   onResume: (platform: AgentPlatform) => void;
@@ -317,6 +318,8 @@ export function UnassignedNativeAgentComposer({
     ?? platformModels[0];
   const canConfigureReasoning = selectedAdapter?.capabilities.composer.reasoning === true;
   const canConfigureMode = selectedAdapter?.capabilities.composer.mode === true;
+  const canConfigureExecutionProfile = platform === "opencode"
+    && selectedAdapter?.capabilities.composer.executionProfile === true;
   // The catalogue's `supportsSpeed` describes the model; the table describes the
   // platform. Both have to allow it, so a catalogue entry cannot reintroduce a
   // toggle the platform has no way to apply.
@@ -440,6 +443,9 @@ export function UnassignedNativeAgentComposer({
       // A platform with no conversation mode must not pin one on the locked
       // tab. OpenCode would receive it as the SDK `agent` name.
       ...(canConfigureMode ? { mode: draft.mode } : {}),
+      ...(canConfigureExecutionProfile ? {
+        executionProfileId: draft.executionProfileId ?? "build",
+      } : {}),
     });
   };
 
@@ -526,6 +532,7 @@ export function UnassignedNativeAgentComposer({
                     platform: next,
                     modelId: undefined,
                     reasoningId: undefined,
+                    executionProfileId: undefined,
                     fastMode: next === "claude"
                       ? globalConfig.claudeNativeFastModeDefault ?? false
                       : next === "codex"
@@ -576,30 +583,59 @@ export function UnassignedNativeAgentComposer({
                 onFastModeChange={(fastMode) => updateDraft(sessionKey, { fastMode })}
                 disabled={disabled}
               />
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    disabled={disabled || !canConfigureMode}
-                    aria-label="Conversation mode"
-                    className="h-8 gap-1 px-2 text-xs font-normal text-muted-foreground hover:text-foreground"
-                  >
-                    {draft.mode === "plan" ? "Plan" : "Build"}
-                    <ChevronDown className="size-3" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start">
-                  <DropdownMenuRadioGroup
-                    value={draft.mode}
-                    onValueChange={(mode) => updateDraft(sessionKey, { mode: mode as "build" | "plan" })}
-                  >
-                    <DropdownMenuRadioItem value="build">Build</DropdownMenuRadioItem>
-                    <DropdownMenuRadioItem value="plan">Plan</DropdownMenuRadioItem>
-                  </DropdownMenuRadioGroup>
-                </DropdownMenuContent>
-              </DropdownMenu>
+              {canConfigureMode ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      disabled={disabled}
+                      aria-label="Conversation mode"
+                      className="h-8 gap-1 px-2 text-xs font-normal text-muted-foreground hover:text-foreground"
+                    >
+                      {draft.mode === "plan" ? "Plan" : "Build"}
+                      <ChevronDown className="size-3" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start">
+                    <DropdownMenuRadioGroup
+                      value={draft.mode}
+                      onValueChange={(mode) => updateDraft(sessionKey, { mode: mode as "build" | "plan" })}
+                    >
+                      <DropdownMenuRadioItem value="build">Build</DropdownMenuRadioItem>
+                      <DropdownMenuRadioItem value="plan">Plan</DropdownMenuRadioItem>
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : canConfigureExecutionProfile ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      disabled={disabled}
+                      aria-label="Execution profile"
+                      className="h-8 gap-1 px-2 text-xs font-normal text-muted-foreground hover:text-foreground"
+                    >
+                      {(draft.executionProfileId ?? "build") === "plan" ? "Plan agent" : "Build agent"}
+                      <ChevronDown className="size-3" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start">
+                    <DropdownMenuRadioGroup
+                      value={draft.executionProfileId ?? "build"}
+                      onValueChange={(executionProfileId) => updateDraft(sessionKey, {
+                        executionProfileId: executionProfileId as "build" | "plan",
+                      })}
+                    >
+                      <DropdownMenuRadioItem value="build">Build agent</DropdownMenuRadioItem>
+                      <DropdownMenuRadioItem value="plan">Plan agent</DropdownMenuRadioItem>
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : null}
             </>
           )}
           sendDisabled={disabled || (!draft.text.trim() && draft.attachments.length === 0)}
@@ -620,4 +656,3 @@ export function UnassignedNativeAgentComposer({
     </div>
   );
 }
-

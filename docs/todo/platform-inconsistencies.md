@@ -115,7 +115,10 @@ OpenCode mode **was** partial: the table inherited `mode: true`; projection
 injected Build/Plan; send mapped `mode` onto OpenCode’s **agent** field
 (`executionAgent ?? mode`). That is not Claude/Codex permission-mode, so
 OpenCode is now `composer.mode: false` and the dropdown is gone. Its execution
-profile picker is the real control and already lists the primary agents.
+profile picker is the real control and already lists the primary agents. Before
+the provider session exists, the launcher offers the built-in Build and Plan
+agents as execution profiles and persists that choice separately from
+conversation mode, so the opening prompt runs under the selected agent too.
 
 `composer.provider` is `true` in the rich default for every native platform, but
 a locked native tab never offers a platform switch. Only OpenCode’s model ids
@@ -384,8 +387,10 @@ cheap to fix relative to vendor protocol work.
    the compose bar reads `composer` directly and never reads the generated
    array — gating only the generator would have changed nothing a user can see.
    OpenCode no longer gets an injected Build/Plan.
-2. **Done.** OpenCode is `composer.mode: false`; the execution-profile picker is
-   its only agent selector.
+2. **Done.** OpenCode is `composer.mode: false`; execution-profile pickers are
+   its only agent selectors. The pre-session picker carries Build/Plan into
+   durable session controls, while the connected-session picker lists every
+   primary agent the SDK reports.
 3. Set `composer.provider: false` except OpenCode, or document it as
    launch-dialog only.
 4. **Decided: keep the flag as “may offer”.** Cursor and Grok both really do own

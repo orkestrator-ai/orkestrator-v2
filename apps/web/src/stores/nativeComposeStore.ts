@@ -15,6 +15,7 @@ export interface NativeComposeDraft {
   requestId?: string;
   fastMode: boolean;
   mode: AgentConversationMode;
+  executionProfileId?: "build" | "plan";
 }
 
 const EMPTY_DRAFT: NativeComposeDraft = {
@@ -63,6 +64,9 @@ function persistedDraftMetadata(draft: NativeComposeDraft): Readonly<Record<stri
     ...(draft.requestId ? { requestId: draft.requestId } : {}),
     fastMode: draft.fastMode,
     mode: draft.mode,
+    ...(draft.executionProfileId
+      ? { executionProfileId: draft.executionProfileId }
+      : {}),
   });
   DRAFT_METADATA_CACHE.set(draft, metadata);
   return metadata;
@@ -86,8 +90,27 @@ function restoreDraftMetadata(value: unknown): Partial<NativeComposeDraft> | und
     : undefined;
   const fastMode = typeof metadata.fastMode === "boolean" ? metadata.fastMode : undefined;
   const mode = metadata.mode === "build" || metadata.mode === "plan" ? metadata.mode : undefined;
-  if (!platform && !modelId && !reasoningId && fastMode === undefined && !mode) return undefined;
-  return { platform, modelId, reasoningId, requestId, fastMode, mode };
+  const executionProfileId = metadata.executionProfileId === "build"
+    || metadata.executionProfileId === "plan"
+    ? metadata.executionProfileId
+    : undefined;
+  if (
+    !platform
+    && !modelId
+    && !reasoningId
+    && fastMode === undefined
+    && !mode
+    && !executionProfileId
+  ) return undefined;
+  return {
+    platform,
+    modelId,
+    reasoningId,
+    requestId,
+    fastMode,
+    mode,
+    executionProfileId,
+  };
 }
 
 export function nativeComposeDraft(

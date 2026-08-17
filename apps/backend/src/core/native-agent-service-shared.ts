@@ -109,6 +109,8 @@ export interface EnsureNativeAgentSessionInput {
   sessionMode?: ProviderExecutionMode;
   /** Cursor/Grok ACP speed toggle applied at session create. */
   fastMode?: boolean;
+  /** Primary execution profile to persist before the first interactive prompt. */
+  executionProfileId?: string;
 }
 
 export interface DispatchNativeAgentPromptInput
@@ -163,6 +165,9 @@ export function controlsFromSessionInput(
     ...(input.reasoningEffort ? { reasoningId: input.reasoningEffort } : {}),
     ...(typeof input.fastMode === "boolean" ? { fastMode: input.fastMode } : {}),
     ...(input.sessionMode ? { mode: input.sessionMode } : {}),
+    ...(input.executionProfileId
+      ? { executionProfileId: input.executionProfileId }
+      : {}),
   };
   return Object.keys(controls).length > 0 ? controls : undefined;
 }

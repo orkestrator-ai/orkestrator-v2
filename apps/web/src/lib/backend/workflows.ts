@@ -171,6 +171,7 @@ export async function ensureNativeAgentSession(input: {
    */
   sessionMode?: "plan" | "build";
   fastMode?: boolean;
+  executionProfileId?: string;
 }): Promise<PersistedNativeAgentSession> {
   return invoke<PersistedNativeAgentSession>(
     "ensure_native_agent_session",
@@ -190,6 +191,7 @@ export async function adoptNativeAgentSession(input: {
   reasoningEffort?: string;
   sessionMode?: "plan" | "build";
   fastMode?: boolean;
+  executionProfileId?: string;
 }): Promise<PersistedNativeAgentSession> {
   return invoke<PersistedNativeAgentSession>(
     "adopt_native_agent_session",

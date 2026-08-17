@@ -622,6 +622,50 @@ describe("NativeAgentService", () => {
     });
   });
 
+  test("projects an initial OpenCode execution profile before the first prompt", async () => {
+    const stub = createProviderStub("opencode", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: [],
+        composer: {
+          models: [],
+          fastModeEnabled: false,
+          fastModeAvailable: false,
+          modes: [],
+          executionProfiles: [
+            { id: "build", label: "Build agent" },
+            { id: "plan", label: "Plan agent" },
+          ],
+        },
+      }),
+    });
+    await withService({
+      prefix: "orkestrator-native-initial-execution-profile-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "opencode" as const,
+        logicalSessionKey: "env-env-1:tab-initial-profile",
+      };
+      await service.ensureSession({
+        ...identity,
+        executionProfileId: "plan",
+      });
+
+      await expect(service.getProjection(identity)).resolves.toMatchObject({
+        composer: {
+          modes: [],
+          selectedExecutionProfileId: "plan",
+          executionProfiles: [
+            { id: "build", label: "Build agent" },
+            { id: "plan", label: "Plan agent" },
+          ],
+        },
+      });
+    });
+  });
+
   test("drops execution profiles and Claude-only toggles a provider reports off-table", async () => {
     const stub = createProviderStub("codex", {
       interactiveSnapshot: async () => ({

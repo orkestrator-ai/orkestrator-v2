@@ -156,10 +156,10 @@ export function openCodeModelDisplayLabel(
   const providerId = openCodeModelProviderId(modelId);
   if (!providerId) return raw;
   const prefix = `${providerId}/`;
-  return raw.length > prefix.length
-    && raw.toLowerCase().startsWith(prefix.toLowerCase())
-    ? raw.slice(prefix.length) || localId || raw
-    : raw;
+  if (!raw.toLowerCase().startsWith(prefix.toLowerCase())) return raw;
+  // A name that is nothing but the prefix would strip to an empty label, so
+  // fall back rather than render a blank row.
+  return raw.slice(prefix.length) || localId || raw;
 }
 
 /**

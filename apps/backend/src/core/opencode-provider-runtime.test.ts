@@ -747,6 +747,62 @@ describe("OpenCode provider runtime", () => {
     }
   });
 
+  // The per-provider cap is separate from the global one. A provider may
+  // advertise more than 512 models on its own, and the advertised default must
+  // not be lost merely because of where the provider listed it.
+  test("reserves a default listed past the per-provider model cap", () => {
+    const catalog = normalizeOpenCodeComposerCatalog({
+      providers: [{
+        id: "openrouter",
+        models: Array.from({ length: 700 }, (_unused, index) => ({
+          id: `model-${index}`,
+          name: `Model ${index}`,
+        })),
+      }],
+      default: { providerID: "openrouter", modelID: "model-690" },
+    }, []);
+
+    expect(catalog.models).toHaveLength(512);
+    expect(catalog.models.some((model) => model.id === "openrouter/model-690")).toBe(true);
+    expect(catalog.selectedModelId).toBe("openrouter/model-690");
+  });
+
+  // The raw-cache read ranks the configured allowlist first, so a priority
+  // provider can fill the whole budget before the default's own provider is
+  // ever visited. The default still has to survive, at the cost of one row.
+  test("reserves a default whose provider never reached the budget", () => {
+    const catalog = normalizeOpenCodeComposerCatalog(
+      {
+        providers: [
+          {
+            id: "opencode",
+            models: Array.from({ length: 512 }, (_unused, index) => ({
+              id: `priority-${index}`,
+              name: `Priority ${index}`,
+            })),
+          },
+          {
+            id: "openrouter",
+            models: Array.from({ length: 10 }, (_unused, index) => ({
+              id: `other-${index}`,
+              name: `Other ${index}`,
+            })),
+          },
+        ],
+        default: { providerID: "openrouter", modelID: "other-3" },
+      },
+      [],
+      { priorityProviders: ["opencode"] },
+    );
+
+    expect(catalog.models).toHaveLength(512);
+    expect(catalog.selectedModelId).toBe("openrouter/other-3");
+    expect(catalog.models.filter((model) => model.id.startsWith("openrouter/")))
+      .toHaveLength(1);
+    expect(catalog.models.filter((model) => model.id.startsWith("opencode/")))
+      .toHaveLength(511);
+  });
+
   test("drops an OpenCode default that names an excluded provider", async () => {
     const fake = openCodeFake();
     Object.assign(fake.client as object, {

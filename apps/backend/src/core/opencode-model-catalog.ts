@@ -47,7 +47,14 @@ const MAX_OPENCODE_PROVIDER_MODELS = 512;
 
 interface OpenCodeCatalogModelGroup {
   providerId: string;
+  /** Models eligible for the shared budget, capped per provider. */
   models: Record<string, unknown>[];
+  /**
+   * The provider's own entry for the advertised default, resolved before the
+   * per-provider cap so a default listed past position 512 stays reservable.
+   * Exactly one model is retained, so the cap still bounds what is held.
+   */
+  defaultModel?: Record<string, unknown>;
 }
 
 interface OpenCodeCatalogModelSource {
@@ -117,16 +124,12 @@ function reserveOpenCodeDefaultSource(
   if (!defaultModelId || selected.some((source) => openCodeCatalogSourceId(source) === defaultModelId)) {
     return;
   }
-  let defaultSource: OpenCodeCatalogModelSource | undefined;
-  for (const group of groups) {
-    const model = group.models.find((candidate) =>
-      `${group.providerId}/${nonEmptyString(candidate.id) ?? ""}` === defaultModelId
-    );
-    if (!model) continue;
-    defaultSource = { providerId: group.providerId, model };
-    break;
-  }
-  if (!defaultSource) return;
+  const owner = groups.find((group) => group.defaultModel !== undefined);
+  if (!owner?.defaultModel) return;
+  const defaultSource: OpenCodeCatalogModelSource = {
+    providerId: owner.providerId,
+    model: owner.defaultModel,
+  };
   if (selected.length < budget) {
     selected.push(defaultSource);
     return;
@@ -243,15 +246,37 @@ export function normalizeOpenCodeComposerCatalog(
     ? accepted
     : [...accepted.filter(isPriority), ...accepted.filter((provider) => !isPriority(provider))])
     .slice(0, MAX_OPENCODE_CATALOG_PROVIDERS);
+  const defaults = openCodeCatalogDefault(value);
+  const selectableDefaultModelId = defaults.modelId
+    && isSelectableOpenCodeModelId(defaults.modelId, allowedProviders)
+    ? defaults.modelId
+    : undefined;
+  const defaultProviderId = selectableDefaultModelId
+    ? openCodeModelProviderId(selectableDefaultModelId)
+    : "";
   const groupForProvider = (
     provider: Record<string, unknown>,
   ): OpenCodeCatalogModelGroup | null => {
     const providerId = nonEmptyString(provider.id);
     if (!providerId) return null;
-    const models = openCodeProviderModels(provider.models)
+    const parsed = openCodeProviderModels(provider.models);
+    const models = parsed
       .slice(0, MAX_OPENCODE_PROVIDER_MODELS)
       .filter((model) => nonEmptyString(model.id) !== null);
-    return models.length > 0 ? { providerId, models } : null;
+    if (models.length === 0) return null;
+    // The reservation below is an exact-id lookup, so it has to see past the
+    // per-provider cap — a provider can advertise more than 512 models, and
+    // truncating first would drop the advertised default merely for its listing
+    // position. Only the one matching model is retained, so the cap still bounds
+    // what this group holds.
+    const defaultModel = providerId === defaultProviderId
+      ? parsed.find((candidate) => {
+        const candidateId = nonEmptyString(candidate.id);
+        return candidateId !== null
+          && `${providerId}/${candidateId}` === selectableDefaultModelId;
+      })
+      : undefined;
+    return { providerId, models, ...(defaultModel ? { defaultModel } : {}) };
   };
   const priorityGroups: OpenCodeCatalogModelGroup[] = [];
   const otherGroups: OpenCodeCatalogModelGroup[] = [];
@@ -283,11 +308,6 @@ export function normalizeOpenCodeComposerCatalog(
       true,
     );
   }
-  const defaults = openCodeCatalogDefault(value);
-  const selectableDefaultModelId = defaults.modelId
-    && isSelectableOpenCodeModelId(defaults.modelId, allowedProviders)
-    ? defaults.modelId
-    : undefined;
   reserveOpenCodeDefaultSource(
     selectedSources,
     [...priorityGroups, ...otherGroups],

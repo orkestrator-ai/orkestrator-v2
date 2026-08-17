@@ -871,6 +871,31 @@ describe("AgentModelPicker", () => {
     expect(onModelChange).toHaveBeenCalledWith("opencode-go/deepseek-v4-flash");
   });
 
+  // Availability is a flag, not a string match on the description. A catalogued
+  // model is free to carry any description — including the placeholder copy —
+  // without silently becoming unselectable.
+  test("keeps a catalogued model selectable whatever its description says", () => {
+    setMobileViewport(false);
+    const { onModelChange } = renderPicker({
+      models: [{
+        platform: "opencode",
+        id: "opencode-go/deepseek-v4-flash",
+        label: "deepseek-v4-flash",
+        providerLabel: "opencode-go",
+        description: "Unavailable in the current catalog",
+      }],
+      enabledPlatforms: ["opencode"],
+      selectedPlatform: "opencode",
+      favorites: [{ platform: "opencode", modelId: "opencode-go/deepseek-v4-flash" }],
+    });
+    openPicker();
+
+    const row = screen.getByRole("menuitemradio", { name: /deepseek-v4-flash/ });
+    expect(row.getAttribute("aria-disabled") === "true").toBe(false);
+    fireEvent.click(row);
+    expect(onModelChange).toHaveBeenCalledWith("opencode-go/deepseek-v4-flash");
+  });
+
   test("keeps identical provider model ids distinct in the cross-platform favorites view", () => {
     setMobileViewport(false);
     const onPlatformChange = mock(() => {});

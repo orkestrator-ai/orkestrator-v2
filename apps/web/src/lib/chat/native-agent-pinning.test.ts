@@ -693,7 +693,7 @@ describe("pinNativeAgentParts", () => {
     }
   });
 
-  test("holds a card at the bottom when its anchor row is consumed", () => {
+  test("keeps a card at its settled position when its anchor row is consumed", () => {
     // The launch row held nothing but the child, so releasing it leaves the
     // message the anchor names with nothing to render.
     const messages = [
@@ -702,7 +702,23 @@ describe("pinNativeAgentParts", () => {
     ];
 
     expect(pinNativeAgentParts(messages).map((message) => message.id))
-      .toEqual(["assistant-2", "assistant-1:settled-agents"]);
+      .toEqual(["assistant-1:settled-agents", "assistant-2"]);
+
+    // Future rows belong below the position the card already holds; adding one
+    // must not pull the settled card back to the transcript bottom.
+    const withLaterMessage = [
+      ...messages,
+      at("assistant-3", "2026-06-28T12:10:00.000Z", [{
+        type: "text",
+        content: "Much later",
+      }]),
+    ];
+    expect(pinNativeAgentParts(withLaterMessage).map((message) => message.id))
+      .toEqual([
+        "assistant-1:settled-agents",
+        "assistant-2",
+        "assistant-3",
+      ]);
   });
 
   test("does not let a tab's own rowless card become a position", () => {

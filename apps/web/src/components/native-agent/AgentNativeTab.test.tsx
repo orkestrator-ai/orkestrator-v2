@@ -20,11 +20,42 @@ import { getNativeAgentData, type TabInfo } from "@/types/paneLayout";
 import { createSessionKey } from "@/lib/utils";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import { dispatchResourceChange } from "@/lib/resource-sync";
+import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 
 // Snapshot before installing the stubs so the real modules are restored for
 // any suite that runs after this file in the same module registry.
 const realBackendSnapshot = { ...realBackend };
 const realPaneLayoutPersistenceSnapshot = { ...realPaneLayoutPersistence };
+const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
+let renderVirtualizedMessages = false;
+
+mock.module("@/components/chat/VirtualizedMessageList", () => ({
+  ...realVirtualizedMessageListSnapshot,
+  VirtualizedMessageList: (props: any) => {
+    if (!renderVirtualizedMessages) {
+      const RealVirtualizedMessageList = realVirtualizedMessageListSnapshot.VirtualizedMessageList;
+      return <RealVirtualizedMessageList {...props} />;
+    }
+    return (
+      <div data-testid="native-agent-transcript-test-list">
+        {props.header}
+        {props.messages.length === 0 ? props.emptyState : null}
+        {props.messages.map((message: NativeMessage, index: number) => (
+          <div key={props.computeItemKey(index, message)}>
+            {props.renderMessage(
+              index,
+              message,
+              props.resolvePreviousMessage
+                ? props.resolvePreviousMessage(props.messages, index)
+                : index > 0 ? props.messages[index - 1] : null,
+            )}
+          </div>
+        ))}
+        {props.footer}
+      </div>
+    );
+  },
+}));
 const flushPaneLayoutNowMock = mock(async (
   _environmentId: string,
   _layout: unknown,
@@ -200,6 +231,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  renderVirtualizedMessages = false;
   useConfigStore.getState().setConfig(configSnapshot);
   flushPaneLayoutNowMock.mockClear();
   getNativeAgentModelCatalogMock.mockReset();
@@ -252,6 +284,8 @@ afterEach(() => {
 afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
   mock.module("@/lib/pane-layout-persistence", () => realPaneLayoutPersistenceSnapshot);
+  mock.module("@/components/chat/VirtualizedMessageList", () =>
+    realVirtualizedMessageListSnapshot);
 });
 
 function identity(platform: NativeAgentTabData["platform"]): NativeAgentTabData {
@@ -2082,15 +2116,13 @@ describe("AgentNativeTab", () => {
         .toBe(true);
     });
 
-    test("still reports a live task the transcript cannot show", async () => {
+    test("renders a rowless live task as one stoppable transcript card", async () => {
       /*
-       * The card itself is a transcript row, which this harness does not paint
-       * — see the note in the sibling test. What stays observable here is that
-       * the tab knows about a task with no launch row at all, which is the
-       * condition the synthesised row exists for.
-       * `native-message-adapters.test.ts` covers the row it builds, and
-       * `NativeMessage.test.tsx` covers that row rendering as a stoppable card.
+       * Paint the virtualized rows for this integration boundary: the adapter
+       * builds the missing row, the controller supplies it to the transcript,
+       * and the real NativeMessage card must wire Stop back to the provider.
        */
+      renderVirtualizedMessages = true;
       seedProjection({
         backgroundTasks: [{
           id: "orphan-task",
@@ -2111,6 +2143,17 @@ describe("AgentNativeTab", () => {
       expect(await screen.findByRole("status", {
         name: "1 background task running: Watch the server.",
       })).toBeTruthy();
+      expect(screen.getAllByRole("button", {
+        name: /Task Watch the server Running/,
+      })).toHaveLength(1);
+      expect(screen.getAllByRole("button", {
+        name: "Stop Watch the server",
+      })).toHaveLength(1);
+
+      fireEvent.click(screen.getByRole("button", { name: "Stop Watch the server" }));
+      await waitFor(() => expect(stopNativeAgentBackgroundTaskMock).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId: "orphan-task" }),
+      ));
     });
 
     test("keeps reporting the task once the transcript renders its launch", async () => {

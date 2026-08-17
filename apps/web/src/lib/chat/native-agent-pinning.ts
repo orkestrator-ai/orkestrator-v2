@@ -323,6 +323,10 @@ export function pinNativeAgentParts(
   anchorTimeline: readonly NativeMessage[] = messages,
 ): NativeMessage[] {
   const renderedMessages: NativeMessage[] = [];
+  const renderedSlots: Array<{
+    originalMessageId: string;
+    renderedMessage?: NativeMessage;
+  }> = [];
   const activeMessages: NativeMessage[] = [];
   const settledRows = new Map<string, SettledAgentRow>();
   const resolveAnchor = (part: NativeAgentActivityPart) =>
@@ -336,12 +340,25 @@ export function pinNativeAgentParts(
 
     if (activeParts.length === 0 && settledParts.length === 0) {
       renderedMessages.push(message);
+      renderedSlots.push({
+        originalMessageId: message.id,
+        renderedMessage: message,
+      });
       continue;
     }
 
     const retainedMessage = { ...message, parts: retainedParts };
     if (hasRenderableContent(retainedMessage)) {
       renderedMessages.push(retainedMessage);
+      renderedSlots.push({
+        originalMessageId: message.id,
+        renderedMessage: retainedMessage,
+      });
+    } else {
+      // The row can disappear when it held only the child being extracted, but
+      // its position is still real. Keep an empty slot so a card that settled
+      // here stays before messages that arrived after it.
+      renderedSlots.push({ originalMessageId: message.id });
     }
 
     if (activeParts.length > 0) {
@@ -365,20 +382,20 @@ export function pinNativeAgentParts(
   if (settledRows.size === 0) return [...renderedMessages, ...activeMessages];
 
   const pinnedMessages: NativeMessage[] = [];
-  for (const message of renderedMessages) {
-    pinnedMessages.push(message);
-    const row = settledRows.get(message.id);
+  for (const slot of renderedSlots) {
+    if (slot.renderedMessage) pinnedMessages.push(slot.renderedMessage);
+    const row = settledRows.get(slot.originalMessageId);
     if (!row) continue;
-    settledRows.delete(message.id);
+    settledRows.delete(slot.originalMessageId);
     pinnedMessages.push(createPinnedAgentMessage(
       row.source,
-      `${message.id}:settled-agents`,
+      `${slot.originalMessageId}:settled-agents`,
       row.parts,
     ));
   }
 
-  // An anchor whose message is gone — trimmed out of a windowed transcript, or
-  // consumed entirely by this extraction. The card was last seen at the bottom,
+  // An anchor whose message is genuinely absent from this message set (rather
+  // than merely consumed by extraction). The card was last seen at the bottom,
   // so that is where it stays, still above anything still running.
   for (const [anchorMessageId, row] of settledRows) {
     pinnedMessages.push(createPinnedAgentMessage(

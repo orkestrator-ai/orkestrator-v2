@@ -107,6 +107,7 @@ records for the `tmux-backend.test.ts` and `standalone.test.ts` clusters below.
   - Run 1 — none of this cluster failed.
   - Run 2 — `remote gateway > serializes invoke results once and keeps command metrics private and bounded` (5059.89 ms). 3,741 passed, 1 skipped, 1 failed, 179 files, 244.2 s. Isolated rerun of `gateway-support-extra.test.ts` → 23 passed, 0 failed, in **1.03 s**.
   - Run 3 — `bounded test diagnostics > never passes a DOM-producing query result directly to toBeNull` (`tests/unit/test-diagnostic-bounds.test.ts`, 5011.17 ms) and `Electron backend command registry > rejects malformed container status framing and invalid encoded sections` (`tests/unit/electron/commands-registry-environments.test.ts`, 5006.02 ms). 3,740 passed, 1 skipped, 2 failed, 361.4 s. Both owning files passed alone: 12 passed in 2.18 s, and 114 passed in 43.40 s.
+- **Recurrence (2026-08-17, `claude-task-layout`):** one further occurrence of the same 5000 ms-deadline cluster, in the full four-group `scripts/test-all.ts` run rather than the root group alone: `Electron backend command registry > rejects malformed container status framing and invalid encoded sections` (`commands-registry-terminal.test.ts`, 5018.26 ms), alongside `scripts/test-all.ts > the non-iOS groups run concurrently, not one after another` (1008.70 ms) — see that test's own entry. The run took 229.6 s against ~137 s for the same command minutes earlier on the same tree, so the host was materially slower; both owning files passed alone immediately afterwards (64 passed and 32 passed, exit 0). No new evidence about mechanism, and the change under review touched only transcript settle positions in `apps/web`, `apps/backend/src/core/http-bridge-provider.ts`, `bridges/claude-bridge` message normalization and the protocol summary — none of which these files load.
 - **Widened scope:** run 3 shows the cluster is not confined to the gateway and command-registry files. `test-diagnostic-bounds.test.ts` walks every test file in the repository and needs 2.18 s even alone, so it sits close to the 5000 ms deadline before any contention is added; it is the clearest example of a deadline that is too tight for the work rather than a test that hangs. A test needing 1–2 s alone but exceeding 5 s under `--parallel=4` is being starved.
 - **Hypothesis:** All three are fixed-deadline (5000 ms) assertions in files that spawn child processes and bind loopback ports. Under the observed load they lose the CPU long enough to cross the deadline, and the gateway proxy's `502` is the same starvation surfacing as an upstream connect failure rather than a timeout. The `commands-registry-environments.test.ts` file failing on a *different* pair of tests in isolation is the strongest evidence that the deadline, not any one test's logic, is what is being hit. A fix should replace the fixed deadlines in these three files with progress-based waits, or raise them proportionally to detected host load; do not simply widen the constant, which moves the threshold without removing the race.
 - **Not attributable to the change under review:** the diff that surfaced this (`packages/protocol/src/action-defaults.ts` and the settings/toolbar wiring) touches none of these files or the code they exercise.
@@ -416,7 +417,7 @@ recorded against the file that actually ran, not against the historical name.
 
 ## `scripts/test-all.ts > the non-iOS groups run concurrently, not one after another` (`tests/unit/test-all.test.ts`)
 
-- **Status:** resolved
+- **Status:** open again — recurred 2026-08-17 past the one-second bound its fix introduced (see the recurrence note at the end of this entry).
 - **Date observed:** 2026-08-15
 - **Original command:** `bun run test`
 - **Worker configuration:** root group at four workers while the other aggregate
@@ -434,6 +435,19 @@ recorded against the file that actually ran, not against the historical name.
   genuinely sequential implementation still cannot pass because the first
   group remains deliberately gated.
 - **Verification:** Focused runner tests and the complete concurrent suite pass.
+- **Recurrence (2026-08-17, `claude-task-layout`):** failed again at 1008.70 ms in a
+  full `bun run test`, which is the one-second poll the fix above installed rather
+  than the original five-millisecond assumption — so the observable group-start
+  boundary took longer than a second to appear. The same run also hit the
+  5000 ms-deadline cluster documented above and took 229.6 s against ~137 s for
+  the identical command minutes earlier on the same tree, so the host was
+  materially slower throughout. `bun test tests/unit/test-all.test.ts` passed
+  alone immediately afterwards (32 passed, exit 0).
+- **Next step:** the fix chose a bound where it needs a signal. Polling longer
+  would move the same threshold again; what the test actually wants is to wait on
+  the group-start boundary without a deadline and let the suite-level timeout be
+  the only limit, or to assert concurrency from the recorded start/end ordering
+  after the run rather than by sampling it live. Do not simply raise the second.
 
 ## `Electron tmux backend command registration` — three lifecycle tests (`tests/unit/electron/tmux-backend.test.ts`)
 
@@ -1736,6 +1750,29 @@ Post-fix stress verification:
   any budget is touched. The change in flight touched only
   `bridges/codex-bridge` sub-agent status derivation, which no ACP path loads.
 
+## `ACP bridge > keeps each assistant message on the model that produced it when the model changes` (`bridges/acp-bridge/src/acp-transcript.test.ts`)
+
+- **Status:** open
+- **Date observed:** 2026-08-17
+- **Original command:** `bun run test:logged -- --name full-suite -- bun run test`, at `3773514b` on `claude-task-layout`, with a working tree carrying web-only transcript-pinning changes.
+- **Worker configuration:** the full four-group `scripts/test-all.ts` run, so the bridges group shared the host with the workspace, root and protocol groups. This is the loudest configuration in which this family has been recorded.
+- **Failure:** `error: Timed out waiting for ACP state: false` (duration 15,011.46 ms), thrown from the shared `waitFor` helper (`acp-test-harness.ts:184`) via `spawnBridge` (`acp-test-harness.ts:234`). As with the rest of the family the expired wait is the `GET /global/health` poll against the freshly spawned bridge child, so the child never reported healthy and none of the per-message model attribution under test was reached.
+- **Suite counts:** bridges group `2690 pass, 1 fail`. It was the only failure in that group; the root group's one failure in the same run was a real expectation change, not a flake.
+- **Isolated rerun:** `bun test bridges/acp-bridge/src/acp-transcript.test.ts` → 69 passed, 0 failed; the target passed.
+- **Related:** same `spawnBridge` health-wait family as `ACP bridge > bounds remembered provider message ids during a large replay` (`acp-transcript.test.ts:136`), `ACP bridge > keeps a completed turn idle when Cursor replay is failed` (`acp-transcript.test.ts:1410`), `ACP bridge > reads agent arguments from the spawned child` (`acp-prompt.test.ts:50`) and `ACP bridge > rejects a concurrent second turn that carries a different requestId` (`index.test.ts:4956`).
+- **Hypothesis:** no new evidence, and this occurrence is the load-side complement to the `acp-prompt.test.ts:50` entry: that one missed the 15 s budget on the quietest configuration, this one missed it on the busiest, which is consistent with the family being dominated by something other than host throughput. The change in flight was confined to `apps/web` transcript rendering and `docs/`; no ACP path loads any of it, and `bridges/` was untouched. The outstanding measurement is unchanged — record how long the child took to bind and whether a previous child was still alive when the failing spawn began, before the startup budget is touched.
+
+## `remote gateway > returns 502 and releases admission when an eligible buffered proxy body aborts` (`tests/unit/electron/gateway-proxy.test.ts:810`)
+
+- **Status:** open
+- **Date observed:** 2026-08-17
+- **Original command:** `bun run test:logged -- --name full-suite -- bun run test`, at `3773514b` on `claude-task-layout`, with a working tree carrying web-only transcript-pinning changes plus this document.
+- **Worker configuration:** the full four-group `scripts/test-all.ts` run, so the root group shared the host with the workspace, bridges and protocol groups.
+- **Failure:** the status assertion passed — the proxy did answer `502` — and the *body* assertion failed: `expect(received).toContain("aborted")`, received `{"error":"The socket connection was closed unexpectedly. For more information, pass \`verbose: true\` in the second argument to fetch()}`. So the abort was handled and admission released as intended; what varied is whether the client read the gateway's own error body or Bun's fetch-level socket-closed message first. Duration 64.71 ms, so this is a race in the read, not a timeout.
+- **Suite counts:** root group `3772 pass, 1 fail. Ran 3774 tests across 181 files. [115.24s]`. It was the only failure in the group and in the whole run.
+- **Isolated rerun:** `bun test tests/unit/electron/gateway-proxy.test.ts` → 26 passed, 0 failed, exit 0; the target passed.
+- **Related:** same file as `remote gateway > keeps a slow but progressing proxy body alive past the idle timeout` (`gateway-proxy.test.ts:674`), and the same aggregate-only pattern recorded for that entry. Different mechanism, though: that one is a timing miss on a keep-alive, this one is a body-versus-socket-close read race on a deliberate abort.
+- **Hypothesis:** the test aborts the upstream body and then asserts on both the status and the response text. When the abort lands before the gateway's error body is flushed and read, Bun's fetch surfaces its own socket-closed JSON instead, so the assertion sees a different — but equally correct — 502 body. The behaviour under test (502 plus admission release) was not violated in this run. Before touching the gateway, a recurrence should establish whether the assertion should accept either body shape, or whether the gateway should be made to flush its error body before the socket closes; the change in flight was confined to `apps/web` transcript rendering and `docs/`, and loads no gateway code.
 ## `useVirtuosoScrollState > scroll state persistence > keeps retrying until the Virtuoso handle is ready while the scroller stays mounted` (`tests/unit/hooks/useVirtuosoScrollState.test.ts:1576`)
 
 - **Status:** open

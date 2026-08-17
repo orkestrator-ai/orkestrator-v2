@@ -114,6 +114,17 @@ export interface NormalizedPart {
   content: string;
   /** When this content block first arrived from the SDK. */
   createdAt?: string;
+  /**
+   * When this tool's result arrived, for a call that launched a long-running
+   * child (a subagent, or anything else presented as an agent card).
+   *
+   * Taken from the message carrying the result rather than a clock, so a
+   * transcript replayed after a restart stamps the identical value — which is
+   * what lets the renderer place a settled card where it actually settled
+   * without remembering anything itself. See `settledAt` on the protocol's
+   * background-task summary for the same idea on the snapshot side.
+   */
+  settledAt?: string;
   toolName?: string;
   toolArgs?: Record<string, unknown>;
   toolState?: "success" | "failure" | "pending";

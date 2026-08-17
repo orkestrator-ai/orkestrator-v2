@@ -20,11 +20,42 @@ import { getNativeAgentData, type TabInfo } from "@/types/paneLayout";
 import { createSessionKey } from "@/lib/utils";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import { dispatchResourceChange } from "@/lib/resource-sync";
+import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 
 // Snapshot before installing the stubs so the real modules are restored for
 // any suite that runs after this file in the same module registry.
 const realBackendSnapshot = { ...realBackend };
 const realPaneLayoutPersistenceSnapshot = { ...realPaneLayoutPersistence };
+const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
+let renderVirtualizedMessages = false;
+
+mock.module("@/components/chat/VirtualizedMessageList", () => ({
+  ...realVirtualizedMessageListSnapshot,
+  VirtualizedMessageList: (props: any) => {
+    if (!renderVirtualizedMessages) {
+      const RealVirtualizedMessageList = realVirtualizedMessageListSnapshot.VirtualizedMessageList;
+      return <RealVirtualizedMessageList {...props} />;
+    }
+    return (
+      <div data-testid="native-agent-transcript-test-list">
+        {props.header}
+        {props.messages.length === 0 ? props.emptyState : null}
+        {props.messages.map((message: NativeMessage, index: number) => (
+          <div key={props.computeItemKey(index, message)}>
+            {props.renderMessage(
+              index,
+              message,
+              props.resolvePreviousMessage
+                ? props.resolvePreviousMessage(props.messages, index)
+                : index > 0 ? props.messages[index - 1] : null,
+            )}
+          </div>
+        ))}
+        {props.footer}
+      </div>
+    );
+  },
+}));
 const flushPaneLayoutNowMock = mock(async (
   _environmentId: string,
   _layout: unknown,
@@ -201,6 +232,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  renderVirtualizedMessages = false;
   useConfigStore.getState().setConfig(configSnapshot);
   flushPaneLayoutNowMock.mockClear();
   getNativeAgentModelCatalogMock.mockReset();
@@ -256,6 +288,8 @@ afterEach(() => {
 afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
   mock.module("@/lib/pane-layout-persistence", () => realPaneLayoutPersistenceSnapshot);
+  mock.module("@/components/chat/VirtualizedMessageList", () =>
+    realVirtualizedMessageListSnapshot);
 });
 
 function identity(platform: NativeAgentTabData["platform"]): NativeAgentTabData {
@@ -2441,7 +2475,13 @@ describe("AgentNativeTab", () => {
         .toBe(true);
     });
 
-    test("keeps an unrendered live task available as one fallback card", async () => {
+    test("renders a rowless live task as one stoppable transcript card", async () => {
+      /*
+       * Paint the virtualized rows for this integration boundary: the adapter
+       * builds the missing row, the controller supplies it to the transcript,
+       * and the real NativeMessage card must wire Stop back to the provider.
+       */
+      renderVirtualizedMessages = true;
       seedProjection({
         backgroundTasks: [{
           id: "orphan-task",
@@ -2459,23 +2499,107 @@ describe("AgentNativeTab", () => {
         />,
       );
 
-      expect(await screen.findByRole("button", {
-        name: /Task Watch the server Running/,
+      expect(await screen.findByRole("status", {
+        name: "1 background task running: Watch the server.",
       })).toBeTruthy();
-      expect(screen.getAllByRole("button", { name: "Stop Watch the server" }))
-        .toHaveLength(1);
+      expect(screen.getAllByRole("button", {
+        name: /Task Watch the server Running/,
+      })).toHaveLength(1);
+      expect(screen.getAllByRole("button", {
+        name: "Stop Watch the server",
+      })).toHaveLength(1);
+
       fireEvent.click(screen.getByRole("button", { name: "Stop Watch the server" }));
       await waitFor(() => expect(stopNativeAgentBackgroundTaskMock).toHaveBeenCalledWith(
         expect.objectContaining({ taskId: "orphan-task" }),
       ));
     });
 
-    test("retires the fallback card once the transcript renders the same task", async () => {
+    test("places a rowless task that settled inside the loaded window", async () => {
       /*
-       * The pinned card exists only because the transcript cannot show the
-       * task. The moment the launch row arrives, keeping both would put two
-       * stop controls on screen for one task, and the reader could not tell
-       * which of the two the task actually belongs to.
+       * The other half of the rowless path, end to end: a task that stopped
+       * while the reader could see it keeps a card, and holds the position the
+       * backend recorded rather than falling to the bottom of the transcript.
+       * The row the tab synthesised is not itself a position, so it must land
+       * under the real transcript row it settled after, not under the earlier
+       * rowless card.
+       */
+      renderVirtualizedMessages = true;
+      const transcriptRow = (id: string, createdAt: string): NativeMessage => ({
+        id,
+        role: "assistant",
+        content: "",
+        createdAt,
+        parts: [{ type: "text", content: id }],
+      });
+      seedProjection({
+        backgroundTasks: [
+          {
+            id: "settled-early",
+            description: "Build the image",
+            status: "completed",
+            settledAt: "2026-08-16T10:00:30.000Z",
+          },
+          {
+            id: "settled-late",
+            description: "Run the suite",
+            status: "completed",
+            settledAt: "2026-08-16T10:01:30.000Z",
+          },
+          {
+            id: "settled-before-window",
+            description: "Ancient task",
+            status: "completed",
+            settledAt: "2026-08-16T09:00:00.000Z",
+          },
+        ],
+        messages: [
+          transcriptRow("assistant-1", "2026-08-16T10:00:00.000Z"),
+          transcriptRow("assistant-2", "2026-08-16T10:01:00.000Z"),
+        ],
+      });
+
+      render(
+        <AgentNativeTab
+          tabId="tab-claude-settled-task"
+          data={identity("claude")}
+          isActive
+        />,
+      );
+
+      expect(await screen.findByRole("button", {
+        name: /Task Build the image/,
+      })).toBeTruthy();
+      expect(screen.getByRole("button", { name: /Task Run the suite/ })).toBeTruthy();
+      // It settled before anything the reader can see, so it has no position
+      // here and no card — the transcript never mentioned it.
+      expect(screen.queryByRole("button", { name: /Task Ancient task/ }) === null)
+        .toBe(true);
+
+      const rows = [...screen.getByTestId("native-agent-transcript-test-list").children]
+        .map((row) => row.textContent ?? "");
+      const indexOf = (needle: string) => {
+        const index = rows.findIndex((row) => row.includes(needle));
+        // An ordering assertion against a missing row compares -1 and passes
+        // for the wrong reason, so absence fails here instead.
+        if (index < 0) throw new Error(`no transcript row contains "${needle}"`);
+        return index;
+      };
+
+      // Each card sits after the row the conversation had reached when the
+      // backend recorded it stopping, not at the bottom with the other.
+      expect(indexOf("assistant-1")).toBeLessThan(indexOf("Build the image"));
+      expect(indexOf("Build the image")).toBeLessThan(indexOf("assistant-2"));
+      expect(indexOf("assistant-2")).toBeLessThan(indexOf("Run the suite"));
+    });
+
+    test("keeps reporting the task once the transcript renders its launch", async () => {
+      /*
+       * The synthesised row exists only because the transcript cannot show the
+       * task. The moment the launch row arrives it withdraws, since keeping both
+       * would put two stop controls on screen for one task with nothing to tell
+       * the reader which is which — `native-message-adapters.test.ts` asserts
+       * that handover directly, because neither card is paintable here.
        */
       const launchRow = {
         id: "assistant-late-launch",
@@ -2515,11 +2639,9 @@ describe("AgentNativeTab", () => {
         />,
       );
 
-      expect(await screen.findByRole("button", {
-        name: /Task Run the dev server Running/,
+      expect(await screen.findByRole("status", {
+        name: "1 background task running: Run the dev server.",
       })).toBeTruthy();
-      expect(screen.getAllByRole("button", { name: "Stop Run the dev server" }))
-        .toHaveLength(1);
 
       seed([launchRow]);
       view.rerender(
@@ -2531,20 +2653,8 @@ describe("AgentNativeTab", () => {
         />,
       );
 
-      /*
-       * The launch row now owns the task, so the fallback withdraws. It goes to
-       * zero here rather than one because this harness does not paint
-       * virtualized transcript rows — only the dock, which is where the
-       * fallback lives. `native-message-adapters.test.ts` covers the other half:
-       * that this same row does render a card carrying the task's id.
-       */
-      await waitFor(() => expect(
-        screen.queryByRole("button", { name: "Stop Run the dev server" }) === null,
-      ).toBe(true));
-      expect(screen.queryByRole("button", {
-        name: /Task Run the dev server Running/,
-      }) === null).toBe(true);
-      // The task is still live, and the tab still says so.
+      // The task is still live, and the tab still says so — now on the strength
+      // of the launch row the transcript finally supplied.
       expect(await screen.findByRole("status", {
         name: "1 background task running: Run the dev server.",
       })).toBeTruthy();

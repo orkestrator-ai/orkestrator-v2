@@ -90,6 +90,8 @@ export class ToolTracker {
       error?: string;
       state: "success" | "failure";
       taskSnapshot?: TaskListSnapshot;
+      /** Timestamp of the message carrying the result; see `NormalizedPart`. */
+      settledAt?: string;
     },
   ): void {
     const existing = this.tools.get(toolUseId);
@@ -100,6 +102,9 @@ export class ToolTracker {
         toolOutput: result.output,
         toolError: result.error,
         taskSnapshot: result.taskSnapshot ?? existing.taskSnapshot,
+        // First result wins. A tool is only settled once, and a later edge
+        // rewriting the stamp would move a card the reader has already placed.
+        settledAt: existing.settledAt ?? result.settledAt,
       });
     }
   }
@@ -380,6 +385,9 @@ export function parseMessageContent(
           }),
           state: block.is_error ? "failure" : "success",
           taskSnapshot,
+          // The record's own clock, not this process's: replaying the transcript
+          // after a restart has to reproduce the same settle position.
+          settledAt: recordTimestamp,
         });
 
         // Check if this is a Task tool completing

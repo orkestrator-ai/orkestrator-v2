@@ -83,3 +83,4 @@ temp/
 src-tauri
 
 .playwright-cli/
+.playwright-mcp/

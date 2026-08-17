@@ -568,6 +568,29 @@ export interface NativeAgentBackgroundTaskSummary {
    * fallback: it exists solely in the tool result's prose.
    */
   toolUseId?: string;
+  /**
+   * When the provider started this task, as an ISO timestamp.
+   *
+   * Only the card for a task the transcript cannot show needs this, and only
+   * when there is no transcript row to take a clock from either — a tab that
+   * resumed into a task already running. Unlike `settledAt` it says nothing
+   * about where the card belongs; it is what the card's own header reads.
+   */
+  startedAt?: string;
+  /**
+   * When the provider reported this task terminal, as an ISO timestamp.
+   *
+   * A long-running child is presented at the bottom of the transcript while it
+   * runs, which is nowhere near the row that launched it. This is what says
+   * where it belongs once it stops: the transcript position it had reached when
+   * it settled, rather than the launch row it would otherwise snap back to.
+   *
+   * Deliberately backend-owned. The renderer could observe the same transition,
+   * but only for the transitions it was mounted for — so the position would
+   * differ between tabs, and reset on reload. Absent for a task that is still
+   * live, and for one whose terminal edge predates this field.
+   */
+  settledAt?: string;
 }
 
 export const BACKGROUND_TASK_ID_MAX_LENGTH = 512;

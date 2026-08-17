@@ -428,6 +428,113 @@ describe("HTTP bridge provider", () => {
     ]);
   });
 
+  test("carries a terminal task's settle position and withholds a live one's", async () => {
+    /*
+     * `settledAt` is the position a finished card holds in the transcript, so it
+     * is the backend's answer to "where does this belong" rather than a detail.
+     * A live task has no position — it belongs at the bottom until it stops —
+     * and a stale edge left on one that was revived would drag its card back up
+     * the conversation.
+     */
+    const { provider } = httpProvider((url) => {
+      if (url.endsWith("/messages")) return Response.json({ messages: [] });
+      return Response.json({
+        status: "idle",
+        backgroundTasks: {
+          finished: {
+            status: "completed",
+            endedAt: Date.parse("2026-08-17T10:30:00.000Z"),
+          },
+          revived: {
+            status: "running",
+            endedAt: Date.parse("2026-08-17T10:00:00.000Z"),
+          },
+          unstamped: { status: "failed" },
+        },
+      });
+    });
+
+    const snapshot = await provider.interactiveSnapshot!("session-1");
+
+    expect(snapshot.backgroundTasks).toEqual([
+      {
+        id: "finished",
+        status: "completed",
+        settledAt: "2026-08-17T10:30:00.000Z",
+      },
+      { id: "revived", status: "running" },
+      { id: "unstamped", status: "failed" },
+    ]);
+  });
+
+  test("withholds a settle position the bridge's clock cannot express", async () => {
+    /*
+     * `endedAt` crosses a process boundary, so a value that is not a real epoch
+     * has to be survivable: `new Date(...).toISOString()` throws on one, and
+     * this runs inside snapshot normalization for every task in the session. No
+     * position is the right answer anyway — the card stays in its launch row
+     * rather than being placed by a number nothing vouches for.
+     */
+    const { provider } = httpProvider((url) => {
+      if (url.endsWith("/messages")) return Response.json({ messages: [] });
+      return Response.json({
+        status: "idle",
+        backgroundTasks: {
+          "out-of-range": { status: "completed", endedAt: 1e300, startedAt: 1e300 },
+          "not-a-number": { status: "completed", endedAt: Number.NaN },
+          "wrong-type": {
+            status: "failed",
+            endedAt: "2026-08-17T10:30:00.000Z",
+            startedAt: "2026-08-17T10:00:00.000Z",
+          },
+        },
+      });
+    });
+
+    const snapshot = await provider.interactiveSnapshot!("session-1");
+
+    expect(snapshot.backgroundTasks).toEqual([
+      { id: "out-of-range", status: "completed" },
+      { id: "not-a-number", status: "completed" },
+      { id: "wrong-type", status: "failed" },
+    ]);
+  });
+
+  test("carries a task's launch clock whatever its lifecycle", async () => {
+    /*
+     * Unlike the settle position, this is meaningful while the task runs: it is
+     * the only clock the card for a task with no transcript row has of its own,
+     * and a tab that resumes into a running task has the snapshot before it has
+     * any row to borrow one from.
+     */
+    const { provider } = httpProvider((url) => {
+      if (url.endsWith("/messages")) return Response.json({ messages: [] });
+      return Response.json({
+        status: "idle",
+        backgroundTasks: {
+          live: { status: "running", startedAt: Date.parse("2026-08-17T10:00:00.000Z") },
+          done: {
+            status: "completed",
+            startedAt: Date.parse("2026-08-17T10:00:00.000Z"),
+            endedAt: Date.parse("2026-08-17T10:30:00.000Z"),
+          },
+        },
+      });
+    });
+
+    const snapshot = await provider.interactiveSnapshot!("session-1");
+
+    expect(snapshot.backgroundTasks).toEqual([
+      { id: "live", status: "running", startedAt: "2026-08-17T10:00:00.000Z" },
+      {
+        id: "done",
+        status: "completed",
+        startedAt: "2026-08-17T10:00:00.000Z",
+        settledAt: "2026-08-17T10:30:00.000Z",
+      },
+    ]);
+  });
+
   test("reads the ACP snapshot as a small status plus a bounded transcript", async () => {
     /*
      * The whole-session route returned composer, runtime and the entire

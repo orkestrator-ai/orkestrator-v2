@@ -7,10 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import { ChevronDown, X } from "lucide-react";
-import {
-  resolveReasoningId,
-  type NativeAgentBackgroundTaskSummary,
-} from "@orkestrator/protocol/native-agent";
+import { resolveReasoningId } from "@orkestrator/protocol/native-agent";
 import {
   isProviderSlashCommand,
   resolveSessionActionCommand,
@@ -59,8 +56,8 @@ import { prependAgentHandoffHistory } from "@/lib/agent-handoff";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import {
   applyClaudeBackgroundTaskStates,
-  collectRenderedBackgroundTaskIds,
   normalizeNativeMessages,
+  rowlessBackgroundTaskMessages,
 } from "@/lib/chat/native-message-adapters";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import {
@@ -69,7 +66,7 @@ import {
   TURN_STOPPED_BY_USER,
 } from "@/lib/chat/client-only-messages";
 import {
-  pinActiveNativeAgentParts,
+  pinNativeAgentParts,
 } from "@/lib/chat/native-agent-pinning";
 import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
 import { persistAgentModelDefault } from "@/lib/chat/agent-model-preferences";
@@ -114,7 +111,6 @@ import {
 } from "./AgentNativeTab.helpers";
 import { NativeAgentInteractionCard } from "./NativeAgentInteractionCard";
 import { CodexPlanModeCard } from "@/components/codex/CodexPlanModeCard";
-import { BackgroundTaskCard } from "@/components/chat/NativeMessage.agent-parts";
 import { useElapsedTimer } from "@/hooks/useElapsedTimer";
 import {
   findLatestBackendTurnElapsedSeconds,
@@ -125,29 +121,6 @@ import { isSetupBlocked } from "@/lib/setup-commands";
 
 /** Stable identity so the transcript decoration memo cannot churn. */
 const EMPTY_BACKGROUND_TASKS: Record<string, never> = {};
-
-/**
- * The same background-task card the transcript renders, for a live task the
- * transcript itself cannot show. It owns its disclosure locally because it has
- * no message part to key persisted expansion against.
- */
-function PinnedBackgroundTaskCard({
-  task,
-  onStop,
-}: {
-  task: NativeAgentBackgroundTaskSummary;
-  onStop: (taskId: string) => Promise<boolean>;
-}) {
-  const [open, setOpen] = useState(false);
-  return (
-    <BackgroundTaskCard
-      task={task}
-      open={open}
-      onOpenChange={setOpen}
-      onStop={onStop}
-    />
-  );
-}
 
 export function SharedNativeAgentController({
   tabId,
@@ -409,13 +382,50 @@ export function SharedNativeAgentController({
     transcriptEchoedOptimistic,
     turnStopMarker,
   ]);
+  /*
+   * Tasks the transcript cannot show: the launch fell outside the loaded
+   * window, or the tab resumed a session whose earlier turns were trimmed. The
+   * snapshot still describes them and still accepts a stop, so they are given
+   * the transcript row they are missing — which is what puts them at transcript
+   * width, at the bottom while they run, and holding their position once they
+   * settle, exactly like a child the transcript did capture.
+   *
+   * A settled task keeps a row when the backend's settle stamp lands inside the
+   * loaded window — it stopped somewhere the reader can see. One that settled
+   * before the window begins gets none, because rendering every terminal task in
+   * the snapshot would drop a pile of finished cards into a transcript that
+   * never mentioned them. Deliberately not "whatever this tab happened to watch
+   * go live": that answer would differ between tabs and reset on reload.
+   */
+  const backgroundTaskRows = useMemo(
+    () => rowlessBackgroundTaskMessages(
+      projection?.backgroundTasks ?? [],
+      displayMessages,
+    ),
+    [displayMessages, projection?.backgroundTasks],
+  );
+  /*
+   * The transcript the reader sees, rowless tasks included. The announcement
+   * reads it too: a live task is worth announcing whether or not the loaded
+   * window happens to contain the row that launched it.
+   */
+  const transcriptMessages = useMemo(
+    () => (backgroundTaskRows.length === 0
+      ? displayMessages
+      : [...displayMessages, ...backgroundTaskRows]),
+    [backgroundTaskRows, displayMessages],
+  );
   const agentActivityAnnouncement = useNativeAgentActivityAnnouncement(
-    displayMessages,
+    transcriptMessages,
     sessionKey,
   );
+  /*
+   * Only the backend transcript supplies positions: a row this tab synthesised
+   * for a rowless task is a card, not a place in the conversation.
+   */
   const messages = useMemo(
-    () => pinActiveNativeAgentParts(displayMessages),
-    [displayMessages],
+    () => pinNativeAgentParts(transcriptMessages, displayMessages),
+    [displayMessages, transcriptMessages],
   );
   const latestAssistantMessage = [...normalizedMessages].reverse().find(
     (message) => message.role === "assistant",
@@ -549,12 +559,6 @@ export function SharedNativeAgentController({
     }),
     [projection?.queue?.items],
   );
-  const liveBackgroundTasks = useMemo(
-    () => (projection?.backgroundTasks ?? []).filter((task) =>
-      task.status === "running" || task.status === "pending" || task.status === "paused"
-    ),
-    [projection?.backgroundTasks],
-  );
   const stopBackgroundTaskFromCard = useCallback(async (taskId: string) => {
     try {
       await stopBackgroundTask(taskId);
@@ -566,17 +570,6 @@ export function SharedNativeAgentController({
       return false;
     }
   }, [stopBackgroundTask]);
-  /*
-   * A live task the transcript cannot show: its launch fell outside the loaded
-   * window, or the tab resumed a session whose earlier turns were trimmed.
-   * The snapshot still says it is running and still accepts a stop, so the
-   * control has to exist somewhere — pinned, as the same card.
-   */
-  const unrenderedLiveBackgroundTasks = useMemo(() => {
-    if (liveBackgroundTasks.length === 0) return [];
-    const rendered = collectRenderedBackgroundTaskIds(messages);
-    return liveBackgroundTasks.filter((task) => !rendered.has(task.id));
-  }, [liveBackgroundTasks, messages]);
   const discardProvisionalDraft = useCallback(() => {
     void discardComposeDraft(
       composeDraftKey("agent-native", data.environmentId, sessionKey),
@@ -1247,13 +1240,6 @@ export function SharedNativeAgentController({
         )}
       />
     ) : null,
-    ...unrenderedLiveBackgroundTasks.map((task) => (
-      <PinnedBackgroundTaskCard
-        key={`background-task:${task.id}`}
-        task={task}
-        onStop={stopBackgroundTaskFromCard}
-      />
-    )),
     ...(projection?.notices ?? []).map((notice, index) => (
       <div
         key={`notice:${notice.kind}:${index}`}

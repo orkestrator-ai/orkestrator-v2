@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
+import { pinNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import type {
   NativeMessage,
   NativeMessagePart,
@@ -205,7 +205,7 @@ describe("message fork placement", () => {
     const kinds = buildMessageForkActionKinds(rows, false);
     expect(kinds.get("assistant-1")).toBe("response");
 
-    const pinned = pinActiveNativeAgentParts(rows);
+    const pinned = pinNativeAgentParts(rows);
     const retained = pinned.find((row) => row.id === "assistant-1");
     expect(retained?.parts).toEqual([]);
     expect(kinds.get(retained!.id)).toBe("response");

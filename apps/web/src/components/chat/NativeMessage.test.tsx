@@ -3,6 +3,7 @@ import { cleanup, render, screen, fireEvent, waitFor } from "@testing-library/re
 import { TerminalProvider } from "@/contexts";
 import type { NativeMessagePart } from "@/lib/chat/native-message-types";
 import { clearImagePreviewCache } from "@/lib/chat/image-preview-cache";
+import { rowlessBackgroundTaskMessages } from "@/lib/chat/native-message-adapters";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
 import { mockWriteText } from "../../../../../tests/mocks/clipboard";
 import {
@@ -3326,6 +3327,46 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Stop Run the full suite" }));
     expect(stopBackgroundTask).toHaveBeenCalledWith("bg-suite");
+  });
+
+  test("renders a synthesised row for a task with no launch as the same card", () => {
+    /*
+     * The row a tab builds for a task the transcript cannot show has to be a
+     * real card with a working stop, not a placeholder: it is the only control
+     * the user has over that task. Built through the real adapter so a change
+     * to the row's shape fails here rather than silently rendering nothing.
+     */
+    const stopBackgroundTask = mock(async () => true);
+    const rows = rowlessBackgroundTaskMessages(
+      [{
+        id: "orphan-task",
+        description: "Watch the server",
+        status: "running",
+        startedAt: "2026-08-16T09:59:00.000Z",
+      }],
+      [],
+    );
+
+    const view = render(
+      <NativeMessage
+        stopBackgroundTask={stopBackgroundTask}
+        message={rows[0]!}
+      />,
+    );
+
+    expect(screen.getByRole("button", {
+      name: /Task Watch the server Running/,
+    })).toBeTruthy();
+    /*
+     * Nothing was loaded to borrow a clock from, so the card falls back to the
+     * task's own launch time — which is what the header then prints. It used to
+     * fall back to the epoch here, and the row read as having started in 1970.
+     */
+    expect(rows[0]?.createdAt).toBe("2026-08-16T09:59:00.000Z");
+    expect(view.container.textContent).not.toContain("Invalid Date");
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop Watch the server" }));
+    expect(stopBackgroundTask).toHaveBeenCalledWith("orphan-task");
   });
 
   test("keeps a backgrounded subagent as one stoppable Agent card", () => {

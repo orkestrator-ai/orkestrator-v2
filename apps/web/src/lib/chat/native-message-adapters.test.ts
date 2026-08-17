@@ -10,6 +10,7 @@ import {
   getClaudeSourceMessageId,
   groupNativeAgentActivity,
   groupNativeToolActivity,
+  isTaskTool,
   messageHasVisibleContent,
   normalizeClaudeMessage,
   normalizeClaudeMessages,
@@ -20,6 +21,7 @@ import {
   normalizeNativeMessages,
   normalizeOpenCodeNativeMessage,
   parseNativeAttachmentsFromContent,
+  rowlessBackgroundTaskMessages,
   splitClaudeAssistantTextBlocks,
 } from "./native-message-adapters";
 
@@ -126,6 +128,131 @@ describe("Claude activity in the shared native transcript", () => {
     expect(collectRenderedBackgroundTaskIds([normalized!])).toEqual(
       new Set(["bg-dev"]),
     );
+  });
+
+  describe("tasks the transcript cannot show", () => {
+    const watchTask = {
+      id: "orphan-task",
+      description: "Watch the server",
+      status: "running",
+    } as const;
+    const transcript: NativeMessage[] = [{
+      id: "assistant-1",
+      role: "assistant",
+      content: "Working",
+      parts: [],
+      createdAt: "2026-08-16T10:00:00.000Z",
+    }];
+
+    test("builds a stoppable card row for a live task with no launch row", () => {
+      const rows = rowlessBackgroundTaskMessages([watchTask], transcript);
+
+      expect(rows).toHaveLength(1);
+      const part = rows[0]?.parts[0];
+      expect(part?.type).toBe("task-group");
+      if (part?.type !== "task-group") throw new Error("expected a task card");
+      // Active lifecycle plus a resolved task is what carries the stop control.
+      expect(part.task.agentState).toBe("active");
+      expect(part.task.backgroundTask).toEqual({
+        id: "orphan-task",
+        status: "running",
+        description: "Watch the server",
+      });
+      // Not an agent launch: a background command reports none of the tool and
+      // update counts the sub-agent card would advertise.
+      expect(isTaskTool(part.task.toolName)).toBe(false);
+      // It sits at the bottom, so it carries the newest row's clock.
+      expect(rows[0]?.createdAt).toBe("2026-08-16T10:00:00.000Z");
+    });
+
+    test("clocks a live task from its own launch when nothing is loaded yet", () => {
+      /*
+       * A tab that resumes a session with a task already running has the
+       * snapshot before it has the transcript, so there is no row to borrow a
+       * clock from. The task's own launch time is the honest answer, and is why
+       * the snapshot carries one: without it this fell to the epoch, and the
+       * card's header read as having started in 1970.
+       */
+      const rows = rowlessBackgroundTaskMessages(
+        [{ ...watchTask, startedAt: "2026-08-16T09:59:00.000Z" }],
+        [],
+      );
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.createdAt).toBe("2026-08-16T09:59:00.000Z");
+    });
+
+    test("prefers the transcript's newest clock to the launch clock for a live task", () => {
+      // A live card sits at the bottom of the transcript, so its header should
+      // agree with the position it holds rather than with when it started.
+      const rows = rowlessBackgroundTaskMessages(
+        [{ ...watchTask, startedAt: "2026-08-16T09:59:00.000Z" }],
+        transcript,
+      );
+
+      expect(rows[0]?.createdAt).toBe("2026-08-16T10:00:00.000Z");
+    });
+
+    test("hands the task over when its launch row finally arrives", () => {
+      // Two cards for one task would mean two stop controls, with nothing to
+      // tell the reader which of them the task actually belongs to.
+      const [launched] = normalizeNativeMessages(
+        applyClaudeBackgroundTaskStates([backgroundLaunch()], {
+          "bg-dev": {
+            id: "bg-dev",
+            toolUseId: "bash-1",
+            description: "Run the dev server",
+            status: "running",
+          },
+        }),
+      );
+
+      const rows = rowlessBackgroundTaskMessages(
+        [{ id: "bg-dev", description: "Run the dev server", status: "running" }],
+        [launched!],
+      );
+
+      expect(rows).toHaveLength(0);
+    });
+
+    test("keeps the row for a task that settled inside the loaded transcript", () => {
+      // It stopped somewhere the reader can see, so its card belongs there —
+      // and the backend's own stamp is what says so, not anything this render
+      // watched happen.
+      const rows = rowlessBackgroundTaskMessages([{
+        ...watchTask,
+        status: "completed",
+        settledAt: "2026-08-16T10:05:00.000Z",
+      }], transcript);
+
+      expect(rows).toHaveLength(1);
+      const part = rows[0]?.parts[0];
+      expect(part?.type === "task-group" && part.task.agentState).toBe("finished");
+      // The row carries the settle stamp, which is what places the card.
+      expect(part?.type === "task-group" && part.task.backgroundTask?.settledAt)
+        .toBe("2026-08-16T10:05:00.000Z");
+      expect(rows[0]?.createdAt).toBe("2026-08-16T10:05:00.000Z");
+    });
+
+    test("ignores a task that settled before the loaded transcript begins", () => {
+      // A snapshot carries the provider's task history. Rendering all of it
+      // would drop a pile of finished cards into a conversation that never
+      // mentioned them and has no position for them.
+      expect(rowlessBackgroundTaskMessages([{
+        ...watchTask,
+        status: "completed",
+        settledAt: "2026-08-16T09:00:00.000Z",
+      }], transcript)).toHaveLength(0);
+    });
+
+    test("ignores a terminal task the backend never stamped", () => {
+      // No recorded edge is no position. A bridge that predates the field
+      // leaves its finished tasks out rather than guessing where they go.
+      expect(rowlessBackgroundTaskMessages(
+        [{ ...watchTask, status: "completed" }],
+        transcript,
+      )).toHaveLength(0);
+    });
   });
 
   test("keeps an unresolved background launch a plain tool row", () => {

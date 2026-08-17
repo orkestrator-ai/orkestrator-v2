@@ -85,8 +85,54 @@ function normalizeClaudeBackgroundTasks(
       ...(typeof task.toolUseId === "string" && task.toolUseId.length <= 512
         ? { toolUseId: task.toolUseId }
         : {}),
+      ...startedAtField(task.startedAt),
+      ...settledAtFromEndedAt(task.endedAt, task.status),
     }];
   });
+}
+
+/**
+ * An epoch millisecond clock as an ISO timestamp, or nothing.
+ *
+ * These cross a process boundary, so a value that is not a real epoch has to be
+ * survivable rather than throwing out of snapshot normalization: `toISOString`
+ * rejects a date built from a non-finite or out-of-range number.
+ */
+function isoFromEpoch(value: unknown): string | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
+}
+
+/**
+ * The bridge's launch clock for a task.
+ *
+ * Unlike `settledAt` this is meaningful while the task is live: it is the only
+ * clock a card the transcript cannot show has of its own, and a tab that
+ * resumes into a running task has the snapshot before it has any transcript row
+ * to borrow one from.
+ */
+function startedAtField(startedAt: unknown): { startedAt?: string } {
+  const value = isoFromEpoch(startedAt);
+  return value ? { startedAt: value } : {};
+}
+
+/**
+ * The bridge's terminal-edge clock, as the position-bearing `settledAt`.
+ *
+ * Only a terminal task carries one. A live task with a stale `endedAt` — a
+ * paused task that ran before, a record the provider revived — would otherwise
+ * hand the renderer a position for work that is running again, which is exactly
+ * the state that belongs at the bottom of the transcript instead.
+ */
+function settledAtFromEndedAt(
+  endedAt: unknown,
+  status: unknown,
+): { settledAt?: string } {
+  const live = status === "pending" || status === "running" || status === "paused";
+  if (live) return {};
+  const settledAt = isoFromEpoch(endedAt);
+  return settledAt ? { settledAt } : {};
 }
 
 const CLAUDE_BUILT_IN_SLASH_COMMANDS: readonly NativeAgentSlashCommand[] = [

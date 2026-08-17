@@ -14,7 +14,7 @@ import type {
   NativeMessage,
   NativeMessagePart,
 } from "@/lib/chat/native-message-types";
-import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
+import { pinNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
 import * as realVirtualizedMessageList from "./VirtualizedMessageList";
 
@@ -293,7 +293,7 @@ describe("NativeChatShell", () => {
       createdAt: "2026-07-28T12:00:00.000Z",
     };
     const pinnedMessages = (parts: NativeMessagePart[]) =>
-      pinActiveNativeAgentParts([{ ...source, parts }]);
+      pinNativeAgentParts([{ ...source, parts }]);
 
     const view = render(
       <NativeChatShell

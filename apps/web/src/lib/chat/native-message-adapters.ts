@@ -6,6 +6,8 @@ import type {
 import type {
   NativeAgentActivityPart,
   NativeAgentGroupPart,
+  NativeAgentState,
+  NativeBackgroundTaskStatus,
   NativeFilePart,
   NativeMessage,
   NativeMessagePart,
@@ -16,6 +18,7 @@ import {
   isBackgroundCapableShellTool,
   recoverBackgroundTaskLaunchId,
 } from "@orkestrator/protocol/native-agent";
+import { createNativeAgentSettleAnchors } from "./native-agent-pinning";
 import { parseLocalFilePathFromUrl } from "./file-url";
 import type { AcpMessage } from "@/lib/acp-client";
 
@@ -744,12 +747,61 @@ function sameBackgroundTask(
  * finished". SDK events use `tool_use_id` as the stable launch correlation;
  * persisted Bash results provide a durable task-id fallback after restart.
  */
+function settledAtField(settledAt: string | undefined): { settledAt?: string } {
+  return settledAt ? { settledAt } : {};
+}
+
+/**
+ * The backend's terminal edge for one task, whichever shape reported it.
+ *
+ * The projection carries an ISO `settledAt`; the bridge's own record carries an
+ * epoch `endedAt`, which some callers still pass through directly. Only a
+ * terminal task has a position: a live one belongs at the bottom, and a stale
+ * edge left on a revived task would drag it back up the transcript.
+ */
+function backgroundTaskSettledAt(
+  task: {
+    status?: ClaudeBackgroundTask["status"];
+    endedAt?: number;
+    settledAt?: string;
+  } | undefined,
+): string | undefined {
+  if (!task || !task.status) return undefined;
+  if (task.status === "pending" || task.status === "running" || task.status === "paused") {
+    return undefined;
+  }
+  if (task.settledAt) return task.settledAt;
+  if (typeof task.endedAt !== "number" || !Number.isFinite(task.endedAt)) return undefined;
+  const endedAt = new Date(task.endedAt);
+  return Number.isFinite(endedAt.getTime()) ? endedAt.toISOString() : undefined;
+}
+
+/**
+ * What this decoration reads off a task record, whichever shape supplied it.
+ *
+ * Two shapes reach it — the bridge's own `ClaudeBackgroundTask` and the
+ * projection's summary — and they agree on every field named here while
+ * disagreeing elsewhere: `startedAt` is epoch milliseconds on one and an ISO
+ * string on the other. Naming what is used keeps that disagreement out of a
+ * function that touches neither.
+ */
+export interface ClaudeBackgroundTaskState {
+  id: string;
+  toolUseId?: string;
+  description?: string;
+  status: ClaudeBackgroundTask["status"];
+  /** Terminal edge as the bridge records it, in epoch milliseconds. */
+  endedAt?: number;
+  /** Terminal edge as the projection carries it; see `settledAt` there. */
+  settledAt?: string;
+}
+
 export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
   messages: TMessage[],
-  backgroundTasks: Record<string, ClaudeBackgroundTask>,
+  backgroundTasks: Record<string, ClaudeBackgroundTaskState>,
 ): TMessage[] {
-  const tasksById = new Map<string, ClaudeBackgroundTask>();
-  const tasksByToolUseId = new Map<string, ClaudeBackgroundTask>();
+  const tasksById = new Map<string, ClaudeBackgroundTaskState>();
+  const tasksByToolUseId = new Map<string, ClaudeBackgroundTaskState>();
   for (const task of Object.values(backgroundTasks)) {
     tasksById.set(task.id, task);
     if (task.toolUseId) tasksByToolUseId.set(task.toolUseId, task);
@@ -762,7 +814,12 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
    */
   const launchesByTaskId = new Map<
     string,
-    { id: string; description?: string; status?: ClaudeBackgroundTask["status"] }
+    {
+      id: string;
+      description?: string;
+      status?: ClaudeBackgroundTask["status"];
+      settledAt?: string;
+    }
   >();
   let hasSubagentLaunch = false;
   for (const message of messages) {
@@ -784,6 +841,7 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
           authoritative?.description
           ?? stringArgument(part.toolArgs, "description"),
         status: authoritative?.status,
+        settledAt: backgroundTaskSettledAt(authoritative),
       });
     }
   }
@@ -822,6 +880,7 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
             authoritativeLaunch.description
             ?? stringArgument(part.toolArgs, "description"),
           status: authoritativeLaunch.status,
+          ...settledAtField(backgroundTaskSettledAt(authoritativeLaunch)),
         };
       } else if (isAgentTool && agentState === undefined) {
         /*
@@ -850,6 +909,7 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
               launch.description
               ?? stringArgument(part.toolArgs, "description"),
             status: launch.status,
+            ...settledAtField(backgroundTaskSettledAt(launch)),
           };
           /*
            * The launch row's own result says the command was *accepted*, so it
@@ -877,6 +937,7 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
             id: taskId,
             description: task.description,
             status: task.status,
+            ...settledAtField(backgroundTaskSettledAt(task)),
           };
         }
       }
@@ -934,6 +995,138 @@ export function collectRenderedBackgroundTaskIds(
   const ids = new Set<string>();
   for (const message of messages) collectBackgroundTaskIds(message.parts, ids);
   return ids;
+}
+
+export interface BackgroundTaskSnapshot {
+  id: string;
+  status: NativeBackgroundTaskStatus;
+  description?: string;
+  /** Backend-recorded launch clock; see the protocol summary's `startedAt`. */
+  startedAt?: string;
+  /** Backend-recorded terminal edge; see `NativeBackgroundTask.settledAt`. */
+  settledAt?: string;
+}
+
+function backgroundTaskAgentStateFromStatus(
+  status: NativeBackgroundTaskStatus,
+): NativeAgentState {
+  switch (status) {
+    case "pending":
+    case "running":
+    case "paused":
+      return "active";
+    case "completed":
+      return "finished";
+    default:
+      return "failed";
+  }
+}
+
+/**
+ * A transcript row for a task the transcript itself cannot show.
+ *
+ * Its launch fell outside the loaded window, or the tab resumed a session whose
+ * earlier turns were trimmed, so there is no row to decorate — but the snapshot
+ * still describes the task and still accepts a stop. Synthesising the row it is
+ * missing puts that card in the transcript, at transcript width, under the same
+ * pinning rules as every other long-running child, rather than in a wider
+ * pinned strip that obeys none of them.
+ *
+ * The tool name is deliberately not a task tool: the renderer routes an agent
+ * launch to the sub-agent card, which would advertise the tool and update counts
+ * a background command never reports.
+ */
+function createBackgroundTaskMessage(
+  task: BackgroundTaskSnapshot,
+  createdAt: string,
+): NativeMessage {
+  // The description doubles as the part's content so the accessible activity
+  // label resolves to the task's name rather than the generic child fallback.
+  const label = task.description?.trim() ?? "";
+  return {
+    id: `background-task:${task.id}`,
+    role: "assistant",
+    content: "",
+    createdAt,
+    parts: [{
+      type: "task-group",
+      content: label,
+      task: {
+        type: "tool-invocation",
+        content: label,
+        toolName: "BackgroundTask",
+        agentState: backgroundTaskAgentStateFromStatus(task.status),
+        backgroundTask: {
+          id: task.id,
+          status: task.status,
+          ...(task.description ? { description: task.description } : {}),
+          ...(task.settledAt ? { settledAt: task.settledAt } : {}),
+        },
+      },
+      childTools: [],
+    }],
+  };
+}
+
+const EMPTY_ROWLESS_TASKS: NativeMessage[] = [];
+
+function isLiveBackgroundTask(status: NativeBackgroundTaskStatus): boolean {
+  return status === "running" || status === "pending" || status === "paused";
+}
+
+/**
+ * Transcript rows for the snapshot tasks the transcript itself cannot show.
+ *
+ * Exactly one card per task: a task the transcript already renders is left to
+ * its own row, so a launch arriving late replaces the synthesised card instead
+ * of doubling it — two stop controls for one task, with nothing to tell the
+ * reader which is which.
+ *
+ * A settled task earns a row by having a backend settle position that falls
+ * inside the loaded transcript: it stopped somewhere the reader can see, so its
+ * card belongs there. One that settled before any loaded message is history the
+ * transcript never mentioned, and rendering it would drop a pile of finished
+ * cards into a conversation that has no room for them. Both answers come from
+ * the backend's own timestamps, so they do not depend on what this tab watched
+ * happen.
+ */
+export function rowlessBackgroundTaskMessages(
+  tasks: readonly BackgroundTaskSnapshot[],
+  messages: readonly NativeMessage[],
+): NativeMessage[] {
+  if (tasks.length === 0) return EMPTY_ROWLESS_TASKS;
+
+  const rendered = collectRenderedBackgroundTaskIds(messages);
+  const anchors = createNativeAgentSettleAnchors(messages);
+  const rows = tasks.filter((task) =>
+    !rendered.has(task.id)
+    && (isLiveBackgroundTask(task.status)
+      || anchors.resolve(task.settledAt) !== undefined));
+  if (rows.length === 0) return EMPTY_ROWLESS_TASKS;
+
+  return rows.map((task) => createBackgroundTaskMessage(
+    task,
+    /*
+     * A live card sits at the bottom, so it takes the newest row's clock — the
+     * one belonging to the position it actually holds. A settled one is placed
+     * by its own settle position, and carrying that as the row's timestamp
+     * keeps the header honest about when it stopped.
+     *
+     * A tab that resumed into a running task has neither: it has the snapshot
+     * before it has a transcript. Its own launch clock is then the only honest
+     * answer, and is why the snapshot carries one — without it this fell to the
+     * epoch, and the card claimed to have started in 1970.
+     *
+     * The epoch remains only because a row must carry some clock and a provider
+     * that reports neither leaves nothing to carry. Every task the Claude
+     * bridge reports has a `startedAt`, so that last resort is not a path this
+     * renders in practice.
+     */
+    task.settledAt
+      ?? messages.at(-1)?.createdAt
+      ?? task.startedAt
+      ?? new Date(0).toISOString(),
+  ));
 }
 
 interface TranscriptBlockSegment {

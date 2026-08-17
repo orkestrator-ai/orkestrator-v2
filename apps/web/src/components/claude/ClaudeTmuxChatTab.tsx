@@ -64,7 +64,7 @@ import {
 } from "@/stores/claudeTmuxStore";
 import { findPreviousNativeMessage, normalizeClaudeMessagesForDisplay } from "@/lib/chat/native-message-adapters";
 import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
-import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
+import { pinNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import { applyTmuxAgentUsageSummaries } from "@/lib/claude-tmux-usage";
 import type { ClaudeEffortLevel } from "@/lib/claude-client";
 import { useClaudeStore } from "@/stores/claudeStore";
@@ -262,7 +262,7 @@ export function ClaudeTmuxChatTab({
     [messages, agentUsageSummaries],
   );
   const displayMessages = useMemo(
-    () => pinActiveNativeAgentParts(normalizeClaudeMessagesForDisplay(transcriptMessages)),
+    () => pinNativeAgentParts(normalizeClaudeMessagesForDisplay(transcriptMessages)),
     [transcriptMessages],
   );
   const hasMessageHistory = displayMessages.length > 0;

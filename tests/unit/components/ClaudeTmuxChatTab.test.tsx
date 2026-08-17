@@ -3778,7 +3778,7 @@ Running 1 Explore agent...
 
 
 
-  test("pins active task-group agents in tmux transcript data and releases them on success", async () => {
+  test("pins active task-group agents in tmux transcript data and releases them in place on success", async () => {
     const store = useClaudeTmuxStore.getState();
     store.setRunning("tab-1", true, {
       environmentId: "env-1",
@@ -3845,17 +3845,22 @@ Running 1 Explore agent...
       });
     });
 
+    /*
+     * The card is released where it was pinned, not back at the launch row it
+     * came from: the reader was watching it at the bottom, and dropping it back
+     * up the transcript the instant it finishes moves the thing being read.
+     */
     await waitFor(() => {
       const renderedMessages = lastVirtuosoProps?.data ?? [];
       expect(renderedMessages.map((message: any) => message.id)).toEqual([
         "assistant-agent",
-        "assistant-agent:text-block:1",
         "assistant-agent:text-block:2",
+        "assistant-agent:text-block:2:settled-agents",
       ]);
       expect(renderedMessages.map((message: any) => message.parts.map((part: any) => part.type))).toEqual([
         ["text"],
-        ["task-group"],
         ["text", "text"],
+        ["task-group"],
       ]);
     });
   });

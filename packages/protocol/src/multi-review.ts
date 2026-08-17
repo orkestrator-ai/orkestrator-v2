@@ -9,6 +9,7 @@ import { isSafeLoopedReviewTargetBranch } from "./review-workflow.js";
 export const MULTI_REVIEW_WORKFLOW_VERSION = 1 as const;
 export const MULTI_REVIEW_MIN_REVIEWERS = 1;
 export const MULTI_REVIEW_MAX_REVIEWERS = 32;
+export const MULTI_REVIEW_MAX_SNAPSHOT_PATHS = 10_000;
 export const MULTI_REVIEW_ADDRESS_PROMPT =
   "Please address all the issues and coverage gaps";
 
@@ -78,6 +79,15 @@ export interface MultiReviewFixSession extends MultiReviewModelSelection {
   error?: string;
 }
 
+/** Durable identity shared by every reviewer and the consolidation turn. */
+export interface MultiReviewWorktreeSnapshot {
+  status: "clean" | "dirty";
+  head: string;
+  paths: string[];
+  fingerprint: string;
+  capturedAt: string;
+}
+
 export interface MultiReviewWorkflow {
   version: typeof MULTI_REVIEW_WORKFLOW_VERSION;
   controller: "backend";
@@ -91,6 +101,9 @@ export interface MultiReviewWorkflow {
   reviewers: MultiReviewReviewer[];
   fixModel: MultiReviewModelSelection;
   fixSession?: MultiReviewFixSession;
+  reviewWorktreeSnapshot?: MultiReviewWorktreeSnapshot;
+  /** Set when the worktree changed before all reports could be consolidated. */
+  reviewSnapshotStale?: boolean;
   phase: MultiReviewPhase;
   consolidatedReport?: StructuredReviewReport;
   fixResult?: {
@@ -189,6 +202,24 @@ function optionalDate(value: unknown): boolean {
   return value === undefined || (typeof value === "string" && Number.isFinite(Date.parse(value)));
 }
 
+function isMultiReviewWorktreeSnapshot(value: unknown): value is MultiReviewWorktreeSnapshot {
+  return record(value)
+    && hasOnlyKeys(value, ["status", "head", "paths", "fingerprint", "capturedAt"])
+    && (value.status === "clean" || value.status === "dirty")
+    && typeof value.head === "string"
+    && /^[0-9a-f]{40,64}$/i.test(value.head)
+    && Array.isArray(value.paths)
+    && value.paths.length <= MULTI_REVIEW_MAX_SNAPSHOT_PATHS
+    && value.paths.every((entry) => typeof entry === "string" && entry.length > 0 && entry.length <= 4_096)
+    && (value.status === "clean" ? value.paths.length === 0 : value.paths.length > 0)
+    && typeof value.fingerprint === "string"
+    && /^[0-9a-f]{64}$/i.test(value.fingerprint)
+    // `Date.parse` coerces, so the string check cannot be left to the cast:
+    // a numeric 0 stringifies to "0" and parses as a valid date.
+    && typeof value.capturedAt === "string"
+    && Number.isFinite(Date.parse(value.capturedAt));
+}
+
 function optionalPollCount(value: unknown): boolean {
   return value === undefined || (Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= 5);
 }
@@ -265,6 +296,7 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
     || !hasOnlyKeys(value, [
       "version", "controller", "controllerFence", "id", "environmentId", "projectId",
       "targetBranch", "reviewInstruction", "reviewers", "fixModel", "fixSession", "phase",
+      "reviewWorktreeSnapshot", "reviewSnapshotStale",
       "consolidatedReport", "fixResult", "addressPromptPending", "activeRequest",
       "cancellingSince", "error", "createdAt", "updatedAt",
       "backendRevision",
@@ -288,6 +320,10 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
     || (value.backendRevision as number) < 0
     || (value.controllerFence !== undefined && !nonBlank(value.controllerFence))
     || (value.fixSession !== undefined && !isFixSession(value.fixSession))
+    || (value.reviewWorktreeSnapshot !== undefined
+      && !isMultiReviewWorktreeSnapshot(value.reviewWorktreeSnapshot))
+    || (value.reviewSnapshotStale !== undefined
+      && typeof value.reviewSnapshotStale !== "boolean")
     || (value.activeRequest !== undefined && !isActiveRequest(value.activeRequest))
     || !optionalDate(value.cancellingSince)
     || (value.fixResult !== undefined && !isFixResult(value.fixResult))

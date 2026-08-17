@@ -53,8 +53,8 @@ export function buildPrompt(pipeline: BuildPipeline, notes: string): string {
  * the pipeline's own evidence rather than something the reviewer re-derives.
  */
 export type ReviewWorktreeSnapshot =
-  | { status: "clean"; head: string }
-  | { status: "dirty"; paths: string[]; head: string }
+  | { status: "clean"; head: string; fingerprint?: string }
+  | { status: "dirty"; paths: string[]; head: string; fingerprint?: string }
   | { status: "unknown"; reason: string; head?: never };
 
 /**
@@ -73,19 +73,42 @@ export type ObservedWorktreeSnapshot = Exclude<
 /** Keeps a pathological worktree from crowding out the rest of the prompt. */
 export const MAX_REPORTED_UNCOMMITTED_PATHS = 50;
 
+/**
+ * Lead sentences for the two observed states.
+ *
+ * The evidence is identical for every review flow, but what it *means* is not:
+ * a dirty tree in the build pipeline is work the build stage did not commit,
+ * while in a Multi Review it is usually the entire change under review.
+ */
+export interface WorktreeSnapshotWording {
+  clean: string;
+  dirty: string;
+}
+
+const BUILD_PIPELINE_WORKTREE_WORDING: WorktreeSnapshotWording = {
+  clean: "**Authoritative worktree state**: the backend confirmed the environment worktree was clean when this review started. Treat validation at the captured head as safe to run in place.",
+  dirty: "**Authoritative worktree state**: the backend observed uncommitted paths when this review started, so the preceding build stage did not commit everything. They are part of the change under review: include them in the Step 1 snapshot and review them from this worktree.",
+};
+
 export function worktreeSnapshotSection(
   snapshot: ReviewWorktreeSnapshot,
+  wording: WorktreeSnapshotWording = BUILD_PIPELINE_WORKTREE_WORDING,
 ): string {
-  if (snapshot.status === "clean") {
-    return "**Authoritative worktree state**: the backend confirmed the environment worktree was clean when this review started. Treat validation at the captured head as safe to run in place.";
-  }
   if (snapshot.status === "unknown") {
     return `**Authoritative worktree state**: the backend could not determine the worktree state (${snapshot.reason}). Establish it yourself in Step 1 and record it as a limitation.`;
   }
+  const identity = [
+    `**Captured environment HEAD**: \`${snapshot.head}\``,
+    snapshot.fingerprint
+      ? `**Captured worktree fingerprint**: \`${snapshot.fingerprint}\``
+      : "",
+  ].filter(Boolean);
+  if (snapshot.status === "clean") return [wording.clean, ...identity].join("\n");
   const shown = snapshot.paths.slice(0, MAX_REPORTED_UNCOMMITTED_PATHS);
   const omitted = snapshot.paths.length - shown.length;
   return [
-    "**Authoritative worktree state**: the backend observed uncommitted paths when this review started, so the preceding build stage did not commit everything. Apply the Step 1 rule to decide whether they block validation, and record them as a limitation either way.",
+    wording.dirty,
+    ...identity,
     // Path text comes from the repository, so it is untrusted: fence it as code
     // rather than letting a crafted filename render as prompt markup.
     ...shown.map((filePath) => `- \`${filePath.replaceAll("`", "'")}\``),

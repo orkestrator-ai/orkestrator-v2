@@ -117,6 +117,12 @@ export type EnvironmentCommandRunner = (
   command: string,
   args: string[],
   timeoutMs?: number,
+  /**
+   * Local commands inherit the backend's own environment, which in a packaged
+   * desktop build is whatever the OS handed Electron. Callers that need a
+   * managed interpreter on PATH must supply it.
+   */
+  env?: NodeJS.ProcessEnv,
 ) => Promise<string>;
 
 export type ReviewPreparationValidation = {
@@ -141,10 +147,11 @@ export function createEnvironmentCommandRunner(
     if (!environment.worktreePath) {
       throw new Error("Local environment worktree is not available");
     }
-    return async (command, args, timeoutMs = 60_000) =>
+    return async (command, args, timeoutMs = 60_000, env) =>
       (await runCommand(command, args, {
         cwd: environment.worktreePath,
         timeoutMs,
+        ...(env ? { env } : {}),
       })).stdout;
   }
   if (!environment.containerId) {

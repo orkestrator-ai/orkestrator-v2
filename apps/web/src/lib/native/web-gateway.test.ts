@@ -243,6 +243,31 @@ afterEach(() => {
 });
 
 describe("web gateway browser API", () => {
+  test("renews agent-test sessions only after explicit browser activity", async () => {
+    const calls: Array<{ url: string; method: string }> = [];
+    globalThis.fetch = mock(async (input, init) => {
+      const method = init?.method ?? "GET";
+      calls.push({ url: String(input), method });
+      return method === "GET"
+        ? new Response(JSON.stringify({ active: true }), { status: 200 })
+        : new Response(null, { status: 401 });
+    }) as unknown as typeof fetch;
+
+    createBrowserGatewayApi({ agentTestSessionActivity: true });
+    await waitForCondition(() => calls.length === 1, "Agent-test session was not detected");
+    expect(calls).toEqual([{ url: "/__orkestrator/agent-test/session", method: "GET" }]);
+
+    window.dispatchEvent(new Event("pointerdown"));
+    await waitForCondition(() => calls.length === 2, "Explicit activity did not renew the session");
+    expect(calls[1]).toEqual({ url: "/__orkestrator/agent-test/session", method: "POST" });
+
+    // A rejected renewal removes both listeners, so unrelated later activity
+    // cannot become a background keepalive loop.
+    window.dispatchEvent(new Event("keydown"));
+    await Promise.resolve();
+    expect(calls).toHaveLength(2);
+  });
+
   test("passes through an optional server-connections API", async () => {
     const connectionList = { activeConnectionId: "remote-1", connections: [] };
     const connections = {
@@ -347,7 +372,11 @@ describe("web gateway browser API", () => {
   test("enables boot metrics for every installed browser client", async () => {
     // The install path is the only place production turns boot metrics on, so
     // dropping the flag here would disable the feature everywhere.
-    const metricsFetch = mock(async () => new Response(null, { status: 202 }));
+    const metricsFetch = mock(async (input: RequestInfo | URL) => (
+      String(input).includes("/agent-test/session")
+        ? new Response(null, { status: 404 })
+        : new Response(null, { status: 202 })
+    ));
     globalThis.fetch = metricsFetch as unknown as typeof fetch;
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
     const fakeWindow: TestGatewayWindow = {
@@ -362,7 +391,7 @@ describe("web gateway browser API", () => {
     MockEventSource.instances[0]?.open();
     window.dispatchEvent(new Event("load"));
     await waitForCondition(
-      () => metricsFetch.mock.calls.length === 1,
+      () => metricsFetch.mock.calls.some(([input]) => String(input).includes("/client-metrics")),
       "The installed client did not report boot metrics",
     );
 
@@ -859,7 +888,8 @@ describe("web gateway browser API", () => {
 
   test("disposing a replaced gateway aborts in-flight and queued terminal input", async () => {
     let oldSignal: AbortSignal | undefined;
-    const fetchMock = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes("/agent-test/session")) return new Response(null, { status: 404 });
       oldSignal = init?.signal ?? undefined;
       return new Promise<Response>((_resolve, reject) => {
         init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
@@ -880,7 +910,7 @@ describe("web gateway browser API", () => {
     const queued = oldApi.invoke("terminal_write", { sessionId: "old", data: "q" });
     const activeResult = active.catch((error) => error);
     const queuedResult = queued.catch((error) => error);
-    await waitForCondition(() => fetchMock.mock.calls.length === 1, "Old terminal write did not start");
+    await waitForCondition(() => oldSignal !== undefined, "Old terminal write did not start");
     const resizeResult = oldApi.invoke("terminal_resize", {
       sessionId: "old",
       cols: 100,
@@ -904,7 +934,8 @@ describe("web gateway browser API", () => {
     await expect(closeResult).resolves.toEqual(new Error("Browser gateway replaced"));
     await expect(oldApi.invoke("terminal_write", { sessionId: "old", data: "later" }))
       .rejects.toThrow("Browser gateway replaced");
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls.filter(([input]) => !String(input).includes("/agent-test/session")))
+      .toHaveLength(1);
   });
 
   test("keeps a live terminal writable when its close never reached the backend", async () => {

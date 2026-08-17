@@ -117,9 +117,8 @@ export const API_PREFIX = "/__orkestrator";
  */
 export const AGENT_TEST_BOOTSTRAP_TTL_MS = 120_000;
 /**
- * Idle timeout for an exchanged agent-test browser session. It slides on every
- * authenticated request, so a QA run is never logged out mid-flow, while an
- * abandoned browser tab still loses access.
+ * Idle timeout for an exchanged agent-test browser session. Explicit keyboard
+ * or pointer activity renews it; background API polling does not.
  */
 export const AGENT_TEST_SESSION_IDLE_TTL_MS = 30 * 60_000;
 /** Hard ceiling on a session regardless of activity. */

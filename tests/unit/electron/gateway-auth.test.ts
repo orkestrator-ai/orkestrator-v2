@@ -11,9 +11,11 @@ import {
   decodeResponseBody,
   eventClients,
   gateways,
+  openEventStream,
   readGatewayMetrics,
   requestUrl,
   startGateway,
+  waitUntil,
 } from "./gateway-test-harness.js";
 
 
@@ -657,7 +659,7 @@ describe("remote gateway", () => {
 
 
   test("signs a browser in through a single-use agent-test login link", async () => {
-    const { info } = await startGateway({ agentTestMode: true, agentTestProfile: "agent-login-qa" });
+    const { gateway, info } = await startGateway({ agentTestMode: true, agentTestProfile: "agent-login-qa" });
     const mint = async () => {
       const minted = await requestUrl(`${info.url}__orkestrator/agent-test/bootstrap`, {
         method: "POST",
@@ -695,6 +697,19 @@ describe("remote gateway", () => {
     const wrongMethod = await requestUrl(loginUrl(await mint()), { method: "POST" });
     expect(wrongMethod.status).toBe(405);
     expect(wrongMethod.headers.allow).toBe("GET");
+
+    const concurrentCode = await mint();
+    const concurrent = await Promise.all([
+      requestUrl(loginUrl(concurrentCode)),
+      requestUrl(loginUrl(concurrentCode)),
+    ]);
+    expect(concurrent.map((response) => response.status).sort()).toEqual([303, 401]);
+
+    const expiredCode = await mint();
+    const bootstraps = (gateway as unknown as { agentTestBootstraps: Map<string, number> })
+      .agentTestBootstraps;
+    bootstraps.set(expiredCode, Date.now() - 1);
+    expect((await requestUrl(loginUrl(expiredCode))).status).toBe(401);
   });
 
 
@@ -727,7 +742,7 @@ describe("remote gateway", () => {
 
 
 
-  test("slides an agent-test session on use and stops at its absolute lifetime", async () => {
+  test("renews only on explicit activity and stops at its absolute lifetime", async () => {
     const { gateway, info } = await startGateway({ agentTestMode: true });
     const sessions = (gateway as unknown as {
       agentTestSessions: Map<string, { expiresAt: number; absoluteExpiresAt: number }>;
@@ -745,11 +760,23 @@ describe("remote gateway", () => {
     const [session, entry] = [...sessions.entries()][0]!;
     expect(cookie).toContain(session);
 
-    // An idle window about to lapse is renewed by the request that uses it, so
-    // a long QA run is never bounced back to the login page mid-flow.
+    // Background API traffic authenticates without changing the idle deadline.
     entry.expiresAt = Date.now() + 1_000;
-    const renewed = await requestUrl(`${info.url}__orkestrator/status`, { headers: { cookie } });
-    expect(renewed.status).toBe(200);
+    const originalExpiry = entry.expiresAt;
+    const background = await requestUrl(`${info.url}__orkestrator/status`, { headers: { cookie } });
+    expect(background.status).toBe(200);
+    expect(sessions.get(session)!.expiresAt).toBe(originalExpiry);
+
+    const detected = await requestUrl(`${info.url}__orkestrator/agent-test/session`, {
+      headers: { cookie },
+    });
+    expect(detected.status).toBe(200);
+    expect(detected.json()).toEqual({ active: true });
+    const renewed = await requestUrl(`${info.url}__orkestrator/agent-test/session`, {
+      method: "POST",
+      headers: { cookie },
+    });
+    expect(renewed.status).toBe(204);
     expect(sessions.get(session)!.expiresAt).toBeGreaterThan(Date.now() + 60_000);
 
     // The absolute cap is not slideable.
@@ -757,6 +784,35 @@ describe("remote gateway", () => {
     const expired = await requestUrl(`${info.url}__orkestrator/status`, { headers: { cookie } });
     expect(expired.status).toBe(401);
     expect(sessions.has(session)).toBe(false);
+  });
+
+
+
+  test("closes an established event stream when its agent-test session expires", async () => {
+    const { gateway, info } = await startGateway({ agentTestMode: true });
+    const minted = await requestUrl(`${info.url}__orkestrator/agent-test/bootstrap`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${info.token}` },
+    });
+    const exchanged = await requestUrl(`${info.url}__orkestrator/agent-test/bootstrap/exchange`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code: (minted.json() as { code: string }).code }),
+    });
+    const cookie = exchanged.headers["set-cookie"]![0]!;
+    const sessions = (gateway as unknown as {
+      agentTestSessions: Map<string, { expiresAt: number; absoluteExpiresAt: number }>;
+    }).agentTestSessions;
+    const entry = [...sessions.values()][0]!;
+    entry.expiresAt = Date.now() + 40;
+
+    const stream = await openEventStream(gateway, info, "", {
+      authorization: "",
+      cookie,
+    });
+    await waitUntil(() => eventClients(gateway).size === 0, "Expired event stream remained connected");
+    expect(stream.aborted()).toBe(true);
+    stream.close();
   });
 
 

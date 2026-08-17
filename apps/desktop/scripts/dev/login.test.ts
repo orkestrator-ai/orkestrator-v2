@@ -152,6 +152,27 @@ describe("agent-test login link", () => {
     expect(requests).toHaveLength(0);
   });
 
+  test("refuses userinfo even when the parsed hostname is loopback", async () => {
+    const { requests, fetchImpl } = stubGateway(Date.now() + 120_000);
+    let authFileRead = false;
+    for (const browserUrl of [
+      "http://name@127.0.0.1:41234/",
+      "http://name:password@localhost:41234/",
+      "http://name:password@[::1]:41234/",
+    ]) {
+      await expect(mintAgentTestLoginUrl({
+        status: { ...readyStatus, browserUrl },
+        fetchImpl,
+        readTokenFile: async () => {
+          authFileRead = true;
+          return JSON.stringify({ token: "durable-gateway-token" });
+        },
+      })).rejects.toThrow("not loopback");
+    }
+    expect(authFileRead).toBe(false);
+    expect(requests).toHaveLength(0);
+  });
+
   test("refuses a missing browser URL before reading the auth file", async () => {
     const { requests, fetchImpl } = stubGateway(Date.now() + 120_000);
     await expect(mint({ ...readyStatus, browserUrl: undefined }, fetchImpl))
@@ -192,6 +213,32 @@ describe("agent-test login link", () => {
       const { fetchImpl } = stubGateway(Date.now() + 120_000, body);
       await expect(mint(readyStatus, fetchImpl)).rejects.toThrow("unexpected bootstrap response");
     }
+  });
+
+  test("times out when the gateway never returns response headers", async () => {
+    await expect(mintAgentTestLoginUrl({
+      status: readyStatus,
+      timeoutMs: 20,
+      readTokenFile: async () => JSON.stringify({ token: "durable-gateway-token" }),
+      fetchImpl: (_url, init) => new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          reject(new DOMException("aborted", "AbortError"));
+        }, { once: true });
+      }),
+    })).rejects.toThrow("Timed out minting a login link for profile login-qa");
+  });
+
+  test("times out when the gateway stalls the bootstrap response body", async () => {
+    const body = new ReadableStream<Uint8Array>({ start: () => undefined });
+    await expect(mintAgentTestLoginUrl({
+      status: readyStatus,
+      timeoutMs: 20,
+      readTokenFile: async () => JSON.stringify({ token: "durable-gateway-token" }),
+      fetchImpl: async () => new Response(body, {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      }),
+    })).rejects.toThrow("Timed out minting a login link for profile login-qa");
   });
 });
 

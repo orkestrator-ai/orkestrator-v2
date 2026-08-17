@@ -3,7 +3,6 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 
 import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
-import { mintAgentTestLoginUrl } from "../../apps/desktop/scripts/dev/login";
 
 type Status = {
   status: string;
@@ -36,17 +35,23 @@ async function profileStatus(): Promise<Status> {
 }
 
 async function authenticatedInvoke(page: Page, status: Status) {
-  // Mint on the host so the durable token never enters a browser trace, then
-  // sign in by navigating the one-shot login URL the agents are told to use.
-  const login = await mintAgentTestLoginUrl({
-    status: {
-      profile: status.profile ?? profile,
-      flavor: "agent-test",
-      status: "ready",
-      browserUrl: status.browserUrl,
-      authFile: status.authFile,
-    },
+  // Exercise the exact host command agents use. Its stdout is parsed in memory
+  // and never copied into Playwright output, so the one-shot code stays out of
+  // traces and reports.
+  const command = spawnSync("bun", [
+    "run", "dev:login", "--", "--profile", profile, "--json",
+  ], {
+    cwd: repositoryRoot,
+    encoding: "utf8",
   });
+  if (command.status !== 0) throw new Error(command.stderr || "dev:login failed");
+  let login: { loginUrl?: unknown };
+  try {
+    login = JSON.parse(command.stdout) as { loginUrl?: unknown };
+  } catch {
+    throw new Error("dev:login returned invalid JSON");
+  }
+  if (typeof login.loginUrl !== "string") throw new Error("dev:login returned no login URL");
   const response = await page.goto(login.loginUrl, { waitUntil: "domcontentloaded" });
   expect(response?.ok() ?? false).toBe(true);
   expect(page.url()).not.toContain("/__orkestrator/agent-test/login");

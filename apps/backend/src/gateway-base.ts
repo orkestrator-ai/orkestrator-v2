@@ -62,6 +62,7 @@ export abstract class GatewayBase {
   protected tokenTransition: Promise<unknown> = Promise.resolve();
 
   protected abstract gatewayCredentialMatches(candidate: string | null): boolean;
+  protected abstract gatewayCredentialExpiresAt(candidate: string | null): number | null;
   protected abstract isOriginAllowed(
     request: IncomingMessage,
     originValue: string,
@@ -159,6 +160,9 @@ export abstract class GatewayBase {
     this.terminalWebSocket = new TerminalWebSocketGateway({
       backend: this.backend,
       tokenMatches: (request, suppliedToken) => this.gatewayCredentialMatches(
+        suppliedToken ?? getBearerToken(request.headers) ?? getCookie(request.headers, AUTH_COOKIE),
+      ),
+      credentialExpiresAt: (request, suppliedToken) => this.gatewayCredentialExpiresAt(
         suppliedToken ?? getBearerToken(request.headers) ?? getCookie(request.headers, AUTH_COOKIE),
       ),
       originAllowed: (request) => Boolean(

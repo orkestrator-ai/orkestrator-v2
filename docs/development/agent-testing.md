@@ -45,10 +45,11 @@ cheaper than reusing anything. The durable token never appears in the URL,
 `dev:login` output, or browser state, and must still never be echoed, pasted
 into chat, or captured in artifacts.
 
-The resulting browser session slides with use, so an active QA run is not logged
-out mid-flow; it still lapses after 30 idle minutes, after 12 hours regardless of
-activity, and whenever the backend restarts. Any of those simply means minting
-another link.
+The resulting browser session renews on throttled keyboard and pointer activity,
+so background status polling cannot keep an abandoned tab authenticated. It
+lapses after 30 minutes without user activity, after 12 hours regardless of
+activity, and whenever the backend restarts. Existing event and terminal streams
+are closed at the same deadline. Any of those simply means minting another link.
 
 Agent-test profiles authorize the host's Claude, Codex, Cursor, Grok, and
 OpenCode credentials by default so manual QA can run real agents:

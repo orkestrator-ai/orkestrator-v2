@@ -12,6 +12,8 @@ export type AgentTestLogin = {
 
 type Fetcher = (input: string, init?: RequestInit) => Promise<Response>;
 
+export const AGENT_TEST_LOGIN_MINT_TIMEOUT_MS = 10_000;
+
 /**
  * The durable token may only travel to the profile's own loopback gateway.
  * `localhost` / `127.0.0.1` / `::1` match what agent-test profiles bind;
@@ -22,6 +24,8 @@ export function isLoopbackBrowserGatewayUrl(value: string): boolean {
   try {
     const url = new URL(value);
     return (url.protocol === "http:" || url.protocol === "https:")
+      && url.username === ""
+      && url.password === ""
       && (url.hostname === "127.0.0.1"
         || url.hostname === "localhost"
         || url.hostname === "::1"
@@ -44,6 +48,7 @@ export async function mintAgentTestLoginUrl(options: {
   status: Pick<RuntimeStatusManifest, "profile" | "flavor" | "status" | "browserUrl" | "authFile">;
   fetchImpl?: Fetcher;
   readTokenFile?: (path: string) => Promise<string>;
+  timeoutMs?: number;
 }): Promise<AgentTestLogin> {
   const { status } = options;
   if (status.flavor !== "agent-test") {
@@ -70,15 +75,45 @@ export async function mintAgentTestLoginUrl(options: {
   }
 
   const fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init));
-  const response = await fetchImpl(new URL("/__orkestrator/agent-test/bootstrap", status.browserUrl).href, {
-    method: "POST",
-    headers: { authorization: `Bearer ${parsed.token}` },
-    redirect: "error",
+  const timeoutMs = options.timeoutMs ?? AGENT_TEST_LOGIN_MINT_TIMEOUT_MS;
+  const controller = new AbortController();
+  let timedOut = false;
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+      reject(new Error(`Timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
   });
-  if (!response.ok) {
-    throw new Error(`Gateway refused to mint a login link (HTTP ${response.status})`);
+  let response: Response | null = null;
+  let minted: { code?: unknown; expiresAt?: unknown };
+  try {
+    response = await Promise.race([
+      fetchImpl(new URL("/__orkestrator/agent-test/bootstrap", status.browserUrl).href, {
+        method: "POST",
+        headers: { authorization: `Bearer ${parsed.token}` },
+        redirect: "error",
+        signal: controller.signal,
+      }),
+      deadline,
+    ]);
+    if (!response.ok) {
+      throw new Error(`Gateway refused to mint a login link (HTTP ${response.status})`);
+    }
+    minted = await Promise.race([
+      response.json() as Promise<{ code?: unknown; expiresAt?: unknown }>,
+      deadline,
+    ]);
+  } catch (error) {
+    if (timedOut || (error instanceof DOMException && error.name === "AbortError")) {
+      void response?.body?.cancel().catch(() => undefined);
+      throw new Error(`Timed out minting a login link for profile ${status.profile}`);
+    }
+    throw error;
+  } finally {
+    if (timeout) clearTimeout(timeout);
   }
-  const minted = await response.json() as { code?: unknown; expiresAt?: unknown };
   if (
     typeof minted.code !== "string"
     || minted.code.length === 0

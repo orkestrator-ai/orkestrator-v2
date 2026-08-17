@@ -37,6 +37,7 @@ const GATEWAY_CURSOR_EVENT = "gateway.cursor";
  * still retrying for us.
  */
 const EVENT_SOURCE_CLOSED = 2;
+export const AGENT_TEST_SESSION_ACTIVITY_REFRESH_INTERVAL_MS = 60_000;
 export const TERMINAL_TRANSPORT_STORAGE_KEY = "orkestrator-terminal-transport";
 /** How long a shared-stream filter narrowing waits for its siblings. */
 const TERMINAL_FILTER_NARROW_DELAY_MS = 50;
@@ -72,6 +73,8 @@ export interface BrowserGatewayOptions {
   onTokenChanged?: (token: string) => void;
   eventReconnectDelayMs?: number;
   reportBootMetrics?: boolean;
+  /** Same-origin app install probes for the agent-test-only activity endpoint. */
+  agentTestSessionActivity?: boolean;
   connections?: NonNullable<Window["orkestrator"]>["connections"];
   /** Test/embedding overrides; production uses the bounded defaults. */
   terminalInputBatchDelayMs?: number;
@@ -183,6 +186,49 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   const credentials = bearerToken || baseUrl ? "omit" as const : "same-origin" as const;
   const websocketTerminalsEnabled = terminalTransportEnabled(options);
   let terminalSocket: TerminalWebSocketClient | null = null;
+  let disposeAgentTestActivity: () => void = () => undefined;
+
+  const detectAgentTestSession = async () => {
+    if (credentials !== "same-origin" || !options.agentTestSessionActivity) return;
+    const controller = new AbortController();
+    let disposed = false;
+    let lastRefreshAt = 0;
+    const removeListeners = () => {
+      if (disposed) return;
+      disposed = true;
+      controller.abort();
+      window.removeEventListener("keydown", refreshAfterActivity);
+      window.removeEventListener("pointerdown", refreshAfterActivity);
+    };
+    const refreshAfterActivity = () => {
+      const now = Date.now();
+      if (disposed || now - lastRefreshAt < AGENT_TEST_SESSION_ACTIVITY_REFRESH_INTERVAL_MS) return;
+      lastRefreshAt = now;
+      void fetch(apiUrl(`${GATEWAY_PREFIX}/agent-test/session`), {
+        method: "POST",
+        credentials,
+        signal: controller.signal,
+      }).then((response) => {
+        if (response.status === 401 || response.status === 404) removeListeners();
+      }).catch(() => undefined);
+    };
+    disposeAgentTestActivity = removeListeners;
+    try {
+      const response = await fetch(apiUrl(`${GATEWAY_PREFIX}/agent-test/session`), {
+        credentials,
+        signal: controller.signal,
+      });
+      if (!response.ok || disposed) {
+        removeListeners();
+        return;
+      }
+      window.addEventListener("keydown", refreshAfterActivity);
+      window.addEventListener("pointerdown", refreshAfterActivity);
+    } catch {
+      removeListeners();
+    }
+  };
+  void detectAgentTestSession();
 
   /**
    * Receive every authoritative state event, but only terminal byte streams
@@ -1242,6 +1288,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     },
   };
   browserGatewayDisposers.set(api, (reason = new Error("Browser gateway disposed")) => {
+    disposeAgentTestActivity();
     terminalInputDisposedReason = reason;
     terminalInputBatcher.dispose(reason);
     terminalSocket?.dispose();
@@ -1269,7 +1316,12 @@ export function installBrowserGatewayApi(
       configureDirectGatewayTransport(baseUrl, options.token.trim());
     }
     targetWindow.orkestratorGateway = { enabled: true, ...(baseUrl ? { baseUrl } : {}) };
-    targetWindow.orkestrator = createBrowserGatewayApi({ ...options, baseUrl, reportBootMetrics: true });
+    targetWindow.orkestrator = createBrowserGatewayApi({
+      ...options,
+      baseUrl,
+      reportBootMetrics: true,
+      agentTestSessionActivity: true,
+    });
   }
 }
 

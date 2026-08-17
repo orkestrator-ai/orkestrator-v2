@@ -117,6 +117,33 @@ describe("gateway terminal WebSocket", () => {
     cookieAuthenticated.socket.terminate();
   });
 
+  test("closes a cookie-authenticated terminal socket when its agent-test session expires", async () => {
+    const { gateway, info } = await startGateway({ agentTestMode: true });
+    const minted = await requestUrl(`${info.url}__orkestrator/agent-test/bootstrap`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${info.token}` },
+    });
+    const exchanged = await requestUrl(`${info.url}__orkestrator/agent-test/bootstrap/exchange`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code: (minted.json() as { code: string }).code }),
+    });
+    const cookie = exchanged.headers["set-cookie"]![0]!;
+    const sessions = (gateway as unknown as {
+      agentTestSessions: Map<string, { expiresAt: number; absoluteExpiresAt: number }>;
+    }).agentTestSessions;
+    [...sessions.values()][0]!.expiresAt = Date.now() + 40;
+
+    const socket = await openTerminalSocket(info, {
+      authenticate: false,
+      headers: { Origin: new URL(info.url).origin, Cookie: cookie },
+    });
+    expect(await nextTerminalControl(socket.inbox, "ready"))
+      .toMatchObject({ type: "ready", version: 1 });
+    const closeCode = await new Promise<number>((resolve) => socket.socket.once("close", resolve));
+    expect(closeCode).toBe(TERMINAL_WEBSOCKET_CLOSE.authenticationRequired);
+  });
+
   test("rejects malformed, oversized, and wrong-direction frames with assigned close codes", async () => {
     const { info } = await startGateway();
     for (const [payload, expected] of [

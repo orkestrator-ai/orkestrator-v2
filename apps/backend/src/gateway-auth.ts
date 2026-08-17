@@ -21,9 +21,27 @@ export abstract class GatewayAuth extends GatewayEvents {
       this.agentTestSessions.delete(candidate);
       return false;
     }
-    // Slide the idle window. A QA run that is being driven should never be
-    // bounced back to the login page mid-flow, which is what turns a stalled
-    // browser session into a stalled agent.
+    return true;
+  }
+
+  /**
+   * Current deadline for a credential already accepted by
+   * `gatewayCredentialMatches`. Durable gateway tokens have no session
+   * deadline; agent-test session cookies are bounded by both clocks.
+   */
+  protected gatewayCredentialExpiresAt(candidate: string | null): number | null {
+    if (tokenMatches(this.token, candidate)) return null;
+    if (!this.agentTestMode || !candidate) return null;
+    const session = this.agentTestSessions.get(candidate);
+    return session ? Math.min(session.expiresAt, session.absoluteExpiresAt) : null;
+  }
+
+  protected refreshAgentTestSession(candidate: string, now = Date.now()): boolean {
+    const session = this.agentTestSessions.get(candidate);
+    if (!session || session.expiresAt <= now || session.absoluteExpiresAt <= now) {
+      this.agentTestSessions.delete(candidate);
+      return false;
+    }
     session.expiresAt = Math.min(now + AGENT_TEST_SESSION_IDLE_TTL_MS, session.absoluteExpiresAt);
     return true;
   }
@@ -240,6 +258,11 @@ export abstract class GatewayAuth extends GatewayEvents {
       } else {
         jsonResponse(response, 401, { error: "Authentication required" });
       }
+      return;
+    }
+
+    if (url.pathname === `${API_PREFIX}/agent-test/session`) {
+      this.handleAgentTestSession(request, response, listenerKind);
       return;
     }
 
@@ -469,6 +492,42 @@ export abstract class GatewayAuth extends GatewayEvents {
     const expiresAt = now + AGENT_TEST_BOOTSTRAP_TTL_MS;
     this.agentTestBootstraps.set(code, expiresAt);
     jsonResponse(response, 201, { code, expiresAt }, { "cache-control": "no-store" });
+  }
+
+  /**
+   * Detects an agent-test cookie session and renews it only after explicit
+   * browser activity. Ordinary API polling deliberately does not touch the
+   * idle clock.
+   */
+  protected handleAgentTestSession(
+    request: IncomingMessage,
+    response: ServerResponse,
+    listenerKind: ListenerKind,
+  ): void {
+    if (!this.agentTestBootstrapAllowed(request, listenerKind)) {
+      jsonResponse(response, 404, { error: "Not found" });
+      return;
+    }
+    const session = getCookie(request.headers, AUTH_COOKIE);
+    if (!session || !this.agentTestSessions.has(session)) {
+      jsonResponse(response, 404, { error: "Not found" });
+      return;
+    }
+    if (request.method === "GET") {
+      jsonResponse(response, 200, { active: true }, { "cache-control": "no-store" });
+      return;
+    }
+    if (request.method !== "POST") {
+      response.writeHead(405, { allow: "GET, POST" });
+      response.end();
+      return;
+    }
+    if (!this.refreshAgentTestSession(session)) {
+      jsonResponse(response, 401, { error: "Agent-test session expired" });
+      return;
+    }
+    response.writeHead(204, { "cache-control": "no-store" });
+    response.end();
   }
 
   protected async handleAgentTestBootstrapExchange(

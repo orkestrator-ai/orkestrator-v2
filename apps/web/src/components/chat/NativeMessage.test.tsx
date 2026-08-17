@@ -3277,11 +3277,16 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
      */
     const stopBackgroundTask = mock(async () => true);
     const rows = rowlessBackgroundTaskMessages(
-      [{ id: "orphan-task", description: "Watch the server", status: "running" }],
+      [{
+        id: "orphan-task",
+        description: "Watch the server",
+        status: "running",
+        startedAt: "2026-08-16T09:59:00.000Z",
+      }],
       [],
     );
 
-    render(
+    const view = render(
       <NativeMessage
         stopBackgroundTask={stopBackgroundTask}
         message={rows[0]!}
@@ -3291,6 +3296,14 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
     expect(screen.getByRole("button", {
       name: /Task Watch the server Running/,
     })).toBeTruthy();
+    /*
+     * Nothing was loaded to borrow a clock from, so the card falls back to the
+     * task's own launch time — which is what the header then prints. It used to
+     * fall back to the epoch here, and the row read as having started in 1970.
+     */
+    expect(rows[0]?.createdAt).toBe("2026-08-16T09:59:00.000Z");
+    expect(view.container.textContent).not.toContain("Invalid Date");
+
     fireEvent.click(screen.getByRole("button", { name: "Stop Watch the server" }));
     expect(stopBackgroundTask).toHaveBeenCalledWith("orphan-task");
   });

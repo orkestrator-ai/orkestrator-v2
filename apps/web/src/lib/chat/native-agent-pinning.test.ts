@@ -597,6 +597,125 @@ describe("pinNativeAgentParts", () => {
     ]);
     expect(pinned[0]?.parts.map((part) => part.type)).toEqual(["text"]);
     expect(pinned[2]?.parts[0]?.type).toBe("subagent");
+    /*
+     * The row prints its own clock, and the position it holds is the settle,
+     * not the launch. Inheriting the launch row's clock would put a 12:00 in
+     * the header of a row sitting below a 12:01 — a card claiming to predate
+     * the message above it.
+     */
+    expect(pinned[2]?.createdAt).toBe("2026-06-28T12:02:30.000Z");
+    expect(pinned[2]?.createdAt).not.toBe(pinned[0]?.createdAt);
+  });
+
+  test("clocks a shared settled row from the first card to reach it", () => {
+    // Everything in one row settled in the same gap — after the anchor and
+    // before whatever followed it — so the earliest stamp is when the row
+    // first had something to show.
+    const messages = [
+      at("assistant-1", "2026-06-28T12:00:00.000Z", [{
+        type: "subagent",
+        content: "second",
+        subagentId: "agent-2",
+        toolState: "success",
+        settledAt: "2026-06-28T12:04:30.000Z",
+      }, {
+        type: "subagent",
+        content: "first",
+        subagentId: "agent-1",
+        toolState: "success",
+        settledAt: "2026-06-28T12:04:00.000Z",
+      }]),
+      at("assistant-2", "2026-06-28T12:06:00.000Z", [
+        { type: "text", content: "Afterwards" },
+      ]),
+    ];
+
+    const pinned = pinNativeAgentParts(messages);
+    expect(pinned.map((message) => message.id)).toEqual([
+      "assistant-1:settled-agents",
+      "assistant-2",
+    ]);
+    expect(pinned[0]?.createdAt).toBe("2026-06-28T12:04:00.000Z");
+  });
+
+  test("keeps a running card on the clock of the row that launched it", () => {
+    // The mirror of the rule above: a running card has not settled anywhere, so
+    // there is no other clock to give it.
+    const messages = [
+      at("assistant-1", "2026-06-28T12:00:00.000Z", [
+        { type: "subagent", content: "worker", subagentId: "agent-1", toolState: "pending" },
+      ]),
+      at("assistant-2", "2026-06-28T12:01:00.000Z", [{ type: "text", content: "Meanwhile" }]),
+    ];
+
+    const pinned = pinNativeAgentParts(messages);
+    expect(pinned.at(-1)?.id).toBe("assistant-1:active-agents");
+    expect(pinned.at(-1)?.createdAt).toBe("2026-06-28T12:00:00.000Z");
+  });
+
+  test("anchors on transcript order rather than assuming sorted clocks", () => {
+    /*
+     * Resolution bisects a derived array rather than scanning, so this pins the
+     * property that makes that legal: the anchor is the *last row in transcript
+     * order* whose clock qualifies, not the one with the greatest clock. A
+     * transcript whose clocks step backwards — a provider re-stamping a
+     * retried turn — must still put the card under the row the reader last saw.
+     */
+    const messages = [
+      at("assistant-1", "2026-06-28T12:03:00.000Z", [{ type: "text", content: "First" }]),
+      at("assistant-2", "2026-06-28T12:01:00.000Z", [
+        { type: "text", content: "Second" },
+        settledWorker("2026-06-28T12:04:00.000Z"),
+      ]),
+      at("assistant-3", "2026-06-28T12:09:00.000Z", [{ type: "text", content: "Third" }]),
+    ];
+
+    const pinned = pinNativeAgentParts(messages);
+    expect(pinned.map((message) => message.id)).toEqual([
+      "assistant-1",
+      "assistant-2",
+      "assistant-2:settled-agents",
+      "assistant-3",
+    ]);
+  });
+
+  test("resolves each of many settled cards to its own anchor", () => {
+    /*
+     * Placement runs inside a memo the streaming transcript invalidates on
+     * every frame, so the timeline is indexed once and each card bisects it
+     * rather than rescanning the window per card. This asserts the behaviour
+     * that refactor has to preserve at the scale where it matters — every card
+     * still resolving independently across a long transcript — deliberately
+     * without a wall-clock deadline, which `docs/flaky-tests.md` records as the
+     * repository's most reliable source of parallel-run flakes.
+     */
+    const size = 2_000;
+    const messages: NativeMessage[] = [];
+    for (let index = 0; index < size; index += 1) {
+      const createdAt = new Date(Date.UTC(2026, 5, 28, 12, 0, index)).toISOString();
+      messages.push(at(`assistant-${index}`, createdAt, index % 10 === 0
+        ? [{
+            type: "subagent",
+            content: `worker-${index}`,
+            subagentId: `agent-${index}`,
+            toolState: "success",
+            // Settles one row later, so every card resolves to a distinct
+            // anchor rather than sharing one cheap answer.
+            settledAt: new Date(Date.UTC(2026, 5, 28, 12, 0, index + 1)).toISOString(),
+          }]
+        : [{ type: "text", content: `line ${index}` }]));
+    }
+
+    const pinned = pinNativeAgentParts(messages);
+    const settledRows = pinned.filter((message) =>
+      message.id.endsWith(":settled-agents"));
+
+    expect(settledRows).toHaveLength(size / 10);
+    // Each card lands under the row after its launch, and carries that card's
+    // own settle stamp rather than a shared one.
+    expect(settledRows[0]?.id).toBe("assistant-1:settled-agents");
+    expect(settledRows[0]?.createdAt).toBe("2026-06-28T12:00:01.000Z");
+    expect(settledRows.at(-1)?.id).toBe(`assistant-${size - 9}:settled-agents`);
   });
 
   test("puts the same transcript in the same order every time it is read", () => {

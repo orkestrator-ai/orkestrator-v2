@@ -2156,6 +2156,84 @@ describe("AgentNativeTab", () => {
       ));
     });
 
+    test("places a rowless task that settled inside the loaded window", async () => {
+      /*
+       * The other half of the rowless path, end to end: a task that stopped
+       * while the reader could see it keeps a card, and holds the position the
+       * backend recorded rather than falling to the bottom of the transcript.
+       * The row the tab synthesised is not itself a position, so it must land
+       * under the real transcript row it settled after, not under the earlier
+       * rowless card.
+       */
+      renderVirtualizedMessages = true;
+      const transcriptRow = (id: string, createdAt: string): NativeMessage => ({
+        id,
+        role: "assistant",
+        content: "",
+        createdAt,
+        parts: [{ type: "text", content: id }],
+      });
+      seedProjection({
+        backgroundTasks: [
+          {
+            id: "settled-early",
+            description: "Build the image",
+            status: "completed",
+            settledAt: "2026-08-16T10:00:30.000Z",
+          },
+          {
+            id: "settled-late",
+            description: "Run the suite",
+            status: "completed",
+            settledAt: "2026-08-16T10:01:30.000Z",
+          },
+          {
+            id: "settled-before-window",
+            description: "Ancient task",
+            status: "completed",
+            settledAt: "2026-08-16T09:00:00.000Z",
+          },
+        ],
+        messages: [
+          transcriptRow("assistant-1", "2026-08-16T10:00:00.000Z"),
+          transcriptRow("assistant-2", "2026-08-16T10:01:00.000Z"),
+        ],
+      });
+
+      render(
+        <AgentNativeTab
+          tabId="tab-claude-settled-task"
+          data={identity("claude")}
+          isActive
+        />,
+      );
+
+      expect(await screen.findByRole("button", {
+        name: /Task Build the image/,
+      })).toBeTruthy();
+      expect(screen.getByRole("button", { name: /Task Run the suite/ })).toBeTruthy();
+      // It settled before anything the reader can see, so it has no position
+      // here and no card — the transcript never mentioned it.
+      expect(screen.queryByRole("button", { name: /Task Ancient task/ }) === null)
+        .toBe(true);
+
+      const rows = [...screen.getByTestId("native-agent-transcript-test-list").children]
+        .map((row) => row.textContent ?? "");
+      const indexOf = (needle: string) => {
+        const index = rows.findIndex((row) => row.includes(needle));
+        // An ordering assertion against a missing row compares -1 and passes
+        // for the wrong reason, so absence fails here instead.
+        if (index < 0) throw new Error(`no transcript row contains "${needle}"`);
+        return index;
+      };
+
+      // Each card sits after the row the conversation had reached when the
+      // backend recorded it stopping, not at the bottom with the other.
+      expect(indexOf("assistant-1")).toBeLessThan(indexOf("Build the image"));
+      expect(indexOf("Build the image")).toBeLessThan(indexOf("assistant-2"));
+      expect(indexOf("assistant-2")).toBeLessThan(indexOf("Run the suite"));
+    });
+
     test("keeps reporting the task once the transcript renders its launch", async () => {
       /*
        * The synthesised row exists only because the transcript cannot show the

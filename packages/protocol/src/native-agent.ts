@@ -548,6 +548,15 @@ export interface NativeAgentBackgroundTaskSummary {
    */
   toolUseId?: string;
   /**
+   * When the provider started this task, as an ISO timestamp.
+   *
+   * Only the card for a task the transcript cannot show needs this, and only
+   * when there is no transcript row to take a clock from either — a tab that
+   * resumed into a task already running. Unlike `settledAt` it says nothing
+   * about where the card belongs; it is what the card's own header reads.
+   */
+  startedAt?: string;
+  /**
    * When the provider reported this task terminal, as an ISO timestamp.
    *
    * A long-running child is presented at the bottom of the transcript while it

@@ -809,6 +809,19 @@ function applyLine(state: TmuxTabState, line: TranscriptLine): TmuxTabState {
     (line.message?.content as TranscriptLine["content"]) ?? line.content;
   const timestamp =
     typeof line.timestamp === "string" ? line.timestamp : new Date().toISOString();
+  /*
+   * The record's own clock, or nothing.
+   *
+   * `timestamp` above falls back to this process's clock so a message always
+   * has one to render, which is fine for a bubble. It is not fine for a settle
+   * position: replaying this transcript after a reload would stamp a card with
+   * the reload time and drop it at the bottom, and two tabs would disagree —
+   * exactly what reading the position off the backend exists to prevent.
+   */
+  const recordTimestamp =
+    typeof line.timestamp === "string" && Number.isFinite(Date.parse(line.timestamp))
+      ? line.timestamp
+      : undefined;
 
   const parts = contentToParts(content, line.taskSnapshots);
 
@@ -817,7 +830,7 @@ function applyLine(state: TmuxTabState, line: TranscriptLine): TmuxTabState {
     parts.length > 0 &&
     parts.every((p) => p.type === "tool-result");
   if (allToolResults) {
-    const merged = mergeToolResultsIntoPrior(state.messages, parts, timestamp);
+    const merged = mergeToolResultsIntoPrior(state.messages, parts, recordTimestamp);
     if (merged) return { ...state, messages: merged };
   }
 
@@ -1025,14 +1038,16 @@ function mergeToolResultsIntoPrior(
   messages: ClaudeMessage[],
   resultParts: ClaudeMessagePart[],
   /**
-   * Timestamp of the record carrying these results.
+   * Timestamp of the record carrying these results, when it has a readable one.
    *
    * A tool that launched a long-running child settles here, and that is the
    * transcript position its card holds once it stops — see `settledAt` on the
    * shared part type. Read from the record rather than a clock so replaying the
-   * same transcript, on this tab or the next, reproduces the same position.
+   * same transcript, on this tab or the next, reproduces the same position;
+   * a record with no usable clock stamps nothing, which leaves the card in its
+   * launch row rather than wherever this replay happened to run.
    */
-  settledAt: string,
+  settledAt: string | undefined,
 ): ClaudeMessage[] | null {
   const resultIds = new Set(
     resultParts
@@ -1055,13 +1070,15 @@ function mergeToolResultsIntoPrior(
       if (p.type === "tool-invocation" && p.toolUseId && resultIds.has(p.toolUseId)) {
         const match = resultParts.find((r) => r.toolUseId === p.toolUseId);
         if (match) {
+          // A tool settles once; a repeated result must not move its card, and
+          // a record with no readable clock must not stamp one at all.
+          const settled = p.settledAt ?? settledAt;
           updatedParts[updatedParts.length - 1] = {
             ...p,
             toolState: match.toolState,
             toolOutput: match.toolOutput ?? p.toolOutput,
             toolError: match.toolError ?? p.toolError,
-            // A tool settles once; a repeated result must not move its card.
-            settledAt: p.settledAt ?? settledAt,
+            ...(settled ? { settledAt: settled } : {}),
             // The task list state the backend derived for this result belongs
             // on the invocation, which is what TodoToolPart renders.
             taskSnapshot: match.taskSnapshot ?? p.taskSnapshot,

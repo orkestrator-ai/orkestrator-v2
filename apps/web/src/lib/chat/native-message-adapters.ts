@@ -18,7 +18,7 @@ import {
   isBackgroundCapableShellTool,
   recoverBackgroundTaskLaunchId,
 } from "@orkestrator/protocol/native-agent";
-import { nativeAgentSettleAnchor } from "./native-agent-pinning";
+import { createNativeAgentSettleAnchors } from "./native-agent-pinning";
 import { parseLocalFilePathFromUrl } from "./file-url";
 import type { AcpMessage } from "@/lib/acp-client";
 
@@ -776,12 +776,32 @@ function backgroundTaskSettledAt(
   return Number.isFinite(endedAt.getTime()) ? endedAt.toISOString() : undefined;
 }
 
+/**
+ * What this decoration reads off a task record, whichever shape supplied it.
+ *
+ * Two shapes reach it — the bridge's own `ClaudeBackgroundTask` and the
+ * projection's summary — and they agree on every field named here while
+ * disagreeing elsewhere: `startedAt` is epoch milliseconds on one and an ISO
+ * string on the other. Naming what is used keeps that disagreement out of a
+ * function that touches neither.
+ */
+export interface ClaudeBackgroundTaskState {
+  id: string;
+  toolUseId?: string;
+  description?: string;
+  status: ClaudeBackgroundTask["status"];
+  /** Terminal edge as the bridge records it, in epoch milliseconds. */
+  endedAt?: number;
+  /** Terminal edge as the projection carries it; see `settledAt` there. */
+  settledAt?: string;
+}
+
 export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
   messages: TMessage[],
-  backgroundTasks: Record<string, ClaudeBackgroundTask & { settledAt?: string }>,
+  backgroundTasks: Record<string, ClaudeBackgroundTaskState>,
 ): TMessage[] {
-  const tasksById = new Map<string, ClaudeBackgroundTask>();
-  const tasksByToolUseId = new Map<string, ClaudeBackgroundTask>();
+  const tasksById = new Map<string, ClaudeBackgroundTaskState>();
+  const tasksByToolUseId = new Map<string, ClaudeBackgroundTaskState>();
   for (const task of Object.values(backgroundTasks)) {
     tasksById.set(task.id, task);
     if (task.toolUseId) tasksByToolUseId.set(task.toolUseId, task);
@@ -981,6 +1001,8 @@ export interface BackgroundTaskSnapshot {
   id: string;
   status: NativeBackgroundTaskStatus;
   description?: string;
+  /** Backend-recorded launch clock; see the protocol summary's `startedAt`. */
+  startedAt?: string;
   /** Backend-recorded terminal edge; see `NativeBackgroundTask.settledAt`. */
   settledAt?: string;
 }
@@ -1075,18 +1097,35 @@ export function rowlessBackgroundTaskMessages(
   if (tasks.length === 0) return EMPTY_ROWLESS_TASKS;
 
   const rendered = collectRenderedBackgroundTaskIds(messages);
+  const anchors = createNativeAgentSettleAnchors(messages);
   const rows = tasks.filter((task) =>
     !rendered.has(task.id)
     && (isLiveBackgroundTask(task.status)
-      || nativeAgentSettleAnchor(messages, task.settledAt) !== undefined));
+      || anchors.resolve(task.settledAt) !== undefined));
   if (rows.length === 0) return EMPTY_ROWLESS_TASKS;
 
   return rows.map((task) => createBackgroundTaskMessage(
     task,
-    // A live card sits at the bottom, so it takes the newest row's clock. A
-    // settled one is placed by its own settle position, and carrying that as
-    // the row's timestamp keeps the header honest about when it stopped.
-    task.settledAt ?? messages.at(-1)?.createdAt ?? new Date(0).toISOString(),
+    /*
+     * A live card sits at the bottom, so it takes the newest row's clock — the
+     * one belonging to the position it actually holds. A settled one is placed
+     * by its own settle position, and carrying that as the row's timestamp
+     * keeps the header honest about when it stopped.
+     *
+     * A tab that resumed into a running task has neither: it has the snapshot
+     * before it has a transcript. Its own launch clock is then the only honest
+     * answer, and is why the snapshot carries one — without it this fell to the
+     * epoch, and the card claimed to have started in 1970.
+     *
+     * The epoch remains only because a row must carry some clock and a provider
+     * that reports neither leaves nothing to carry. Every task the Claude
+     * bridge reports has a `startedAt`, so that last resort is not a path this
+     * renders in practice.
+     */
+    task.settledAt
+      ?? messages.at(-1)?.createdAt
+      ?? task.startedAt
+      ?? new Date(0).toISOString(),
   ));
 }
 

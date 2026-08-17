@@ -411,6 +411,82 @@ describe("applyTranscriptLine", () => {
     expect(result!.toolOutput).toBe("ok\n");
   });
 
+  describe("settle stamps on merged tool results", () => {
+    /*
+     * A tool that launched a long-running child settles where the record says
+     * it did, and that stamp is the transcript position its card holds once it
+     * stops. It has to come off the record: a clock read during replay would
+     * put the card somewhere different after every reload, and somewhere
+     * different again in a second tab.
+     */
+    const launch: TranscriptLine = {
+      type: "assistant",
+      uuid: "a1",
+      timestamp: "2026-08-17T10:00:00.000Z",
+      message: {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "tu1", name: "Task", input: {} }],
+      },
+    };
+    const resultLine = (timestamp?: unknown): TranscriptLine => ({
+      type: "user",
+      uuid: "r1",
+      ...(timestamp === undefined ? {} : { timestamp }),
+      message: {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "tu1", content: "done" }],
+      },
+    } as TranscriptLine);
+
+    const settleOf = (line: TranscriptLine) => {
+      useClaudeTmuxStore.getState().applyTranscriptLine("e", launch);
+      useClaudeTmuxStore.getState().applyTranscriptLine("e", line);
+      const parts = useClaudeTmuxStore.getState().getTab("e").messages[0]!.parts;
+      const invocation = parts.find(
+        (p) => p.type === "tool-invocation" && p.toolUseId === "tu1",
+      );
+      expect(invocation!.toolState).toBe("success");
+      return invocation!.settledAt;
+    };
+
+    test("stamps the card from the record's own clock", () => {
+      expect(settleOf(resultLine("2026-08-17T10:04:30.000Z")))
+        .toBe("2026-08-17T10:04:30.000Z");
+    });
+
+    test.each([
+      ["no timestamp at all", undefined],
+      ["an unparseable timestamp", "not-a-date"],
+      ["a non-string timestamp", 1_755_000_000_000],
+    ])("leaves the card unstamped for a record with %s", (_label, timestamp) => {
+      /*
+       * The regression this guards: the message clock falls back to
+       * `new Date()` so a bubble always has something to render, and reusing
+       * that for the settle position stamped the card with the replay time —
+       * dropping it at the bottom of the transcript, differently every reload.
+       */
+      expect(settleOf(resultLine(timestamp))).toBeUndefined();
+    });
+
+    test("keeps the first stamp when a later record repeats the result", () => {
+      useClaudeTmuxStore.getState().applyTranscriptLine("e", launch);
+      useClaudeTmuxStore.getState().applyTranscriptLine(
+        "e",
+        resultLine("2026-08-17T10:04:30.000Z"),
+      );
+      useClaudeTmuxStore.getState().applyTranscriptLine("e", {
+        ...resultLine("2026-08-17T11:00:00.000Z"),
+        uuid: "r2",
+      });
+
+      const parts = useClaudeTmuxStore.getState().getTab("e").messages[0]!.parts;
+      // A tool settles once. Restamping would move a card the reader has
+      // already found in its place.
+      expect(parts.find((p) => p.type === "tool-invocation")?.settledAt)
+        .toBe("2026-08-17T10:04:30.000Z");
+    });
+  });
+
   test("lands the backend's task snapshot on the tool invocation", () => {
     // tmux mode does not derive the task list; the backend that reads the
     // transcript stamps it on the result line, and it has to survive the merge

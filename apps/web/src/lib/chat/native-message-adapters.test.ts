@@ -165,6 +165,34 @@ describe("Claude activity in the shared native transcript", () => {
       expect(rows[0]?.createdAt).toBe("2026-08-16T10:00:00.000Z");
     });
 
+    test("clocks a live task from its own launch when nothing is loaded yet", () => {
+      /*
+       * A tab that resumes a session with a task already running has the
+       * snapshot before it has the transcript, so there is no row to borrow a
+       * clock from. The task's own launch time is the honest answer, and is why
+       * the snapshot carries one: without it this fell to the epoch, and the
+       * card's header read as having started in 1970.
+       */
+      const rows = rowlessBackgroundTaskMessages(
+        [{ ...watchTask, startedAt: "2026-08-16T09:59:00.000Z" }],
+        [],
+      );
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.createdAt).toBe("2026-08-16T09:59:00.000Z");
+    });
+
+    test("prefers the transcript's newest clock to the launch clock for a live task", () => {
+      // A live card sits at the bottom of the transcript, so its header should
+      // agree with the position it holds rather than with when it started.
+      const rows = rowlessBackgroundTaskMessages(
+        [{ ...watchTask, startedAt: "2026-08-16T09:59:00.000Z" }],
+        transcript,
+      );
+
+      expect(rows[0]?.createdAt).toBe("2026-08-16T10:00:00.000Z");
+    });
+
     test("hands the task over when its launch row finally arrives", () => {
       // Two cards for one task would mean two stop controls, with nothing to
       // tell the reader which of them the task actually belongs to.

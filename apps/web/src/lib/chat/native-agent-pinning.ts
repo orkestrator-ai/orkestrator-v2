@@ -161,29 +161,88 @@ export function snapshotNativeAgentActivity(
   return [...snapshots.values()];
 }
 
-/**
- * The row a card that settled at `settledAt` belongs under.
- *
- * The transcript had reached this message when the backend recorded the child
- * terminal, so this is where the card was sitting and where it stays. A child
- * that settled before anything in the loaded window has no row to sit under —
- * its transcript was trimmed — and gets no anchor, which leaves it in its
- * launch row rather than teleporting it to the top.
- */
-export function nativeAgentSettleAnchor(
-  timeline: readonly NativeMessage[],
-  settledAt: string | undefined,
-): string | undefined {
-  const settled = timestampOf(settledAt);
-  if (settled === undefined) return undefined;
+/** Resolves settle stamps to the transcript row they belong under. */
+export interface NativeAgentSettleAnchors {
+  /**
+   * The row a card that settled at `settledAt` belongs under.
+   *
+   * The transcript had reached this message when the backend recorded the child
+   * terminal, so this is where the card was sitting and where it stays. A child
+   * that settled before anything in the loaded window has no row to sit under —
+   * its transcript was trimmed — and gets no anchor, which leaves it in its
+   * launch row rather than teleporting it to the top.
+   */
+  resolve(settledAt: string | undefined): string | undefined;
+}
 
-  let anchorId: string | undefined;
+/**
+ * Index the rows a settled card may be placed under.
+ *
+ * One transcript answers this for every settled child in it, and a long session
+ * holds many, so the timeline is read once here rather than once per child —
+ * resolving used to walk the whole transcript per card, which is quadratic on a
+ * path that re-runs on every streamed frame.
+ *
+ * `floors[i]` is the earliest clock at or after position `i`. That is
+ * non-decreasing however unordered the transcript's own clocks happen to be, so
+ * the position can be bisected without assuming the timeline is sorted — which
+ * keeps the answer identical to the scan it replaces.
+ */
+export function createNativeAgentSettleAnchors(
+  timeline: readonly NativeMessage[],
+): NativeAgentSettleAnchors {
+  const ids: string[] = [];
+  const clocks: number[] = [];
   for (const message of timeline) {
     const createdAt = timestampOf(message.createdAt);
-    if (createdAt === undefined || createdAt > settled) continue;
-    anchorId = message.id;
+    // A row with no readable clock cannot vouch for where anything settled, so
+    // it is not offered as a position.
+    if (createdAt === undefined) continue;
+    ids.push(message.id);
+    clocks.push(createdAt);
   }
-  return anchorId;
+
+  const floors = new Array<number>(clocks.length);
+  let floor = Number.POSITIVE_INFINITY;
+  for (let index = clocks.length - 1; index >= 0; index -= 1) {
+    floor = Math.min(floor, clocks[index]!);
+    floors[index] = floor;
+  }
+
+  return {
+    resolve(settledAt) {
+      const settled = timestampOf(settledAt);
+      if (settled === undefined) return undefined;
+
+      /*
+       * The last position whose floor is still at-or-before the stamp. Its own
+       * clock has to be the qualifying one: nothing after it qualifies, so the
+       * minimum it contributes over that range is its own.
+       */
+      let low = 0;
+      let high = floors.length - 1;
+      let anchor = -1;
+      while (low <= high) {
+        const middle = (low + high) >> 1;
+        if (floors[middle]! <= settled) {
+          anchor = middle;
+          low = middle + 1;
+        } else {
+          high = middle - 1;
+        }
+      }
+      return anchor === -1 ? undefined : ids[anchor];
+    },
+  };
+}
+
+/** The earlier of two settle stamps, ignoring one this module cannot read. */
+function earlierStamp(first: string, second: string): string {
+  const firstMs = timestampOf(first);
+  const secondMs = timestampOf(second);
+  if (firstMs === undefined) return second;
+  if (secondMs === undefined) return first;
+  return firstMs <= secondMs ? first : second;
 }
 
 function hasRenderableContent(message: NativeMessage): boolean {
@@ -193,6 +252,7 @@ function hasRenderableContent(message: NativeMessage): boolean {
 interface SettledAgentPart {
   part: NativeAgentActivityPart;
   anchorMessageId: string;
+  settledAt: string;
 }
 
 interface AgentPartExtraction {
@@ -205,7 +265,7 @@ interface AgentPartExtraction {
 
 function extractPinnedAgentParts(
   parts: NativeMessagePart[],
-  resolveAnchor: (part: NativeAgentActivityPart) => string | undefined,
+  anchors: NativeAgentSettleAnchors,
 ): AgentPartExtraction {
   const retainedParts: NativeMessagePart[] = [];
   const activeParts: NativeAgentActivityPart[] = [];
@@ -221,9 +281,10 @@ function extractPinnedAgentParts(
       // No recorded settle position: a child whose bridge predates the field,
       // or one whose terminal edge the backend never saw. Its launch row is
       // then the only position anything vouches for.
-      const anchorMessageId = resolveAnchor(part);
-      if (anchorMessageId) {
-        settledParts.push({ part, anchorMessageId });
+      const settledAt = settledAtOf(part);
+      const anchorMessageId = anchors.resolve(settledAt);
+      if (anchorMessageId && settledAt) {
+        settledParts.push({ part, anchorMessageId, settledAt });
         continue;
       }
 
@@ -232,7 +293,7 @@ function extractPinnedAgentParts(
     }
 
     if (part.type === "tool-group") {
-      const extracted = extractPinnedAgentParts(part.parts, resolveAnchor);
+      const extracted = extractPinnedAgentParts(part.parts, anchors);
       activeParts.push(...extracted.activeParts);
       settledParts.push(...extracted.settledParts);
 
@@ -246,7 +307,7 @@ function extractPinnedAgentParts(
     }
 
     if (part.type === "agent-group") {
-      const extracted = extractPinnedAgentParts(part.parts, resolveAnchor);
+      const extracted = extractPinnedAgentParts(part.parts, anchors);
       activeParts.push(...extracted.activeParts);
       settledParts.push(...extracted.settledParts);
       const retainedAgentParts = extracted.retainedParts.filter(isAgentPart);
@@ -270,6 +331,16 @@ function createPinnedAgentMessage(
   source: NativeMessage,
   id: string,
   parts: NativeAgentActivityPart[],
+  /**
+   * Clock for the row, when the source message's own is the wrong one.
+   *
+   * A settled row sits where the backend recorded the child stopping, which is
+   * not where the launch row it was lifted out of sits — so inheriting the
+   * launch clock would print a time earlier than the rows above it. A running
+   * row keeps the source's clock: it is pinned to the bottom precisely because
+   * it has not settled anywhere yet.
+   */
+  createdAt?: string,
 ): NativeMessage {
   const isGroup = parts.length > 1;
 
@@ -279,6 +350,7 @@ function createPinnedAgentMessage(
     // expansion state lives inside NativeMessage, so a singleton-specific id
     // would collapse an expanded row as soon as a second agent starts.
     id,
+    ...(createdAt ? { createdAt } : {}),
     content: "",
     parts: isGroup
       ? [{
@@ -293,6 +365,14 @@ function createPinnedAgentMessage(
 interface SettledAgentRow {
   source: NativeMessage;
   parts: NativeAgentActivityPart[];
+  /**
+   * Clock for the row: the earliest stamp among the cards sharing it.
+   *
+   * Every card here settled after the anchor row and before whatever followed
+   * it, so any of their stamps sits in the same gap; the earliest is the one
+   * that says when this row first had something to show.
+   */
+  settledAt: string;
 }
 
 /**
@@ -329,13 +409,12 @@ export function pinNativeAgentParts(
   }> = [];
   const activeMessages: NativeMessage[] = [];
   const settledRows = new Map<string, SettledAgentRow>();
-  const resolveAnchor = (part: NativeAgentActivityPart) =>
-    nativeAgentSettleAnchor(anchorTimeline, settledAtOf(part));
+  const anchors = createNativeAgentSettleAnchors(anchorTimeline);
 
   for (const message of messages) {
     const { retainedParts, activeParts, settledParts } = extractPinnedAgentParts(
       message.parts,
-      resolveAnchor,
+      anchors,
     );
 
     if (activeParts.length === 0 && settledParts.length === 0) {
@@ -369,12 +448,17 @@ export function pinNativeAgentParts(
       ));
     }
 
-    for (const { part, anchorMessageId } of settledParts) {
+    for (const { part, anchorMessageId, settledAt } of settledParts) {
       const row = settledRows.get(anchorMessageId);
       if (row) {
         row.parts.push(part);
+        row.settledAt = earlierStamp(row.settledAt, settledAt);
       } else {
-        settledRows.set(anchorMessageId, { source: message, parts: [part] });
+        settledRows.set(anchorMessageId, {
+          source: message,
+          parts: [part],
+          settledAt,
+        });
       }
     }
   }
@@ -391,6 +475,7 @@ export function pinNativeAgentParts(
       row.source,
       `${slot.originalMessageId}:settled-agents`,
       row.parts,
+      row.settledAt,
     ));
   }
 
@@ -402,6 +487,7 @@ export function pinNativeAgentParts(
       row.source,
       `${anchorMessageId}:settled-agents`,
       row.parts,
+      row.settledAt,
     ));
   }
 

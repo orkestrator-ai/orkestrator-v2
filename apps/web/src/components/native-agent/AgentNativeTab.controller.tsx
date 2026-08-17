@@ -387,9 +387,12 @@ export function SharedNativeAgentController({
    * width, at the bottom while they run, and holding their position once they
    * settle, exactly like a child the transcript did capture.
    *
-   * A task keeps its row after settling, but only if this tab surfaced it while
-   * it was live. Rendering every terminal task in the snapshot would drop a pile
-   * of finished cards into a transcript that never mentioned them.
+   * A settled task keeps a row when the backend's settle stamp lands inside the
+   * loaded window — it stopped somewhere the reader can see. One that settled
+   * before the window begins gets none, because rendering every terminal task in
+   * the snapshot would drop a pile of finished cards into a transcript that
+   * never mentioned them. Deliberately not "whatever this tab happened to watch
+   * go live": that answer would differ between tabs and reset on reload.
    */
   const backgroundTaskRows = useMemo(
     () => rowlessBackgroundTaskMessages(

@@ -2,12 +2,20 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { FullscreenSettingsLayout } from "./FullscreenSettingsLayout";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
+import { Z_FULLSCREEN_POPOVER } from "@/constants/z-index";
 
 afterEach(cleanup);
 
@@ -113,6 +121,64 @@ describe("FullscreenSettingsLayout", () => {
 
     fireEvent.click(option);
     expect(onValueChange).toHaveBeenCalledWith("two");
+  });
+
+  test("raises descendant dropdown menus above the fullscreen surface", () => {
+    const onSelect = mock(() => undefined);
+    render(
+      <FullscreenSettingsLayout open onOpenChange={() => undefined} title="Settings" menuItems={menuItems}>
+        {() => (
+          <DropdownMenu>
+            <DropdownMenuTrigger aria-label="Nested dropdown">Open</DropdownMenuTrigger>
+            <DropdownMenuContent>
+              <DropdownMenuItem onSelect={onSelect}>Haiku</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+      </FullscreenSettingsLayout>,
+    );
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Nested dropdown" }));
+    const item = screen.getByRole("menuitem", { name: "Haiku" });
+    const menu = item.closest('[data-slot="dropdown-menu-content"]');
+    expect(menu?.className).toContain("z-[70]");
+    expect(menu?.className).not.toContain("z-50");
+
+    fireEvent.click(item);
+    expect(onSelect).toHaveBeenCalledTimes(1);
+  });
+
+  // The synthetic dropdown above proves the context wiring; this one proves the
+  // component the fix exists for. `DropdownMenuContent` merges the caller's
+  // `className` *after* the inherited layer, so a `z-*` added to the picker's
+  // own content classes would silently win and put Settings → Defaults back
+  // behind the fullscreen surface with every other test still green.
+  test("raises the real agent model picker above the fullscreen surface", () => {
+    render(
+      <FullscreenSettingsLayout open onOpenChange={() => undefined} title="Settings" menuItems={menuItems}>
+        {() => (
+          <AgentModelPicker
+            ariaLabel="Default model"
+            models={[
+              { platform: "codex", id: "model-1", label: "Model 1", description: "Model 1 description" },
+            ]}
+            selectedModelId="model-1"
+            selectedModelLabel="Model 1"
+            onModelChange={() => undefined}
+            reasoningOptions={[{ id: "high", label: "High" }]}
+            selectedReasoningId="high"
+            selectedReasoningLabel="High"
+          />
+        )}
+      </FullscreenSettingsLayout>,
+    );
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Default model" }));
+    const menu = document.querySelector("[data-native-model-picker]");
+    expect(menu).toBeTruthy();
+    expect(menu?.className).toContain(Z_FULLSCREEN_POPOVER);
+    expect(menu?.className).not.toContain("z-50");
+    expect(screen.getByRole("menuitemradio", { name: /Model 1/ })).toBeTruthy();
   });
 
   test("uses Escape to close the mobile selector before closing settings", () => {

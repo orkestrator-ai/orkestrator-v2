@@ -523,8 +523,14 @@ export const MAX_CURSOR_CHILD_PROMPT_BYTES = 4 * 1024;
 export const MAX_CURSOR_CHILD_PROMPT_RECORDS = 8;
 export const CURSOR_BACKGROUND_CONTINUATION_PREFIX = "Background subagent finished.";
 /** Auto-retries for transient provider errors (`resource_exhausted`, `unavailable`). */
-export const RESOURCE_EXHAUSTED_MAX_RETRIES = 3;
-export const RESOURCE_EXHAUSTED_RETRY_BASE_MS = parseDuration(
+export const RETRIABLE_PROVIDER_MAX_RETRIES = 3;
+// The variable keeps the `ACP_RESOURCE_EXHAUSTED_` spelling from when capacity
+// was the only retriable code, deliberately: it is the one part of this
+// mechanism that has escaped the process, so renaming it would silently reset
+// the backoff of any deployment that pinned it. A second accepted spelling was
+// considered and rejected — it is config surface no test can distinguish from
+// the default without a timing assertion.
+export const RETRIABLE_PROVIDER_RETRY_BASE_MS = parseDuration(
   process.env.ACP_RESOURCE_EXHAUSTED_RETRY_BASE_MS,
   1_000,
 );

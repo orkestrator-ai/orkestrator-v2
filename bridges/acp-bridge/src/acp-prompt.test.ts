@@ -16,9 +16,9 @@ import {
   waitFor,
 } from "./acp-test-harness.js";
 import {
-  FLATTENED_RESOURCE_EXHAUSTED_SUFFIX,
-  RESOURCE_EXHAUSTED_ERROR,
-  resourceExhaustedError,
+  FLATTENED_RETRIABLE_PROVIDER_SUFFIX,
+  RETRIABLE_PROVIDER_ERROR,
+  retriableProviderError,
 } from "./acp-prompt.js";
 
 
@@ -27,25 +27,91 @@ describe("ACP bridge", () => {
 
 
   test("classifies resource_exhausted and unavailable provider errors as retriable", () => {
-    expect(RESOURCE_EXHAUSTED_ERROR.test("RetriableError: [resource_exhausted] Error")).toBe(true);
-    expect(RESOURCE_EXHAUSTED_ERROR.test("RetriableError: [unavailable] PING timed out")).toBe(true);
-    expect(RESOURCE_EXHAUSTED_ERROR.test("GoogleGenerativeAIFetchError: [unavailable] PING timed out"))
+    expect(RETRIABLE_PROVIDER_ERROR.test("RetriableError: [resource_exhausted] Error")).toBe(true);
+    expect(RETRIABLE_PROVIDER_ERROR.test("RetriableError: [unavailable] PING timed out")).toBe(true);
+    expect(RETRIABLE_PROVIDER_ERROR.test("GoogleGenerativeAIFetchError: [unavailable] PING timed out"))
       .toBe(true);
-    expect(RESOURCE_EXHAUSTED_ERROR.test("permission denied: [invalid_argument] Error")).toBe(false);
-    expect(resourceExhaustedError(new Error("RetriableError: [unavailable] PING timed out"))).toBe(true);
-    expect(resourceExhaustedError(new Error("cursor ACP session/prompt timed out"))).toBe(false);
+    expect(RETRIABLE_PROVIDER_ERROR.test("permission denied: [invalid_argument] Error")).toBe(false);
+    expect(retriableProviderError(new Error("RetriableError: [unavailable] PING timed out"))).toBe(true);
+    expect(retriableProviderError(new Error("cursor ACP session/prompt timed out"))).toBe(false);
 
-    expect(FLATTENED_RESOURCE_EXHAUSTED_SUFFIX.test(
+    expect(FLATTENED_RETRIABLE_PROVIDER_SUFFIX.test(
       "Completed the first safe step.\n\nError: RetriableError: [unavailable] PING timed out",
     )).toBe(true);
-    expect(FLATTENED_RESOURCE_EXHAUSTED_SUFFIX.test(
+    expect(FLATTENED_RETRIABLE_PROVIDER_SUFFIX.test(
       "Error: GoogleGenerativeAIFetchError: [resource_exhausted] Error",
     )).toBe(true);
-    expect(FLATTENED_RESOURCE_EXHAUSTED_SUFFIX.test(
+    expect(FLATTENED_RETRIABLE_PROVIDER_SUFFIX.test(
       "Error: RetriableError: [invalid_argument] Error",
     )).toBe(false);
-    expect(FLATTENED_RESOURCE_EXHAUSTED_SUFFIX.test(
+    expect(FLATTENED_RETRIABLE_PROVIDER_SUFFIX.test(
       "Error: RetriableError: [unavailable] PING timed out\n\nMore assistant text",
+    )).toBe(false);
+  });
+
+
+
+  // Both classifiers recognise the same provider failure arriving over two
+  // transports: a typed `session/prompt` rejection and Cursor's flattening bug.
+  // A separator only one of them accepts would retry the RPC form while
+  // reporting the flattened form as a finished turn, leaving the raw provider
+  // serialization in the transcript. They must agree character for character.
+  test("both retriable-provider classifiers accept the same code separators", () => {
+    // `\n` included: a provider that wraps the detail onto its own line is the
+    // same failure, and the flattened detail stays bounded to one line either
+    // way, so accepting it costs no extra transcript.
+    for (const separator of [" ", "  ", "\t", " \t ", "\n"]) {
+      const detail = `RetriableError: [unavailable]${separator}PING timed out`;
+      expect(RETRIABLE_PROVIDER_ERROR.test(detail)).toBe(true);
+      expect(FLATTENED_RETRIABLE_PROVIDER_SUFFIX.test(`Answer.\n\nError: ${detail}`)).toBe(true);
+    }
+    // An empty detail is retriable to neither: there is nothing after the code
+    // to distinguish a real failure from prose that merely names one.
+    expect(RETRIABLE_PROVIDER_ERROR.test("RetriableError: [unavailable] ")).toBe(false);
+    expect(FLATTENED_RETRIABLE_PROVIDER_SUFFIX.test(
+      "Answer.\n\nError: RetriableError: [unavailable] ",
+    )).toBe(false);
+  });
+
+
+
+  // The flattened detail is deliberately bounded to the final line. A provider
+  // error that carries its own stack trace is left in the transcript and the
+  // turn ends, rather than being stripped and retried: assistant text is
+  // model-controlled, so a pattern that swallowed trailing lines could delete a
+  // real answer. This pins that trade-off so widening it stays a conscious act.
+  test("leaves a multi-line provider error detail unmatched rather than over-stripping", () => {
+    expect(FLATTENED_RETRIABLE_PROVIDER_SUFFIX.test(
+      "Answer.\n\nError: RetriableError: [unavailable] PING timed out\n    at Socket.onTimeout",
+    )).toBe(false);
+    // The first line alone still matches, so a provider that drops the trace is
+    // unaffected by the bound.
+    expect(FLATTENED_RETRIABLE_PROVIDER_SUFFIX.test(
+      "Answer.\n\nError: RetriableError: [unavailable] PING timed out",
+    )).toBe(true);
+  });
+
+
+
+  // The false-positive direction of the broadened detail matcher. An assistant
+  // answer that quotes a provider error must survive: stripping it would delete
+  // real work and silently re-run a turn that already succeeded.
+  test("preserves an assistant answer that quotes a provider error", () => {
+    // Fenced, which is how an agent reporting a log actually renders it.
+    expect(FLATTENED_RETRIABLE_PROVIDER_SUFFIX.test(
+      "The upstream call fails with:\n\n```\nError: RetriableError: [unavailable] PING timed out\n```",
+    )).toBe(false);
+    // Indented, quoted, or mid-paragraph citations are equally not tail errors.
+    expect(FLATTENED_RETRIABLE_PROVIDER_SUFFIX.test(
+      "Root cause:\n\n> Error: RetriableError: [unavailable] PING timed out",
+    )).toBe(false);
+    expect(FLATTENED_RETRIABLE_PROVIDER_SUFFIX.test(
+      "It logged `Error: RetriableError: [unavailable] PING timed out` on every retry.",
+    )).toBe(false);
+    // A single newline is not the `\n\n` boundary the flattened chunk arrives
+    // with, so a wrapped sentence ending in the same words is left alone too.
+    expect(FLATTENED_RETRIABLE_PROVIDER_SUFFIX.test(
+      "Summary:\nError: RetriableError: [unavailable] PING timed out",
     )).toBe(false);
   });
 

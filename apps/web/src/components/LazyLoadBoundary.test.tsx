@@ -7,6 +7,7 @@ import {
   LazyDialogLoadingFallback,
   LazyLoadBoundary,
   LazyLoadInlineErrorFallback,
+  type LazyLoadFailureDiagnostic,
 } from "./LazyLoadBoundary";
 
 afterEach(() => {
@@ -227,6 +228,50 @@ describe("LazyLoadBoundary", () => {
         </LazyLoadBoundary>,
       );
       expect(await screen.findByText("Recovered at the next revision")).toBeTruthy();
+    });
+  });
+
+  test("notifies onError with the bounded diagnostic so owners can drop stale state", async () => {
+    const onError = mock((_diagnostic: LazyLoadFailureDiagnostic) => undefined);
+    const Exploding = () => {
+      throw new TypeError("poisoned persisted state");
+    };
+
+    await withSilencedReactErrors(async () => {
+      render(
+        <LazyLoadBoundary onError={onError}>
+          <Exploding />
+        </LazyLoadBoundary>,
+      );
+
+      expect(await screen.findByRole("alert")).toBeTruthy();
+    });
+
+    expect(onError).toHaveBeenCalledTimes(1);
+    const diagnostic = onError.mock.calls[0]![0];
+    expect(diagnostic.kind).toBe("render");
+    expect(diagnostic.errorType).toBe("TypeError");
+    expect(JSON.stringify(diagnostic)).not.toContain("poisoned persisted state");
+  });
+
+  test("still shows the fallback when the onError hook itself throws", async () => {
+    const Exploding = () => {
+      throw new Error("view failure");
+    };
+
+    await withSilencedReactErrors(async () => {
+      render(
+        <LazyLoadBoundary
+          onError={() => {
+            throw new Error("cleanup hook failure");
+          }}
+        >
+          <Exploding />
+        </LazyLoadBoundary>,
+      );
+
+      expect(await screen.findByRole("alert")).toBeTruthy();
+      expect(screen.getByText("Something went wrong in this view")).toBeTruthy();
     });
   });
 

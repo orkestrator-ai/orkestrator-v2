@@ -44,6 +44,35 @@ interface PersistedEntry {
 
 const persistedStates = new Map<string, PersistedEntry>();
 
+/**
+ * Whether a persisted snapshot is safe to hand back to Virtuoso.
+ *
+ * `restoreStateFrom` feeds these numbers straight into Virtuoso's size and
+ * offset trees, whose binary search throws from inside a render for values it
+ * cannot order (negative indices, NaN, inverted ranges). A snapshot is captured
+ * by `getState` and should always be well-formed, but a malformed one is not a
+ * recoverable degradation: the throw reaches the view's error boundary, and
+ * because this map outlives the remount, every retry replays the same crash.
+ * Restoring nothing merely costs the scroll position.
+ */
+export function isRestorableStateSnapshot(
+  snapshot: StateSnapshot | undefined,
+): snapshot is StateSnapshot {
+  if (!snapshot || typeof snapshot !== "object") return false;
+  if (!Number.isFinite(snapshot.scrollTop) || snapshot.scrollTop < 0) {
+    return false;
+  }
+  if (!Array.isArray(snapshot.ranges)) return false;
+  return snapshot.ranges.every((range) =>
+    Number.isInteger(range?.startIndex)
+    && Number.isInteger(range?.endIndex)
+    && Number.isFinite(range?.size)
+    && range.startIndex >= 0
+    && range.endIndex >= range.startIndex
+    && range.size >= 0
+  );
+}
+
 function setPersistedState(key: string, entry: PersistedEntry) {
   persistedStates.delete(key);
   persistedStates.set(key, entry);
@@ -136,10 +165,19 @@ export function useVirtuosoScrollState(
   const scrollerElRef = useRef<HTMLElement | null>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const isAtBottomRef = useRef(true);
-  // Resolve persisted state once on mount.
-  const [persisted] = useState<PersistedEntry | undefined>(() =>
-    persistKey ? persistedStates.get(persistKey) : undefined
-  );
+  // Resolve persisted state once on mount. A snapshot that fails validation is
+  // dropped from the map as well: it would fail identically on every future
+  // mount, and retaining it keeps a crash-then-retry cycle deterministic.
+  const [persisted] = useState<PersistedEntry | undefined>(() => {
+    if (!persistKey) return undefined;
+    const entry = persistedStates.get(persistKey);
+    if (!entry) return undefined;
+    if (!isRestorableStateSnapshot(entry.snapshot)) {
+      persistedStates.delete(persistKey);
+      return undefined;
+    }
+    return entry;
+  });
 
   /**
    * Intent: the user wants new content to auto-scroll into view. Only

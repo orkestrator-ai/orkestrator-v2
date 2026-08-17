@@ -3,6 +3,7 @@ import { AlertCircle, CheckCircle2, Loader2, RefreshCw, Square } from "lucide-re
 import type { MultiReviewReviewerTranscript } from "@orkestrator/protocol/multi-review";
 import type { MultiReviewTabData } from "@/types/paneLayout";
 import { Button } from "@/components/ui/button";
+import { MessageRenderBoundary } from "@/components/chat/MessageRenderBoundary";
 import { NativeMessage } from "@/components/chat/NativeMessage";
 import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
 import { getNativeMessageSearchText } from "@/components/chat/native-message-search";
@@ -10,6 +11,7 @@ import { StructuredReviewReportView } from "@/components/review/StructuredReview
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useVirtuosoScrollState } from "@/hooks";
 import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
+import { multiReviewReviewerScrollKey } from "@/lib/multi-review-keys";
 import { showOnlyFinalStructuredReviewMessage } from "@/lib/structured-review-messages";
 import * as backend from "@/lib/backend";
 import { toPipelineTranscript } from "@/components/build-pipeline/pipeline-transcript";
@@ -149,7 +151,7 @@ export function MultiReviewReviewerTab({
     return toMultiReviewReviewerMessages(snapshot);
   }, [snapshot]);
 
-  const scrollKey = `multi-review:${data.workflowId}:reviewer:${data.reviewerId}`;
+  const scrollKey = multiReviewReviewerScrollKey(data.workflowId, data.reviewerId);
   const { virtuosoRef, scrollProps } = useVirtuosoScrollState({
     isActive,
     persistKey: scrollKey,
@@ -227,14 +229,21 @@ export function MultiReviewReviewerTab({
           computeItemKey={(_index, message) => message.id}
           resolvePreviousMessage={findPreviousNativeMessage}
           renderMessage={(_index, message, previous) => (
-            <NativeMessage
-              message={message}
-              previousMessage={previous}
-              assistantLabel={label}
-              containerId={containerId}
-              agentExpansionScope={data.environmentId}
-              platform={snapshot?.agent}
-            />
+            // This read-only view re-reads the whole provider transcript every
+            // few seconds while the reviewer streams, so a frame can hold a
+            // message shape no renderer has seen before. One such message must
+            // degrade to its own row — not hand the entire tab to the view
+            // error boundary — and retries on the next poll's fresh snapshot.
+            <MessageRenderBoundary resetKey={message}>
+              <NativeMessage
+                message={message}
+                previousMessage={previous}
+                assistantLabel={label}
+                containerId={containerId}
+                agentExpansionScope={data.environmentId}
+                platform={snapshot?.agent}
+              />
+            </MessageRenderBoundary>
           )}
           emptyState={
             <div className="px-6 py-12 text-center text-sm text-muted-foreground">

@@ -70,6 +70,7 @@ import {
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import {
   DEFAULT_OPENCODE_MODEL_PROVIDERS,
+  isSelectableOpenCodeModelId,
   migrateOpenCodeModelProviders,
   normalizeOpenCodeModelProviders,
 } from "@orkestrator/protocol/native-agent";
@@ -1589,6 +1590,46 @@ export function storedOpenCodeModelIds(
   return ids;
 }
 
+/** The OpenCode default a fresh install ships with. */
+export const DEFAULT_OPENCODE_MODEL_ID = "opencode/claude-sonnet-5";
+
+/**
+ * Keep the default OpenCode model inside the configured provider allowlist.
+ *
+ * A default naming an excluded provider is unreachable rather than merely
+ * unusual: no picker lists it, so the user cannot replace it there, while
+ * environment launches and build pipelines keep dispatching it. It can only
+ * arise from a catalogue the user has since narrowed, so it is repointed at the
+ * first OpenCode model they already chose that the allowlist still admits —
+ * their favourites, then the shipped default.
+ *
+ * An unrestricted allowlist admits everything and therefore never repoints, a
+ * value that is not `provider/model` is left alone rather than reinterpreted,
+ * and a stored id survives when nothing selectable is on hand: inventing a
+ * model the user never picked would be worse than an unreachable one.
+ */
+export function selectableOpenCodeDefaultModel(
+  storedModelId: unknown,
+  favoriteModels: readonly { platform: string; modelId: string }[],
+  allowedProviders: readonly string[],
+): unknown {
+  if (typeof storedModelId !== "string") return storedModelId;
+  const stored = storedModelId.trim();
+  if (
+    !stored.includes("/")
+    || isSelectableOpenCodeModelId(stored, allowedProviders)
+  ) {
+    return storedModelId;
+  }
+  return [
+    ...favoriteModels
+      .filter((favorite) => favorite.platform === "opencode")
+      .map((favorite) => favorite.modelId),
+    DEFAULT_OPENCODE_MODEL_ID,
+  ].find((modelId) => isSelectableOpenCodeModelId(modelId, allowedProviders))
+    ?? storedModelId;
+}
+
 export function normalizePersistedConfig(config: AppConfig): AppConfig {
   const reviewInstructionSanitized = sanitizePersistedReviewInstruction(config);
   const global = reviewInstructionSanitized && isRecord(reviewInstructionSanitized.global)
@@ -1643,6 +1684,11 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     : migrateOpenCodeModelProviders(
         storedOpenCodeModelIds(global, reviewInstructionSanitized.repositories),
       );
+  const opencodeModel = selectableOpenCodeDefaultModel(
+    global.opencodeModel,
+    favoriteModels,
+    openCodeModelProviders,
+  );
   if (
     global.codexMaxConcurrentThreads === codexMaxConcurrentThreads
     && global.useHostGitHubCredentials === useHostGitHubCredentials
@@ -1652,6 +1698,7 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     && JSON.stringify(global.favoriteModels ?? []) === JSON.stringify(favoriteModels)
     && JSON.stringify(global.openCodeModelProviders)
       === JSON.stringify(openCodeModelProviders)
+    && global.opencodeModel === opencodeModel
   ) {
     return reviewInstructionSanitized;
   }
@@ -1667,6 +1714,7 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
       claudeMode,
       favoriteModels,
       openCodeModelProviders,
+      opencodeModel,
     } as unknown as AppConfig["global"],
   };
 }
@@ -1722,7 +1770,7 @@ export function defaultConfig(): AppConfig {
       enabledAgentPlatforms: [...LEGACY_ENABLED_AGENT_PLATFORMS],
       favoriteModels: [],
       defaultAgent: "claude",
-      opencodeModel: "opencode/claude-sonnet-5",
+      opencodeModel: DEFAULT_OPENCODE_MODEL_ID,
       claudeModel: "claude-sonnet-5",
       codexModel: "gpt-5.4",
       // New installs only. An existing config.json already holds a concrete

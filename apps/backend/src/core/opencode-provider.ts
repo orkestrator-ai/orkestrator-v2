@@ -24,7 +24,6 @@ import {
   DEFAULT_OPENCODE_MODEL_PROVIDERS,
   EMPTY_NATIVE_AGENT_COMPOSER_STATE,
   normalizeOpenCodeModelProviders,
-  openCodeModelProvidersKey,
 } from "@orkestrator/protocol/native-agent";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import { parseLeadingSlashCommand, type ParsedSlashCommand } from "@orkestrator/protocol/agent-slash-commands";
@@ -59,7 +58,12 @@ import {
   setBoundedMapEntry,
   setBoundedSetEntry,
 } from "./agent-provider-runtime.js";
-import { normalizeOpenCodeComposerCatalog } from "./opencode-model-catalog.js";
+import {
+  normalizeOpenCodeComposerCatalog,
+  openCodeCatalogCacheKey,
+  openCodeModelDispatchability,
+  selectOpenCodeComposerCatalog,
+} from "./opencode-model-catalog.js";
 import {
   collectNormalizedOpenCodeSubagentIds,
   collectRawOpenCodeSubagentIds,
@@ -237,28 +241,18 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     ) => Promise<unknown>).call(owner, parameters, this.requestOptions());
   }
 
-  /**
-   * Cache key for one normalized catalogue.
-   *
-   * The connectivity filter has to be part of the key. An allowlist configured
-   * empty means "unrestricted", which collides with the empty allowlist
-   * `rawModelCatalog` passes — without this the picker could be served the
-   * deliberately unfiltered cache entry written for the durable cache.
-   */
-  private catalogCacheKey(
-    allowedProviders: readonly string[],
-    requireConnected: boolean,
-  ): string {
-    return `${requireConnected ? "connected" : "all"}:${openCodeModelProvidersKey(allowedProviders)}`;
-  }
-
   private async readComposerCatalog(
     allowedProviders: readonly string[],
     requireConnected: boolean,
+    priorityProviders: readonly string[] = [],
   ): Promise<
     ReturnType<typeof normalizeOpenCodeComposerCatalog>
   > {
-    const providersKey = this.catalogCacheKey(allowedProviders, requireConnected);
+    const providersKey = openCodeCatalogCacheKey(
+      allowedProviders,
+      requireConnected,
+      priorityProviders,
+    );
     if (
       this.catalogMetadata
       && this.catalogMetadata.expiresAt > Date.now()
@@ -272,21 +266,12 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     ]);
     const payload = (result: PromiseSettledResult<unknown>): unknown =>
       result.status === "fulfilled" ? asRecord(result.value)?.data ?? {} : {};
-    const live = normalizeOpenCodeComposerCatalog(
+    const catalog = selectOpenCodeComposerCatalog(
       payload(providerResult),
+      () => payload(fallbackResult),
       allowedProviders,
-      { requireConnected },
+      { requireConnected, priorityProviders },
     );
-    // An empty connected set is authoritative. Falling back merely because it
-    // yielded no models would re-expose every provider OpenCode knows about,
-    // including providers that cannot currently serve a prompt.
-    const catalog = live.connectedProviderIds !== undefined || live.models.length > 0
-      ? live
-      : normalizeOpenCodeComposerCatalog(
-          payload(fallbackResult),
-          allowedProviders,
-          { requireConnected },
-        );
     this.catalogMetadata = {
       expiresAt: Date.now() + INTERACTIVE_RUNTIME_METADATA_TTL_MS,
       providersKey,
@@ -358,15 +343,14 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     if (catalog.connectedProviderIds !== undefined || catalog.models.length > 0) {
       this.catalogMetadata = {
         expiresAt: Date.now() + INTERACTIVE_RUNTIME_METADATA_TTL_MS,
-        providersKey: this.catalogCacheKey(allowedProviders, true),
+        providersKey: openCodeCatalogCacheKey(allowedProviders, true),
         catalog,
       };
       this.interactiveMetadata.clear();
     }
-    // Older OpenCode builds did not report connectivity. Preserve their prior
-    // behavior instead of treating an absent field as an empty connected set.
-    if (catalog.connectedProviderIds === undefined) return;
-    if (catalog.models.some((candidate) => candidate.id === model)) return;
+    // Judged unfiltered: the allowlist governs what the picker offers, not what
+    // OpenCode can serve, and an unreported connectivity set still dispatches.
+    if (openCodeModelDispatchability(envelope?.data ?? {}, model) !== "unavailable") return;
     throw new PromptRejectedError(
       "The selected OpenCode model is not connected or is no longer available. Choose an available model and retry.",
     );
@@ -386,7 +370,17 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     // Connectivity is deliberately not applied either: this catalogue backs the
     // durable cache, which must still offer a provider the user authenticates
     // after it was written.
-    return (await this.readComposerCatalog([], false)).models;
+    //
+    // The allowlist is still passed, as an ordering priority rather than a
+    // filter. Unrestricted means the bounds are spent on whichever providers
+    // OpenCode happens to list first, which on a real catalogue of thousands of
+    // models truncated the managed pair out entirely — leaving every read of
+    // this catalogue, filtered or not, with no selectable model at all.
+    return (await this.readComposerCatalog(
+      [],
+      false,
+      await this.openCodeModelProviders(),
+    )).models;
   }
 
   private async monitorRequests(): Promise<void> {
@@ -1040,7 +1034,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     const allowedProviders = await this.openCodeModelProviders();
     // Composer reads are picker-facing, so they carry the connectivity filter
     // and must key on it exactly as `readComposerCatalog` does.
-    const providersKey = this.catalogCacheKey(allowedProviders, true);
+    const providersKey = openCodeCatalogCacheKey(allowedProviders, true);
     const cached = this.interactiveMetadata.get(sessionId);
     if (
       cached

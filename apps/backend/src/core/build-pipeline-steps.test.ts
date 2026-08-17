@@ -1055,7 +1055,13 @@ describe("per-step bridge connections", () => {
     }) => {
       bridges.set("opencode", { port: 3212, authToken: "opencode-token" });
       await writeDefaults(storage, {
-        global: { opencodeModel: "anthropic/claude-sonnet" },
+        global: {
+          opencodeModel: "anthropic/claude-sonnet",
+          // An install that opted into OpenCode's full catalogue, so the stored
+          // default survives normalization and this stays a test of pass-through
+          // rather than of the provider allowlist.
+          openCodeModelProviders: [],
+        },
         repository: {
           defaultAgent: "claude",
           defaultModel: "repo-claude",

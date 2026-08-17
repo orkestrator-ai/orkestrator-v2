@@ -126,6 +126,33 @@ describe("GlobalSettings defaults section", () => {
     expect(savedActionDefaults()).toEqual({ pr: { platform: "codex" } });
   });
 
+  test("uses unsaved platform changes when configuring defaults before one combined save", async () => {
+    const view = render(<GlobalSettings activeSection="platforms" />);
+
+    // Platform changes live in GlobalSettings until the shared Save button is
+    // pressed. The Defaults pane must consume that same draft rather than the
+    // older config-store snapshot.
+    fireEvent.click(screen.getByRole("switch", { name: "Claude Code" }));
+    view.rerender(<GlobalSettings activeSection="defaults" />);
+
+    openPicker("Review");
+    expect(screen.queryByRole("button", { name: "claude models" })).toBeNull();
+    expect(screen.getByRole("button", { name: "codex models" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /^gpt-5\.4/ }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        enabledAgentPlatforms: ["codex"],
+        defaultAgent: "codex",
+        actionDefaults: {
+          review: { platform: "codex", model: "gpt-5.4" },
+        },
+      }),
+    ));
+  });
+
   test("clears a configured default back to the app default", async () => {
     useConfigStore.setState((state) => ({
       ...state,

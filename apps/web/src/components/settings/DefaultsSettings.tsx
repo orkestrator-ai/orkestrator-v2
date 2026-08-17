@@ -12,7 +12,7 @@ import { Label } from "@/components/ui/label";
 import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
 import { useAgentModelFavorites } from "@/hooks/useAgentModelFavorites";
 import { useProjectModelCatalog } from "@/hooks/useBuildLaunchOptions";
-import { useConfigStore, useUIStore } from "@/stores";
+import { useUIStore } from "@/stores";
 import {
   effortLabel,
   modelsForAgent,
@@ -213,6 +213,8 @@ function ActionDefaultRow({
 interface DefaultsSettingsProps {
   actionDefaults: ActionDefaults;
   setActionDefaults: (actionDefaults: ActionDefaults) => void;
+  enabledAgentPlatforms: AgentPlatform[];
+  defaultAgent: AgentPlatform;
   isSaving: boolean;
 }
 
@@ -224,21 +226,22 @@ interface DefaultsSettingsProps {
 export function DefaultsSettings({
   actionDefaults,
   setActionDefaults,
+  enabledAgentPlatforms,
+  defaultAgent,
   isSaving,
 }: DefaultsSettingsProps) {
-  const config = useConfigStore((state) => state.config);
   const selectedProjectId = useUIStore((state) => state.selectedProjectId);
   // Repository-scoped so an OpenCode catalog cached for the open project is
   // offered here too; the base Claude/Codex/Cursor/Grok catalogs are global.
   const catalog = useProjectModelCatalog(selectedProjectId ?? "", true);
   const favorites = useAgentModelFavorites();
   const enabledAgents = useMemo(
-    () => normalizeAgentPlatforms(config.global.enabledAgentPlatforms),
-    [config.global.enabledAgentPlatforms],
+    () => normalizeAgentPlatforms(enabledAgentPlatforms),
+    [enabledAgentPlatforms],
   );
   const fallbackAgent = firstEnabledAgentPlatform(
     enabledAgents,
-    config.global.defaultAgent,
+    defaultAgent,
   );
   const pickerModels = useMemo<AgentModel[]>(
     () => enabledAgents.flatMap((platform) =>

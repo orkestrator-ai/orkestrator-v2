@@ -312,6 +312,8 @@ export function GlobalSettingsSections({
     <DefaultsSettings
       actionDefaults={actionDefaults}
       setActionDefaults={setActionDefaults}
+      enabledAgentPlatforms={enabledAgentPlatforms}
+      defaultAgent={defaultAgent}
       isSaving={isSaving}
     />
   );

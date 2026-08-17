@@ -152,6 +152,8 @@ export interface TabInfo {
   initialConversationMode?: "build" | "plan";
   /** One-shot fast-mode selection applied when the agent tab is locked. */
   initialFastMode?: boolean;
+  /** One-shot execution profile applied before the opening prompt is sent. */
+  initialExecutionProfileId?: string;
   /**
    * Durable provider-to-provider conversation handoff rendered ahead of this
    * tab's native transcript. The pane layout stores only this small reference;

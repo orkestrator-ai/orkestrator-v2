@@ -94,6 +94,7 @@ describe("pane layout persistence", () => {
       agentHandoffId: "handoff-1",
       initialAgentModel: "gpt-5.6-sol",
       initialReasoningEffort: "xhigh",
+      initialExecutionProfileId: "plan",
       initialCommands: ["do not persist"],
       nativeAgentData: {
         environmentId: "env-1",
@@ -109,6 +110,7 @@ describe("pane layout persistence", () => {
     expect(JSON.stringify(persisted)).toContain('"agentHandoffId":"handoff-1"');
     expect(JSON.stringify(persisted)).toContain('"initialAgentModel":"gpt-5.6-sol"');
     expect(JSON.stringify(persisted)).toContain('"initialReasoningEffort":"xhigh"');
+    expect(JSON.stringify(persisted)).toContain('"initialExecutionProfileId":"plan"');
     expect(JSON.stringify(persisted)).not.toContain("initialCommands");
     expect(JSON.stringify(persisted)).not.toContain("hostPort");
     expect(JSON.stringify(persisted)).toContain("session-1");
@@ -125,6 +127,7 @@ describe("pane layout persistence", () => {
       .tabs.find((tab) => tab.id === "native");
     expect(rehydratedTab?.initialAgentModel).toBe("gpt-5.6-sol");
     expect(rehydratedTab?.initialReasoningEffort).toBe("xhigh");
+    expect(rehydratedTab?.initialExecutionProfileId).toBe("plan");
     expect(rehydratedTab?.initialPrompt).toBeUndefined();
     expect(rehydratedTab?.agentHandoffId).toBe("handoff-1");
 
@@ -133,6 +136,7 @@ describe("pane layout persistence", () => {
     const consumed = save.mock.calls.at(-1)?.[1];
     expect(JSON.stringify(consumed)).not.toContain("initialAgentModel");
     expect(JSON.stringify(consumed)).not.toContain("initialReasoningEffort");
+    expect(JSON.stringify(consumed)).not.toContain("initialExecutionProfileId");
     stop();
   });
 

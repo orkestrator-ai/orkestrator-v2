@@ -307,6 +307,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                     initialReasoningEffort={tab.initialReasoningEffort}
                     initialConversationMode={tab.initialConversationMode}
                     initialFastMode={tab.initialFastMode}
+                    initialExecutionProfileId={tab.initialExecutionProfileId}
                     agentHandoffId={tab.agentHandoffId}
                     consumedAgentHandoffId={tab.consumedAgentHandoffId}
                     refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}

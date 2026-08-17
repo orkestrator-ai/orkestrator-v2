@@ -58,6 +58,7 @@ interface UseNativeAgentSessionOptions {
   initialProviderSessionId?: string;
   initialConversationMode?: "build" | "plan";
   initialFastMode?: boolean;
+  initialExecutionProfileId?: string;
   defaultFastMode?: boolean;
   isActive?: boolean;
   /** Setup-gated tabs mount presentation without starting provider I/O. */
@@ -100,6 +101,7 @@ export function useNativeAgentSession<TMessage = unknown>({
   initialProviderSessionId,
   initialConversationMode,
   initialFastMode,
+  initialExecutionProfileId,
   defaultFastMode,
   isActive = true,
   enabled = true,
@@ -113,6 +115,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     reasoningEffort: initialReasoningEffort,
     mode: initialConversationMode,
     fastMode: initialFastMode,
+    executionProfileId: initialExecutionProfileId,
   });
   const initialLaunchOptionsPendingRef = useRef(
     Boolean(
@@ -120,6 +123,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       || initialReasoningEffort
       || initialConversationMode
       || typeof initialFastMode === "boolean"
+      || initialExecutionProfileId
     ),
   );
   const isInitializedRef = useRef(false);
@@ -324,6 +328,9 @@ export function useNativeAgentSession<TMessage = unknown>({
             ...(initialReasoningEffort ? { reasoningEffort: initialReasoningEffort } : {}),
             ...(initialConversationMode ? { sessionMode: initialConversationMode } : {}),
             ...(typeof initialFastMode === "boolean" ? { fastMode: initialFastMode } : {}),
+            ...(initialExecutionProfileId
+              ? { executionProfileId: initialExecutionProfileId }
+              : {}),
           });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
@@ -339,6 +346,7 @@ export function useNativeAgentSession<TMessage = unknown>({
             reasoningEffort: initialReasoningEffort ?? defaultReasoningEffort,
             sessionMode: initialConversationMode,
             fastMode: initialFastMode ?? defaultFastMode,
+            executionProfileId: initialExecutionProfileId,
           });
         }
       } else {
@@ -349,6 +357,7 @@ export function useNativeAgentSession<TMessage = unknown>({
           reasoningEffort: initialReasoningEffort ?? defaultReasoningEffort,
           sessionMode: initialConversationMode,
           fastMode: initialFastMode ?? defaultFastMode,
+          executionProfileId: initialExecutionProfileId,
         });
       }
       isInitializedRef.current = true;
@@ -381,6 +390,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     initialAgentModel,
     initialConversationMode,
     initialFastMode,
+    initialExecutionProfileId,
     initialProviderSessionId,
     initialReasoningEffort,
     enabled,

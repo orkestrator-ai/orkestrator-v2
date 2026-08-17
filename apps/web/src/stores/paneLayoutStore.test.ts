@@ -2880,6 +2880,7 @@ describe("paneLayoutStore pane and tab actions", () => {
         initialPrompt: "Review the diff",
         initialAgentModel: "gpt-5.6-sol",
         initialReasoningEffort: "xhigh",
+        initialExecutionProfileId: "plan",
       }],
       activeTabId: "review-tab",
     }, "default", "env-review");
@@ -2892,6 +2893,7 @@ describe("paneLayoutStore pane and tab actions", () => {
       initialPrompt: "Review the diff",
       initialAgentModel: undefined,
       initialReasoningEffort: undefined,
+      initialExecutionProfileId: undefined,
     }]);
   });
 

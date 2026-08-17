@@ -201,7 +201,8 @@ export function registerProjectCommands(
             reasoning: reasoningOptions,
             defaultReasoningId: fallbackReasoningId(reasoningOptions) ?? "default",
             supportsSpeed: false,
-            supportsMode: true,
+            // OpenCode has primary agents, not a Build/Plan permission mode.
+            supportsMode: false,
             ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
             ...(typeof model.supportsImageInput === "boolean"
               ? { supportsImageInput: model.supportsImageInput }

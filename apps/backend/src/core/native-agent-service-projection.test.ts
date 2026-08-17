@@ -561,6 +561,280 @@ describe("NativeAgentService", () => {
 
 
 
+  test("gates composer surfaces on the capability table, not on what the provider reported", async () => {
+    // OpenCode has no fast surface and no Build/Plan permission mode: its
+    // `mode` used to be sent as the SDK `agent` name, duplicating the execution
+    // profile. A provider snapshot that claims both must not reintroduce them.
+    const stub = createProviderStub("opencode", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: [],
+        composer: {
+          models: [{
+            platform: "opencode",
+            id: "opencode/sonnet",
+            label: "Sonnet",
+            supportsSpeed: true,
+          }],
+          selectedModelId: "opencode/sonnet",
+          fastModeEnabled: true,
+          fastModeAvailable: true,
+          selectedModeId: "plan",
+          modes: [{ id: "build", label: "Build" }, { id: "plan", label: "Plan" }],
+          executionProfiles: [{ id: "build", label: "build" }],
+        },
+      }),
+    });
+    await withService({
+      prefix: "orkestrator-native-projection-capability-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "opencode" as const,
+        logicalSessionKey: "env-env-1:tab-capability",
+      };
+      await service.ensureSession(identity);
+      const projection = await service.getProjection(identity);
+      expect(projection?.composer?.modes).toEqual([]);
+      expect(projection?.composer?.selectedModeId).toBeUndefined();
+      expect(projection?.composer?.fastModeAvailable).toBe(false);
+      expect(projection?.composer?.fastModeEnabled).toBeNull();
+      // Execution profiles stay: OpenCode primary agents are the real control.
+      expect(projection?.composer?.executionProfiles).toEqual([
+        { id: "build", label: "build" },
+      ]);
+      expect(projection?.composerControls.map((control) => control.id)).toEqual([
+        "model",
+        "execution-profile",
+      ]);
+
+      // A mode the table forbids is refused rather than persisted, because the
+      // projected `modes` list is what `updateProjectionControls` validates.
+      await expect(service.updateProjectionControls({
+        ...identity,
+        update: { mode: "plan" },
+      })).rejects.toThrow("Native agent conversation mode is invalid");
+      await expect(service.updateProjectionControls({
+        ...identity,
+        update: { fastMode: true },
+      })).rejects.toThrow("Native agent fast mode is unavailable");
+    });
+  });
+
+  test("projects an initial OpenCode execution profile before the first prompt", async () => {
+    const stub = createProviderStub("opencode", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: [],
+        composer: {
+          models: [],
+          fastModeEnabled: false,
+          fastModeAvailable: false,
+          modes: [],
+          executionProfiles: [
+            { id: "build", label: "Build agent" },
+            { id: "plan", label: "Plan agent" },
+          ],
+        },
+      }),
+    });
+    await withService({
+      prefix: "orkestrator-native-initial-execution-profile-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "opencode" as const,
+        logicalSessionKey: "env-env-1:tab-initial-profile",
+      };
+      await service.ensureSession({
+        ...identity,
+        executionProfileId: "plan",
+      });
+
+      await expect(service.getProjection(identity)).resolves.toMatchObject({
+        composer: {
+          modes: [],
+          selectedExecutionProfileId: "plan",
+          executionProfiles: [
+            { id: "build", label: "Build agent" },
+            { id: "plan", label: "Plan agent" },
+          ],
+        },
+      });
+    });
+  });
+
+  test("carries a pre-reclassification conversation mode onto the execution profile", async () => {
+    // A session created while OpenCode still had a Build/Plan pair persisted
+    // `controls.mode`, and that value was dispatched as the SDK `agent` name.
+    // Now that the table says OpenCode has no mode, the projection is the only
+    // thing that can carry the choice across; without it the upgraded session
+    // silently drops to the provider default and runs the build agent.
+    const stub = createProviderStub("opencode", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: [],
+        composer: {
+          models: [],
+          fastModeEnabled: false,
+          fastModeAvailable: false,
+          modes: [],
+          executionProfiles: [
+            { id: "build", label: "Build agent" },
+            { id: "plan", label: "Plan agent" },
+          ],
+        },
+      }),
+    });
+    await withService({
+      prefix: "orkestrator-native-legacy-mode-profile-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "opencode" as const,
+        logicalSessionKey: "env-env-1:tab-legacy-mode",
+      };
+      await service.ensureSession({ ...identity, sessionMode: "plan" });
+
+      const projection = await service.getProjection(identity);
+      expect(projection?.composer?.selectedExecutionProfileId).toBe("plan");
+      // The mode itself stays off the projection: the platform has no mode.
+      expect(projection?.composer?.selectedModeId).toBeUndefined();
+      expect(projection?.composer?.modes).toEqual([]);
+      expect(projection?.composerControls.map((control) => control.id)).toEqual([
+        "execution-profile",
+      ]);
+
+      // An explicit profile still wins over the legacy mode it replaces.
+      await service.updateProjectionControls({
+        ...identity,
+        update: { executionProfileId: "build" },
+      });
+      await expect(service.getProjection(identity)).resolves.toMatchObject({
+        composer: { selectedExecutionProfileId: "build" },
+      });
+    });
+  });
+
+  test("drops a stored execution profile the provider does not list", async () => {
+    // The unassigned launcher pins a profile before any session exists, so it
+    // cannot know the real agent names. A pinned id the provider turns out not
+    // to have must not reach `send` as an unknown agent.
+    const stub = createProviderStub("opencode", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: [],
+        composer: {
+          models: [],
+          fastModeEnabled: false,
+          fastModeAvailable: false,
+          modes: [],
+          executionProfiles: [{ id: "architect", label: "architect" }],
+        },
+      }),
+    });
+    await withService({
+      prefix: "orkestrator-native-unknown-execution-profile-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "opencode" as const,
+        logicalSessionKey: "env-env-1:tab-unknown-profile",
+      };
+      await service.ensureSession({ ...identity, executionProfileId: "plan" });
+
+      const projection = await service.getProjection(identity);
+      expect(projection?.composer?.selectedExecutionProfileId).toBeUndefined();
+      expect(projection?.composer?.executionProfiles).toEqual([
+        { id: "architect", label: "architect" },
+      ]);
+    });
+  });
+
+  test("keeps a stored execution profile while the provider's agent list is unavailable", async () => {
+    // An empty list means the agent listing failed or has not arrived yet, not
+    // that the profile is gone. Dropping the selection there would swap the
+    // user's agent for the provider default on a transient read.
+    const stub = createProviderStub("opencode", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: [],
+        composer: {
+          models: [],
+          fastModeEnabled: false,
+          fastModeAvailable: false,
+          modes: [],
+          executionProfiles: [],
+        },
+      }),
+    });
+    await withService({
+      prefix: "orkestrator-native-pending-execution-profile-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "opencode" as const,
+        logicalSessionKey: "env-env-1:tab-pending-profile",
+      };
+      await service.ensureSession({ ...identity, executionProfileId: "plan" });
+
+      const projection = await service.getProjection(identity);
+      expect(projection?.composer?.selectedExecutionProfileId).toBe("plan");
+      // No list means no control to render it in, but the choice survives for
+      // the dispatch that follows.
+      expect(projection?.composer?.executionProfiles).toBeUndefined();
+      expect(projection?.composerControls.map((control) => control.id)).toEqual([]);
+    });
+  });
+
+  test("drops execution profiles and Claude-only toggles a provider reports off-table", async () => {
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: [],
+        composer: {
+          models: [{ platform: "codex", id: "gpt-5", label: "GPT-5" }],
+          selectedModelId: "gpt-5",
+          fastModeEnabled: false,
+          fastModeAvailable: false,
+          selectedModeId: "build",
+          modes: [{ id: "build", label: "Build" }],
+          executionProfiles: [{ id: "reviewer", label: "Reviewer" }],
+          selectedExecutionProfileId: "reviewer",
+          includeLocalSettings: true,
+          promptSuggestionsEnabled: true,
+        },
+      }),
+    });
+    await withService({
+      prefix: "orkestrator-native-projection-offtable-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "codex" as const,
+        logicalSessionKey: "env-env-1:tab-offtable",
+      };
+      await service.ensureSession(identity);
+      const projection = await service.getProjection(identity);
+      expect(projection?.composer?.executionProfiles).toBeUndefined();
+      expect(projection?.composer?.selectedExecutionProfileId).toBeUndefined();
+      expect(projection?.composer?.includeLocalSettings).toBeUndefined();
+      expect(projection?.composer?.promptSuggestionsEnabled).toBeUndefined();
+      expect(projection?.composerControls.map((control) => control.id)).toEqual([
+        "model",
+        "mode",
+      ]);
+    });
+  });
+
+
+
   test("renders provider terminal states as uniform durable transcript rows", async () => {
     const stub = createProviderStub("opencode", {
       interactiveSnapshot: async () => ({

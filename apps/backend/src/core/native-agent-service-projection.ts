@@ -457,9 +457,43 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         selectedModel?.defaultReasoningId,
       )
       ?? selectedModel?.defaultReasoningId;
-    const supportsSpeed = providerComposer?.fastModeAvailable === true
-      || selectedModel?.supportsSpeed === true;
     const capabilities = nativeCapabilities(input.agent);
+    // The compose bar renders `fastModeAvailable` directly, so the table has to
+    // be consulted here and not only in `nativeComposerControls`. Without it a
+    // provider that grew a fast surface would show the toggle on a platform the
+    // table says has none, and `updateProjectionControls` would then accept the
+    // patch because its own guard reads this same field.
+    const supportsSpeed = capabilities.composer.speed
+      && (providerComposer?.fastModeAvailable === true
+        || selectedModel?.supportsSpeed === true);
+    const executionProfiles = capabilities.composer.executionProfile
+      ? providerComposer?.executionProfiles ?? []
+      : [];
+    // A session created before a platform's Build/Plan pair was reclassified as
+    // an execution profile still carries `controls.mode`. That value was already
+    // dispatched as the provider's agent name, so it names the same thing the
+    // profile now names; without this the upgraded session silently falls back
+    // to the provider default and runs a different agent than the user chose.
+    const legacyModeProfileId = !capabilities.composer.mode
+      ? session.controls?.mode
+      : undefined;
+    const storedExecutionProfileId = providerControls?.executionProfileId
+      ?? session.controls?.executionProfileId
+      ?? providerComposer?.selectedExecutionProfileId
+      ?? legacyModeProfileId;
+    // Only drop the stored selection when the provider actually told us which
+    // profiles exist. An empty list means the agent listing failed or has not
+    // arrived, and the stored id is then the best evidence we have — discarding
+    // it there would swap the user's agent for the provider default on a
+    // transient read. A non-empty list that omits the id is different: that id
+    // demonstrably does not exist, and sending it would fail the dispatch.
+    const profilesAreKnown = executionProfiles.length > 0;
+    const selectedExecutionProfileId = capabilities.composer.executionProfile
+      && storedExecutionProfileId !== undefined
+      && (!profilesAreKnown
+        || executionProfiles.some((profile) => profile.id === storedExecutionProfileId))
+      ? storedExecutionProfileId
+      : undefined;
     return {
       models,
       ...(selectedModel ? { selectedModelId: selectedModel.id } : {}),
@@ -486,20 +520,11 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           ? providerComposer.modes
           : [{ id: "build", label: "Build" }, { id: "plan", label: "Plan" }]
         : [],
-      ...(providerComposer?.executionProfiles?.length ? {
-        executionProfiles: providerComposer.executionProfiles,
-      } : {}),
-      ...(providerControls?.executionProfileId
-        ?? session.controls?.executionProfileId
-        ?? providerComposer?.selectedExecutionProfileId
-        ?? undefined
-        ? {
-            selectedExecutionProfileId: providerControls?.executionProfileId
-              ?? session.controls?.executionProfileId
-              ?? providerComposer?.selectedExecutionProfileId
-              ?? undefined,
-          }
-        : {}),
+      // Execution profiles were previously copied across whenever the provider
+      // reported any, so a platform whose table says `executionProfile: false`
+      // would grow the control the moment its bridge started listing agents.
+      ...(executionProfiles.length ? { executionProfiles } : {}),
+      ...(selectedExecutionProfileId ? { selectedExecutionProfileId } : {}),
       ...(capabilities.composer.localSettings ? {
         includeLocalSettings: providerControls?.includeLocalSettings
           ?? session.controls?.includeLocalSettings
@@ -838,6 +863,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         composerControls: nativeComposerControls(
           composer,
           snapshot.status === "running" || blocked,
+          capabilities,
         ),
         composer,
         capabilities,

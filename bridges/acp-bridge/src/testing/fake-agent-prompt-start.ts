@@ -13,6 +13,13 @@ import {
 } from "./fake-agent-context.js";
 import { handlePromptTools } from "./fake-agent-prompt-tools.js";
 
+function retriableProviderErrorMessage(): string {
+  const name = process.env.FAKE_ACP_FLATTENED_ERROR_NAME ?? "RetriableError";
+  const code = process.env.FAKE_ACP_RETRIABLE_CODE ?? "resource_exhausted";
+  const detail = process.env.FAKE_ACP_RETRIABLE_DETAIL ?? "Error";
+  return `${name}: [${code}] ${detail}`;
+}
+
 export function handlePromptStart(message: JsonObject): boolean {
   if (message.method === "session/prompt" && typeof message.id === "number") {
     const params = message.params as { prompt?: Array<{ text?: unknown }> } | undefined;
@@ -89,7 +96,7 @@ export function handlePromptStart(message: JsonObject): boolean {
         write({
           jsonrpc: "2.0",
           id: message.id,
-          error: { code: -32000, message: "RetriableError: [resource_exhausted] Error" },
+          error: { code: -32000, message: retriableProviderErrorMessage() },
         });
         return true;
       }
@@ -161,11 +168,10 @@ export function handlePromptStart(message: JsonObject): boolean {
               sessionUpdate: "agent_message_chunk",
               content: {
                 type: "text",
-                // The class name varies by provider error; `RetriableError` is
-                // only the one Cursor emits today.
-                text: `\n\nError: ${
-                  process.env.FAKE_ACP_FLATTENED_ERROR_NAME ?? "RetriableError"
-                }: [resource_exhausted] Error`,
+                // The class name and bracketed code vary by provider error;
+                // `RetriableError: [resource_exhausted] Error` is only the
+                // shape Cursor emits for capacity failures.
+                text: `\n\nError: ${retriableProviderErrorMessage()}`,
               },
             },
           },

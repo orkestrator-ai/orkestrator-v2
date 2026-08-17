@@ -79,6 +79,12 @@ function normalizeClaudeBackgroundTasks(
       ...(typeof task.description === "string"
         ? { description: task.description.slice(0, 1_000) }
         : {}),
+      // Bounded like every other free-form provider string here: the renderer
+      // only ever compares it against a transcript `toolUseId`, so an
+      // over-long value can never match and must not be carried.
+      ...(typeof task.toolUseId === "string" && task.toolUseId.length <= 512
+        ? { toolUseId: task.toolUseId }
+        : {}),
     }];
   });
 }

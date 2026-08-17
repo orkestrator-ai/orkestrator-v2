@@ -526,6 +526,125 @@ export interface NativeAgentBackgroundTaskSummary {
   id: string;
   status: "pending" | "running" | "completed" | "failed" | "killed" | "paused";
   description?: string;
+  /**
+   * The tool call that launched this task, when the provider reported one.
+   *
+   * This is what lets the renderer join a live task onto its transcript row and
+   * present one card per task, rather than a separate provider-specific list
+   * beside the transcript. The id recovered from launch output is only a
+   * fallback: it exists solely in the tool result's prose.
+   */
+  toolUseId?: string;
+}
+
+export const BACKGROUND_TASK_ID_MAX_LENGTH = 512;
+
+/**
+ * How much of a tool result is scanned for a launch id.
+ *
+ * The note Claude appends is the first thing in the result, so a bounded scan
+ * finds it. The bound is what stops projection parsing a multi-megabyte result
+ * merely to decorate one transcript row.
+ */
+export const BACKGROUND_TASK_LAUNCH_SCAN_CHARS = 4_096;
+
+/*
+ * Claude emits three different notes when a command ends up in the background,
+ * and all three carry the same durable id:
+ *   "Command running in background with ID: <id>. …"
+ *   "Command was manually backgrounded by user with ID: <id>"
+ *   "…timeout and was moved to the background (ID: <id>). …"
+ * Matching only the first would leave Ctrl+B and timeout-backgrounded commands
+ * unnamed and unlabelled after a transcript rehydration.
+ */
+const BACKGROUND_TASK_LAUNCH_ID_PATTERN =
+  /\bbackground(?:ed by user)?\s*(?:with ID:|\(ID:)\s*([^\s.)]+)/i;
+
+/*
+ * Only a shell row's result may name a task the launch arguments did not.
+ * Without this, any tool whose output happens to quote the note — a Read of
+ * this very file, most obviously — would be mistaken for a launch.
+ */
+const BACKGROUND_CAPABLE_SHELL_TOOL_NAMES = new Set([
+  "bash",
+  "shell",
+  "terminal",
+  "run_command",
+  "runcommand",
+  "run_terminal_cmd",
+  "execute_command",
+]);
+
+function boundedBackgroundTaskId(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const id = value.trim();
+  return id && id.length <= BACKGROUND_TASK_ID_MAX_LENGTH ? id : undefined;
+}
+
+/** True for a shell tool whose result can report a task id its arguments omitted. */
+export function isBackgroundCapableShellTool(toolName: unknown): boolean {
+  return typeof toolName === "string"
+    && BACKGROUND_CAPABLE_SHELL_TOOL_NAMES.has(toolName.trim().toLowerCase());
+}
+
+/**
+ * True for a tool row that could own a background task, and is therefore worth
+ * scanning for a launch id.
+ *
+ * An explicit `run_in_background` argument is the common case. A shell row is
+ * the other one: Claude backgrounds a running command on Ctrl+B and on a
+ * foreground timeout, neither of which can change the arguments the command
+ * was launched with, so the argument alone cannot decide this.
+ */
+export function isBackgroundTaskLaunchCandidate(part: {
+  toolName?: unknown;
+  toolArgs?: unknown;
+}): boolean {
+  const args = part.toolArgs;
+  const explicit = Boolean(args)
+    && typeof args === "object"
+    && !Array.isArray(args)
+    && (args as Record<string, unknown>).run_in_background === true;
+  return explicit || isBackgroundCapableShellTool(part.toolName);
+}
+
+/**
+ * Recover the opaque background-task id a tool result reports, if any.
+ *
+ * Shared by the projection (which runs it before moving the result behind a
+ * detail reference, since the renderer would otherwise never see the text) and
+ * by the renderer itself (which still receives inline results from optimistic
+ * and bridge-direct messages). One implementation so the two sides cannot
+ * disagree about which rows own a task.
+ */
+export function recoverBackgroundTaskLaunchId(part: {
+  toolName?: unknown;
+  toolArgs?: unknown;
+  toolOutput?: unknown;
+}): string | undefined {
+  const output = part.toolOutput;
+  if (typeof output !== "string" || !output) return undefined;
+  if (!isBackgroundTaskLaunchCandidate(part)) return undefined;
+
+  const textMatch = output
+    .slice(0, BACKGROUND_TASK_LAUNCH_SCAN_CHARS)
+    .match(BACKGROUND_TASK_LAUNCH_ID_PATTERN);
+  const textId = boundedBackgroundTaskId(textMatch?.[1]);
+  if (textId) return textId;
+
+  if (output.length > BACKGROUND_TASK_LAUNCH_SCAN_CHARS) return undefined;
+  try {
+    const parsed = JSON.parse(output) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return undefined;
+    }
+    const record = parsed as Record<string, unknown>;
+    return boundedBackgroundTaskId(
+      record.backgroundTaskId ?? record.task_id ?? record.taskId,
+    );
+  } catch {
+    return undefined;
+  }
 }
 
 export interface NativeAgentTurnBoundary {

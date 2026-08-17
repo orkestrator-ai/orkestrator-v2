@@ -25,6 +25,7 @@ import {
 } from "@/lib/chat/native-message-adapters";
 import {
   AgentPlatformContext,
+  BackgroundTaskStopContext,
   MessageExpansionScopeContext,
   NativeMessagePartRendererContext,
   ToolDetailLoaderContext,
@@ -42,6 +43,7 @@ export const NativeMessage = memo(function NativeMessage({
   actions: messageActions,
   resolveModelLabel,
   loadToolDetails,
+  stopBackgroundTask,
   platform,
 }: NativeMessageProps) {
   const normalizedMessage = useMemo(() => normalizeNativeMessage(message), [message]);
@@ -190,6 +192,7 @@ export const NativeMessage = memo(function NativeMessage({
 
   return (
     <ToolDetailLoaderContext.Provider value={loadToolDetails}>
+      <BackgroundTaskStopContext.Provider value={stopBackgroundTask}>
       <AgentPlatformContext.Provider value={platform}>
         <MessageExpansionScopeContext.Provider value={messageAgentExpansionScope}>
         <NativeMessagePartRendererContext.Provider value={(props) => <MessagePart {...props} />}>
@@ -234,6 +237,7 @@ export const NativeMessage = memo(function NativeMessage({
         </NativeMessagePartRendererContext.Provider>
         </MessageExpansionScopeContext.Provider>
       </AgentPlatformContext.Provider>
+      </BackgroundTaskStopContext.Provider>
     </ToolDetailLoaderContext.Provider>
   );
 });

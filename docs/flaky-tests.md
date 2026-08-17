@@ -1473,6 +1473,38 @@ Post-fix stress verification:
 - **Related:** `ACP bridge > rejects a concurrent second turn that carries a different requestId`, the same `spawnBridge` health-wait family in `index.test.ts`. That entry was recorded when `BRIDGE_STARTUP_TIMEOUT_MS` was 5 s; the constant is now 15 s, so this occurrence means a bridge child took longer than fifteen seconds to bind and answer `/global/health`.
 - **Hypothesis:** Spawn contention again, but the 15 s budget makes plain contention a weaker explanation than it was at 5 s — this file alone spawns a bridge child per test and several tests spawn twice (create, stop, respawn against the same state directory). A recurrence should record how long the child actually took to become healthy, and whether a previous test's child was still shutting down and holding its state directory or port, before the startup budget is raised again. Raising the budget without that measurement would hide a genuine startup regression.
 
+## `ActionBar workflow tabs > opens the Resolve modal after a mobile long press without launching a default resolve` (`apps/web/src/components/layout/ActionBar.test.tsx:2910`)
+
+- **Status:** open
+- **Date observed:** 2026-08-16
+- **Original command:**
+  `bun run test:logged -- --name web-all -- bun --cwd=apps/web test --parallel=4 --only-failures`,
+  at `a9107f112ffe2642388c0279aada5c8430019e7c` on `unify-agent-components`.
+- **Worker configuration:** four Bun workers on the web package alone, not under
+  `scripts/test-all.ts`. An isolated `dev:test` profile (Electron, Vite, backend,
+  bridges) had been running on this host earlier in the same session, so host
+  load was above a quiet single-suite run.
+- **Failure:** `getElementError` from `tests/bounded-test-diagnostics.ts:28`,
+  raised at `ActionBar.test.tsx:2933` — the
+  `screen.getByRole("dialog", { name: "Configure conflict resolution" })`
+  assertion found no dialog. Duration 736.72 ms.
+- **Suite counts:** `5095 pass, 1 fail. Ran 5096 tests across 221 files. [53.17s]`
+- **Isolated rerun:** `bun --cwd=apps/web test src/components/layout/ActionBar --parallel=2`
+  → exit 0, no failures. The aggregate command had also passed twice earlier in
+  the same session at the same commit.
+- **Hypothesis:** the same wall-clock race already documented and fixed for
+  `clears active long-press click suppression when the action bar unmounts`
+  above. The case fires a touch `pointerDown`, sleeps a bare
+  `setTimeout(575)` — the entire margin over the component's long-press
+  threshold — then asserts synchronously. Under contention the timer fires late
+  or React commits the dialog after the sleep resolves, and the immediate
+  `getByRole` misses it. The documented fix for the sibling case (wait for the
+  accessible dialog with a bounded UI wait instead of sleeping past the
+  threshold) applies unchanged here; this occurrence is a second instance of the
+  same pattern in a case the earlier sweep did not convert. Nothing in the
+  failing path touches the transcript, agent cards, or background tasks, which
+  are the only areas the change that observed this touched.
+
 ## Electron command-registry fixture-shim timeouts (four tests, three files)
 
 - **Status:** open
@@ -1493,3 +1525,26 @@ Post-fix stress verification:
 - **Follow-up:** the identical whole-group command passed on a rerun later the same day, exit 0 in 161.9 s — under half the failing run's 361.24 s. The wall-clock gap is the useful part of that observation: the failing run was roughly 2.2x slower overall, which is consistent with host contention rather than with anything specific to these four cases.
 - **Related:** the "Command-registry Git fixture, deduplicated/admitted container starts, and process-launch coverage" row of the 2026-08-16 resolution sweep. That sweep raised the shared condition deadline to 10 s and gave several cases explicit budgets precisely because the shared helper's deadline had grown past Bun's 5 s default. These four cases wait on real `git`/`docker`/`gh` shims but carry **no** `ASYNC_TEST_BUDGET_MS`, so Bun's 5 s default still wins and reports a generic timeout instead of naming the condition.
 - **Hypothesis:** Same family as that sweep row rather than a new product defect — the change in flight touched only `bridges/acp-bridge`, which none of these files load. Under `--parallel=4` the real `git`/`docker`/`gh` shim processes under `$TMPDIR` are slow enough to exceed the 5 s outer budget; the timeout then interrupts the case mid-flight and its `finally` tears the shim down, which is what produces the trailing "command failed"/"promise rejected" errors *after* the timeout rather than before it. The log also shows repeated "killed 1 dangling process" lines around them. A recurrence should record how long the shim command actually took before any budget is raised: give each of the four an explicit `ASYNC_TEST_BUDGET_MS` so the named condition wins the race and the real latency is visible, rather than widening a tolerance against a generic timeout.
+- **Recurrence (terminal case only), 2026-08-17:** `rejects malformed container
+  status framing and invalid encoded sections` failed alone under
+  `bun run test:logged -- --name root-tests -- bun test ./tests --parallel=4 --only-failures`
+  at `55539f08ac3dcb3b4b9e18e522f881e9992f9057` on `unify-agent-components`, four
+  Bun workers on the root suite alone, with the bridges and web suites run back
+  to back in the same session. Same two symptoms as above in the same order —
+  `expect(received).toThrow(expected)` at `:1418`, expected substring
+  `"Malformed"`, received `Command failed: docker exec container-1 bash -lc …`
+  (the git-status script echoed back), then a 5,019.09 ms timeout and one
+  trailing "Unhandled error between tests" for the same case. Suite counts:
+  `3727 pass, 1 skip, 1 fail, 1 error. Ran 3729 tests across 178 files. [379.1s]`
+  — again roughly 2.2x the passing run's wall clock. Isolated rerun
+  `bun run test:logged -- --name root-terminal-isolated -- bun test tests/unit/electron/commands-registry-terminal.test.ts`
+  → exit 0 in 31.7 s, and the same aggregate command passed at the follow-up
+  commit in the same session (79.6 s, exit 0). The change in flight touched only
+  the chat transcript, agent cards and background tasks, none of which this path
+  loads. One alternative worth ruling out when the measurement above is taken:
+  the received message is the *unrejected* command failure rather than the
+  framing error, which would also fit the queued `docker` stub answering a
+  different invocation than the one under test — an ordering dependency between
+  queued fakes rather than plain shim latency. The isolated file takes 31.7 s in
+  total with no single case near 5 s, so recording which stubbed command actually
+  answered distinguishes the two before any budget is raised.

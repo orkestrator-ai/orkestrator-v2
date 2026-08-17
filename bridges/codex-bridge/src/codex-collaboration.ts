@@ -33,9 +33,10 @@ interface LatestCollabAgentState {
   spawnPrompt?: string;
   taskName?: string;
   /**
-   * The child's last lifecycle beat was `interrupted` and no later collab item
-   * named it. Applied only to rows that are otherwise unresolved, so it can end
-   * a spinner without repainting a child that reached its own terminal state.
+   * The child's last lifecycle beat was `interrupted` and nothing later reported
+   * a status for it. Applied only to rows that are otherwise unresolved, so it
+   * can end a spinner without repainting a child that reached its own terminal
+   * state.
    */
   interruptedWithoutSnapshot?: boolean;
 }
@@ -356,10 +357,22 @@ export function applyCodexCollabStateToSubagentParts(
       : undefined;
     for (const agentId of getReceiverThreadIds(item)) {
       const previous = latestByAgentId.get(agentId);
+      const reportedState = item.agents_states?.[agentId];
+      // Naming a child is not the same as reporting on it: `receiver_thread_ids`
+      // is populated for every collaboration call, while `agents_states` carries
+      // an entry only when the call actually observed the child, and that entry
+      // may still be message-only. An unconfirmed interrupt therefore survives
+      // until something supplies a real status — otherwise a later send/list
+      // that says nothing about the child would drop the only terminal evidence
+      // it has and return the row to a permanent spinner.
+      const reportsStatus = toToolState(reportedState?.status) !== undefined;
       latestByAgentId.set(agentId, {
-        state: item.agents_states?.[agentId] ?? previous?.state,
+        state: reportedState ?? previous?.state,
         spawnPrompt: previous?.spawnPrompt ?? spawnPrompt,
         taskName: previous?.taskName,
+        ...(previous?.interruptedWithoutSnapshot && !reportsStatus
+          ? { interruptedWithoutSnapshot: true }
+          : {}),
       });
     }
   }

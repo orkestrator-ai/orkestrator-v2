@@ -451,6 +451,44 @@ describe("reused child thread status", () => {
     expect(finished?.toolState).toBe("success");
   });
 
+  test("keeps a finished child successful when an abort names no turn of its own", () => {
+    // Interrupting a child that already finished is a no-op. Every real turn
+    // writes `turn_context`, `task_started` or `user_message` first, so a
+    // `turn_aborted` with nothing between it and the terminal record describes
+    // no turn this child ran, and must not repaint the outcome the child
+    // reported for itself.
+    const aborted: TranscriptRecord = {
+      type: "event_msg",
+      payload: { type: "turn_aborted", reason: "interrupted", turn_id: "turn-2" },
+    };
+
+    for (const terminal of [
+      { type: "event_msg", payload: { type: "task_complete" } },
+      {
+        type: "event_msg",
+        payload: { type: "agent_message", phase: "final_answer", message: "Done" },
+      },
+    ] as TranscriptRecord[]) {
+      expect(deriveSingleSubagent([terminal, aborted])?.toolState).toBe("success");
+
+      // A turn that actually started still resolves as a failure.
+      expect(deriveSingleSubagent([
+        terminal,
+        { type: "turn_context", payload: { cwd: "/repo" } },
+        aborted,
+      ])?.toolState).toBe("failure");
+    }
+
+    // The stronger task-scoped failures are unconditional: they name the
+    // agent's own task rather than whichever turn was cancelled.
+    for (const terminalType of ["task_failed", "task_aborted"] as const) {
+      expect(deriveSingleSubagent([
+        { type: "event_msg", payload: { type: "task_complete" } },
+        { type: "event_msg", payload: { type: terminalType } },
+      ])?.toolState).toBe("failure");
+    }
+  });
+
   test("reopens after task completion and explicit task failure", () => {
     for (const terminalType of ["task_complete", "task_failed"] as const) {
       const part = deriveSingleSubagent([

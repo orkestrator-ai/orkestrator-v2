@@ -459,6 +459,53 @@ describe("Codex collaboration state", () => {
     expect(running?.toolState).toBe("pending");
   });
 
+  test("keeps an unconfirmed interrupt through collab items that report no status", () => {
+    // `receiver_thread_ids` is populated for every collaboration call, but
+    // `agents_states` carries an entry only when the call observed the child.
+    // A later call that merely names the interrupted child — or reports only a
+    // message for it — must not discard the one piece of terminal evidence the
+    // row has, or the card spins for the rest of the session again.
+    const interrupt = {
+      id: "interrupt-1",
+      type: "subagent_activity",
+      activity: "interrupted",
+      agent_thread_id: "agent-1",
+    } as const;
+
+    const silentItems = [
+      {
+        id: "send-1",
+        type: "collab_tool_call",
+        tool: "send_message",
+        receiver_thread_ids: ["agent-1"],
+      },
+      {
+        id: "list-1",
+        type: "collab_tool_call",
+        tool: "list_agents",
+        receiver_thread_ids: ["agent-1"],
+        agents_states: { "agent-1": { message: "Partial findings" } },
+      },
+    ] as const;
+
+    for (const silentItem of silentItems) {
+      const [part] = applyCodexCollabStateToSubagentParts(
+        [makeAgent("agent-1")],
+        [interrupt, silentItem],
+      );
+      expect(part?.toolState).toBe("failure");
+    }
+
+    // The message such an item does carry is still surfaced.
+    const [withMessage] = applyCodexCollabStateToSubagentParts(
+      [makeAgent("agent-1")],
+      [interrupt, silentItems[1]],
+    );
+    expect(withMessage?.subagentActions).toEqual([
+      { type: "text", content: "Partial findings" },
+    ]);
+  });
+
   test("keeps an interrupt from repainting a child that already finished", () => {
     // `interrupt_agent` against a completed child is a no-op, so the child's own
     // transcript outcome must survive the beat it still emits — and the beat

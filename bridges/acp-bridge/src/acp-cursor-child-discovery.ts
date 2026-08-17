@@ -54,6 +54,7 @@ export interface DiscoveredCursorChild {
 interface DiscoveryCache {
   root: string;
   mtimeMs: number;
+  limit: number;
   createdAt: Map<string, number>;
   children: DiscoveredCursorChild[];
 }
@@ -68,8 +69,14 @@ let discoveryCache: DiscoveryCache | undefined;
  * `/session/:id/messages`, which a visible tab polls twice a second. Entry
  * creation times are cached by name across scans, so a rescan only stats
  * directories it has not seen.
+ *
+ * `limit` exists so a test can reach the entry cap without creating thousands
+ * of directories; it is part of the cache key so a bounded scan can never be
+ * served back to an unbounded one.
  */
-export function discoverCursorChildTranscriptDirectories(): DiscoveredCursorChild[] {
+export function discoverCursorChildTranscriptDirectories(
+  limit: number = MAX_CURSOR_DISCOVERY_ENTRIES,
+): DiscoveredCursorChild[] {
   const root = cursorTranscriptRoot();
   let rootStats;
   try {
@@ -80,18 +87,23 @@ export function discoverCursorChildTranscriptDirectories(): DiscoveredCursorChil
   }
   if (!rootStats.isDirectory()) return [];
   const cached = discoveryCache?.root === root ? discoveryCache : undefined;
-  if (cached && cached.mtimeMs === rootStats.mtimeMs) return cached.children;
+  if (cached && cached.mtimeMs === rootStats.mtimeMs && cached.limit === limit) {
+    return cached.children;
+  }
 
   let entries;
   try {
     entries = readdirSync(root, { withFileTypes: true });
   } catch {
+    // An unreadable root is transient (a permissions change, a racing rename).
+    // The previous list is stale rather than wrong, and dropping it would
+    // unclaim every directory in it.
     return cached?.children ?? [];
   }
   const createdAt = new Map<string, number>();
   const children: DiscoveredCursorChild[] = [];
   for (const entry of entries) {
-    if (children.length >= MAX_CURSOR_DISCOVERY_ENTRIES) break;
+    if (children.length >= limit) break;
     if (!entry.isDirectory() || !isSafeCursorAgentId(entry.name)) continue;
     let createdAtMs = cached?.createdAt.get(entry.name);
     if (createdAtMs === undefined) {
@@ -109,11 +121,12 @@ export function discoverCursorChildTranscriptDirectories(): DiscoveredCursorChil
   children.sort((left, right) =>
     left.createdAtMs - right.createdAtMs || left.agentId.localeCompare(right.agentId)
   );
-  discoveryCache = { root, mtimeMs: rootStats.mtimeMs, createdAt, children };
+  discoveryCache = { root, mtimeMs: rootStats.mtimeMs, limit, createdAt, children };
   return children;
 }
 
 interface UnboundCursorLaunch {
+  owner: SessionState;
   toolUseId: string;
   startedAtMs: number;
 }
@@ -140,6 +153,14 @@ interface UnboundCursorLaunch {
  * - a directory already attributed to a card in this process — live or
  *   settled — is never taken from it.
  *
+ * The pairing is computed over *every* session's unnamed launches, not just
+ * this one's. A peer tab's anonymous card cannot reserve its directory by name
+ * — it has no name yet — so a per-session pass let whichever tab polled first
+ * take the peer's child. One global ordering gives every launch the same
+ * answer regardless of who polls, and only the caller's own bindings are
+ * written: a peer's launch merely consumes its candidate here, and the poll
+ * that owns that session re-derives the identical pairing.
+ *
  * It is still an inference. If a card's child never writes a transcript, the
  * next card's directory is bound to it instead; the authoritative `agentId`
  * arriving with `cursor/task` re-anchors the card and
@@ -149,11 +170,15 @@ interface UnboundCursorLaunch {
  */
 export function bindDiscoveredCursorChildren(state: SessionState): boolean {
   if (provider !== "cursor") return false;
-  const launches = unboundActiveLaunches(state);
+  const owners = discoverySessionStates(state);
+  const launches = unboundActiveLaunches(owners);
   if (launches.length === 0) return false;
-  const claimed = claimedCursorAgentIds(state);
-  const candidates = discoverCursorChildTranscriptDirectories()
-    .filter((child) => !claimed.has(child.agentId));
+  // Ordered before the claim scan: with no directory to hand out there is
+  // nothing to protect, and the scan is the expensive half.
+  const directories = discoverCursorChildTranscriptDirectories();
+  if (directories.length === 0) return false;
+  const claimed = claimedCursorAgentIds(owners);
+  const candidates = directories.filter((child) => !claimed.has(child.agentId));
   if (candidates.length === 0) return false;
 
   let index = 0;
@@ -168,6 +193,10 @@ export function bindDiscoveredCursorChildren(state: SessionState): boolean {
     const candidate = candidates[index];
     if (!candidate) break;
     index += 1;
+    // A peer's launch has now consumed its candidate, which is the whole point
+    // of the global pass, but the binding itself belongs to the poll that owns
+    // that session. Writing it here would let one tab's read mutate another's.
+    if (launch.owner !== state) continue;
     const previous = state.activeSubagentDescriptors.get(launch.toolUseId);
     state.activeSubagentDescriptors.set(launch.toolUseId, {
       ...previous,
@@ -179,17 +208,36 @@ export function bindDiscoveredCursorChildren(state: SessionState): boolean {
   return bound;
 }
 
-function unboundActiveLaunches(state: SessionState): UnboundCursorLaunch[] {
+/**
+ * Every session that shares this process's transcript root, including one the
+ * caller holds that is not (or is no longer) in the registry.
+ */
+function discoverySessionStates(state: SessionState): Set<SessionState> {
+  const states = new Set<SessionState>(sessions.values());
+  states.add(state);
+  return states;
+}
+
+/**
+ * Unnamed running Task cards across every session, oldest first.
+ *
+ * Both iteration orders feeding this are insertion-ordered and the sort is
+ * stable, so repeated calls produce the same ordering — which is what lets a
+ * peer session re-derive the same pairing on its own poll.
+ */
+function unboundActiveLaunches(states: Iterable<SessionState>): UnboundCursorLaunch[] {
   const launches: UnboundCursorLaunch[] = [];
-  for (const toolUseId of state.activeSubagentToolIds) {
-    if (state.activeSubagentDescriptors.get(toolUseId)?.agentId) continue;
-    const found = findToolPart(state, toolUseId);
-    if (!found) continue;
-    const startedAtMs = launchStartedAtMs(found.part);
-    // Without a launch time there is no floor, and a card that cannot be
-    // time-bounded could adopt any directory in the root.
-    if (startedAtMs === undefined) continue;
-    launches.push({ toolUseId, startedAtMs });
+  for (const owner of states) {
+    for (const toolUseId of owner.activeSubagentToolIds) {
+      if (owner.activeSubagentDescriptors.get(toolUseId)?.agentId) continue;
+      const found = findToolPart(owner, toolUseId);
+      if (!found) continue;
+      const startedAtMs = launchStartedAtMs(found.part);
+      // Without a launch time there is no floor, and a card that cannot be
+      // time-bounded could adopt any directory in the root.
+      if (startedAtMs === undefined) continue;
+      launches.push({ owner, toolUseId, startedAtMs });
+    }
   }
   launches.sort((left, right) =>
     left.startedAtMs - right.startedAtMs || left.toolUseId.localeCompare(right.toolUseId)
@@ -213,14 +261,12 @@ function launchStartedAtMs(part: BridgeToolPart): number | undefined {
  * does not exclude that directory from the *next* unnamed launch — sequential
  * short Tasks are newer than the floor. This scan therefore also reads
  * `agentId` off launch parts and off JSONL projections still attached to a
- * card. It runs only while an unnamed launch is waiting to bind, not on the
- * `/activity` poll.
+ * card. It runs only while an unnamed launch is waiting to bind and a
+ * directory is available to bind it to, not on the `/activity` poll.
  */
-function claimedCursorAgentIds(state: SessionState): Set<string> {
+function claimedCursorAgentIds(states: Iterable<SessionState>): Set<string> {
   const claimed = new Set<string>();
-  const candidates = new Set<SessionState>(sessions.values());
-  candidates.add(state);
-  for (const candidate of candidates) {
+  for (const candidate of states) {
     for (const descriptor of candidate.activeSubagentDescriptors.values()) {
       if (descriptor.agentId) claimed.add(descriptor.agentId);
     }
@@ -229,12 +275,28 @@ function claimedCursorAgentIds(state: SessionState): Set<string> {
         const projectedId = cursorJsonlPartAgentId(part.sourcePartId);
         if (projectedId) claimed.add(projectedId);
         if (part.type !== "tool-invocation" || part.parentTaskUseId) continue;
+        if (!isSubagentLaunchPart(part)) continue;
         const agentId = toolPartAgentId(part);
         if (agentId) claimed.add(agentId);
       }
     }
   }
   return claimed;
+}
+
+/**
+ * A Task card — the only part that can carry a Cursor `agentId`.
+ *
+ * Ordinary tool calls have to be excluded by more than the `agentId` lookup
+ * failing on them: `toolPartAgentId` falls through to parsing `toolOutput` as
+ * JSON, which for a `Read` or `Bash` result means scanning and failing to
+ * parse up to `MAX_TOOL_OUTPUT_BYTES`. Doing that for every part of every
+ * message would put a whole extra transcript pass on `/session/:id/messages`,
+ * which a visible tab polls twice a second — the exact cost
+ * `boundTranscriptForRead` exists to keep off that route.
+ */
+function isSubagentLaunchPart(part: BridgeToolPart): boolean {
+  return part.agentState !== undefined || part.toolName?.trim().toLowerCase() === "task";
 }
 
 /** Agent id encoded in a projected `cursor-jsonl:<agentId>:…` part. */

@@ -102,6 +102,33 @@ function addUnnamedLaunch(
   state.activeSubagentDescriptors.set(toolUseId, {});
 }
 
+/** Pushes a part whose shape differs from the launch parts `makeState` builds. */
+function addRawPart(state: ReturnType<typeof makeState>, part: Record<string, unknown>): void {
+  (state.messages[0]!.parts as unknown as Array<Record<string, unknown>>).push(part);
+}
+
+/**
+ * Registers states in the process-wide session registry for the duration of
+ * `run`, restoring whatever was there before. `bindDiscoveredCursorChildren`
+ * reads every session in that registry, so a leaked entry would follow the
+ * suite into unrelated tests.
+ */
+function withSessions<T>(
+  entries: Array<[string, ReturnType<typeof makeState>]>,
+  run: () => T,
+): T {
+  const restore = entries.map(([key]) => [key, sessions.get(key)] as const);
+  for (const [key, state] of entries) sessions.set(key, state as unknown as SessionState);
+  try {
+    return run();
+  } finally {
+    for (const [key, previous] of restore) {
+      if (previous) sessions.set(key, previous);
+      else sessions.delete(key);
+    }
+  }
+}
+
 async function writeChildTranscript(
   root: string,
   agentId: string,
@@ -276,16 +303,10 @@ describe("Cursor child transcript discovery", () => {
       const owner = makeState([{ toolUseId: "owner-task", agentId: "child-a" }]);
       settleNamedLaunch(owner, "owner-task", "child-a");
       const contender = makeState([{ toolUseId: "contender-task" }]);
-      const sessionKey = `cursor-discovery-test:${root}`;
-      const previous = sessions.get(sessionKey);
-      sessions.set(sessionKey, owner as unknown as SessionState);
-      try {
+      withSessions([[`cursor-discovery-test:${root}`, owner]], () => {
         expect(bindDiscoveredCursorChildren(contender as unknown as SessionState)).toBe(false);
         expect(contender.activeSubagentDescriptors.get("contender-task")).toEqual({});
-      } finally {
-        if (previous) sessions.set(sessionKey, previous);
-        else sessions.delete(sessionKey);
-      }
+      });
     });
   });
 
@@ -382,16 +403,77 @@ describe("Cursor child transcript discovery", () => {
       await writeChildTranscript(root, "child-a", toolRecord("Read"));
       const owner = makeState([{ toolUseId: "owner-task", agentId: "child-a" }]);
       const contender = makeState([{ toolUseId: "contender-task" }]);
-      const sessionKey = `cursor-discovery-test:${root}`;
-      const previous = sessions.get(sessionKey);
-      sessions.set(sessionKey, owner as unknown as SessionState);
-      try {
+      withSessions([[`cursor-discovery-test:${root}`, owner]], () => {
         expect(bindDiscoveredCursorChildren(contender as unknown as SessionState)).toBe(false);
         expect(contender.activeSubagentDescriptors.get("contender-task")).toEqual({});
-      } finally {
-        if (previous) sessions.set(sessionKey, previous);
-        else sessions.delete(sessionKey);
-      }
+      });
+    });
+  });
+
+  // Two tabs can launch anonymous foreground Tasks within the skew window, and
+  // an unnamed peer reserves nothing by name — it has no name yet. Pairing per
+  // session therefore let whichever tab polled first take the other's child, so
+  // the pass has to be computed over every session's unnamed launches.
+  test("does not take a peer session's directory for its own unnamed launch", async () => {
+    await withTranscriptRoot(async (root) => {
+      await writeChildTranscript(root, "child-a", toolRecord("Read"));
+      await writeChildTranscript(root, "child-b", toolRecord("Grep"));
+      const early = makeState([{ toolUseId: "peer-task" }]);
+      const late = makeState([{
+        toolUseId: "task-1",
+        createdAt: new Date(LAUNCHED_AT_MS + 1_000).toISOString(),
+      }]);
+
+      withSessions([
+        [`cursor-discovery-early:${root}`, early],
+        [`cursor-discovery-late:${root}`, late],
+      ], () => {
+        // The later session polls first. The earlier peer launched first, so
+        // the older directory is still its child.
+        expect(bindDiscoveredCursorChildren(late as unknown as SessionState)).toBe(true);
+        expect(late.activeSubagentDescriptors.get("task-1")).toEqual({
+          agentId: "child-b",
+          agentIdDiscovered: true,
+        });
+        // The peer's candidate was reserved, not written: one tab's read must
+        // not mutate another tab's state.
+        expect(early.activeSubagentDescriptors.get("peer-task")).toEqual({});
+
+        // The peer's own poll re-derives the same pairing.
+        expect(bindDiscoveredCursorChildren(early as unknown as SessionState)).toBe(true);
+        expect(early.activeSubagentDescriptors.get("peer-task")).toEqual({
+          agentId: "child-a",
+          agentIdDiscovered: true,
+        });
+      });
+    });
+  });
+
+  // Only a Task card can carry a Cursor `agentId`. Reading one off every tool
+  // part would also mean parsing every tool's output as JSON on a route a
+  // visible tab polls twice a second.
+  test("ignores an agentId on a tool call that was never a sub-agent launch", async () => {
+    await withTranscriptRoot(async (root) => {
+      await writeChildTranscript(root, "child-a", toolRecord("Read"));
+      const state = makeState([{ toolUseId: "task-1" }]);
+      addRawPart(state, {
+        type: "tool-invocation",
+        content: "Read",
+        sourcePartId: "read-1",
+        sourceMessageId: "message-1",
+        toolUseId: "read-1",
+        toolName: "Read",
+        toolTitle: "Read",
+        toolArgs: { agentId: "child-a" },
+        toolState: "success",
+        createdAt: LAUNCHED_AT,
+      });
+
+      expect(bindDiscoveredCursorChildren(state as unknown as SessionState)).toBe(true);
+      expect(state.activeSubagentDescriptors.get("task-1")).toEqual({
+        agentId: "child-a",
+        agentIdDiscovered: true,
+      });
     });
   });
 
@@ -409,6 +491,49 @@ describe("Cursor child transcript discovery", () => {
 
       expect(discoverCursorChildTranscriptDirectories().map((child) => child.agentId))
         .toEqual(["child-a", "child-b"]);
+    });
+  });
+
+  // The cap bounds one scan's syscalls. It truncates in directory-read order,
+  // before the sort, so which entries survive is deliberately unspecified —
+  // only the bound is contractual.
+  test("stops scanning at the entry cap", async () => {
+    await withTranscriptRoot(async (root) => {
+      for (const agentId of ["child-a", "child-b", "child-c"]) {
+        await writeChildTranscript(root, agentId, toolRecord("Read"));
+      }
+
+      expect(discoverCursorChildTranscriptDirectories(2)).toHaveLength(2);
+      // A bounded scan must not be served back to an unbounded one.
+      expect(discoverCursorChildTranscriptDirectories().map((child) => child.agentId))
+        .toEqual(["child-a", "child-b", "child-c"]);
+    });
+  });
+
+  // A root that becomes unreadable is transient. Dropping the cached list would
+  // unclaim every directory in it and invite a rebind onto a live child.
+  test("keeps the cached listing when the root cannot be read", async () => {
+    if ((process.getuid?.() ?? 0) === 0) {
+      // Mode bits do not stop root, so this branch cannot be provoked here.
+      return;
+    }
+    await withTranscriptRoot(async (root) => {
+      await writeChildTranscript(root, "child-a", toolRecord("Read"));
+      expect(discoverCursorChildTranscriptDirectories().map((child) => child.agentId))
+        .toEqual(["child-a"]);
+
+      // Change the root's mtime so the cache is invalidated, then take away
+      // the read permission the rescan needs.
+      await writeChildTranscript(root, "child-b", toolRecord("Grep"));
+      const rootStats = await fs.stat(root);
+      await fs.utimes(root, rootStats.atime, new Date(rootStats.mtimeMs + 2_000));
+      await fs.chmod(root, 0o000);
+      try {
+        expect(discoverCursorChildTranscriptDirectories().map((child) => child.agentId))
+          .toEqual(["child-a"]);
+      } finally {
+        await fs.chmod(root, 0o700);
+      }
     });
   });
 
@@ -485,6 +610,34 @@ describe("Cursor child transcript discovery", () => {
         "cursor-jsonl:child-b:0:0",
       ]);
       expect(parts[1]).toMatchObject({ toolName: "Grep", toolState: "success" });
+    });
+  });
+
+  // The recovered prompt is a stand-in for a card Cursor has not described. A
+  // prompt Cursor did report is authoritative and must survive every later read
+  // of the child's transcript.
+  test("never overwrites a reported prompt with one recovered from the transcript", async () => {
+    await withTranscriptRoot(async (root) => {
+      await writeChildTranscript(
+        root,
+        "child-a",
+        promptRecord("<user_query>\nRecovered stand-in.\n</user_query>") + toolRecord("Read"),
+      );
+      const state = makeState([{ toolUseId: "task-1", agentId: "child-a" }]);
+      const launch = state.messages[0]!.parts[0]!;
+      launch.toolArgs = { agentId: "child-a", prompt: "The prompt Cursor reported." };
+
+      hydrateCursorChildTranscripts(state as unknown as SessionState);
+      // A second read, with the read cache dropped, is the one that would
+      // re-run recovery against an already-labelled card.
+      resetCursorTranscriptReadCache();
+      hydrateCursorChildTranscripts(state as unknown as SessionState);
+
+      const parts = state.messages[0]!.parts as Array<Record<string, unknown>>;
+      expect(parts[0]).toMatchObject({ toolArgs: { prompt: "The prompt Cursor reported." } });
+      // The child's activity still projects; only the label is left alone.
+      expect(parts.map((part) => part.sourcePartId))
+        .toEqual(["task-1", "cursor-jsonl:child-a:0:0"]);
     });
   });
 

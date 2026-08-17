@@ -32,6 +32,12 @@ interface LatestCollabAgentState {
   state?: CodexCollabAgentState;
   spawnPrompt?: string;
   taskName?: string;
+  /**
+   * The child's last lifecycle beat was `interrupted` and no later collab item
+   * named it. Applied only to rows that are otherwise unresolved, so it can end
+   * a spinner without repainting a child that reached its own terminal state.
+   */
+  interruptedWithoutSnapshot?: boolean;
 }
 
 interface CodexSubagentActivityItem {
@@ -266,7 +272,8 @@ function makeSubagentPart(
     subagentPrompt: latest?.spawnPrompt,
     subagentActions: appendFinalCollabMessage([], latest?.state?.message),
     subagentActionCount: 0,
-    toolState: toToolState(latest?.state?.status) ?? "pending",
+    toolState: toToolState(latest?.state?.status)
+      ?? (latest?.interruptedWithoutSnapshot ? "failure" : "pending"),
   };
 }
 
@@ -309,15 +316,28 @@ export function applyCodexCollabStateToSubagentParts(
       // started beat can create a pending orphan row, but must not repaint a
       // newer terminal transcript. Interactions without prior state are also
       // ignored because send_message may not wake a completed child.
-      if (item.activity !== "started" && !previous) continue;
+      //
+      // `interrupted` is the exception, because it is the only signal that
+      // always names an interrupted child. app-server drops interrupted agents
+      // from later `list_agents` snapshots unpredictably — two children
+      // interrupted seconds apart can disagree on whether any snapshot reports
+      // them at all — and `interrupt_agent` answers only with `previous_status`.
+      // It is still recorded as a weak outcome so a no-op interrupt of an
+      // already-finished child cannot repaint its terminal state.
+      const interrupted = item.activity === "interrupted";
+      if (item.activity !== "started" && !interrupted && !previous) continue;
       latestByAgentId.set(item.agent_thread_id, {
-        ...previous,
+        spawnPrompt: previous?.spawnPrompt,
         taskName: previous?.taskName ?? taskNameFromAgentPath(item.agent_path),
         // Keep any final message so an earlier-turn agent does not lose its
         // only transcript text when the old terminal status is invalidated.
-        state: previous?.state?.message !== undefined
-          ? { message: previous.state.message }
-          : undefined,
+        ...(previous?.state?.message !== undefined
+          ? { state: { message: previous.state.message } }
+          : {}),
+        // Only an interrupt carries this forward: a started or interacted beat
+        // means the child is working again, so an earlier interrupt no longer
+        // describes it.
+        ...(interrupted ? { interruptedWithoutSnapshot: true } : {}),
       });
       continue;
     }
@@ -404,6 +424,12 @@ export function applyCodexCollabStateToSubagentParts(
     part.subagentRole ??= latest.taskName;
     part.subagentPrompt ??= latest.spawnPrompt;
     part.toolState = toToolState(latest.state?.status) ?? part.toolState;
+    // Resolve an interrupt that no snapshot ever confirmed, but only for a row
+    // still waiting on an outcome: an interrupt issued against a child that had
+    // already finished is a no-op, and its transcript owns the real result.
+    if (latest.interruptedWithoutSnapshot && part.toolState === "pending") {
+      part.toolState = "failure";
+    }
     if (failedSpawnAgentIds.has(agentId)) part.toolState = "failure";
     part.subagentActions = appendFinalCollabMessage(
       part.subagentActions,

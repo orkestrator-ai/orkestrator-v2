@@ -398,6 +398,59 @@ describe("reused child thread status", () => {
     }
   });
 
+  test("ends an interrupted child on its turn_aborted record", () => {
+    // An interrupted child writes `turn_aborted`, not `task_aborted`, and that
+    // record is the only terminal marker its rollout ever gets: the parent's
+    // `list_agents` snapshots may never name the child again.
+    const part = deriveSingleSubagent([
+      {
+        type: "response_item",
+        payload: { type: "custom_tool_call", name: "exec", call_id: "call", input: "{}" },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "developer",
+          content: [{ type: "input_text", text: "<turn_aborted>" }],
+        },
+      },
+      {
+        type: "event_msg",
+        payload: { type: "turn_aborted", reason: "interrupted", turn_id: "turn-1" },
+      },
+    ]);
+
+    expect(part?.toolState).toBe("failure");
+  });
+
+  test("reopens an interrupted child that receives a follow-up", () => {
+    const interrupted: TranscriptRecord = {
+      type: "event_msg",
+      payload: { type: "turn_aborted", reason: "interrupted", turn_id: "turn-1" },
+    };
+
+    const working = deriveSingleSubagent([
+      interrupted,
+      { type: "event_msg", payload: { type: "user_message", message: "Try again" } },
+      {
+        type: "response_item",
+        payload: { type: "function_call", name: "exec", call_id: "retry", arguments: "{}" },
+      },
+    ]);
+    expect(working?.toolState).toBe("pending");
+
+    const finished = deriveSingleSubagent([
+      interrupted,
+      { type: "event_msg", payload: { type: "user_message", message: "Try again" } },
+      {
+        type: "event_msg",
+        payload: { type: "agent_message", phase: "final_answer", message: "Done" },
+      },
+    ]);
+    expect(finished?.toolState).toBe("success");
+  });
+
   test("reopens after task completion and explicit task failure", () => {
     for (const terminalType of ["task_complete", "task_failed"] as const) {
       const part = deriveSingleSubagent([

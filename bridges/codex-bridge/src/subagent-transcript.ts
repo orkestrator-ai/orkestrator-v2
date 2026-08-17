@@ -596,6 +596,12 @@ function isExplicitSubagentFailureEvent(eventType: string | undefined): boolean 
     || eventType === "task_error"
     || eventType === "task_aborted"
     || eventType === "task_cancelled"
+    // An interrupted child writes `turn_aborted`, *not* `task_aborted`, and that
+    // record is the only terminal marker its rollout ever gets. Omitting it left
+    // the row pending forever, because the parent-side snapshot cannot be relied
+    // on to name an interrupted child either (see `applyCodexCollabStateToSubagentParts`).
+    // A follow-up on the same thread still reopens the row through `markPending`.
+    || eventType === "turn_aborted"
   );
 }
 

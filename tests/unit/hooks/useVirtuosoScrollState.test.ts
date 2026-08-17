@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach } from "bun:test";
 import { renderHook, act, waitFor } from "@testing-library/react";
+import type { StateSnapshot } from "react-virtuoso";
 import {
   useVirtuosoScrollState,
   clearPersistedVirtuosoState,
@@ -99,6 +100,8 @@ describe("useVirtuosoScrollState", () => {
     clearPersistedVirtuosoState("test-key");
     clearPersistedVirtuosoState("key-a");
     clearPersistedVirtuosoState("key-b");
+    clearPersistedVirtuosoState("unrestorable-key");
+    clearPersistedVirtuosoState("header-offset-key");
   });
 
   describe("initial state", () => {
@@ -1216,8 +1219,14 @@ describe("useVirtuosoScrollState", () => {
   });
 
   describe("scroll state persistence", () => {
-    test("persists and restores snapshot when user had scrolled up (not sticky)", () => {
-      const mockSnapshot = { ranges: [], scrollTop: 500 } as any;
+    test("persists and restores a real getState snapshot when user had scrolled up", () => {
+      const mockSnapshot: StateSnapshot = {
+        // react-virtuoso represents the size tree's terminal entry as an
+        // open-ended range. Losing this snapshot regresses every persisted
+        // transcript to a mount-from-top instead of restoring the user's view.
+        ranges: [{ startIndex: 0, endIndex: Number.POSITIVE_INFINITY, size: 34 }],
+        scrollTop: 500,
+      };
       const { result, rerender } = renderHook(
         ({ isActive }) =>
           useVirtuosoScrollState({ isActive, persistKey: "test-key" }),
@@ -1250,6 +1259,98 @@ describe("useVirtuosoScrollState", () => {
       } finally {
         document.body.removeChild(el);
       }
+    });
+
+    test("refuses an unrestorable persisted snapshot instead of handing it to restoreStateFrom", () => {
+      const persistKey = "unrestorable-key";
+      // This is one of the shapes that throws "Failed binary finding record in
+      // array" from inside a render when passed to restoreStateFrom. Persisting
+      // it and remounting must not restore it, and must drop it from the map
+      // so a later retry cannot replay the crash.
+      const poison = {
+        ranges: [{ startIndex: -3, endIndex: Number.NaN, size: Number.NaN }],
+        scrollTop: 500,
+      } as StateSnapshot;
+      const healthy: StateSnapshot = {
+        ranges: [{ startIndex: 0, endIndex: Number.POSITIVE_INFINITY, size: 34 }],
+        scrollTop: 120,
+      };
+
+      const { result, rerender } = renderHook(
+        ({ isActive }) => useVirtuosoScrollState({ isActive, persistKey }),
+        { initialProps: { isActive: true } },
+      );
+
+      result.current.virtuosoRef.current = {
+        scrollToIndex: () => {},
+        getState: (cb: (state: any) => void) => cb(poison),
+      } as any;
+
+      rerender({ isActive: false });
+
+      const { result: refused } = renderHook(() =>
+        useVirtuosoScrollState({ persistKey }),
+      );
+      expect(refused.current.scrollProps.restoreStateFrom).toBeUndefined();
+
+      // A later remount must also refuse: the initializer deletes the poison
+      // so retry cannot restore it from the module-level map.
+      const { result: stillRefused } = renderHook(() =>
+        useVirtuosoScrollState({ persistKey }),
+      );
+      expect(stillRefused.current.scrollProps.restoreStateFrom).toBeUndefined();
+
+      // The key is not bricked: a later well-formed snapshot still restores.
+      const { result: writer, rerender: rerenderWriter } = renderHook(
+        ({ isActive }) => useVirtuosoScrollState({ isActive, persistKey }),
+        { initialProps: { isActive: true } },
+      );
+      writer.current.virtuosoRef.current = {
+        scrollToIndex: () => {},
+        getState: (cb: (state: any) => void) => cb(healthy),
+      } as any;
+      rerenderWriter({ isActive: false });
+
+      const { result: restored } = renderHook(() =>
+        useVirtuosoScrollState({ persistKey }),
+      );
+      expect(restored.current.scrollProps.restoreStateFrom).toEqual(healthy);
+      clearPersistedVirtuosoState(persistKey);
+    });
+
+    test("restores a header-offset snapshot whose scrollTop is negative", () => {
+      const persistKey = "header-offset-key";
+      // Virtuoso's getState() records `scrollTop - headerHeight`, and restore
+      // reads it back as `{ align: "start", index: 0, offset }`. A view with a
+      // Header — the agent tab's "load earlier messages" banner — persists a
+      // negative value whenever the reader is scrolled into that header, so
+      // this is a well-formed snapshot and must survive the round trip.
+      const headerOffset: StateSnapshot = {
+        ranges: [{ startIndex: 0, endIndex: Number.POSITIVE_INFINITY, size: 34 }],
+        scrollTop: -48,
+      };
+
+      const { result, rerender } = renderHook(
+        ({ isActive }) => useVirtuosoScrollState({ isActive, persistKey }),
+        { initialProps: { isActive: true } },
+      );
+      result.current.virtuosoRef.current = {
+        scrollToIndex: () => {},
+        getState: (cb: (state: any) => void) => cb(headerOffset),
+      } as any;
+      rerender({ isActive: false });
+
+      const { result: restored } = renderHook(() =>
+        useVirtuosoScrollState({ persistKey }),
+      );
+      expect(restored.current.scrollProps.restoreStateFrom).toEqual(headerOffset);
+
+      // Not consumed-and-dropped either: the entry survives for later mounts.
+      const { result: again } = renderHook(() =>
+        useVirtuosoScrollState({ persistKey }),
+      );
+      expect(again.current.scrollProps.restoreStateFrom).toEqual(headerOffset);
+      clearPersistedVirtuosoState(persistKey);
     });
 
     test("restores snapshot even when user was sticky (avoids mount-from-top flash)", () => {

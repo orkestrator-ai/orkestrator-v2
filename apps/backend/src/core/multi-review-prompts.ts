@@ -43,7 +43,12 @@ export function createMultiReviewerPrompt(input: {
       allowClarifyingQuestions: false,
       outputFormat: "structured",
     }),
-    "The provider enforces the structured review schema. Do not edit source files or create commits. Validation commands may write generated artifacts and tool caches. Return all high-confidence issues, coverage gaps, strengths, limitations, and review commentary in the schema; do not omit a finding because another reviewer might discover it.",
+    // A reviewer runs for minutes in a tab the user can watch, so its progress
+    // messages are the only evidence the review is alive. Codex and the ACP
+    // agents answer a schema-constrained turn in the text channel and will
+    // otherwise spend the whole review re-drafting the report there, which the
+    // viewer withholds as machine output — leaving an apparently silent tab.
+    "The provider enforces the structured review schema on your final message. Narrate your progress in ordinary prose as you go — what you are examining, what you have confirmed, and what you are validating — so someone watching this review can follow it. Do not edit source files or create commits. Validation commands may write generated artifacts and tool caches. Return all high-confidence issues, coverage gaps, strengths, limitations, and review commentary in the schema; do not omit a finding because another reviewer might discover it.",
   ].join("\n\n");
 }
 

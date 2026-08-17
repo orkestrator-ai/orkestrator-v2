@@ -12,6 +12,7 @@ import {
   type JsonObject,
 } from "./fake-agent-context.js";
 import { handlePromptTools } from "./fake-agent-prompt-tools.js";
+import { STRUCTURED_PROMPT_INSTRUCTION_PREFIX } from "../structured-prompt-marker.js";
 
 function retriableProviderErrorMessage(): string {
   const name = process.env.FAKE_ACP_FLATTENED_ERROR_NAME ?? "RetriableError";
@@ -240,14 +241,14 @@ export function handlePromptStart(message: JsonObject): boolean {
         method: "session/update",
         params: {
           sessionId: "fake-session",
-          update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: prompt.slice("DIRECT:".length).split("\n\nReturn only")[0] } },
+          update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: prompt.slice("DIRECT:".length).split(`\n\n${STRUCTURED_PROMPT_INSTRUCTION_PREFIX}`)[0] } },
         },
       });
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
       return true;
     }
     if (prompt.startsWith("JSON_THEN_THOUGHT:")) {
-      const text = prompt.slice("JSON_THEN_THOUGHT:".length).split("\n\nReturn only")[0];
+      const text = prompt.slice("JSON_THEN_THOUGHT:".length).split(`\n\n${STRUCTURED_PROMPT_INSTRUCTION_PREFIX}`)[0];
       write({
         jsonrpc: "2.0",
         method: "session/update",
@@ -271,7 +272,7 @@ export function handlePromptStart(message: JsonObject): boolean {
       return true;
     }
     if (prompt.startsWith("THOUGHT_THEN_JSON:")) {
-      const text = prompt.slice("THOUGHT_THEN_JSON:".length).split("\n\nReturn only")[0];
+      const text = prompt.slice("THOUGHT_THEN_JSON:".length).split(`\n\n${STRUCTURED_PROMPT_INSTRUCTION_PREFIX}`)[0];
       write({
         jsonrpc: "2.0",
         method: "session/update",

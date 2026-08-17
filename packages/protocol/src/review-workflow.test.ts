@@ -121,7 +121,11 @@ describe("review workflow contract", () => {
     expect(body).toContain("git diff origin/main...HEAD");
     expect(body).toContain("## Step 4: Test Coverage Review");
     expect(body).toContain("provider-enforced JSON Schema");
-    expect(body).toContain("Use ordinary prose for interim progress updates");
+    expect(body).toContain("The output schema applies to your final message only");
+    expect(body).toContain("Write interim progress updates as plain sentences");
+    // The withholding rule the reviewer viewer enforces, stated to the agent:
+    // a drafted report is not progress anyone can read.
+    expect(body).toContain("An interim message must never be a JSON object or array");
     expect(body).toContain("Never emit a partial or provisional structured report");
     expect(body).toContain(
       "make the final assistant message the only provider-enforced structured report",

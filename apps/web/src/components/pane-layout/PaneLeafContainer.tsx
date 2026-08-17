@@ -19,6 +19,8 @@ import { useTerminalPortalStore } from "@/stores/terminalPortalStore";
 import type { MultiReviewTabData, PaneLeaf } from "@/types/paneLayout";
 import { createTabbarDroppableId, getNativeAgentData } from "@/types/paneLayout";
 import { cn } from "@/lib/utils";
+import { multiReviewReviewerScrollKey } from "@/lib/multi-review-keys";
+import { clearPersistedVirtuosoState } from "@/hooks";
 import { DraggableTabBar } from "./DraggableTabBar";
 import { DropZoneOverlay } from "./DropZoneOverlay";
 import {
@@ -74,11 +76,24 @@ function MultiReviewTabBoundary({
   const workflowRevision = useMultiReviewStore(
     (state) => state.workflows.get(data.workflowId)?.backendRevision,
   );
+  // Persisted scroll snapshots live in a module-level map that outlives this
+  // remount. A snapshot that contributed to the failure would replay the
+  // identical crash on every retry — the boundary's own resetKeys retry as
+  // well as the user's "Retry view" — so a failure forfeits the scroll
+  // position to make the retry genuinely fresh.
+  const handleViewFailure = useCallback(() => {
+    if (data.reviewerId) {
+      clearPersistedVirtuosoState(
+        multiReviewReviewerScrollKey(data.workflowId, data.reviewerId),
+      );
+    }
+  }, [data.reviewerId, data.workflowId]);
   return (
     <LazyLoadBoundary
       loadingFallback={loadingFallback}
       renderError={renderError}
       resetKeys={[isVisible, refreshRequestId, workflowRevision]}
+      onError={handleViewFailure}
     >
       <LazyMultiReviewTab
         key={refreshRequestId}

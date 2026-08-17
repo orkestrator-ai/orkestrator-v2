@@ -19,7 +19,40 @@ import {
   FLATTENED_RETRIABLE_PROVIDER_SUFFIX,
   RETRIABLE_PROVIDER_ERROR,
   retriableProviderError,
+  structuredPromptInstruction,
 } from "./acp-prompt.js";
+
+describe("structuredPromptInstruction", () => {
+  const instruction = structuredPromptInstruction({
+    type: "object",
+    properties: { answer: { type: "string" } },
+  });
+
+  test("binds the schema to the final message and carries it verbatim", () => {
+    expect(instruction).toContain(
+      "End your turn with exactly one JSON value matching this JSON Schema.",
+    );
+    expect(instruction).toContain("no Markdown fence and no commentary around it");
+    expect(instruction).toContain('{"type":"object","properties":{"answer":{"type":"string"}}}');
+  });
+
+  /*
+   * Cursor and Grok write a structured answer into the same text channel the
+   * user is watching. Forbidding commentary outright left a multi-minute
+   * structured turn — a Multi Review reviewer — showing nothing at all until it
+   * finished. Turn output is recovered from the *last* well-formed document, so
+   * prose before it was always safe.
+   */
+  test("permits prose progress updates but not drafted JSON", () => {
+    expect(instruction).toContain(
+      "Before that final message you may send ordinary prose progress updates.",
+    );
+    expect(instruction).toContain(
+      "never send a JSON object or array as a progress update",
+    );
+    expect(instruction).toContain("never draft or preview the final value");
+  });
+});
 
 
 describe("ACP bridge", () => {

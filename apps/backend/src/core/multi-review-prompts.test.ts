@@ -34,6 +34,15 @@ describe("multi review reviewer prompt", () => {
     });
 
     expect(prompt).toContain("You are independent reviewer 1 of 3");
+    // A reviewer that spends the whole run re-drafting its report into the text
+    // channel looks like a silent tab, because the viewer withholds machine
+    // output. The schema binds only the final message; progress must be prose.
+    expect(prompt).toContain(
+      "The provider enforces the structured review schema on your final message",
+    );
+    expect(prompt).toContain("Narrate your progress in ordinary prose as you go");
+    expect(prompt).toContain("The output schema applies to your final message only");
+    expect(prompt).toContain("An interim message must never be a JSON object or array");
     expect(prompt).toContain("the backend observed these uncommitted paths");
     expect(prompt).toContain("- `src/feature.ts`");
     expect(prompt).toContain("- `src/feature.test.ts`");

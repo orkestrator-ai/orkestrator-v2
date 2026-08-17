@@ -282,6 +282,34 @@ describe("opencode-client getModelsWithDefaults", () => {
     expect(result.defaults.modelId).toBe("anthropic/claude-sonnet-4");
   });
 
+  test("shortens a provider-qualified display name without changing the model id", async () => {
+    const client = {
+      provider: {
+        list: async () => ({
+          data: {
+            all: [{
+              id: "opencode-go",
+              models: {
+                "deepseek-v4-flash": {
+                  id: "deepseek-v4-flash",
+                  name: "opencode-go/deepseek-v4-flash",
+                },
+              },
+            }],
+          },
+        }),
+      },
+    } as unknown as OpencodeClient;
+
+    const result = await getModelsWithDefaults(client);
+
+    expect(result.models).toEqual([{
+      id: "opencode-go/deepseek-v4-flash",
+      name: "deepseek-v4-flash",
+      provider: "opencode-go",
+    }]);
+  });
+
   test("maps default model and variant from direct default config", async () => {
     const client = {
       ...noProviderCatalog,

@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { OPEN_CODE_MESSAGE_HISTORY_LIMIT } from "@orkestrator/protocol/opencode-message-id";
 import { createNativeAgentProvider, PromptRejectedError, ProviderUnavailableError } from "./native-agent-provider.js";
 import { waitUntil, deferred, expectedOpenCodeMessageId, openCodeFake, openCodeProvider, openCodeActivityProvider } from "./agent-provider-test-support.js";
+import { normalizeOpenCodeComposerCatalog } from "./opencode-model-catalog.js";
 
 describe("OpenCode provider runtime", () => {
   test.each([["permission"], ["question"]] as const)(
@@ -327,7 +328,7 @@ describe("OpenCode provider runtime", () => {
         platform: "opencode",
         id: "opencode/claude-sonnet",
         label: "Claude Sonnet",
-        providerLabel: "OpenCode",
+        providerLabel: "opencode",
         reasoning: [
           { id: "default", label: "Default" },
           { id: "high", label: "High" },
@@ -623,6 +624,183 @@ describe("OpenCode provider runtime", () => {
     } finally {
       await provider.dispose?.();
     }
+  });
+
+  test("shares the picker budget so an allowlisted sibling cannot hide opencode-go", async () => {
+    const fake = openCodeFake();
+    Object.assign(fake.client as object, {
+      provider: {
+        list: mock(async () => ({
+          data: {
+            providers: [
+              {
+                id: "opencode",
+                name: "OpenCode",
+                models: Object.fromEntries(
+                  Array.from({ length: 600 }, (_unused, index) => [
+                    `zen-${index}`,
+                    { name: `Zen ${index}` },
+                  ]),
+                ),
+              },
+              {
+                id: "opencode-go",
+                name: "OpenCode",
+                models: {
+                  "deepseek-v4-flash": { name: "opencode-go/deepseek-v4-flash" },
+                  "deepseek-v4-pro": { name: "opencode-go/deepseek-v4-pro" },
+                },
+              },
+            ],
+          },
+        })),
+      },
+    });
+    const provider = openCodeActivityProvider(fake);
+    try {
+      const models = await provider.modelCatalog?.();
+      expect(models?.some((model) => model.id === "opencode-go/deepseek-v4-flash")).toBe(true);
+      expect(models?.some((model) => model.id === "opencode-go/deepseek-v4-pro")).toBe(true);
+      expect(models?.find((model) => model.id === "opencode-go/deepseek-v4-flash")).toMatchObject({
+        label: "deepseek-v4-flash",
+        providerLabel: "opencode-go",
+      });
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("preserves OpenCode's advertised default while sharing the picker budget", async () => {
+    const fake = openCodeFake();
+    Object.assign(fake.client as object, {
+      provider: {
+        list: mock(async () => ({
+          data: {
+            providers: [
+              {
+                id: "opencode",
+                models: Object.fromEntries(
+                  Array.from({ length: 512 }, (_unused, index) => [
+                    `model-${index}`,
+                    { name: `Model ${index}` },
+                  ]),
+                ),
+              },
+              {
+                id: "opencode-go",
+                models: Object.fromEntries(
+                  Array.from({ length: 100 }, (_unused, index) => [
+                    `sibling-${index}`,
+                    { name: `Sibling ${index}` },
+                  ]),
+                ),
+              },
+            ],
+            default: { providerID: "opencode", modelID: "model-500" },
+          },
+        })),
+      },
+    });
+    fake.setSessionGetResponse("owned-session", {
+      data: { id: "owned-session", directory: "/workspace" },
+    });
+    const provider = openCodeActivityProvider(fake);
+    try {
+      const snapshot = await provider.interactiveSnapshot?.("owned-session");
+      expect(snapshot?.composer?.models).toHaveLength(512);
+      expect(snapshot?.composer?.models.some((model) => model.id.startsWith("opencode-go/")))
+        .toBe(true);
+      expect(snapshot?.composer?.models.some((model) => model.id === "opencode/model-500"))
+        .toBe(true);
+      expect(snapshot?.composer?.selectedModelId).toBe("opencode/model-500");
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("normalizes only models selected within the global catalogue budget", () => {
+    let normalizedVariants = 0;
+    const providers = Array.from({ length: 4 }, (_unused, providerIndex) => ({
+      id: `provider-${providerIndex}`,
+      models: Array.from({ length: 512 }, (_modelUnused, modelIndex) => {
+        const model: Record<string, unknown> = {
+          id: `model-${modelIndex}`,
+          name: `Model ${modelIndex}`,
+        };
+        Object.defineProperty(model, "variants", {
+          enumerable: true,
+          get: () => {
+            normalizedVariants += 1;
+            return { high: {} };
+          },
+        });
+        return model;
+      }),
+    }));
+
+    const catalog = normalizeOpenCodeComposerCatalog({ providers }, []);
+
+    expect(catalog.models).toHaveLength(512);
+    expect(normalizedVariants).toBe(512);
+    for (const provider of providers) {
+      expect(catalog.models.some((model) => model.id.startsWith(`${provider.id}/`))).toBe(true);
+    }
+  });
+
+  // The per-provider cap is separate from the global one. A provider may
+  // advertise more than 512 models on its own, and the advertised default must
+  // not be lost merely because of where the provider listed it.
+  test("reserves a default listed past the per-provider model cap", () => {
+    const catalog = normalizeOpenCodeComposerCatalog({
+      providers: [{
+        id: "openrouter",
+        models: Array.from({ length: 700 }, (_unused, index) => ({
+          id: `model-${index}`,
+          name: `Model ${index}`,
+        })),
+      }],
+      default: { providerID: "openrouter", modelID: "model-690" },
+    }, []);
+
+    expect(catalog.models).toHaveLength(512);
+    expect(catalog.models.some((model) => model.id === "openrouter/model-690")).toBe(true);
+    expect(catalog.selectedModelId).toBe("openrouter/model-690");
+  });
+
+  // The raw-cache read ranks the configured allowlist first, so a priority
+  // provider can fill the whole budget before the default's own provider is
+  // ever visited. The default still has to survive, at the cost of one row.
+  test("reserves a default whose provider never reached the budget", () => {
+    const catalog = normalizeOpenCodeComposerCatalog(
+      {
+        providers: [
+          {
+            id: "opencode",
+            models: Array.from({ length: 512 }, (_unused, index) => ({
+              id: `priority-${index}`,
+              name: `Priority ${index}`,
+            })),
+          },
+          {
+            id: "openrouter",
+            models: Array.from({ length: 10 }, (_unused, index) => ({
+              id: `other-${index}`,
+              name: `Other ${index}`,
+            })),
+          },
+        ],
+        default: { providerID: "openrouter", modelID: "other-3" },
+      },
+      [],
+      { priorityProviders: ["opencode"] },
+    );
+
+    expect(catalog.models).toHaveLength(512);
+    expect(catalog.selectedModelId).toBe("openrouter/other-3");
+    expect(catalog.models.filter((model) => model.id.startsWith("openrouter/")))
+      .toHaveLength(1);
+    expect(catalog.models.filter((model) => model.id.startsWith("opencode/")))
+      .toHaveLength(511);
   });
 
   test("drops an OpenCode default that names an excluded provider", async () => {

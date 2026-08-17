@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { buildReviewModelCatalog, resolveDefaultReviewTabType } from "./review-launch-options";
+import {
+  buildReviewModelCatalog,
+  includeMissingOpenCodeModels,
+  resolveDefaultReviewTabType,
+} from "./review-launch-options";
 import { useConfigStore } from "@/stores/configStore";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
@@ -342,5 +346,38 @@ describe("resolveDefaultReviewTabType", () => {
       environment: { opencodeMode: "terminal" },
       global,
     })).toBe("opencode");
+  });
+});
+
+describe("includeMissingOpenCodeModels", () => {
+  test("replaces the Default placeholder with favourited provider models", () => {
+    expect(includeMissingOpenCodeModels(
+      [{ id: "default", name: "Default", reasoningEfforts: [] }],
+      ["opencode-go/deepseek-v4-flash", "opencode/claude-sonnet-5"],
+      ["opencode", "opencode-go"],
+    )).toEqual([
+      {
+        id: "opencode-go/deepseek-v4-flash",
+        name: "deepseek-v4-flash",
+        description: "opencode-go",
+        reasoningEfforts: [],
+      },
+      {
+        id: "opencode/claude-sonnet-5",
+        name: "claude-sonnet-5",
+        description: "opencode",
+        reasoningEfforts: [],
+      },
+    ]);
+  });
+
+  test("does not add a provider the allowlist excludes", () => {
+    expect(includeMissingOpenCodeModels(
+      [{ id: "opencode/a", name: "A", description: "opencode", reasoningEfforts: [] }],
+      ["openrouter/kimi"],
+      ["opencode", "opencode-go"],
+    )).toEqual([
+      { id: "opencode/a", name: "A", description: "opencode", reasoningEfforts: [] },
+    ]);
   });
 });

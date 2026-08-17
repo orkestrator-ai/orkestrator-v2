@@ -3,6 +3,7 @@ import {
   DEFAULT_OPENCODE_MODEL_PROVIDERS,
   isSelectableOpenCodeModelId,
   isSelectableOpenCodeProvider,
+  openCodeModelDisplayLabel,
   openCodeModelProviderId,
   openCodeModelProvidersKey,
 } from "@orkestrator/protocol/native-agent";
@@ -38,6 +39,112 @@ function openCodeProviderModels(value: unknown): Record<string, unknown>[] {
     const model = asRecord(candidate);
     return model ? [{ id, ...model }] : [];
   });
+}
+
+const MAX_OPENCODE_CATALOG_MODELS = 512;
+const MAX_OPENCODE_CATALOG_PROVIDERS = 128;
+const MAX_OPENCODE_PROVIDER_MODELS = 512;
+
+interface OpenCodeCatalogModelGroup {
+  providerId: string;
+  /** Models eligible for the shared budget, capped per provider. */
+  models: Record<string, unknown>[];
+  /**
+   * The provider's own entry for the advertised default, resolved before the
+   * per-provider cap so a default listed past position 512 stays reservable.
+   * Exactly one model is retained, so the cap still bounds what is held.
+   */
+  defaultModel?: Record<string, unknown>;
+}
+
+interface OpenCodeCatalogModelSource {
+  providerId: string;
+  model: Record<string, unknown>;
+}
+
+function appendOpenCodeCatalogSources(
+  target: OpenCodeCatalogModelSource[],
+  group: OpenCodeCatalogModelGroup,
+  start: number,
+  count: number,
+): void {
+  for (let index = start; index < start + count; index += 1) {
+    const model = group.models[index];
+    if (model) target.push({ providerId: group.providerId, model });
+  }
+}
+
+function takeOpenCodeCatalogSources(
+  target: OpenCodeCatalogModelSource[],
+  groups: readonly OpenCodeCatalogModelGroup[],
+  budget: number,
+  fairShare: boolean,
+): void {
+  if (groups.length === 0 || target.length >= budget) return;
+  if (!fairShare) {
+    for (const group of groups) {
+      const room = budget - target.length;
+      if (room <= 0) return;
+      appendOpenCodeCatalogSources(target, group, 0, Math.min(group.models.length, room));
+    }
+    return;
+  }
+  const remaining = budget - target.length;
+  const share = Math.max(1, Math.floor(remaining / groups.length));
+  const leftovers: Array<{ group: OpenCodeCatalogModelGroup; start: number }> = [];
+  for (const group of groups) {
+    const room = budget - target.length;
+    if (room <= 0) return;
+    const take = Math.min(share, group.models.length, room);
+    appendOpenCodeCatalogSources(target, group, 0, take);
+    if (group.models.length > take) leftovers.push({ group, start: take });
+  }
+  for (const { group, start } of leftovers) {
+    const room = budget - target.length;
+    if (room <= 0) return;
+    appendOpenCodeCatalogSources(
+      target,
+      group,
+      start,
+      Math.min(group.models.length - start, room),
+    );
+  }
+}
+
+function openCodeCatalogSourceId(source: OpenCodeCatalogModelSource): string {
+  return `${source.providerId}/${nonEmptyString(source.model.id) ?? ""}`;
+}
+
+function reserveOpenCodeDefaultSource(
+  selected: OpenCodeCatalogModelSource[],
+  groups: readonly OpenCodeCatalogModelGroup[],
+  defaultModelId: string | undefined,
+  budget: number,
+): void {
+  if (!defaultModelId || selected.some((source) => openCodeCatalogSourceId(source) === defaultModelId)) {
+    return;
+  }
+  const owner = groups.find((group) => group.defaultModel !== undefined);
+  if (!owner?.defaultModel) return;
+  const defaultSource: OpenCodeCatalogModelSource = {
+    providerId: owner.providerId,
+    model: owner.defaultModel,
+  };
+  if (selected.length < budget) {
+    selected.push(defaultSource);
+    return;
+  }
+  // Replace from the default's own provider when possible so preserving the
+  // provider-selected model does not undo fair representation of its siblings.
+  for (let index = selected.length - 1; index >= 0; index -= 1) {
+    if (selected[index]?.providerId !== defaultSource.providerId) continue;
+    selected[index] = defaultSource;
+    return;
+  }
+  // A priority-only raw-cache allocation can fill the budget before the
+  // default's non-priority provider is visited. In that case sacrifice the last
+  // row, while retaining the hard bound and making the advertised default usable.
+  selected[selected.length - 1] = defaultSource;
 }
 
 function openCodeCatalogDefault(value: unknown): {
@@ -84,12 +191,12 @@ function openCodeCatalogDefault(value: unknown): {
  * `connectedProviderIds` is reported either way, so a caller that skipped the
  * filter can still see what OpenCode considered connected.
  *
- * `priorityProviders` is for the unfiltered read. Its provider and model caps
- * are spent in the order OpenCode lists providers, and OpenCode advertises
- * thousands of models, so the configured allowlist has to be normalized *first*
- * or the durable cache can be truncated to a catalogue that contains none of the
- * providers the user actually selected — the same failure the filter avoids for
- * the picker-facing reads.
+ * `priorityProviders` is for the unfiltered read. OpenCode advertises thousands
+ * of models, so the configured allowlist has to be normalized *first* or the
+ * durable cache can be truncated to a catalogue that contains none of the
+ * providers the user actually selected. Sibling allowlisted providers then
+ * share the model budget, so one of them (typically `opencode`) cannot hide
+ * another (`opencode-go`) merely by listing first and filling the cap.
  */
 export function normalizeOpenCodeComposerCatalog(
   value: unknown,
@@ -105,7 +212,6 @@ export function normalizeOpenCodeComposerCatalog(
   /** Present when OpenCode authoritatively reported its connected providers. */
   connectedProviderIds?: string[];
 } {
-  const models: AgentModel[] = [];
   const connected = asRecord(value)?.connected;
   const connectedProviderIds = Array.isArray(connected)
     ? connected.flatMap((candidate) => {
@@ -139,64 +245,126 @@ export function normalizeOpenCodeComposerCatalog(
   const selectableProviders = (priorityProviders.size === 0
     ? accepted
     : [...accepted.filter(isPriority), ...accepted.filter((provider) => !isPriority(provider))])
-    .slice(0, 128);
-  for (const provider of selectableProviders) {
-    const providerId = nonEmptyString(provider.id);
-    if (!providerId) continue;
-    for (const model of openCodeProviderModels(provider.models).slice(0, 512)) {
-      const localId = nonEmptyString(model.id);
-      if (!localId) continue;
-      const variants = asRecord(model.variants);
-      const reasoning = variants
-        ? Object.entries(variants).flatMap(([id, candidate]) => {
-            const variant = asRecord(candidate);
-            return variant?.disabled === true
-              ? []
-              : [{ id, label: id.replace(/[-_]+/g, " ").replace(/^\w/, (letter) => letter.toUpperCase()) }];
-          }).slice(0, 64)
-        : [];
-      const limit = asRecord(model.limit);
-      const capabilities = asRecord(model.capabilities);
-      const input = asRecord(capabilities?.input);
-      const contextWindow = [
-        limit?.context,
-        model.contextWindow,
-        model.context_window,
-      ].find((candidate) => typeof candidate === "number"
-        && Number.isSafeInteger(candidate)
-        && candidate > 0) as number | undefined;
-      models.push({
-        platform: "opencode",
-        id: `${providerId}/${localId}`,
-        label: nonEmptyString(model.name) ?? localId,
-        providerLabel: nonEmptyString(provider.name) ?? providerId,
-        reasoning: [
-          { id: "default", label: "Default" },
-          ...reasoning,
-        ],
-        defaultReasoningId: "default",
-        supportsSpeed: false,
-        // OpenCode has primary agents, not a Build/Plan permission mode.
-        supportsMode: false,
-        ...(contextWindow ? { contextWindow } : {}),
-        ...(typeof input?.image === "boolean"
-          ? { supportsImageInput: input.image }
-          : typeof model.attachment === "boolean"
-            ? { supportsImageInput: model.attachment }
-            : {}),
-      });
-      if (models.length >= 512) break;
-    }
-    if (models.length >= 512) break;
-  }
+    .slice(0, MAX_OPENCODE_CATALOG_PROVIDERS);
   const defaults = openCodeCatalogDefault(value);
+  const selectableDefaultModelId = defaults.modelId
+    && isSelectableOpenCodeModelId(defaults.modelId, allowedProviders)
+    ? defaults.modelId
+    : undefined;
+  const defaultProviderId = selectableDefaultModelId
+    ? openCodeModelProviderId(selectableDefaultModelId)
+    : "";
+  const groupForProvider = (
+    provider: Record<string, unknown>,
+  ): OpenCodeCatalogModelGroup | null => {
+    const providerId = nonEmptyString(provider.id);
+    if (!providerId) return null;
+    const parsed = openCodeProviderModels(provider.models);
+    const models = parsed
+      .slice(0, MAX_OPENCODE_PROVIDER_MODELS)
+      .filter((model) => nonEmptyString(model.id) !== null);
+    if (models.length === 0) return null;
+    // The reservation below is an exact-id lookup, so it has to see past the
+    // per-provider cap — a provider can advertise more than 512 models, and
+    // truncating first would drop the advertised default merely for its listing
+    // position. Only the one matching model is retained, so the cap still bounds
+    // what this group holds.
+    const defaultModel = providerId === defaultProviderId
+      ? parsed.find((candidate) => {
+        const candidateId = nonEmptyString(candidate.id);
+        return candidateId !== null
+          && `${providerId}/${candidateId}` === selectableDefaultModelId;
+      })
+      : undefined;
+    return { providerId, models, ...(defaultModel ? { defaultModel } : {}) };
+  };
+  const priorityGroups: OpenCodeCatalogModelGroup[] = [];
+  const otherGroups: OpenCodeCatalogModelGroup[] = [];
+  for (const provider of selectableProviders) {
+    const group = groupForProvider(provider);
+    if (!group) continue;
+    if (priorityProviders.size > 0 && isPriority(provider)) priorityGroups.push(group);
+    else otherGroups.push(group);
+  }
+  const selectedSources: OpenCodeCatalogModelSource[] = [];
+  if (priorityGroups.length > 0) {
+    takeOpenCodeCatalogSources(
+      selectedSources,
+      priorityGroups,
+      MAX_OPENCODE_CATALOG_MODELS,
+      true,
+    );
+    takeOpenCodeCatalogSources(
+      selectedSources,
+      otherGroups,
+      MAX_OPENCODE_CATALOG_MODELS,
+      false,
+    );
+  } else {
+    takeOpenCodeCatalogSources(
+      selectedSources,
+      otherGroups,
+      MAX_OPENCODE_CATALOG_MODELS,
+      true,
+    );
+  }
+  reserveOpenCodeDefaultSource(
+    selectedSources,
+    [...priorityGroups, ...otherGroups],
+    selectableDefaultModelId,
+    MAX_OPENCODE_CATALOG_MODELS,
+  );
+  // Keep expensive label, capability, and reasoning normalization proportional
+  // to the bounded output rather than every model in every accepted provider.
+  const models = selectedSources.map(({ providerId, model }): AgentModel => {
+    const localId = nonEmptyString(model.id)!;
+    const variants = asRecord(model.variants);
+    const reasoning = variants
+      ? Object.entries(variants).flatMap(([id, candidate]) => {
+          const variant = asRecord(candidate);
+          return variant?.disabled === true
+            ? []
+            : [{ id, label: id.replace(/[-_]+/g, " ").replace(/^\w/, (letter) => letter.toUpperCase()) }];
+        }).slice(0, 64)
+      : [];
+    const limit = asRecord(model.limit);
+    const capabilities = asRecord(model.capabilities);
+    const input = asRecord(capabilities?.input);
+    const contextWindow = [
+      limit?.context,
+      model.contextWindow,
+      model.context_window,
+    ].find((candidate) => typeof candidate === "number"
+      && Number.isSafeInteger(candidate)
+      && candidate > 0) as number | undefined;
+    const modelId = `${providerId}/${localId}`;
+    return {
+      platform: "opencode",
+      id: modelId,
+      label: openCodeModelDisplayLabel(modelId, nonEmptyString(model.name)),
+      providerLabel: providerId,
+      reasoning: [
+        { id: "default", label: "Default" },
+        ...reasoning,
+      ],
+      defaultReasoningId: "default",
+      supportsSpeed: false,
+      // OpenCode has primary agents, not a Build/Plan permission mode.
+      supportsMode: false,
+      ...(contextWindow ? { contextWindow } : {}),
+      ...(typeof input?.image === "boolean"
+        ? { supportsImageInput: input.image }
+        : typeof model.attachment === "boolean"
+          ? { supportsImageInput: model.attachment }
+          : {}),
+    };
+  });
   // OpenCode's own default may name a provider the user excluded. Surfacing it
   // would pre-select a model the picker cannot show, so it is dropped with the
   // rest of that provider's catalogue.
-  const selectedModelId = defaults.modelId
-    && isSelectableOpenCodeModelId(defaults.modelId, allowedProviders)
-    && models.some((model) => model.id === defaults.modelId)
-    ? defaults.modelId
+  const selectedModelId = selectableDefaultModelId
+    && models.some((model) => model.id === selectableDefaultModelId)
+    ? selectableDefaultModelId
     : undefined;
   return {
     models,

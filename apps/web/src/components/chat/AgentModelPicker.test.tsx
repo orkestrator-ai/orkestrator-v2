@@ -804,6 +804,98 @@ describe("AgentModelPicker", () => {
     expect(screen.getByPlaceholderText("Search models...")).toBeTruthy();
   });
 
+  test("keeps a missing OpenCode favourite disabled while preserving its provider label", () => {
+    setMobileViewport(false);
+    const { onModelChange } = renderPicker({
+      models: [{ platform: "codex", id: "codex-model", label: "Codex model" }],
+      enabledPlatforms: ["codex"],
+      selectedPlatform: "codex",
+      selectedModelId: "codex-model",
+      platformSelectionLocked: true,
+      favorites: [{ platform: "opencode", modelId: "opencode-go/deepseek-v4-flash" }],
+    });
+    openPicker();
+
+    const row = screen.getByRole("menuitemradio", { name: /deepseek-v4-flash/ });
+    expect(row.getAttribute("aria-disabled")).toBe("true");
+    expect(row.textContent).toContain("opencode-go");
+    expect(row.textContent).not.toContain("opencode-go/deepseek-v4-flash");
+    fireEvent.click(row);
+    expect(onModelChange).not.toHaveBeenCalled();
+  });
+
+  test("keeps an omitted same-platform OpenCode favourite disabled in a locked catalog", () => {
+    setMobileViewport(false);
+    const { onModelChange } = renderPicker({
+      models: [{
+        platform: "opencode",
+        id: "opencode/current",
+        label: "Current",
+      }],
+      enabledPlatforms: ["opencode"],
+      selectedPlatform: "opencode",
+      selectedModelId: "opencode/current",
+      platformSelectionLocked: true,
+      favorites: [{ platform: "opencode", modelId: "openrouter/kimi-k2.5" }],
+    });
+    openPicker();
+
+    const row = screen.getByRole("menuitemradio", { name: /kimi-k2\.5/ });
+    expect(row.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(row);
+    expect(onModelChange).not.toHaveBeenCalled();
+  });
+
+  test("offers an upstream-catalogued OpenCode favourite", () => {
+    setMobileViewport(false);
+    const { onModelChange } = renderPicker({
+      models: [
+        { platform: "codex", id: "codex-model", label: "Codex model" },
+        {
+          platform: "opencode",
+          id: "opencode-go/deepseek-v4-flash",
+          label: "deepseek-v4-flash",
+          providerLabel: "opencode-go",
+        },
+      ],
+      enabledPlatforms: ["codex", "opencode"],
+      selectedPlatform: "codex",
+      selectedModelId: "codex-model",
+      favorites: [{ platform: "opencode", modelId: "opencode-go/deepseek-v4-flash" }],
+    });
+    openPicker();
+
+    const row = screen.getByRole("menuitemradio", { name: /deepseek-v4-flash/ });
+    expect(row.getAttribute("aria-disabled") === "true").toBe(false);
+    fireEvent.click(row);
+    expect(onModelChange).toHaveBeenCalledWith("opencode-go/deepseek-v4-flash");
+  });
+
+  // Availability is a flag, not a string match on the description. A catalogued
+  // model is free to carry any description — including the placeholder copy —
+  // without silently becoming unselectable.
+  test("keeps a catalogued model selectable whatever its description says", () => {
+    setMobileViewport(false);
+    const { onModelChange } = renderPicker({
+      models: [{
+        platform: "opencode",
+        id: "opencode-go/deepseek-v4-flash",
+        label: "deepseek-v4-flash",
+        providerLabel: "opencode-go",
+        description: "Unavailable in the current catalog",
+      }],
+      enabledPlatforms: ["opencode"],
+      selectedPlatform: "opencode",
+      favorites: [{ platform: "opencode", modelId: "opencode-go/deepseek-v4-flash" }],
+    });
+    openPicker();
+
+    const row = screen.getByRole("menuitemradio", { name: /deepseek-v4-flash/ });
+    expect(row.getAttribute("aria-disabled") === "true").toBe(false);
+    fireEvent.click(row);
+    expect(onModelChange).toHaveBeenCalledWith("opencode-go/deepseek-v4-flash");
+  });
+
   test("keeps identical provider model ids distinct in the cross-platform favorites view", () => {
     setMobileViewport(false);
     const onPlatformChange = mock(() => {});

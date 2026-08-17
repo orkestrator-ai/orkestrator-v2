@@ -13,8 +13,11 @@ import {
   isSelectableOpenCodeProvider,
   migrateOpenCodeModelProviders,
   normalizeOpenCodeModelProviders,
+  openCodeModelDisplayLabel,
+  openCodeModelLocalId,
   openCodeModelProviderId,
   openCodeModelProvidersKey,
+  synthesizedOpenCodeAgentModel,
   nativeAgentCapabilities,
   resolveReasoningId,
   BACKGROUND_TASK_ID_MAX_LENGTH,
@@ -188,6 +191,64 @@ describe("opencode model provider allowlist", () => {
     expect(openCodeModelProviderId("opencode-go/openai/gpt-5")).toBe("opencode-go");
     expect(openCodeModelProviderId("no-separator")).toBe("");
     expect(openCodeModelProviderId("/leading")).toBe("");
+  });
+
+  test("strips a duplicated provider prefix from the picker label", () => {
+    expect(openCodeModelLocalId("opencode-go/deepseek-v4-flash"))
+      .toBe("deepseek-v4-flash");
+    expect(openCodeModelDisplayLabel(
+      "opencode-go/deepseek-v4-flash",
+      "opencode-go/deepseek-v4-flash",
+    )).toBe("deepseek-v4-flash");
+    expect(openCodeModelDisplayLabel(
+      "opencode-go/deepseek-v4-pro",
+      "DeepSeek V4 Pro",
+    )).toBe("DeepSeek V4 Pro");
+    expect(synthesizedOpenCodeAgentModel("opencode-go/deepseek-v4-flash")).toEqual({
+      platform: "opencode",
+      id: "opencode-go/deepseek-v4-flash",
+      label: "deepseek-v4-flash",
+      providerLabel: "opencode-go",
+      reasoning: [{ id: "default", label: "Default" }],
+      defaultReasoningId: "default",
+      supportsSpeed: false,
+      supportsMode: false,
+    });
+    expect(synthesizedOpenCodeAgentModel("not-a-model")).toBeNull();
+  });
+
+  test("strips the provider prefix regardless of its casing", () => {
+    expect(openCodeModelDisplayLabel(
+      "opencode-go/deepseek-v4-flash",
+      "OpenCode-Go/deepseek-v4-flash",
+    )).toBe("deepseek-v4-flash");
+  });
+
+  test("keeps every segment of a model half that contains slashes", () => {
+    // The provider is only the first segment, so an OpenRouter-style id must
+    // keep `anthropic/` — that belongs to the model, not the provider.
+    expect(openCodeModelLocalId("openrouter/anthropic/claude-3.5"))
+      .toBe("anthropic/claude-3.5");
+    expect(openCodeModelDisplayLabel(
+      "openrouter/anthropic/claude-3.5",
+      "openrouter/anthropic/claude-3.5",
+    )).toBe("anthropic/claude-3.5");
+    expect(openCodeModelDisplayLabel("openrouter/anthropic/claude-3.5"))
+      .toBe("anthropic/claude-3.5");
+  });
+
+  test("falls back to the model half when the reported name is unusable", () => {
+    expect(openCodeModelDisplayLabel("opencode-go/deepseek-v4-flash", "   "))
+      .toBe("deepseek-v4-flash");
+    expect(openCodeModelDisplayLabel("opencode-go/deepseek-v4-flash", null))
+      .toBe("deepseek-v4-flash");
+    expect(openCodeModelDisplayLabel("opencode-go/deepseek-v4-flash", undefined))
+      .toBe("deepseek-v4-flash");
+    // A name that is exactly the prefix must never strip down to an empty label.
+    expect(openCodeModelDisplayLabel("opencode-go/deepseek-v4-flash", "opencode-go/"))
+      .toBe("deepseek-v4-flash");
+    // An id with no provider half has nothing to strip.
+    expect(openCodeModelDisplayLabel("no-separator")).toBe("no-separator");
   });
 
   test("selects model ids by their provider half", () => {

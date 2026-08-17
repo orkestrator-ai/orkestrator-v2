@@ -1,5 +1,6 @@
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk/v2/client";
 import { resolveGatewayLoopbackBaseUrl } from "./gateway-url";
+import { openCodeModelDisplayLabel } from "@orkestrator/protocol/native-agent";
 
 import {
   OPENCODE_MESSAGE_ABORTED_ERROR,
@@ -242,7 +243,10 @@ export async function getModelsWithDefaults(client: OpencodeClient): Promise<Ope
 
           models.push({
             id: `${provider.id}/${modelId}`,
-            name: modelName || modelId,
+            name: openCodeModelDisplayLabel(
+              `${provider.id}/${modelId}`,
+              modelName || modelId,
+            ),
             provider: provider.id,
             variants: variants.length > 0 ? variants : undefined,
             inputCost: typeof inputCost === "number" ? inputCost : undefined,

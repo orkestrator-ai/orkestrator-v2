@@ -40,6 +40,7 @@ import { cn } from "@/lib/utils";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { AgentModel, AgentModelRef, AgentReasoningOption } from "@orkestrator/protocol/native-agent";
+import { synthesizedOpenCodeAgentModel } from "@orkestrator/protocol/native-agent";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 
 interface AgentModelPickerProps {
@@ -146,6 +147,33 @@ function modelRowKey(model: AgentModel): string {
   return `${model.platform}:${model.id}`;
 }
 
+const UNAVAILABLE_DESCRIPTION = "Unavailable in the current catalog";
+
+/**
+ * A picker row plus its UI-only availability flag.
+ *
+ * `unavailable` is what disables a row, never the description text. A catalogue
+ * entry is free to carry any description — including this one — without
+ * silently becoming unselectable, and the copy can be reworded or localized
+ * without re-enabling rows nothing can serve.
+ */
+type PickerModel = AgentModel & { unavailable?: boolean };
+
+function favoritePlaceholder(favorite: AgentModelRef): PickerModel {
+  const fallback: PickerModel = {
+    platform: favorite.platform,
+    id: favorite.modelId,
+    label: favorite.modelId,
+    description: UNAVAILABLE_DESCRIPTION,
+    unavailable: true,
+  };
+  if (favorite.platform !== "opencode") return fallback;
+  const synthesized = synthesizedOpenCodeAgentModel(favorite.modelId);
+  return synthesized
+    ? { ...synthesized, description: UNAVAILABLE_DESCRIPTION, unavailable: true }
+    : fallback;
+}
+
 function preferredCatalogView(
   favorites: AgentModelRef[],
   selectedPlatform: AgentPlatform | undefined,
@@ -164,7 +192,7 @@ function ModelRow({
   suppressSelectRef,
   onToggleFavorite,
 }: {
-  model: AgentModel;
+  model: PickerModel;
   isFavorite: boolean;
   disabled?: boolean;
   sortable?: boolean;
@@ -176,7 +204,7 @@ function ModelRow({
     <div className="relative">
       <DropdownMenuRadioItem
         value={modelKey}
-        disabled={disabled || model.description === "Unavailable in the current catalog"}
+        disabled={disabled || model.unavailable === true}
         onSelect={(event) => {
           if (suppressSelectRef?.current) event.preventDefault();
         }}
@@ -274,7 +302,7 @@ function SortableFavoriteItems({
   onToggleFavorite,
   onReorderFavorites,
 }: {
-  models: AgentModel[];
+  models: PickerModel[];
   favorites: AgentModelRef[];
   selectedModelKey: string;
   disabled?: boolean;
@@ -357,16 +385,20 @@ function ModelItems({
   isMobile = false,
   onToggleFavorite,
   onReorderFavorites,
-}: Pick<
-  AgentModelPickerProps,
-  | "models"
-  | "selectedModelId"
-  | "selectedPlatform"
-  | "disabled"
-  | "favorites"
-  | "onToggleFavorite"
-  | "onReorderFavorites"
+}: Omit<
+  Pick<
+    AgentModelPickerProps,
+    | "models"
+    | "selectedModelId"
+    | "selectedPlatform"
+    | "disabled"
+    | "favorites"
+    | "onToggleFavorite"
+    | "onReorderFavorites"
+  >,
+  "models"
 > & {
+  models: PickerModel[];
   emptyLabel?: string;
   sortable?: boolean;
   isMobile?: boolean;
@@ -601,13 +633,8 @@ export function AgentModelPicker({
   };
   const visibleModels = useMemo(() => {
     const byKey = new Map(models.map((model) => [`${model.platform}:${model.id}`, model]));
-    const ordered = catalogView === "favorites"
-      ? favorites.map((favorite) => byKey.get(`${favorite.platform}:${favorite.modelId}`) ?? {
-          platform: favorite.platform,
-          id: favorite.modelId,
-          label: favorite.modelId,
-          description: "Unavailable in the current catalog",
-        })
+    const ordered: PickerModel[] = catalogView === "favorites"
+      ? favorites.map((favorite) => byKey.get(`${favorite.platform}:${favorite.modelId}`) ?? favoritePlaceholder(favorite))
       : models.filter((model) => model.platform === catalogView);
     if (!normalizedSearch) return ordered;
     return ordered.filter((model) =>

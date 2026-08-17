@@ -343,8 +343,8 @@ describe("native agent model catalogue command", () => {
         "grok-cached",
       ]);
       expect(models.slice(2, 4).map((model) => model.providerLabel)).toEqual([
-        "OpenCode/opencode-go",
-        "OpenCode/opencode",
+        "opencode-go",
+        "opencode",
       ]);
 
       // Storage stays the complete durable record; only the reads narrow.
@@ -466,6 +466,78 @@ describe("native agent model catalogue command", () => {
         "hpc-ai/b",
         "opencode/a",
       ]);
+    });
+  });
+
+  test("surfaces favourited OpenCode models before a live catalogue exists", async () => {
+    await withCommands(async (invoke, storage) => {
+      const config = await storage.loadConfig();
+      await storage.updateGlobalConfig({
+        ...config.global,
+        favoriteModels: [
+          { platform: "opencode", modelId: "opencode-go/deepseek-v4-flash" },
+          { platform: "codex", modelId: "gpt-codex" },
+        ],
+      });
+
+      const models = await invoke("get_native_agent_model_catalog", {
+        environmentId: "e1",
+      }) as Array<Record<string, unknown>>;
+      expect(models).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          platform: "opencode",
+          id: "opencode-go/deepseek-v4-flash",
+          label: "deepseek-v4-flash",
+          providerLabel: "opencode-go",
+        }),
+      ]));
+    });
+  });
+
+  // The favourite list is renderer-supplied config, so this command is the
+  // boundary that has to re-apply the allowlist to it. A favourite naming an
+  // excluded provider must not slip a model back into the picker that every
+  // other read of this catalogue filters out.
+  test("does not surface a favourite from a provider the allowlist excludes", async () => {
+    await withCommands(async (invoke, storage) => {
+      const config = await storage.loadConfig();
+      await storage.updateGlobalConfig({
+        ...config.global,
+        favoriteModels: [
+          { platform: "opencode", modelId: "openrouter/kimi-k2.5" },
+          { platform: "opencode", modelId: "opencode-go/deepseek-v4-flash" },
+        ],
+      });
+      await setOpenCodeModelProviders(storage, ["opencode", "opencode-go"]);
+
+      const models = await invoke("get_native_agent_model_catalog", {
+        environmentId: "e1",
+      }) as Array<Record<string, unknown>>;
+
+      expect(models.map((model) => model.id)).not.toContain("openrouter/kimi-k2.5");
+      expect(models.map((model) => model.id)).toContain("opencode-go/deepseek-v4-flash");
+    });
+  });
+
+  test("does not duplicate a favourite the cached catalogue already lists", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.cacheOpenCodeModelCatalog("proj-1", [
+        { id: "opencode/a", name: "OpenCode A", provider: "opencode" },
+      ]);
+      const config = await storage.loadConfig();
+      await storage.updateGlobalConfig({
+        ...config.global,
+        favoriteModels: [
+          { platform: "opencode", modelId: "opencode/a" },
+          { platform: "opencode", modelId: "opencode/a" },
+        ],
+      });
+
+      const models = await invoke("get_native_agent_model_catalog", {
+        environmentId: "e1",
+      }) as Array<Record<string, unknown>>;
+
+      expect(models.filter((model) => model.id === "opencode/a")).toHaveLength(1);
     });
   });
 });

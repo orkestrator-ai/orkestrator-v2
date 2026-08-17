@@ -70,7 +70,7 @@ import {
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
 import type { InitialPromptImageAttachment } from "@/lib/initial-prompt-attachments";
-import { buildReviewModelCatalog } from "@/lib/review-launch-options";
+import { buildReviewModelCatalog, includeMissingOpenCodeModels } from "@/lib/review-launch-options";
 import { effortLabel, modelsForAgent } from "@/lib/agent-launch";
 import { resolveCreateEnvironmentAgentDefaults } from "@/lib/create-environment-agent-defaults";
 import {
@@ -84,6 +84,10 @@ import {
 } from "@orkestrator/protocol/agent-platforms";
 import { resolveActionDefault } from "@orkestrator/protocol/action-defaults";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
+import {
+  normalizeOpenCodeModelProviders,
+  openCodeModelDisplayLabel,
+} from "@orkestrator/protocol/native-agent";
 import { DEFAULT_CLAUDE_MODE } from "@orkestrator/protocol/startup-launch";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 
@@ -302,62 +306,74 @@ export function CreateEnvironmentDialog({
               ...liveCatalog,
               opencode: cachedOpenCodeModels.map((candidate) => ({
                 id: candidate.id,
-                name: candidate.name,
+                name: openCodeModelDisplayLabel(candidate.id, candidate.name),
                 description: candidate.provider,
                 reasoningEfforts: [...(candidate.variants ?? [])],
               })),
             }
           : liveCatalog;
-      if (!configuredOpenCodeModel) return catalog;
-
-      const configuredModel = catalog.opencode.find(
-        (candidate) => candidate.id === configuredOpenCodeModel,
-      );
-      if (configuredModel) {
-        if (
-          !configuredOpenCodeEffort
-          || configuredModel.reasoningEfforts?.includes(configuredOpenCodeEffort)
-        ) {
-          return catalog;
+      const withConfigured = (() => {
+        if (!configuredOpenCodeModel) return catalog;
+        const configuredModel = catalog.opencode.find(
+          (candidate) => candidate.id === configuredOpenCodeModel,
+        );
+        if (configuredModel) {
+          if (
+            !configuredOpenCodeEffort
+            || configuredModel.reasoningEfforts?.includes(configuredOpenCodeEffort)
+          ) {
+            return catalog;
+          }
+          return {
+            ...catalog,
+            opencode: catalog.opencode.map((candidate) =>
+              candidate.id === configuredOpenCodeModel
+                ? {
+                    ...candidate,
+                    reasoningEfforts: [
+                      ...(candidate.reasoningEfforts ?? []),
+                      configuredOpenCodeEffort,
+                    ],
+                  }
+                : candidate
+            ),
+          };
         }
         return {
           ...catalog,
-          opencode: catalog.opencode.map((candidate) =>
-            candidate.id === configuredOpenCodeModel
-              ? {
-                  ...candidate,
-                  reasoningEfforts: [
-                    ...(candidate.reasoningEfforts ?? []),
-                    configuredOpenCodeEffort,
-                  ],
-                }
-              : candidate
-          ),
+          opencode: [
+            {
+              id: configuredOpenCodeModel,
+              name: openCodeModelDisplayLabel(configuredOpenCodeModel),
+              description: "Configured default",
+              reasoningEfforts: configuredOpenCodeEffort
+                ? [configuredOpenCodeEffort]
+                : [],
+            },
+            ...catalog.opencode,
+          ],
         };
-      }
-
+      })();
       return {
-        ...catalog,
-        opencode: [
-          {
-            id: configuredOpenCodeModel,
-            name: configuredOpenCodeModel,
-            description: "Configured default",
-            reasoningEfforts: configuredOpenCodeEffort
-              ? [configuredOpenCodeEffort]
-              : [],
-          },
-          ...catalog.opencode,
-        ],
+        ...withConfigured,
+        opencode: includeMissingOpenCodeModels(
+          withConfigured.opencode,
+          favoriteModels
+            .filter((favorite) => favorite.platform === "opencode")
+            .map((favorite) => favorite.modelId),
+          normalizeOpenCodeModelProviders(config.global.openCodeModelProviders),
+        ),
       };
     },
     [
       claudeModels,
       cachedOpenCodeModels,
       codexModels,
+      config.global.openCodeModelProviders,
       configuredOpenCodeEffort,
       configuredOpenCodeModel,
       cursorModels,
+      favoriteModels,
       grokModels,
       openCodeModels,
     ],

@@ -36,10 +36,18 @@ export interface LazyLoadErrorDetails {
 
 export interface LazyLoadFailureDiagnostic {
   kind: "module-load" | "render";
+  /**
+   * An allowlisted built-in error name, `NonErrorThrow` when the thrown value
+   * was not an `Error`, or `Error` for anything else. Never a custom subclass
+   * name, which application code controls and could embed untrusted text.
+   */
   errorType: string;
   fingerprint: string;
   componentChain: string[];
 }
+
+/** Fixed sentinel for a thrown value that was not an `Error` at all. */
+const NON_ERROR_THROW = "NonErrorThrow";
 
 const SAFE_ERROR_TYPES = new Set([
   "AggregateError",
@@ -70,7 +78,7 @@ export function createLazyLoadFailureDiagnostic(
   error: unknown,
   info?: Pick<ErrorInfo, "componentStack">,
 ): LazyLoadFailureDiagnostic {
-  let rawName = "NonErrorThrow";
+  let rawName = NON_ERROR_THROW;
   let stack = "";
   if (error instanceof Error) {
     try {
@@ -80,12 +88,22 @@ export function createLazyLoadFailureDiagnostic(
       rawName = "Error";
     }
   }
-  const errorType = SAFE_ERROR_TYPES.has(rawName) ? rawName : "Error";
+  // The sentinel is a fixed literal rather than attacker-influenced text, so
+  // preserving it alongside the allowlist keeps "nobody threw an Error" visible
+  // without letting a custom subclass name reach the log.
+  const errorType = rawName === NON_ERROR_THROW || SAFE_ERROR_TYPES.has(rawName)
+    ? rawName
+    : "Error";
   const componentStack = info?.componentStack ?? "";
   const componentChain = componentStack
     .split("\n")
     .flatMap((line) => {
-      const match = /^\s*at\s+([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)/.exec(line);
+      // The trailing lookahead is what keeps a location-only frame out of the
+      // chain: React writes `at Name (loc)` or `at Name`, so a line such as
+      // `at https://host/assets/chunk.js:2:2` fails on the `:` and is dropped
+      // rather than contributing a bare `https`.
+      const match = /^\s*at\s+([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)(?=\s|\(|$)/
+        .exec(line);
       return match?.[1] ? [match[1]] : [];
     })
     .slice(0, 12);

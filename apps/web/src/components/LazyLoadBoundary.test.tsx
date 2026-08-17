@@ -76,6 +76,51 @@ describe("LazyLoadBoundary", () => {
     expect(serialized).not.toContain("https://");
   });
 
+  test("reports a non-Error throw distinctly from a real Error", () => {
+    expect(createLazyLoadFailureDiagnostic("boom")).toEqual({
+      kind: "render",
+      errorType: "NonErrorThrow",
+      fingerprint: expect.stringMatching(/^[a-f0-9]{8}$/),
+      componentChain: [],
+    });
+    expect(createLazyLoadFailureDiagnostic(undefined).errorType).toBe("NonErrorThrow");
+    expect(createLazyLoadFailureDiagnostic(new Error("boom")).errorType).toBe("Error");
+  });
+
+  test("collapses a custom error subclass to Error rather than echoing its name", () => {
+    class SecretPathReadError extends Error {
+      override name = "SecretPathReadError";
+    }
+
+    const diagnostic = createLazyLoadFailureDiagnostic(new SecretPathReadError("boom"));
+
+    expect(diagnostic.errorType).toBe("Error");
+    expect(JSON.stringify(diagnostic)).not.toContain("SecretPathReadError");
+  });
+
+  test("classifies a chunk failure as a module load rather than a render failure", () => {
+    expect(createLazyLoadFailureDiagnostic(new TypeError(
+      "Failed to fetch dynamically imported module: https://host/assets/x-1234.js",
+    )).kind).toBe("module-load");
+    expect(createLazyLoadFailureDiagnostic(new TypeError("undefined is not a function")).kind)
+      .toBe("render");
+  });
+
+  test("bounds the component chain and drops lines that are not component names", () => {
+    const diagnostic = createLazyLoadFailureDiagnostic(new Error("boom"), {
+      componentStack: [
+        "    at /Users/person/private/anonymous.tsx:1:1",
+        "    at https://host/assets/chunk-1234.js:2:2",
+        ...Array.from({ length: 20 }, (_, index) => `    at Component${index} (x.tsx:1:1)`),
+      ].join("\n"),
+    });
+
+    expect(diagnostic.componentChain).toHaveLength(12);
+    expect(diagnostic.componentChain[0]).toBe("Component0");
+    expect(diagnostic.componentChain[11]).toBe("Component11");
+    expect(JSON.stringify(diagnostic)).not.toContain("/Users/");
+  });
+
   test("shows the supplied fallback while a lazy component is pending", () => {
     const PendingComponent = lazy(
       () => new Promise<{ default: () => ReactNode }>(() => {}),
@@ -185,6 +230,77 @@ describe("LazyLoadBoundary", () => {
     });
   });
 
+  test("holds a failed view when the parent re-renders with equal reset keys", async () => {
+    let shouldThrow = true;
+    const TransientFailure = () => {
+      if (shouldThrow) throw new TypeError("transient transcript render failure");
+      return <div>Recovered at the next revision</div>;
+    };
+
+    await withSilencedReactErrors(async () => {
+      // A fresh array literal on every parent render must not read as a change,
+      // or a failed boundary would thrash on unrelated re-renders.
+      const view = render(
+        <LazyLoadBoundary resetKeys={[true, 0, 7]}>
+          <TransientFailure />
+        </LazyLoadBoundary>,
+      );
+
+      expect(await screen.findByRole("alert")).toBeTruthy();
+      shouldThrow = false;
+      view.rerender(
+        <LazyLoadBoundary resetKeys={[true, 0, 7]}>
+          <TransientFailure />
+        </LazyLoadBoundary>,
+      );
+
+      expect(screen.getByRole("alert")).toBeTruthy();
+      expect(screen.queryByText("Recovered at the next revision") === null).toBe(true);
+    });
+  });
+
+  test("treats an appearing reset key and a changed key count as a reset", async () => {
+    let shouldThrow = true;
+    const TransientFailure = () => {
+      if (shouldThrow) throw new TypeError("transient transcript render failure");
+      return <div>Recovered at the next revision</div>;
+    };
+
+    await withSilencedReactErrors(async () => {
+      // A workflow absent from the store selects `undefined`; its first
+      // authoritative revision must recover the view.
+      const view = render(
+        <LazyLoadBoundary>
+          <TransientFailure />
+        </LazyLoadBoundary>,
+      );
+
+      expect(await screen.findByRole("alert")).toBeTruthy();
+      shouldThrow = false;
+      view.rerender(
+        <LazyLoadBoundary resetKeys={[1]}>
+          <TransientFailure />
+        </LazyLoadBoundary>,
+      );
+      expect(await screen.findByText("Recovered at the next revision")).toBeTruthy();
+
+      shouldThrow = true;
+      view.rerender(
+        <LazyLoadBoundary resetKeys={[1]}>
+          <TransientFailure />
+        </LazyLoadBoundary>,
+      );
+      expect(await screen.findByRole("alert")).toBeTruthy();
+      shouldThrow = false;
+      view.rerender(
+        <LazyLoadBoundary resetKeys={[1, 2]}>
+          <TransientFailure />
+        </LazyLoadBoundary>,
+      );
+      expect(await screen.findByText("Recovered at the next revision")).toBeTruthy();
+    });
+  });
+
   test("reloads the window by default", async () => {
     const reload = mock(() => undefined);
     const originalLocation = window.location;
@@ -259,6 +375,30 @@ describe("LazyLoadBoundary", () => {
     fireEvent.click(screen.getByRole("button", { name: "Reload application" }));
     expect(onReload).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("button", { name: "Retry view" }) === null).toBe(true);
+  });
+
+  test("offers an inline retry for a render failure without reloading", () => {
+    const onReload = mock(() => undefined);
+    const onRetry = mock(() => undefined);
+    render(
+      <LazyLoadInlineErrorFallback
+        isModuleLoadError={false}
+        onReload={onReload}
+        onRetry={onRetry}
+        isVisible
+      />,
+    );
+
+    // Every pane tab renders through this surface, so retry has to be reachable
+    // here and not only on the app-level overlay.
+    expect(screen.getByRole("alert").textContent).toContain("Retry this view");
+    fireEvent.click(screen.getByRole("button", { name: "Retry view" }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    expect(onReload).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Reload application" }));
+    expect(onReload).toHaveBeenCalledTimes(1);
+    expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
   test("renders a blocking dialog loading status", () => {

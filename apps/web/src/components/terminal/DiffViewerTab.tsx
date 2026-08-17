@@ -536,9 +536,13 @@ function DiffHeader({
           {/* On a phone the directory is dropped entirely: the basename is the only
               part that fits, and the full path is still on the title/sr-only node. */}
           <span aria-hidden="true" className="flex min-w-0 overflow-hidden">
+            {/* The RTL direction truncates the directory from its start, which is the
+                uninteresting end of a path. The text itself has to stay in an LTR bidi
+                isolate, or a leading neutral character — the dot of ".playwright-mcp" —
+                is reordered to the visual end and renders as "playwright-mcp.". */}
             {directory && !isMobile && (
               <span className="min-w-0 shrink truncate text-left [direction:rtl]">
-                {directory}
+                <bdi dir="ltr">{directory}</bdi>
               </span>
             )}
             <span className="max-w-full min-w-0 shrink-0 truncate">

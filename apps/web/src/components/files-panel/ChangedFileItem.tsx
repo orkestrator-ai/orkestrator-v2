@@ -31,9 +31,13 @@ export function ChangedFileItem({ change, onClick, onReveal, onRevert, onDelete 
       <FileIcon filename={change.filename} className="h-4 w-4 shrink-0" />
 
       <div className="flex min-w-0 items-baseline overflow-hidden text-left text-xs">
+        {/* The RTL direction truncates the directory from its start, which is the
+            uninteresting end of a path. The text itself has to stay in an LTR bidi
+            isolate, or a leading neutral character — the dot of ".github" — is
+            reordered to the visual end and renders as "github." instead. */}
         {change.directory && (
           <span className="min-w-0 shrink truncate text-left text-muted-foreground [direction:rtl]">
-            {change.directory}
+            <bdi dir="ltr">{change.directory}</bdi>
           </span>
         )}
         <span className="max-w-full min-w-0 shrink-0 truncate text-foreground">

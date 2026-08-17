@@ -1,9 +1,22 @@
-import { lazy, memo, useCallback, useRef, useLayoutEffect, useState } from "react";
+import {
+  lazy,
+  memo,
+  useCallback,
+  useRef,
+  useLayoutEffect,
+  useState,
+  type ReactNode,
+} from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { useShallow } from "zustand/react/shallow";
-import { usePaneLayoutStore, useEnvironmentStore, useConfigStore } from "@/stores";
+import {
+  usePaneLayoutStore,
+  useEnvironmentStore,
+  useConfigStore,
+} from "@/stores";
+import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { useTerminalPortalStore } from "@/stores/terminalPortalStore";
-import type { PaneLeaf } from "@/types/paneLayout";
+import type { MultiReviewTabData, PaneLeaf } from "@/types/paneLayout";
 import { createTabbarDroppableId, getNativeAgentData } from "@/types/paneLayout";
 import { cn } from "@/lib/utils";
 import { DraggableTabBar } from "./DraggableTabBar";
@@ -35,6 +48,46 @@ const LazyMultiReviewTab = lazy(async () => ({
 const LazyBrowserTab = lazy(async () => ({
   default: (await import("@/components/browser/BrowserTab")).BrowserTab,
 }));
+
+/**
+ * Owns the Multi Review workflow subscription for exactly one tab.
+ *
+ * The revision is read here, not in `PaneLeafContainer`, because the store
+ * replaces its whole workflow map on every update — including no-op refreshes.
+ * Selecting that map in the pane would re-render every pane in every
+ * environment on any workflow event, defeating `PaneLeafContainer`'s `memo`.
+ * A primitive revision selector re-renders only the tab that depends on it.
+ */
+function MultiReviewTabBoundary({
+  data,
+  isVisible,
+  refreshRequestId,
+  loadingFallback,
+  renderError,
+}: {
+  data: MultiReviewTabData;
+  isVisible: boolean;
+  refreshRequestId: number;
+  loadingFallback: ReactNode;
+  renderError: (details: LazyLoadErrorDetails) => ReactNode;
+}) {
+  const workflowRevision = useMultiReviewStore(
+    (state) => state.workflows.get(data.workflowId)?.backendRevision,
+  );
+  return (
+    <LazyLoadBoundary
+      loadingFallback={loadingFallback}
+      renderError={renderError}
+      resetKeys={[isVisible, refreshRequestId, workflowRevision]}
+    >
+      <LazyMultiReviewTab
+        key={refreshRequestId}
+        data={data}
+        isActive={isVisible}
+      />
+    </LazyLoadBoundary>
+  );
+}
 
 interface PaneLeafContainerProps {
   pane: PaneLeaf;
@@ -348,15 +401,13 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   isTabActive && isActive ? "z-10 pointer-events-auto" : "hidden",
                 )}
               >
-                <LazyLoadBoundary
+                <MultiReviewTabBoundary
+                  data={tab.multiReviewTabData}
+                  isVisible={isTabActive && isActive}
+                  refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
                   loadingFallback={renderTabFallback(isTabActive && isActive)}
                   renderError={renderTabError(isTabActive && isActive)}
-                >
-                  <LazyMultiReviewTab
-                    data={tab.multiReviewTabData}
-                    isActive={isTabActive && isActive}
-                  />
-                </LazyLoadBoundary>
+                />
               </div>
             );
           }

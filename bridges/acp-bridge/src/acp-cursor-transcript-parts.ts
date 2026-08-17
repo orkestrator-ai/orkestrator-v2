@@ -1,6 +1,8 @@
 import {
   CURSOR_JSONL_SOURCE_PREFIX,
   MAX_CURSOR_CHILD_PARTS,
+  MAX_CURSOR_CHILD_PROMPT_BYTES,
+  MAX_CURSOR_CHILD_PROMPT_RECORDS,
   MAX_MESSAGE_TEXT_BYTES,
   MAX_TOOL_ID_BYTES,
   MAX_TOOL_NAME_BYTES,
@@ -14,7 +16,7 @@ import {
 } from "./acp-context.js";
 import { schedulePersist } from "./acp-persist-writer.js";
 import { boundTranscript, boundedToolArguments, truncateUtf8 } from "./acp-transcript.js";
-import { findToolPart } from "./acp-tools.js";
+import { findToolPart, recordCursorTaskPrompt } from "./acp-tools.js";
 
 /**
  * How the child stands at the moment of a projection:
@@ -142,8 +144,9 @@ export function syncCursorChildTranscriptParts(
   const found = findToolPart(state, child.toolUseId);
   if (!found) return false;
   const { owner, part: parent } = found;
-  if (hasNativeNestedChildren(owner, child.toolUseId, child.agentId)) return false;
+  if (hasNativeNestedChildren(owner, child.toolUseId)) return false;
 
+  let changed = recoverCursorChildPrompt(parent, contents);
   const next = parseCursorChildTranscriptParts(
     contents,
     child.toolUseId,
@@ -151,31 +154,97 @@ export function syncCursorChildTranscriptParts(
     owner.id,
     childState,
   );
-  const existing = owner.parts.filter((part) => isCursorJsonlPart(part, child.agentId));
-  if (cursorJsonlPartsEqual(existing, next)) return false;
-
-  owner.parts = [
-    ...owner.parts.filter((candidate) => !isCursorJsonlPart(candidate, child.agentId)),
-  ];
-  const parentIndex = owner.parts.indexOf(parent);
-  const insertAt = parentIndex >= 0 ? parentIndex + 1 : owner.parts.length;
-  owner.parts.splice(insertAt, 0, ...next);
+  // Keyed on the launch, not the agent: when an inferred binding is superseded
+  // by the `agentId` Cursor finally reports, the superseded child's parts must
+  // leave with it rather than sit alongside the real ones forever.
+  const existing = owner.parts.filter((part) => isCursorJsonlChildPart(part, child.toolUseId));
+  if (!cursorJsonlPartsEqual(existing, next)) {
+    owner.parts = [
+      ...owner.parts.filter((candidate) => !isCursorJsonlChildPart(candidate, child.toolUseId)),
+    ];
+    const parentIndex = owner.parts.indexOf(parent);
+    const insertAt = parentIndex >= 0 ? parentIndex + 1 : owner.parts.length;
+    owner.parts.splice(insertAt, 0, ...next);
+    changed = true;
+  }
+  if (!changed) return false;
   state.revision += 1;
   boundTranscript(state);
   schedulePersist();
   return true;
 }
 
-function hasNativeNestedChildren(
-  owner: BridgeMessage,
-  parentToolUseId: string,
-  agentId: string,
-): boolean {
+function isCursorJsonlChildPart(part: BridgeMessagePart, parentToolUseId: string): boolean {
+  // A projection is only ever a text or tool part; `file` has no parent link.
+  return part.type !== "file"
+    && isCursorJsonlPart(part)
+    && part.parentTaskUseId === parentToolUseId;
+}
+
+function hasNativeNestedChildren(owner: BridgeMessage, parentToolUseId: string): boolean {
   return owner.parts.some((part) =>
     part.type === "tool-invocation"
     && part.parentTaskUseId === parentToolUseId
-    && !isCursorJsonlPart(part, agentId),
+    && !isCursorJsonlPart(part),
   );
+}
+
+/**
+ * Label a Task card from the child's own first user record when Cursor has not
+ * named it.
+ *
+ * A foreground launch arrives as a bare `{ _toolName: "task" }`, so until the
+ * child ends the card has no description and no prompt — it reads as an
+ * anonymous "Subagent task" for however long the child runs. The child's
+ * transcript opens with the prompt it was given, which is the same text
+ * `cursor/task` would eventually carry, so it stands in until the real one
+ * arrives and replaces it.
+ */
+function recoverCursorChildPrompt(parent: BridgeToolPart, contents: string): boolean {
+  const existing = parent.toolArgs?.prompt;
+  if (typeof existing === "string" && existing.trim()) return false;
+  const prompt = cursorChildTranscriptPrompt(contents);
+  if (!prompt) return false;
+  return recordCursorTaskPrompt(parent, prompt);
+}
+
+export function cursorChildTranscriptPrompt(contents: string): string | undefined {
+  const lines = contents.split("\n");
+  const limit = Math.min(lines.length, MAX_CURSOR_CHILD_PROMPT_RECORDS);
+  for (let index = 0; index < limit; index += 1) {
+    const line = lines[index]?.trim();
+    if (!line) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      // A tail read can start mid-line, and the head of a rotated file may be
+      // gone entirely. Either way there is simply no prompt to recover.
+      continue;
+    }
+    if (!isObject(parsed)) continue;
+    if (parsed.role !== "user" && parsed.type !== "user") continue;
+    const message = isObject(parsed.message) ? parsed.message : parsed;
+    const text = userRecordText(message.content);
+    if (!text) continue;
+    return truncateUtf8(text, MAX_CURSOR_CHILD_PROMPT_BYTES);
+  }
+  return undefined;
+}
+
+function userRecordText(content: unknown): string | undefined {
+  const raw = typeof content === "string"
+    ? content
+    : Array.isArray(content)
+      ? content
+        .map((part) => (isObject(part) && typeof part.text === "string" ? part.text : ""))
+        .join("")
+      : "";
+  // Cursor wraps the spawn prompt in `<user_query>` and prefixes a
+  // `<timestamp>` envelope. Neither belongs on a card.
+  const query = /<user_query>([\s\S]*?)<\/user_query>/.exec(raw)?.[1];
+  const text = (query ?? raw.replace(/<timestamp>[\s\S]*?<\/timestamp>/g, "")).trim();
+  return text || undefined;
 }
 
 function cursorJsonlPartsEqual(

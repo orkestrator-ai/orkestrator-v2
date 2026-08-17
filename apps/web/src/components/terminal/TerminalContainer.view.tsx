@@ -1351,6 +1351,26 @@ export function TerminalContainer({
       if (!isEnvironmentRunning || (!containerId && !isLocalEnvironmentReady)) return false;
 
       const allTabs = getAllTabs(environmentId);
+      // A Multi Review workflow outlives the tab that launched it, so reopening
+      // one is a normal request rather than a duplicate: the launcher reattaches
+      // to an already-active workflow whose tab was closed. Activating the open
+      // view keeps that idempotent, and it is resolved before the tab limit
+      // because showing a tab that already exists adds nothing to count.
+      if (type === "multi-review" && options?.multiReviewId) {
+        const openTab = allTabs.find((tab) =>
+          tab.type === "multi-review"
+          && tab.multiReviewTabData?.workflowId === options.multiReviewId
+          && tab.multiReviewTabData?.reviewerId === options.multiReviewReviewerId);
+        if (openTab) {
+          const pane = usePaneLayoutStore.getState().findPaneWithTab(openTab.id, environmentId);
+          if (pane) {
+            usePaneLayoutStore.getState().setActivePane(pane.id, environmentId);
+            usePaneLayoutStore.getState().setActiveTab(pane.id, openTab.id, environmentId);
+          }
+          return true;
+        }
+      }
+
       if (allTabs.length >= MAX_TABS) {
         rendererDebugLog("[TerminalContainer] Maximum tab limit reached:", MAX_TABS);
         showTabLimitReachedToast(MAX_TABS);

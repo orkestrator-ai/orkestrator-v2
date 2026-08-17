@@ -1,7 +1,7 @@
-import { fsConstants, fs, os, path, inferLanguage, runCommand, MAX_BINARY_FILE_BYTES, validateRelativeFilePath, writeConfinedFile, INITIAL_PROMPT_STAGING_DIRECTORY } from "./commands-dependencies.js";
+import { fsConstants, fs, os, path, randomUUID, inferLanguage, runCommand, MAX_BINARY_FILE_BYTES, validateRelativeFilePath, writeConfinedFile, INITIAL_PROMPT_STAGING_DIRECTORY } from "./commands-dependencies.js";
 import { WORKSPACE_ARTIFACT_GIT_EXCLUDE_PATTERNS } from "./commands-runtime-state.js";
 import type { Environment, AppConfig, StorageService } from "./commands-dependencies.js";
-import { CONTAINER_GITHUB_CREDENTIAL_FILE, CONTAINER_CLAUDE_CREDENTIAL_FILE, CONTAINER_CURSOR_API_KEY_FILE, CONTAINER_CURSOR_CREDENTIAL_DIR, HOST_CLAUDE_KEYCHAIN_SERVICE, CONTAINER_UNTRACKED_STATS_SCANNER, gitFetchScheduler } from "./commands-runtime-state.js";
+import { AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV, CONTAINER_GITHUB_CREDENTIAL_FILE, CONTAINER_CLAUDE_CREDENTIAL_FILE, CONTAINER_CURSOR_API_KEY_FILE, CONTAINER_CURSOR_CREDENTIAL_DIR, HOST_CLAUDE_KEYCHAIN_SERVICE, CONTAINER_UNTRACKED_STATS_SCANNER, gitFetchScheduler } from "./commands-runtime-state.js";
 import { UNTRACKED_SCAN_CONCURRENCY, UNTRACKED_SCAN_MAX_FILES, FILE_LINE_COUNT_CHUNK_BYTES } from "./commands-validation.js";
 import { quoteShell, validateGitRefName } from "./commands-agent-support.js";
 import { dockerExec } from "./commands-container-exec.js";
@@ -1156,6 +1156,51 @@ export function buildSyncContainerClaudeCredentialCommand(
 export const SYNC_CONTAINER_CLAUDE_CREDENTIAL_COMMAND =
   buildSyncContainerClaudeCredentialCommand();
 
+const MAX_HOST_AGENT_CREDENTIAL_BYTES = 1024 * 1024;
+const HOST_CURSOR_KEYCHAIN_ACCOUNT = "cursor-user";
+const HOST_CURSOR_KEYCHAIN_SERVICES = {
+  accessToken: "cursor-access-token",
+  refreshToken: "cursor-refresh-token",
+  apiKey: "cursor-api-key",
+} as const;
+
+/**
+ * Reads one named Keychain record, preferring an explicit login-Keychain path.
+ *
+ * The explicit path is what makes an isolated agent-test profile deterministic:
+ * its HOME holds no Keychain preferences, so an unqualified lookup would resolve
+ * against whatever the launching session happens to default to. A host that is
+ * not isolated has no such requirement and may legitimately keep the record in a
+ * keychain other than `login.keychain-db`, so it retries the default search list
+ * — which is what an unqualified lookup did before the path was pinned — rather
+ * than reporting a logged-in user as signed out.
+ */
+async function readMacKeychainPassword(
+  service: string,
+  homeDir: string,
+  account?: string,
+  allowDefaultSearchList = false,
+): Promise<string | undefined> {
+  const args = ["find-generic-password"];
+  if (account) args.push("-a", account);
+  args.push("-s", service, "-w");
+  const attempts = [[...args, path.join(homeDir, "Library", "Keychains", "login.keychain-db")]];
+  if (allowDefaultSearchList) attempts.push(args);
+  for (const attempt of attempts) {
+    try {
+      const { stdout } = await runCommand("security", attempt, { timeoutMs: 10_000 });
+      const value = stdout.trim();
+      // An empty or oversized payload is not a reason to stop looking; a second
+      // keychain may still hold the real record.
+      if (!value || Buffer.byteLength(value) > MAX_HOST_AGENT_CREDENTIAL_BYTES) continue;
+      return value;
+    } catch {
+      // A missing item and a declined access prompt look identical from here.
+    }
+  }
+  return undefined;
+}
+
 /**
  * Reads the host's Claude Code credential, preferring the macOS Keychain.
  *
@@ -1166,6 +1211,8 @@ export const SYNC_CONTAINER_CLAUDE_CREDENTIAL_COMMAND =
 export async function getHostClaudeCredentials(
   platform: NodeJS.Platform = process.platform,
   homeDir: string = os.homedir(),
+  configDir?: string,
+  options: { allowDefaultKeychainSearchList?: boolean } = {},
 ): Promise<string | undefined> {
   const isUsable = (value: string | undefined): string | undefined => {
     const trimmed = value?.trim();
@@ -1184,26 +1231,154 @@ export async function getHostClaudeCredentials(
   };
 
   if (platform === "darwin") {
-    try {
-      const { stdout } = await runCommand(
-        "security",
-        ["find-generic-password", "-s", HOST_CLAUDE_KEYCHAIN_SERVICE, "-w"],
-        { timeoutMs: 10_000 },
-      );
-      const fromKeychain = isUsable(stdout);
-      if (fromKeychain) return fromKeychain;
-    } catch {
-      // No Keychain entry, or the user declined the access prompt. Fall through
-      // to the on-disk credential, which is where Linux hosts keep it anyway.
-    }
+    const fromKeychain = isUsable(
+      await readMacKeychainPassword(
+        HOST_CLAUDE_KEYCHAIN_SERVICE,
+        homeDir,
+        undefined,
+        options.allowDefaultKeychainSearchList === true,
+      ),
+    );
+    if (fromKeychain) return fromKeychain;
   }
 
+  // `CLAUDE_CONFIG_DIR` first, because that is where Claude Code itself keeps
+  // the on-disk credential when it is set. An agent-test profile runs with an
+  // isolated HOME but is pointed at the host configuration, so reading only
+  // `homeDir` would look inside the empty isolated home and report no login.
+  for (const directory of [configDir, path.join(homeDir, ".claude")]) {
+    if (!directory) continue;
+    try {
+      const found = isUsable(await fs.readFile(path.join(directory, ".credentials.json"), "utf-8"));
+      if (found) return found;
+    } catch {
+      // Try the next location; a missing file is not an error here.
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Grace period applied to a recorded OAuth expiry.
+ *
+ * The token is read once, at bridge start, and never refreshed. One that lapses
+ * during startup would be indistinguishable from a broken login, so treat the
+ * final moments of its life as already expired.
+ */
+const CLAUDE_OAUTH_EXPIRY_SKEW_MS = 30_000;
+
+/**
+ * Extracts the single OAuth access token that may be handed to one bridge.
+ *
+ * An expired token is treated as no token at all. It is a non-empty bearer
+ * credential that the CLI prefers over every other source, so forwarding a
+ * lapsed one turns a stale host login into opaque authentication failures
+ * instead of the signed-out state the agent reports clearly. A credential that
+ * records no expiry is not evidence of expiry, so only a real timestamp that has
+ * already passed rejects.
+ */
+export function getClaudeOAuthAccessToken(
+  credentials: string | undefined,
+  now: number = Date.now(),
+): string | undefined {
+  if (!credentials) return undefined;
   try {
-    return isUsable(
-      await fs.readFile(path.join(homeDir, ".claude", ".credentials.json"), "utf-8"),
-    );
+    const parsed = JSON.parse(credentials) as {
+      claudeAiOauth?: { accessToken?: unknown; expiresAt?: unknown };
+    };
+    const accessToken = parsed.claudeAiOauth?.accessToken;
+    if (typeof accessToken !== "string") return undefined;
+    const expiresAt = parsed.claudeAiOauth?.expiresAt;
+    if (
+      typeof expiresAt === "number"
+      && Number.isFinite(expiresAt)
+      && expiresAt <= now + CLAUDE_OAUTH_EXPIRY_SKEW_MS
+    ) {
+      return undefined;
+    }
+    const trimmed = accessToken.trim();
+    return trimmed && Buffer.byteLength(trimmed) <= MAX_HOST_AGENT_CREDENTIAL_BYTES
+      ? trimmed
+      : undefined;
   } catch {
     return undefined;
+  }
+}
+
+export type HostCursorCredentials = {
+  accessToken?: string;
+  refreshToken?: string;
+  apiKey?: string;
+};
+
+export async function getHostCursorCredentials(
+  platform: NodeJS.Platform = process.platform,
+  homeDir: string = os.homedir(),
+): Promise<HostCursorCredentials | undefined> {
+  if (platform !== "darwin") return undefined;
+  const credentials: HostCursorCredentials = {};
+  for (const [key, service] of Object.entries(HOST_CURSOR_KEYCHAIN_SERVICES) as Array<
+    [keyof HostCursorCredentials, string]
+  >) {
+    const value = await readMacKeychainPassword(service, homeDir, HOST_CURSOR_KEYCHAIN_ACCOUNT);
+    if (value) credentials[key] = value;
+  }
+  return Object.keys(credentials).length > 0 ? credentials : undefined;
+}
+
+/**
+ * Store only Cursor's explicitly authorized records in its process-specific
+ * HOME. Cursor CLI's file credential store owns this exact owner-only format.
+ * A missing snapshot removes any prior host import so logout and opt-out revoke
+ * access on the next bridge start.
+ */
+export async function syncAgentTestCursorCredentials(
+  cursorHome: string,
+  credentials: HostCursorCredentials | undefined,
+): Promise<void> {
+  // The bridge is launched with `cursorHome` as its HOME, and a signed-out or
+  // opted-out profile still launches it. Create the home on every path, not just
+  // the one that writes a snapshot, so the process is never handed a HOME that
+  // does not exist.
+  await fs.mkdir(cursorHome, { recursive: true, mode: 0o700 });
+  const directory = path.join(cursorHome, ".cursor");
+  const target = path.join(directory, "auth.json");
+  const existingDirectory = await fs.lstat(directory).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  if (existingDirectory?.isSymbolicLink()) {
+    if (!credentials) {
+      await fs.rm(directory, { force: true });
+      return;
+    }
+    throw new Error("Cursor credential directory is not a real directory");
+  }
+  if (existingDirectory && !existingDirectory.isDirectory()) {
+    throw new Error("Cursor credential directory is not a real directory");
+  }
+  if (!credentials) {
+    await fs.rm(target, { force: true });
+    return;
+  }
+  await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+  const info = await fs.lstat(directory);
+  if (!info.isDirectory() || info.isSymbolicLink()) {
+    throw new Error("Cursor credential directory is not a real directory");
+  }
+  await fs.chmod(directory, 0o700);
+  const temporary = path.join(directory, `.auth.${randomUUID()}.tmp`);
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
+  try {
+    handle = await fs.open(temporary, "wx", 0o600);
+    await handle.writeFile(`${JSON.stringify(credentials, null, 2)}\n`, "utf8");
+    await handle.close();
+    handle = undefined;
+    await fs.rename(temporary, target);
+    await fs.chmod(target, 0o600);
+  } finally {
+    await handle?.close().catch(() => undefined);
+    await fs.rm(temporary, { force: true }).catch(() => undefined);
   }
 }
 
@@ -1273,7 +1448,18 @@ export async function resolveContainerClaudeCredentials(
   globalConfig: AppConfig["global"],
 ): Promise<string | undefined> {
   if (globalConfig.useHostClaudeCredentials === false) return undefined;
-  return getHostClaudeCredentials();
+  const agentTestHostHome = process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME?.trim();
+  return getHostClaudeCredentials(
+    process.platform,
+    agentTestHostHome || os.homedir(),
+    process.env[AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV]?.trim()
+      || process.env.CLAUDE_CONFIG_DIR?.trim()
+      || undefined,
+    // Only an agent-test profile needs the lookup pinned to one keychain file.
+    // An ordinary install runs as the logged-in user and may keep the record
+    // outside `login.keychain-db`, so it keeps the default search list.
+    { allowDefaultKeychainSearchList: !agentTestHostHome },
+  );
 }
 
 /**

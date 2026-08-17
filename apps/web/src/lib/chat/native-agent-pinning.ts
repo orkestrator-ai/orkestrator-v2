@@ -1,6 +1,7 @@
 import type {
   NativeAgentActivityPart,
   NativeAgentGroupPart,
+  NativeBackgroundTaskStatus,
   NativeMessage,
   NativeMessagePart,
   NativeToolGroupPart,
@@ -15,6 +16,8 @@ export interface NativeAgentActivitySnapshot {
   id: string;
   label: string;
   status: NativeAgentStatus;
+  kind: "subagent" | "background-task";
+  backgroundTaskStatus?: NativeBackgroundTaskStatus;
 }
 
 function isAgentPart(
@@ -76,16 +79,23 @@ function collectAgentSnapshots(
   parts.forEach((part, index) => {
     const partPath = `${path}.${index}`;
     if (isAgentPart(part)) {
-      const durableId = part.type === "task-group"
+      const backgroundTask = part.type === "task-group"
+        ? part.task.backgroundTask
+        : part.backgroundTask;
+      const durableId = backgroundTask?.id ?? (part.type === "task-group"
         ? part.task.toolUseId?.trim() || part.task.subagentId?.trim()
-        : part.subagentId?.trim() || part.toolUseId?.trim();
+        : part.subagentId?.trim() || part.toolUseId?.trim());
       const id = durableId
-        ? `${part.type}:${durableId}`
+        ? `${backgroundTask ? "background-task" : part.type}:${durableId}`
         : `${part.type}:${messageId}:${partPath}`;
       snapshots.set(id, {
         id,
         label: nativeAgentActivityLabel(part),
         status: getNativeAgentStatus(part),
+        kind: backgroundTask ? "background-task" : "subagent",
+        ...(backgroundTask?.status
+          ? { backgroundTaskStatus: backgroundTask.status }
+          : {}),
       });
       return;
     }

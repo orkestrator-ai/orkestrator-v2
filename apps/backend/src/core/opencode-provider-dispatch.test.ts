@@ -660,8 +660,14 @@ describe("OpenCode provider dispatch", () => {
         type: "text",
         text: expect.stringContaining(JSON.stringify(schema)),
       }]);
-      expect(String((fake.promptCalls[0]!.parts as Array<{ text?: string }>)[0]?.text))
-        .toContain("Return only one JSON value matching this JSON Schema");
+      const structuredText =
+        String((fake.promptCalls[0]!.parts as Array<{ text?: string }>)[0]?.text);
+      expect(structuredText)
+        .toContain("End your turn with exactly one JSON value matching this JSON Schema");
+      // The schema binds the final message only: a long structured turn must
+      // still be able to narrate its progress in the text channel.
+      expect(structuredText)
+        .toContain("you may send ordinary prose progress updates");
     } finally {
       await provider.dispose?.();
     }

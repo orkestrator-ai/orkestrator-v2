@@ -4,8 +4,16 @@ import {
 } from "@orkestrator/protocol/structured-output";
 import { asRecord, boundedText, nonEmptyString } from "./agent-provider-runtime.js";
 
+/**
+ * The schema constrains the *final* message, not the whole turn.
+ *
+ * `parseOpenCodeStructuredText` joins the turn's text parts and recovers the
+ * last well-formed document, so prose before that document has always been
+ * safe. Forbidding commentary outright left a long structured turn looking
+ * silent to anyone watching the tab.
+ */
 export function openCodeStructuredPrompt(prompt: string, schema: JsonSchema): string {
-  return `${prompt}\n\n## Required OpenCode output\n\nReturn only one JSON value matching this JSON Schema. Do not wrap it in Markdown or add commentary.\n\n${JSON.stringify(schema)}`;
+  return `${prompt}\n\n## Required OpenCode output\n\nEnd your turn with exactly one JSON value matching this JSON Schema. That final message must be the JSON value alone, not wrapped in Markdown and with no commentary around it.\n\nBefore that final message you may send ordinary prose progress updates. Keep them plain sentences: never send a JSON object or array as a progress update, and never draft or preview the final value.\n\n${JSON.stringify(schema)}`;
 }
 
 /**

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "@/components/build-pipeline/structured-review-test-fixture";
 import {
+  hideMachineOutputText,
   showOnlyFinalStructuredReviewMessage,
   showOnlyFinalVerificationMessage,
 } from "./structured-review-messages";
@@ -182,5 +183,87 @@ describe("showOnlyFinalVerificationMessage", () => {
 
     expect(messages).toHaveLength(1);
     expect(messages[0]?.content).toBe(final);
+  });
+});
+
+describe("hideMachineOutputText", () => {
+  test("withholds a streaming JSON draft while keeping prose and tool rows", () => {
+    // The exact shape a reviewer streams while composing its report: a JSON
+    // document that has not closed yet, so nothing can validate or fold it.
+    const draft = '{"reviewScope":{"targetBranch":"main","filesReviewed":["a.ts"';
+    const messages = hideMachineOutputText([{
+      id: "progress",
+      role: "assistant",
+      content: draft,
+      parts: [
+        { type: "text", content: "Reviewing the uncommitted changes." },
+        {
+          type: "tool-invocation",
+          content: "git diff HEAD",
+          toolName: "shell",
+          toolState: "success",
+        },
+        { type: "text", content: draft },
+      ],
+      createdAt: "2026-08-17T13:00:00.000Z",
+    }]);
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.content).toBe("");
+    expect(messages[0]?.parts.map((part) => part.content)).toEqual([
+      "Reviewing the uncommitted changes.",
+      "git diff HEAD",
+    ]);
+  });
+
+  test("withholds a finished JSON document that validates as nothing", () => {
+    const provisional = '{"reviewScope":{"targetBranch":"main"},"issues":[]}';
+    expect(hideMachineOutputText([{
+      id: "draft",
+      role: "assistant",
+      content: provisional,
+      parts: [{ type: "text", content: provisional }],
+      createdAt: "2026-08-17T13:00:00.000Z",
+    }])).toHaveLength(0);
+  });
+
+  test("keeps prose that merely contains or follows JSON", () => {
+    const commentary = 'The config `{"strict":true}` is already covered by tests.';
+    const messages = hideMachineOutputText([{
+      id: "prose",
+      role: "assistant",
+      content: commentary,
+      parts: [{ type: "text", content: commentary }],
+      createdAt: "2026-08-17T13:00:00.000Z",
+    }]);
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.parts.map((part) => part.content)).toEqual([commentary]);
+  });
+
+  test("never withholds the user's own text", () => {
+    const prompt = '{"instruction":"review this"}';
+    const messages = hideMachineOutputText([{
+      id: "prompt",
+      role: "user",
+      content: prompt,
+      parts: [{ type: "text", content: prompt }],
+      createdAt: "2026-08-17T13:00:00.000Z",
+    }]);
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.content).toBe(prompt);
+  });
+
+  test("returns the identical message when nothing is withheld", () => {
+    const message = {
+      id: "prose",
+      role: "assistant" as const,
+      content: "Validation complete.",
+      parts: [{ type: "text" as const, content: "Validation complete." }],
+      createdAt: "2026-08-17T13:00:00.000Z",
+    };
+    // Identity matters: the renderer memoizes on the message object.
+    expect(hideMachineOutputText([message])[0]).toBe(message);
   });
 });

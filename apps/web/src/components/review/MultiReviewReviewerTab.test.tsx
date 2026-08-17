@@ -13,11 +13,26 @@ import * as realNativeMessage from "@/components/chat/NativeMessage";
 const realNativeMessageSnapshot = { ...realNativeMessage };
 mock.module("@/components/chat/NativeMessage", () => ({
   ...realNativeMessageSnapshot,
-  NativeMessage: ({ message }: { message: { id: string; content: string } }) => {
+  NativeMessage: ({ message }: {
+    message: {
+      id: string;
+      content: string;
+      parts: Array<{ type: string; content: string }>;
+    };
+  }) => {
     if (message.content.includes("poison")) {
       throw new Error("injected renderer failure");
     }
-    return <div>{message.content}</div>;
+    // Mirrors the real component: text parts are the content roots, with
+    // `content` as the fallback for messages that carry no text part.
+    const textParts = message.parts.filter((part) => part.type === "text");
+    return (
+      <div>
+        {textParts.length > 0
+          ? textParts.map((part, index) => <div key={index}>{part.content}</div>)
+          : message.content}
+      </div>
+    );
   },
 }));
 afterAll(() => {
@@ -62,7 +77,8 @@ afterAll(() => {
   );
 });
 
-const { MultiReviewReviewerTab } = await import("./MultiReviewReviewerTab");
+const { MultiReviewReviewerTab, toMultiReviewReviewerMessages } =
+  await import("./MultiReviewReviewerTab");
 
 afterEach(cleanup);
 
@@ -131,5 +147,90 @@ describe("MultiReviewReviewerTab message containment", () => {
       expect(screen.getByText("Claude review")).toBeTruthy();
       expect(screen.queryByText("poison frame") === null).toBe(true);
     });
+  });
+});
+
+/*
+ * Codex and the ACP agents answer a schema-constrained turn in the text
+ * channel, and re-draft the whole report there on every progress update. The
+ * shape below is taken from a live Codex reviewer transcript: six text parts,
+ * each a longer draft of the same document, and no prose at all.
+ */
+describe("toMultiReviewReviewerMessages machine output", () => {
+  const snapshot = (parts: Array<{ type: string; content: string }>) => ({
+    workflowId: "multi-1",
+    reviewerId: "reviewer-2",
+    agent: "codex" as const,
+    model: "gpt-5.6-sol",
+    status: "running" as const,
+    startedAt: "2026-08-17T13:21:09.717Z",
+    messages: [{
+      id: "assistant",
+      role: "assistant",
+      content: parts.at(-1)?.content ?? "",
+      createdAt: "2026-08-17T13:21:10.000Z",
+      parts,
+    }],
+  });
+
+  test("withholds progressively longer report drafts", () => {
+    const drafts = [
+      '{"reviewScope":{"targetBranch":"","filesReviewed":[]',
+      '{"reviewScope":{"targetBranch":"main","filesReviewed":["a.ts"]},"issues":[]}',
+      '{"reviewScope":{"targetBranch":"main","filesReviewed":["a.ts","b.ts"]},"issues":[{"title":"x"',
+    ];
+    const messages = toMultiReviewReviewerMessages(
+      snapshot(drafts.map((content) => ({ type: "text", content }))),
+    );
+    const rendered = messages.flatMap((message) =>
+      [message.content, ...message.parts.map((part) => part.content)]);
+    for (const draft of drafts) expect(rendered).not.toContain(draft);
+  });
+
+  test("keeps the prose commentary the prompt now asks for", () => {
+    const messages = toMultiReviewReviewerMessages(snapshot([
+      { type: "text", content: "Captured the worktree snapshot; reviewing the diff." },
+      { type: "text", content: '{"reviewScope":{"targetBranch":"main"' },
+      { type: "text", content: "Validation passed; compiling the final report." },
+    ]));
+
+    const text = messages.flatMap((message) =>
+      message.parts.filter((part) => part.type === "text").map((part) => part.content));
+    expect(text).toEqual([
+      "Captured the worktree snapshot; reviewing the diff.",
+      "Validation passed; compiling the final report.",
+    ]);
+  });
+
+  test("drops a message whose only content was a draft", () => {
+    const messages = toMultiReviewReviewerMessages(snapshot([
+      { type: "text", content: '{"reviewScope":{"targetBranch":"main"}}' },
+    ]));
+    expect(messages).toHaveLength(0);
+  });
+
+  test("renders no raw JSON in the transcript body", async () => {
+    const draft = '{"reviewScope":{"targetBranch":"main","baseRef":"origin/main';
+    const loadTranscript = mock(async () => snapshot([
+      { type: "text", content: "Reading the review skill." },
+      { type: "text", content: draft },
+    ]));
+
+    render(
+      <MultiReviewReviewerTab
+        data={{
+          environmentId: "env-1",
+          workflowId: "multi-1",
+          reviewerId: "reviewer-2",
+          isLocal: true,
+        }}
+        isActive
+        loadTranscript={loadTranscript}
+      />,
+    );
+
+    await waitFor(() => expect(loadTranscript).toHaveBeenCalled());
+    expect(await screen.findByText("Reading the review skill.")).toBeTruthy();
+    expect(document.body.textContent).not.toContain("reviewScope");
   });
 });

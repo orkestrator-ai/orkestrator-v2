@@ -129,7 +129,8 @@ describe("build pipeline prompts", () => {
     expect(prompt).toContain("## Step 4: Test Coverage Review");
     expect(prompt).toContain("git diff origin/main...HEAD");
     expect(prompt).toContain("provider-enforced JSON Schema");
-    expect(prompt).toContain("Use ordinary prose for interim progress updates");
+    expect(prompt).toContain("The output schema applies to your final message only");
+    expect(prompt).toContain("Write interim progress updates as plain sentences");
     expect(prompt).toContain("Never emit a partial or provisional structured report");
     expect(prompt).toContain(
       "make the final assistant message the only provider-enforced structured report",

@@ -12,7 +12,10 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useVirtuosoScrollState } from "@/hooks";
 import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
 import { multiReviewReviewerScrollKey } from "@/lib/multi-review-keys";
-import { showOnlyFinalStructuredReviewMessage } from "@/lib/structured-review-messages";
+import {
+  hideMachineOutputText,
+  showOnlyFinalStructuredReviewMessage,
+} from "@/lib/structured-review-messages";
 import * as backend from "@/lib/backend";
 import { toPipelineTranscript } from "@/components/build-pipeline/pipeline-transcript";
 
@@ -64,7 +67,15 @@ export function toMultiReviewReviewerMessages(snapshot: MultiReviewReviewerTrans
   // The workflow's validated report is authoritative. Schema-shaped text in
   // the provider transcript is progress data and must never be shown as raw
   // JSON (or mistaken for an accepted result).
-  return showOnlyFinalStructuredReviewMessage(output, false);
+  //
+  // Two passes because they catch different things. The first removes reports
+  // that validate. The second removes every remaining JSON document — the
+  // half-written drafts a provider streams while composing its answer, which
+  // validate as nothing and would otherwise render verbatim. Whatever survives
+  // is prose: the reviewer's actual commentary.
+  return hideMachineOutputText(
+    showOnlyFinalStructuredReviewMessage(output, false),
+  );
 }
 
 export function MultiReviewReviewerTab({

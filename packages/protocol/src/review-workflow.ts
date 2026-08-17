@@ -976,7 +976,12 @@ The change under review may be committed, entirely uncommitted, or a mix of both
   const outputSection = outputFormat === "structured"
     ? `## Output contract
 
-Use ordinary prose for interim progress updates. Never emit a partial or provisional structured report. After every validation command, tool call, and subagent has finished, make the final assistant message the only provider-enforced structured report. Populate every field from reviewed evidence, use empty arrays where appropriate, and never invent commands, results, files, or line references.`
+The output schema applies to your final message only. Everything before it is an ordinary conversation.
+
+- Write interim progress updates as plain sentences describing what you are doing and what you found. These are shown to a human watching the review, so they are worth writing well.
+- An interim message must never be a JSON object or array. Do not draft, preview, restate, or incrementally build the report in your messages, and do not wrap progress in schema field names. A message that begins with \`{\` or \`[\` is withheld from the reader as machine output, so a drafted report is not progress they can see.
+- Never emit a partial or provisional structured report.
+- After every validation command, tool call, and subagent has finished, make the final assistant message the only provider-enforced structured report. Populate every field from reviewed evidence, use empty arrays where appropriate, and never invent commands, results, files, or line references.`
     : `## Output Format
 
 Produce the report below in this exact section order. Use Markdown headers so it renders cleanly in any terminal. Every named \`##\` section is required; do not omit, merge, or rename one, even when there are no issues.

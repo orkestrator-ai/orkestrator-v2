@@ -70,10 +70,15 @@ import {
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import {
   DEFAULT_OPENCODE_MODEL_PROVIDERS,
-  isSelectableOpenCodeModelId,
   migrateOpenCodeModelProviders,
   normalizeOpenCodeModelProviders,
 } from "@orkestrator/protocol/native-agent";
+import {
+  DEFAULT_OPENCODE_MODEL_ID,
+  normalizeOpenCodeRepositoryDefaults,
+  selectableOpenCodeDefaultModel,
+  storedOpenCodeModelIds,
+} from "./storage-opencode-models.js";
 import {
   DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
   isValidCodexMaxConcurrentThreads,
@@ -1562,82 +1567,15 @@ export function sanitizePersistedReviewInstruction(config: AppConfig): AppConfig
   };
 }
 
-/**
- * Every place a previously-chosen OpenCode model id is durably stored.
- *
- * These were all selected from a picker that offered every provider OpenCode
- * advertises, so they are what the allowlist migration has to preserve. Ids
- * belonging to another agent contribute nothing: they carry no `provider/model`
- * separator, so they resolve to no provider.
- */
-export function storedOpenCodeModelIds(
-  global: JsonRecord,
-  repositories: AppConfig["repositories"] | undefined,
-): unknown[] {
-  const ids: unknown[] = [global.opencodeModel];
-  if (Array.isArray(global.favoriteModels)) {
-    for (const favorite of global.favoriteModels) {
-      if (isRecord(favorite) && favorite.platform === "opencode") {
-        ids.push(favorite.modelId);
-      }
-    }
-  }
-  if (isRecord(repositories)) {
-    for (const repository of Object.values(repositories)) {
-      if (isRecord(repository)) ids.push(repository.defaultModel);
-    }
-  }
-  return ids;
-}
-
-/** The OpenCode default a fresh install ships with. */
-export const DEFAULT_OPENCODE_MODEL_ID = "opencode/claude-sonnet-5";
-
-/** Whether an OpenCode id contains both a provider and a non-blank model. */
-function isConcreteOpenCodeModelId(modelId: string): boolean {
-  const separator = modelId.indexOf("/");
-  return separator > 0 && modelId.slice(separator + 1).trim().length > 0;
-}
-
-/**
- * Keep the default OpenCode model inside the configured provider allowlist.
- *
- * A default naming an excluded provider is unreachable rather than merely
- * unusual: no picker lists it, so the user cannot replace it there, while
- * environment launches and build pipelines keep dispatching it. It can only
- * arise from a catalogue the user has since narrowed, so it is repointed at the
- * first OpenCode model they already chose that the allowlist still admits —
- * their favourites, then the shipped default.
- *
- * An unrestricted allowlist admits everything and therefore never repoints, a
- * value that is not `provider/model` is left alone rather than reinterpreted,
- * and a stored id survives when nothing selectable is on hand: inventing a
- * model the user never picked would be worse than an unreachable one.
- */
-export function selectableOpenCodeDefaultModel(
-  storedModelId: unknown,
-  favoriteModels: readonly { platform: string; modelId: string }[],
-  allowedProviders: readonly string[],
-): unknown {
-  if (typeof storedModelId !== "string") return storedModelId;
-  const stored = storedModelId.trim();
-  if (
-    !stored.includes("/")
-    || isSelectableOpenCodeModelId(stored, allowedProviders)
-  ) {
-    return storedModelId;
-  }
-  return [
-    ...favoriteModels
-      .filter((favorite) => favorite.platform === "opencode")
-      .map((favorite) => favorite.modelId),
-    DEFAULT_OPENCODE_MODEL_ID,
-  ].find((modelId) =>
-    isConcreteOpenCodeModelId(modelId)
-    && isSelectableOpenCodeModelId(modelId, allowedProviders)
-  )
-    ?? storedModelId;
-}
+// The OpenCode model helpers moved to their own module, but this one is where
+// `storage-shared.ts` and every existing caller reach for them, so the surface
+// stays here.
+export {
+  DEFAULT_OPENCODE_MODEL_ID,
+  normalizeOpenCodeRepositoryDefaults,
+  selectableOpenCodeDefaultModel,
+  storedOpenCodeModelIds,
+};
 
 export function normalizePersistedConfig(config: AppConfig): AppConfig {
   const reviewInstructionSanitized = sanitizePersistedReviewInstruction(config);
@@ -1698,8 +1636,18 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     favoriteModels,
     openCodeModelProviders,
   );
+  // A repository default outranks the global one everywhere it is read, so the
+  // repointing has to reach it too or the unreachable id simply survives one
+  // level down. Identity is preserved when nothing moved.
+  const repositories = normalizeOpenCodeRepositoryDefaults(
+    reviewInstructionSanitized.repositories,
+    defaultAgent,
+    favoriteModels,
+    openCodeModelProviders,
+  );
   if (
-    global.codexMaxConcurrentThreads === codexMaxConcurrentThreads
+    repositories === reviewInstructionSanitized.repositories
+    && global.codexMaxConcurrentThreads === codexMaxConcurrentThreads
     && global.useHostGitHubCredentials === useHostGitHubCredentials
     && JSON.stringify(global.enabledAgentPlatforms) === JSON.stringify(enabledAgentPlatforms)
     && global.defaultAgent === defaultAgent
@@ -1714,6 +1662,7 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
 
   return {
     ...reviewInstructionSanitized,
+    repositories,
     global: {
       ...global,
       codexMaxConcurrentThreads,

@@ -822,6 +822,70 @@ describe("OpenCode provider runtime", () => {
     }
   });
 
+  // Relaxing the cap must not relax the lookup itself. Without this the whole
+  // model-existence half of the check could be deleted and the suite would
+  // still pass on the connectivity half alone.
+  test("still rejects a model its connected provider does not advertise", async () => {
+    const fake = openCodeFake();
+    Object.assign(fake.client as object, {
+      provider: {
+        list: mock(async () => ({
+          data: {
+            all: [
+              { id: "hpc-ai", models: { "deepseek-v4-flash": {} } },
+              { id: "opencode", models: { "kimi-k2.7": {} } },
+            ],
+            connected: ["hpc-ai", "opencode"],
+          },
+        })),
+      },
+    });
+    const provider = openCodeActivityProvider(fake, {
+      resolveOpenCodeModelProviders: () => ["hpc-ai", "opencode"],
+    });
+    try {
+      await expect(provider.send("owned-session", "prompt", {
+        requestId: "request-1",
+        // The provider is connected; this model is simply not one of its.
+        model: "hpc-ai/retired-v3",
+      })).rejects.toBeInstanceOf(PromptRejectedError);
+      expect(fake.promptCalls).toHaveLength(0);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  // Dispatchability parses `connected` itself rather than reusing the
+  // catalogue's pass, so the object form needs pinning on this path too.
+  test("dispatches when connectivity is reported as provider objects", async () => {
+    const fake = openCodeFake();
+    Object.assign(fake.client as object, {
+      provider: {
+        list: mock(async () => ({
+          data: {
+            all: [
+              { id: "hpc-ai", models: { "deepseek-v4-flash": {} } },
+              { id: "opencode", models: { "kimi-k2.7": {} } },
+            ],
+            connected: [{ id: "hpc-ai" }, { id: "" }, null],
+          },
+        })),
+      },
+    });
+    const provider = openCodeActivityProvider(fake, {
+      resolveOpenCodeModelProviders: () => ["opencode"],
+    });
+    try {
+      await provider.send("owned-session", "prompt", {
+        requestId: "request-1",
+        model: "hpc-ai/deepseek-v4-flash",
+      });
+      expect(fake.promptCalls).toHaveLength(1);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
   test("still rejects a model whose provider OpenCode reports disconnected", async () => {
     const fake = openCodeFake();
     Object.assign(fake.client as object, {

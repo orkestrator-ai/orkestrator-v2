@@ -82,6 +82,7 @@ import {
   firstEnabledAgentPlatform,
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
+import { resolveActionDefault } from "@orkestrator/protocol/action-defaults";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import { DEFAULT_CLAUDE_MODE } from "@orkestrator/protocol/startup-launch";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
@@ -217,13 +218,28 @@ export function CreateEnvironmentDialog({
   const config = useConfigStore((state) => state.config);
   const repoConfig = projectId ? config.repositories[projectId] : undefined;
 
-  // Resolve effective defaults: project-level overrides > app-level
-  const resolved = resolveAgentDefaults(config.global, repoConfig);
   const enabledAgentPlatforms = useMemo(
     () => (
       config.global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]
     ) as AgentPlatform[],
     [config.global.enabledAgentPlatforms],
+  );
+  /**
+   * The app-level "New projects" default. It sits between the app default agent
+   * and this repository's own settings: a project that has been configured, or
+   * that already remembers a selection, keeps what it has.
+   */
+  const newProjectDefault = useMemo(
+    () => resolveActionDefault(config.global.actionDefaults, "newProject", {
+      fallbackAgent: (config.global.defaultAgent ?? "claude") as AgentPlatform,
+      enabledAgents: enabledAgentPlatforms,
+    }),
+    [config.global.actionDefaults, config.global.defaultAgent, enabledAgentPlatforms],
+  );
+  // Resolve effective defaults: project-level overrides > app-level
+  const resolved = resolveAgentDefaults(
+    { ...config.global, defaultAgent: newProjectDefault.agent },
+    repoConfig,
   );
   const configDefaultAgent = firstEnabledAgentPlatform(
     enabledAgentPlatforms,
@@ -252,9 +268,13 @@ export function CreateEnvironmentDialog({
   const { favorites: favoriteModels, toggleFavorite: toggleFavoriteModel, reorderFavorites } = useAgentModelFavorites();
   const configuredOpenCodeModel =
     (configDefaultAgent === "opencode" ? repoConfig?.defaultModel : undefined)
+    ?? (newProjectDefault.agent === "opencode" ? newProjectDefault.model : undefined)
     ?? config.global.opencodeModel;
   const configuredOpenCodeEffort =
-    configDefaultAgent === "opencode" ? repoConfig?.defaultEffort : undefined;
+    (configDefaultAgent === "opencode" ? repoConfig?.defaultEffort : undefined)
+    ?? (newProjectDefault.agent === "opencode"
+      ? newProjectDefault.reasoningEffort
+      : undefined);
   /**
    * `buildReviewModelCatalog` synthesises a single `{ id: "default" }` OpenCode
    * entry when no environment has cached a live catalog yet. That id is a UI
@@ -352,12 +372,18 @@ export function CreateEnvironmentDialog({
       ...(config.global.claudeModel ? { claude: config.global.claudeModel } : {}),
       codex: config.global.codexModel,
       opencode: config.global.opencodeModel,
+      ...(newProjectDefault.model
+        ? { [newProjectDefault.agent]: newProjectDefault.model }
+        : {}),
       ...(repoConfig?.defaultModel
         ? { [configDefaultAgent]: repoConfig.defaultModel }
         : {}),
     },
     reasoningEfforts: {
       codex: config.global.codexReasoningEffort,
+      ...(newProjectDefault.reasoningEffort
+        ? { [newProjectDefault.agent]: newProjectDefault.reasoningEffort }
+        : {}),
       ...(repoConfig?.defaultEffort
         ? { [configDefaultAgent]: repoConfig.defaultEffort }
         : {}),
@@ -371,6 +397,7 @@ export function CreateEnvironmentDialog({
     configCodexMode,
     configDefaultAgent,
     configOpencodeMode,
+    newProjectDefault,
     repoConfig?.defaultEffort,
     repoConfig?.defaultModel,
   ]);

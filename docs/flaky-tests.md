@@ -10,6 +10,45 @@ the same incidents in a second format; its entries were merged here on
 2026-08-07 and that file was removed, so a recurrence is compared against one
 history rather than two partial ones.
 
+## Root-suite 5000 ms timeout cluster (`tests/unit/electron/`, `tests/unit/test-diagnostic-bounds.test.ts`)
+
+Three tests failed together in one root-suite run, and three further runs each
+failed a different subset. They are recorded as one entry because the evidence
+points at a single shared cause — starvation against a fixed 5000 ms deadline —
+rather than independent defects. Every owning file passes alone, and the failing
+set is not stable between runs, which is the signature this registry already
+records for the `tmux-backend.test.ts` and `standalone.test.ts` clusters below.
+
+- **Status:** open
+- **Date observed:** 2026-08-17
+- **Original command:** `bun run test:logged -- --name root-tests -- bun test ./tests --parallel=4`
+- **Worker configuration:** `--parallel=4` (which implies `--isolate`). Run concurrently with a second `bun test --test-worker` fleet from another worktree on the same host; load average during the run was 18.67 / 27.53 / 21.07.
+- **Suite counts:** 3,733 passed, 1 skipped, 3 failed, 2 non-fatal between-test errors; 179 files in 341.4 s (exit 1).
+- **Failures:**
+  - `remote gateway > keeps a slow but progressing proxy body alive past the idle timeout` (`tests/unit/electron/gateway-proxy.test.ts:674`) — `expect(received).toBe(expected)`, expected `200`, received `502`.
+  - `remote gateway > serializes invoke results once and keeps command metrics private and bounded` (`tests/unit/electron/gateway-support-extra.test.ts`) — timed out after 5000 ms (5034.33 ms), with an unhandled `ECONNREFUSED` between tests.
+  - `Electron backend command registry > clears a stale failure only once the stop has actually committed` (`tests/unit/electron/commands-registry-environments.test.ts:3892`) — expected a promise that resolves, received one that rejected; timed out after 5000 ms (5002.20 ms).
+- **Isolated reruns:** `bun test tests/unit/electron/gateway-proxy.test.ts` → passed, exit 0, 1.7 s. `bun test tests/unit/electron/gateway-support-extra.test.ts` → passed, exit 0, 2.1 s. `bun test tests/unit/electron/commands-registry-environments.test.ts` → also failed alone, but on **two different tests** than the aggregate run; all three originally-failing tests passed when selected individually with `-t`.
+- **Recurrence (2026-08-17, same day):** Three further `bun test ./tests --parallel=4` runs on an otherwise idle host, each failing a **different** subset of 5000 ms-deadline tests:
+  - Run 1 — none of this cluster failed.
+  - Run 2 — `remote gateway > serializes invoke results once and keeps command metrics private and bounded` (5059.89 ms). 3,741 passed, 1 skipped, 1 failed, 179 files, 244.2 s. Isolated rerun of `gateway-support-extra.test.ts` → 23 passed, 0 failed, in **1.03 s**.
+  - Run 3 — `bounded test diagnostics > never passes a DOM-producing query result directly to toBeNull` (`tests/unit/test-diagnostic-bounds.test.ts`, 5011.17 ms) and `Electron backend command registry > rejects malformed container status framing and invalid encoded sections` (`tests/unit/electron/commands-registry-environments.test.ts`, 5006.02 ms). 3,740 passed, 1 skipped, 2 failed, 361.4 s. Both owning files passed alone: 12 passed in 2.18 s, and 114 passed in 43.40 s.
+- **Widened scope:** run 3 shows the cluster is not confined to the gateway and command-registry files. `test-diagnostic-bounds.test.ts` walks every test file in the repository and needs 2.18 s even alone, so it sits close to the 5000 ms deadline before any contention is added; it is the clearest example of a deadline that is too tight for the work rather than a test that hangs. A test needing 1–2 s alone but exceeding 5 s under `--parallel=4` is being starved.
+- **Hypothesis:** All three are fixed-deadline (5000 ms) assertions in files that spawn child processes and bind loopback ports. Under the observed load they lose the CPU long enough to cross the deadline, and the gateway proxy's `502` is the same starvation surfacing as an upstream connect failure rather than a timeout. The `commands-registry-environments.test.ts` file failing on a *different* pair of tests in isolation is the strongest evidence that the deadline, not any one test's logic, is what is being hit. A fix should replace the fixed deadlines in these three files with progress-based waits, or raise them proportionally to detected host load; do not simply widen the constant, which moves the threshold without removing the race.
+- **Not attributable to the change under review:** the diff that surfaced this (`packages/protocol/src/action-defaults.ts` and the settings/toolbar wiring) touches none of these files or the code they exercise.
+
+## `live session read paths > denies an oversized blocking hook without broadcasting truncated approval data` (`tests/unit/electron/tmux-session.test.ts:1166`)
+
+- **Status:** open
+- **Date observed:** 2026-08-16
+- **Original command:** `bun run test:logged -- --name full-tests -- bun run test`
+- **Worker configuration:** `scripts/test-all.ts` ran the workspace, root/agent-support, bridges, and protocol-lockfile groups concurrently; the failure was in the root/agent-support group.
+- **Failure:** `expect(existsSync(pending)).toBe(false)` received `true` at `tmux-session.test.ts:1166` (duration: 606.40 ms). The oversized approval was correctly denied — the emitted hook response carried `permissionDecision: "deny"` — but the pending approval file had not yet been removed when the assertion ran.
+- **Suite counts:** 3,741 passed, 1 skipped, 1 failed; 3,743 tests across 181 files in 95.69 s.
+- **Isolated rerun:** `bun test tests/unit/electron/tmux-session.test.ts` → 69 passed, 0 failed, in 25.36 s.
+- **Follow-up:** Five further complete aggregate runs (`bun run test`) passed, at 94.5 s, 86.6 s, and three more; the failure has not recurred.
+- **Hypothesis:** The assertion checks the pending-approval file synchronously right after the deny response is observed, but the file removal is a separate filesystem write on the tmux hook path. Under aggregate contention the removal can land after the response. A recurrence should poll for the file's absence with a bounded diagnostic rather than asserting it in the same tick as the response, and should first confirm that the removal is genuinely ordered after the response rather than racing it in production.
+
 ## `ACP bridge > quarantines an unusable state file instead of refusing to start` (`bridges/acp-bridge/src/acp-persistence.test.ts:448`)
 
 - **Status:** open

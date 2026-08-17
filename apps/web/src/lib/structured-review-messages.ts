@@ -84,19 +84,33 @@ function showOnlyFinalPayloadMessage(
  * documents that do validate. This is deliberately shape-based rather than
  * schema-based: it withholds a document the moment it opens, long before
  * enough of it exists to validate against anything.
+ *
+ * `retainPayloadKind` names the contract a preceding `showOnlyFinal*` pass owns.
+ * That pass has already made an explicit keep-or-drop decision about every
+ * payload of that kind, so anything of it still present was kept deliberately —
+ * withholding it here would silently undo a caller's `showFinal: true`. Every
+ * other document, including arbitrary JSON that happens to parse, stays subject
+ * to withholding: no filter claimed it, so nothing has vouched for it.
  */
 export function hideMachineOutputText(
   messages: NativeMessage[],
+  options: { retainPayloadKind?: JsonPayload["kind"] } = {},
 ): NativeMessage[] {
+  const { retainPayloadKind } = options;
+  const isWithheld = (text: string): boolean => {
+    if (!isWithheldMachineOutput(text)) return false;
+    return retainPayloadKind === undefined
+      || !isPayloadKind(text, retainPayloadKind);
+  };
   return messages.flatMap((message) => {
     if (message.role !== "assistant") return [message];
     const parts = message.parts.filter((part) =>
-      part.type !== "text" || !isWithheldMachineOutput(part.content)
+      part.type !== "text" || !isWithheld(part.content)
     );
     // `content` mirrors the provider's last text part, so it is withheld on the
     // same terms; a message rendered from `content` alone would otherwise put
     // the document straight back on screen.
-    const content = isWithheldMachineOutput(message.content) ? "" : message.content;
+    const content = isWithheld(message.content) ? "" : message.content;
     if (parts.length === message.parts.length && content === message.content) {
       return [message];
     }

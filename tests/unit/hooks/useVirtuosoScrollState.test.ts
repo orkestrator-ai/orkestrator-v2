@@ -101,6 +101,7 @@ describe("useVirtuosoScrollState", () => {
     clearPersistedVirtuosoState("key-a");
     clearPersistedVirtuosoState("key-b");
     clearPersistedVirtuosoState("unrestorable-key");
+    clearPersistedVirtuosoState("header-offset-key");
   });
 
   describe("initial state", () => {
@@ -1314,6 +1315,41 @@ describe("useVirtuosoScrollState", () => {
         useVirtuosoScrollState({ persistKey }),
       );
       expect(restored.current.scrollProps.restoreStateFrom).toEqual(healthy);
+      clearPersistedVirtuosoState(persistKey);
+    });
+
+    test("restores a header-offset snapshot whose scrollTop is negative", () => {
+      const persistKey = "header-offset-key";
+      // Virtuoso's getState() records `scrollTop - headerHeight`, and restore
+      // reads it back as `{ align: "start", index: 0, offset }`. A view with a
+      // Header — the agent tab's "load earlier messages" banner — persists a
+      // negative value whenever the reader is scrolled into that header, so
+      // this is a well-formed snapshot and must survive the round trip.
+      const headerOffset: StateSnapshot = {
+        ranges: [{ startIndex: 0, endIndex: Number.POSITIVE_INFINITY, size: 34 }],
+        scrollTop: -48,
+      };
+
+      const { result, rerender } = renderHook(
+        ({ isActive }) => useVirtuosoScrollState({ isActive, persistKey }),
+        { initialProps: { isActive: true } },
+      );
+      result.current.virtuosoRef.current = {
+        scrollToIndex: () => {},
+        getState: (cb: (state: any) => void) => cb(headerOffset),
+      } as any;
+      rerender({ isActive: false });
+
+      const { result: restored } = renderHook(() =>
+        useVirtuosoScrollState({ persistKey }),
+      );
+      expect(restored.current.scrollProps.restoreStateFrom).toEqual(headerOffset);
+
+      // Not consumed-and-dropped either: the entry survives for later mounts.
+      const { result: again } = renderHook(() =>
+        useVirtuosoScrollState({ persistKey }),
+      );
+      expect(again.current.scrollProps.restoreStateFrom).toEqual(headerOffset);
       clearPersistedVirtuosoState(persistKey);
     });
 

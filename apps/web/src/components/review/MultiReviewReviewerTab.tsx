@@ -3,7 +3,10 @@ import { AlertCircle, CheckCircle2, Loader2, RefreshCw, Square } from "lucide-re
 import type { MultiReviewReviewerTranscript } from "@orkestrator/protocol/multi-review";
 import type { MultiReviewTabData } from "@/types/paneLayout";
 import { Button } from "@/components/ui/button";
-import { MessageRenderBoundary } from "@/components/chat/MessageRenderBoundary";
+import {
+  MessageRenderBoundary,
+  messageRenderResetKey,
+} from "@/components/chat/MessageRenderBoundary";
 import { NativeMessage } from "@/components/chat/NativeMessage";
 import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
 import { getNativeMessageSearchText } from "@/components/chat/native-message-search";
@@ -244,8 +247,11 @@ export function MultiReviewReviewerTab({
             // few seconds while the reviewer streams, so a frame can hold a
             // message shape no renderer has seen before. One such message must
             // degrade to its own row — not hand the entire tab to the view
-            // error boundary — and retries on the next poll's fresh snapshot.
-            <MessageRenderBoundary resetKey={message}>
+            // error boundary — and retries as soon as a poll reports that this
+            // message changed. Keyed on content, not identity: every poll
+            // rebuilds all message objects, so identity would retry a row that
+            // fails deterministically on every interval for the whole review.
+            <MessageRenderBoundary resetKey={messageRenderResetKey(message)}>
               <NativeMessage
                 message={message}
                 previousMessage={previous}

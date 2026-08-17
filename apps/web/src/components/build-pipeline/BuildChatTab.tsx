@@ -25,6 +25,7 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import * as backend from "@/lib/backend";
 import { hydrateBuildPipeline } from "@/lib/build-pipeline-persistence";
 import {
+  hideMachineOutputText,
   showOnlyFinalStructuredReviewMessage,
   showOnlyFinalVerificationMessage,
 } from "@/lib/structured-review-messages";
@@ -359,9 +360,20 @@ export function BuildChatTab({
         selectedSession?.interactionTranscript,
       );
       if (selectedSession?.phase === "review") {
-        return showOnlyFinalStructuredReviewMessage(
-          transcript,
-          structuredResultAccepted && !ownsCurrentReviewReport,
+        // Two passes, as in the Multi Review reviewer view. The first decides
+        // the fate of reports that validate; the second removes what is left —
+        // the half-written drafts a provider streams into the text channel
+        // while composing its answer, which validate as nothing and would
+        // otherwise render as a wall of raw JSON. The review prompt tells the
+        // agent this withholding happens, so both viewers have to do it.
+        return hideMachineOutputText(
+          showOnlyFinalStructuredReviewMessage(
+            transcript,
+            structuredResultAccepted && !ownsCurrentReviewReport,
+          ),
+          // A report the first pass retained as authoritative must survive the
+          // second, which cannot tell an accepted result from a draft by shape.
+          { retainPayloadKind: "structured-review" },
         );
       }
       if (selectedSession?.phase === "verify") {

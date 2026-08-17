@@ -266,4 +266,61 @@ describe("hideMachineOutputText", () => {
     // Identity matters: the renderer memoizes on the message object.
     expect(hideMachineOutputText([message])[0]).toBe(message);
   });
+
+  test("keeps a message whose only survivor is a reasoning part", () => {
+    // Withholding the text must not take the whole row with it: the thinking
+    // trace beside it is still the evidence that the reviewer is working.
+    const draft = '{"issues":[{"title":"partial"';
+    const messages = hideMachineOutputText([{
+      id: "thinking",
+      role: "assistant",
+      content: draft,
+      parts: [
+        { type: "thinking", content: "Weighing whether this is a real bug." },
+        { type: "text", content: draft },
+      ],
+      createdAt: "2026-08-17T13:00:00.000Z",
+    }]);
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.content).toBe("");
+    expect(messages[0]?.parts.map((part) => part.type)).toEqual(["thinking"]);
+  });
+
+  test("retains the payload kind a preceding filter deliberately kept", () => {
+    const accepted = JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT);
+    const draft = '{"reviewScope":{"targetBranch":"main"},"issues":[]}';
+    const messages = hideMachineOutputText([{
+      id: "draft",
+      role: "assistant",
+      content: draft,
+      parts: [{ type: "text", content: draft }],
+      createdAt: "2026-08-17T13:00:00.000Z",
+    }, {
+      id: "accepted",
+      role: "assistant",
+      content: accepted,
+      parts: [{ type: "text", content: accepted }],
+      createdAt: "2026-08-17T13:01:00.000Z",
+    }], { retainPayloadKind: "structured-review" });
+
+    // The draft validates as nothing, so no filter owns it and it is withheld.
+    // The accepted report is a structured-review payload that the preceding
+    // `showOnlyFinalStructuredReviewMessage(…, true)` pass kept on purpose.
+    expect(messages.map((message) => message.id)).toEqual(["accepted"]);
+    expect(messages[0]?.content).toBe(accepted);
+  });
+
+  test("withholds a retained kind's payload when no filter claimed it", () => {
+    const accepted = JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT);
+    // Without the option — the Multi Review viewer, which passes showFinal
+    // false, so nothing of that kind was meant to survive.
+    expect(hideMachineOutputText([{
+      id: "accepted",
+      role: "assistant",
+      content: accepted,
+      parts: [{ type: "text", content: accepted }],
+      createdAt: "2026-08-17T13:01:00.000Z",
+    }])).toHaveLength(0);
+  });
 });

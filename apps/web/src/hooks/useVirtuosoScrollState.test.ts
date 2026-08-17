@@ -29,10 +29,22 @@ describe("isRestorableStateSnapshot", () => {
     expect(isRestorableStateSnapshot(null as unknown as StateSnapshot)).toBe(false);
   });
 
-  test("rejects non-finite or negative scrollTop", () => {
+  test("rejects non-finite scrollTop", () => {
     expect(isRestorableStateSnapshot(snapshot({ scrollTop: Number.NaN }))).toBe(false);
     expect(isRestorableStateSnapshot(snapshot({ scrollTop: Infinity }))).toBe(false);
-    expect(isRestorableStateSnapshot(snapshot({ scrollTop: -1 }))).toBe(false);
+    expect(isRestorableStateSnapshot(snapshot({
+      scrollTop: Number.NEGATIVE_INFINITY,
+    }))).toBe(false);
+  });
+
+  test("accepts the negative scrollTop a view with a Header persists", () => {
+    // getState() records `scrollTop - headerHeight`, and restore feeds it back
+    // as `{ align: "start", index: 0, offset }`. A transcript that renders a
+    // Virtuoso Header — the agent tab's "load earlier messages" banner — is
+    // therefore *expected* to persist a negative value once the reader scrolls
+    // into that header, and rejecting the sign would throw the position away.
+    expect(isRestorableStateSnapshot(snapshot({ scrollTop: -48 }))).toBe(true);
+    expect(isRestorableStateSnapshot(snapshot({ scrollTop: -0.5 }))).toBe(true);
   });
 
   test("rejects ranges Virtuoso's size tree cannot order", () => {

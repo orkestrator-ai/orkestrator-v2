@@ -54,14 +54,19 @@ const persistedStates = new Map<string, PersistedEntry>();
  * recoverable degradation: the throw reaches the view's error boundary, and
  * because this map outlives the remount, every retry replays the same crash.
  * Restoring nothing merely costs the scroll position.
+ *
+ * Only the ranges are checked for orderability, because only they reach that
+ * binary search. `scrollTop` is validated for finiteness alone: `getState`
+ * records it as `scrollTop - headerHeight`, and restore feeds it straight back
+ * as `{ align: "start", index: 0, offset }` — so a view with a Virtuoso Header
+ * legitimately persists a *negative* value whenever the viewport sits inside
+ * that header, and rejecting the sign would forfeit the position it encodes.
  */
 export function isRestorableStateSnapshot(
   snapshot: StateSnapshot | undefined,
 ): snapshot is StateSnapshot {
   if (!snapshot || typeof snapshot !== "object") return false;
-  if (!Number.isFinite(snapshot.scrollTop) || snapshot.scrollTop < 0) {
-    return false;
-  }
+  if (!Number.isFinite(snapshot.scrollTop)) return false;
   if (!Array.isArray(snapshot.ranges)) return false;
   return snapshot.ranges.every((range, index, ranges) => {
     const endIndexIsValid = Number.isInteger(range?.endIndex)

@@ -3,7 +3,9 @@ import { AGENT_PLATFORMS } from "./agent-platforms";
 import {
   DEFAULT_OPENCODE_MODEL_PROVIDERS,
   DEFAULT_REASONING_ID,
+  FALLBACK_EXECUTION_PROFILE_IDS,
   FALLBACK_REASONING_ID,
+  isFallbackExecutionProfileId,
   MAX_OPENCODE_MODEL_PROVIDERS,
   fallbackReasoningId,
   isNativeAgentTabData,
@@ -98,6 +100,24 @@ describe("native agent capability table", () => {
       expect(nativeAgentCapabilities(platform).composer.speed).toBe(true);
       expect(nativeAgentCapabilities(platform).composer.mode).toBe(true);
       expect(nativeAgentCapabilities(platform).actions).toEqual({});
+    }
+  });
+});
+
+describe("fallback execution profiles", () => {
+  test("names only OpenCode's two built-in primary agents", () => {
+    // This list is the entire set of ids a client may select before the
+    // provider lists its agents. Growing it widens what
+    // `updateProjectionControls` accepts without a listing to check against,
+    // and the value is forwarded verbatim as the provider's `agent` name.
+    expect([...FALLBACK_EXECUTION_PROFILE_IDS]).toEqual(["build", "plan"]);
+  });
+
+  test("recognises exactly those ids", () => {
+    expect(isFallbackExecutionProfileId("build")).toBe(true);
+    expect(isFallbackExecutionProfileId("plan")).toBe(true);
+    for (const id of ["reviewer", "Build", "PLAN", "", " build ", "general"]) {
+      expect(isFallbackExecutionProfileId(id)).toBe(false);
     }
   });
 });

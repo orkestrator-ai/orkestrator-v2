@@ -4,6 +4,7 @@ import {
   BUILD_PIPELINE_AGENTS,
   PARKED_DISPATCH_CONFLICT_MESSAGE,
   PendingNativeAgentDispatchError,
+  isFallbackExecutionProfileId,
   nativeAgentSessionStorageKey,
   nativeCapabilities,
   nonBlank,
@@ -558,9 +559,18 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
     if (
       input.update.executionProfileId !== undefined
       && input.update.executionProfileId !== null
-      && (composer?.executionProfiles?.length ?? 0) > 0
       && !composer?.executionProfiles?.some(
         (profile: NonNullable<NativeAgentComposerState["executionProfiles"]>[number]) => profile.id === input.update.executionProfileId,
+      )
+      // An empty list means the provider's agent listing failed or has not
+      // arrived, not that the id is wrong — the compose bar still has to offer
+      // Plan/Build there, and a 400 would strand the user on whichever agent
+      // the session happened to start with. Only the two built-in ids are
+      // exempt: anything else is unverifiable *and* unguessable, and it is
+      // forwarded verbatim as the provider's `agent` name.
+      && !(
+        (composer?.executionProfiles?.length ?? 0) === 0
+        && isFallbackExecutionProfileId(input.update.executionProfileId)
       )
     ) {
       throw new Error("Native agent execution profile is invalid");

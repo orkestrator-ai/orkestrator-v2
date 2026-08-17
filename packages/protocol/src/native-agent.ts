@@ -248,6 +248,28 @@ export const EMPTY_NATIVE_AGENT_COMPOSER_STATE: NativeAgentComposerState = {
   modes: [],
 };
 
+/**
+ * The only execution-profile ids selectable before a provider lists its agents.
+ *
+ * Every other id has to be checked against `executionProfiles`, because it is
+ * forwarded verbatim as the provider's `agent` name. These two are exempt: they
+ * are OpenCode's built-in primary agents, so a client can offer them while
+ * `app.agents` is still in flight, and the launcher must offer them because the
+ * opening prompt is dispatched before any session exists to list against.
+ *
+ * Shared so the renderer's fallback pair and the backend's guard cannot drift —
+ * a widened list on one side would otherwise be silently rejected or silently
+ * accepted by the other.
+ */
+export const FALLBACK_EXECUTION_PROFILE_IDS = ["build", "plan"] as const;
+
+export type FallbackExecutionProfileId =
+  (typeof FALLBACK_EXECUTION_PROFILE_IDS)[number];
+
+export function isFallbackExecutionProfileId(id: string): boolean {
+  return (FALLBACK_EXECUTION_PROFILE_IDS as readonly string[]).includes(id);
+}
+
 export type NativeAgentConnectionState = "connecting" | "connected" | "error";
 
 /**

@@ -280,6 +280,30 @@ export function asNonBlankString(value: unknown, name: string): string {
   return normalized;
 }
 
+/**
+ * Longest execution-profile / subagent id accepted from a client.
+ *
+ * These are provider agent names (`build`, `plan`, a user's own primary agent),
+ * and the renderer already refuses anything longer. The bound matters because
+ * the id is persisted to `native-agent-sessions.json` and forwarded verbatim as
+ * the provider's `agent` name, and it is not always checked against a listing:
+ * an update that arrives before the listing does is accepted on the fallback
+ * ids alone.
+ */
+export const MAX_EXECUTION_PROFILE_ID_LENGTH = 256;
+
+export function asBoundedNonBlankString(
+  value: unknown,
+  name: string,
+  maxLength: number,
+): string {
+  const normalized = asNonBlankString(value, name);
+  if (normalized.length > maxLength) {
+    throw new Error(`Expected ${name} to be at most ${maxLength} characters`);
+  }
+  return normalized;
+}
+
 export function asDispatchNativeAgentPromptInput(
   args: JsonRecord,
 ): DispatchNativeAgentPromptInput {
@@ -368,7 +392,11 @@ export function asNativeAgentControlUpdate(
     ...(raw.executionProfileId === undefined
       ? {} : { executionProfileId: raw.executionProfileId === null
         ? null
-        : asNonBlankString(raw.executionProfileId, "executionProfileId") }),
+        : asBoundedNonBlankString(
+          raw.executionProfileId,
+          "executionProfileId",
+          MAX_EXECUTION_PROFILE_ID_LENGTH,
+        ) }),
     ...(raw.includeLocalSettings === undefined
       ? {} : { includeLocalSettings: asRequiredBoolean(raw.includeLocalSettings, "includeLocalSettings") }),
     ...(raw.promptSuggestions === undefined

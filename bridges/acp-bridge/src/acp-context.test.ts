@@ -399,6 +399,55 @@ describe("ACP bridge", () => {
 
 
 
+  // A foreground Task settles from its own completed update, so the frame that
+  // names it always arrives late. Dropping it as "not a live child" left the
+  // card an anonymous "Subagent task" with no prompt and no `agentId` — and
+  // with no `agentId` the child's transcript can never be found.
+  test("keeps the metadata of a foreground Task that settled before cursor/task", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+    }).then((response) => response.json()) as { id: string };
+    const read = async () => nativeFetch(`${base}/session/${created.id}`, { headers })
+      .then((response) => response.json()) as Promise<{
+        status: string;
+        messages: Array<{ parts: Array<Record<string, unknown>> }>;
+      }>;
+
+    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "CURSORFOREGROUNDTASK" }),
+    })).status).toBe(202);
+
+    const settled = await waitFor(
+      read,
+      (value) => value.status === "idle"
+        && value.messages.some((message) => message.parts.some((part) =>
+          part.toolUseId === "cursor-foreground-task-1"
+          && part.agentState === "finished"
+        )),
+    );
+    expect(settled.messages.flatMap((message) => message.parts).find((part) =>
+      part.toolUseId === "cursor-foreground-task-1"
+    )).toMatchObject({
+      toolState: "success",
+      agentState: "finished",
+      toolArgs: {
+        description: "Audit the OpenCode surface",
+        prompt: "Inventory every OpenCode capability and cite file:line evidence.",
+        subagent_type: "explore",
+        model: "composer-2.5",
+        agentId: "fg-child-1",
+        durationMs: 291_849,
+      },
+    });
+    // The late frame enriches the card; it may not reopen it.
+    expect(await nativeFetch(`${base}/session/${created.id}/activity`, { headers })
+      .then((response) => response.json())).toEqual({ activity: "idle" });
+  });
+
   // Each of these turns delivers a `cursor/task` the bridge must ignore. The
   // turn is allowed to finish before the assertion, so a still-active child is
   // evidence the frame was processed and rejected — not that the test raced it.

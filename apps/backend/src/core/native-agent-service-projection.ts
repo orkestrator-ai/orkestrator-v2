@@ -437,9 +437,15 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         selectedModel?.defaultReasoningId,
       )
       ?? selectedModel?.defaultReasoningId;
-    const supportsSpeed = providerComposer?.fastModeAvailable === true
-      || selectedModel?.supportsSpeed === true;
     const capabilities = nativeCapabilities(input.agent);
+    // The compose bar renders `fastModeAvailable` directly, so the table has to
+    // be consulted here and not only in `nativeComposerControls`. Without it a
+    // provider that grew a fast surface would show the toggle on a platform the
+    // table says has none, and `updateProjectionControls` would then accept the
+    // patch because its own guard reads this same field.
+    const supportsSpeed = capabilities.composer.speed
+      && (providerComposer?.fastModeAvailable === true
+        || selectedModel?.supportsSpeed === true);
     return {
       models,
       ...(selectedModel ? { selectedModelId: selectedModel.id } : {}),
@@ -466,13 +472,18 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           ? providerComposer.modes
           : [{ id: "build", label: "Build" }, { id: "plan", label: "Plan" }]
         : [],
-      ...(providerComposer?.executionProfiles?.length ? {
-        executionProfiles: providerComposer.executionProfiles,
-      } : {}),
-      ...(providerControls?.executionProfileId
-        ?? session.controls?.executionProfileId
-        ?? providerComposer?.selectedExecutionProfileId
-        ?? undefined
+      // Execution profiles were previously copied across whenever the provider
+      // reported any, so a platform whose table says `executionProfile: false`
+      // would grow the control the moment its bridge started listing agents.
+      ...(capabilities.composer.executionProfile
+        && providerComposer?.executionProfiles?.length
+        ? { executionProfiles: providerComposer.executionProfiles }
+        : {}),
+      ...(capabilities.composer.executionProfile
+        && (providerControls?.executionProfileId
+          ?? session.controls?.executionProfileId
+          ?? providerComposer?.selectedExecutionProfileId
+          ?? undefined)
         ? {
             selectedExecutionProfileId: providerControls?.executionProfileId
               ?? session.controls?.executionProfileId
@@ -818,6 +829,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         composerControls: nativeComposerControls(
           composer,
           snapshot.status === "running" || blocked,
+          capabilities,
         ),
         composer,
         capabilities,

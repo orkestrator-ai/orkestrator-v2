@@ -334,7 +334,8 @@ describe("OpenCode provider runtime", () => {
         ],
         defaultReasoningId: "default",
         supportsSpeed: false,
-        supportsMode: true,
+        // OpenCode has primary agents, not a Build/Plan permission mode.
+        supportsMode: false,
         contextWindow: 200_000,
         supportsImageInput: true,
       }]);

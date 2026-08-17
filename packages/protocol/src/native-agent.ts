@@ -395,6 +395,11 @@ export function nativeAgentCapabilities(
       attachments: { files: false, images: true },
       fork: false,
       slashCommands: false,
+      // `speed` and `mode` stay true because both agents really do own them:
+      // Cursor drives fast through a `model_config` config option, Grok through
+      // a sibling `…-fast` model id, and both announce session modes. They are
+      // per-build, not per-platform, so the flag means "this platform may offer
+      // it" and the live composer's `fastModeAvailable` / `modes` decides.
       actions: {},
     };
   }
@@ -416,7 +421,14 @@ export function nativeAgentCapabilities(
       ...capabilities,
       composer: {
         ...capabilities.composer,
+        // No fast surface anywhere in the SDK; both OpenCode catalogues report
+        // `supportsSpeed: false` for every model.
         speed: false,
+        // OpenCode has primary agents, not a Claude/Codex permission mode. A
+        // Build/Plan pair here would be a second execution-profile picker whose
+        // selection is sent as the SDK `agent` name and is then overridden by
+        // the real profile (`executionAgent ?? mode`).
+        mode: false,
         executionProfile: true,
       },
       actions: { compact: true, undo: true, redo: true, share: true },

@@ -154,7 +154,8 @@ export function normalizeOpenCodeComposerCatalog(
         ],
         defaultReasoningId: "default",
         supportsSpeed: false,
-        supportsMode: true,
+        // OpenCode has primary agents, not a Build/Plan permission mode.
+        supportsMode: false,
         ...(contextWindow ? { contextWindow } : {}),
         ...(typeof input?.image === "boolean"
           ? { supportsImageInput: input.image }

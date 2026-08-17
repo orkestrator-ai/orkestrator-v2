@@ -230,7 +230,7 @@ export function UnassignedNativeAgentComposer({
       modelId?: string;
       reasoningId?: string;
       fastMode: boolean;
-      mode: "build" | "plan";
+      mode?: "build" | "plan";
     },
   ) => void;
   onResume: (platform: AgentPlatform) => void;
@@ -317,6 +317,11 @@ export function UnassignedNativeAgentComposer({
     ?? platformModels[0];
   const canConfigureReasoning = selectedAdapter?.capabilities.composer.reasoning === true;
   const canConfigureMode = selectedAdapter?.capabilities.composer.mode === true;
+  // The catalogue's `supportsSpeed` describes the model; the table describes the
+  // platform. Both have to allow it, so a catalogue entry cannot reintroduce a
+  // toggle the platform has no way to apply.
+  const canConfigureSpeed = selectedAdapter?.capabilities.composer.speed === true
+    && selectedModel?.supportsSpeed === true;
   const selectedReasoningId = resolveReasoningId(
     selectedModel?.reasoning ?? [],
     draft.reasoningId,
@@ -431,8 +436,10 @@ export function UnassignedNativeAgentComposer({
     onSend(platform, prompt, {
       modelId: selectedModel?.id,
       reasoningId: selectedReasoningId,
-      fastMode: effectiveFastMode,
-      mode: draft.mode,
+      fastMode: canConfigureSpeed && effectiveFastMode,
+      // A platform with no conversation mode must not pin one on the locked
+      // tab. OpenCode would receive it as the SDK `agent` name.
+      ...(canConfigureMode ? { mode: draft.mode } : {}),
     });
   };
 
@@ -565,7 +572,7 @@ export function UnassignedNativeAgentComposer({
                 selectedReasoningLabel={selectedReasoningLabel}
                 onReasoningChange={canConfigureReasoning ? (reasoningId) => updateDraft(sessionKey, { reasoningId }) : undefined}
                 fastModeEnabled={effectiveFastMode}
-                fastModeAvailable={selectedModel?.supportsSpeed === true}
+                fastModeAvailable={canConfigureSpeed}
                 onFastModeChange={(fastMode) => updateDraft(sessionKey, { fastMode })}
                 disabled={disabled}
               />

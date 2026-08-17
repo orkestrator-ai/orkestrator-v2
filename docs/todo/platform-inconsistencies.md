@@ -74,7 +74,7 @@ verified. **partial** = present but weaker, different, or vendor-dependent.
 | Model | full | full (`/model` into TUI) | full | full | full | full |
 | Reasoning | full | full (`switchEffort`) | full | full | full | full |
 | Fast / speed | full | full (`switchFastMode` / `/fast`) | full | partial | partial | **none** |
-| Build / plan mode | full | full (`permission_mode`) | full | full | full | **partial** (maps to agent name) |
+| Build / plan mode | full | full (`permission_mode`) | full | full | full | **none** (agents, not modes) |
 | Execution profile | full (Agent Info) | **partial** (`/agents` TUI only) | none | none | none | full |
 | Local settings / prompt suggestions | full | **none** | none | none | none | none |
 | Compact | full | **partial** (`/compact` typed) | full | none | none | full |
@@ -104,12 +104,18 @@ calls `/session/list` + `/session/resume`, but ACP returns **410** when the
 vendor does not announce `session/list` **and** `loadSession`. That is “unknown /
 not exposed by this agent build”, not “Orkestrator forbids it”.
 
-Cursor/Grok speed is partial: the table always says `speed: true`; the toggle
-only appears if the ACP composer reports `fastModeAvailable`.
+Cursor/Grok speed is partial: the table says `speed: true`; the toggle only
+appears if the ACP composer reports `fastModeAvailable`. That pairing is
+deliberate and was kept — both agents really do own a fast surface (Cursor a
+`model_config` config option, Grok a sibling `…-fast` model id), it is just
+per-agent-build rather than per-platform. The flag means “this platform may
+offer it”.
 
-OpenCode mode is partial: the table inherits `mode: true`; projection injects
-Build/Plan; send maps `mode` onto OpenCode’s **agent** field
-(`executionAgent ?? mode`). That is not Claude/Codex permission-mode.
+OpenCode mode **was** partial: the table inherited `mode: true`; projection
+injected Build/Plan; send mapped `mode` onto OpenCode’s **agent** field
+(`executionAgent ?? mode`). That is not Claude/Codex permission-mode, so
+OpenCode is now `composer.mode: false` and the dropdown is gone. Its execution
+profile picker is the real control and already lists the primary agents.
 
 `composer.provider` is `true` in the rich default for every native platform, but
 a locked native tab never offers a platform switch. Only OpenCode’s model ids
@@ -209,27 +215,44 @@ child that already exited.
 
 - `composer.provider: true` for everyone; a locked tab never switches platform.
   Only OpenCode’s `provider/model` ids are a real catalogue.
-- OpenCode `composer.mode: true` injects Build/Plan, then sends that as the SDK
-  **agent** name. An execution profile can silently override it
-  (`executionAgent ?? mode ?? "build"`). OpenCode snapshots do not publish modes.
-- Cursor/Grok `speed: true` even when the vendor has no fast option; UI hides
-  via `fastModeAvailable`.
-- Speed is not gated by `capabilities.composer.speed` in projection. OpenCode’s
-  table sets `speed: false`, but the path keys off `fastModeAvailable` /
-  `supportsSpeed`. Today the catalog hardcodes `supportsSpeed: false`, so the
-  leak is latent.
+- ~~OpenCode `composer.mode: true` injects Build/Plan, then sends that as the SDK
+  **agent** name.~~ **Fixed:** OpenCode is `composer.mode: false`, so
+  `projectionComposer` no longer injects the pair and `updateProjectionControls`
+  rejects a mode patch (its guard reads the projected `modes` list). Both
+  OpenCode catalogues also report `supportsMode: false`.
+- Cursor/Grok `speed: true` even when the vendor build has no fast option; UI
+  hides via `fastModeAvailable`. **Kept deliberately** — both agents do own a
+  fast surface, so the flag is “may offer” and the composer decides. This is now
+  stated in the table and asserted in `native-agent.test.ts`.
+- ~~Speed is not gated by `capabilities.composer.speed` in projection.~~
+  **Fixed:** `projectionComposer` ands the table into `fastModeAvailable`, which
+  closes the latent leak at the surface the compose bar actually reads. The
+  unassigned composer ands it into the catalogue's `supportsSpeed` too.
 - Agent Info still hardcodes `provider === "claude"|"opencode"|"codex"` for
   rewind / undo / share / review / steer instead of `capabilities.actions.*`.
   Compact and fork *do* read the capability flag, with a provider-string
   fallback if projection is missing.
-- `nativeComposerControls()` never reads the capability table and can emit
-  execution-profile / local-settings / prompt-suggestions the compose bar does
-  not render. The native tab never consumes `composerControls`.
-- Execution profiles are copied onto the projection whenever the provider
-  reports them, **not** when `composer.executionProfile` is true — so a
-  Codex/ACP agent that listed agents would get a control the table says is
-  false. Local settings and prompt suggestions *are* capability-gated in
-  `projectionComposer`.
+- ~~`nativeComposerControls()` never reads the capability table.~~ **Fixed:** it
+  now takes capabilities as a required argument and skips speed / mode /
+  execution-profile / local-settings / prompt-suggestions when the flag is
+  false. The native tab still does not consume `composerControls`; that half of
+  §4.1 is open.
+- ~~Execution profiles are copied onto the projection whenever the provider
+  reports them.~~ **Fixed:** `projectionComposer` gates both
+  `executionProfiles` and `selectedExecutionProfileId` on
+  `composer.executionProfile`, matching how local settings and prompt
+  suggestions were already handled.
+- **Still open, same class:** the Build/Plan default is injected for any platform
+  whose table says `mode: true` but whose provider publishes no `modes`. That is
+  correct for Claude (mode rides on the prompt as `permissionMode`) and Codex
+  (mode lives in `/session/:id/config`), because neither bridge publishes a
+  `modes` array. It is wrong for ACP: `composer.modes` there is derived from the
+  vendor's `availableModeIds`, so an agent build that announces none still gets a
+  dropdown whose selection `buildConfigCalls` silently drops. Fixing it needs a
+  way to distinguish "provider does not own this list" from "provider owns it and
+  says it is empty" without flickering the control off while an ACP session's
+  config is still being restored (`acp-persistence.ts` starts at
+  `availableModeIds: {}`).
 
 ### 3.4 Session-action islands
 
@@ -321,14 +344,19 @@ Tmux (including the backend queue drainer for still-generated timestamp names).
 These are places the capability table, projection, and UI disagree. They are
 cheap to fix relative to vendor protocol work.
 
-1. `nativeComposerControls` ignores the capability table and the native tab
-   ignores `composerControls`.
-2. Projection injects Build/Plan whenever `composer.mode` is true, including
-   OpenCode, which has no `updateInteractiveControls` and treats mode as an
-   agent name.
-3. Speed is not gated by `capabilities.composer.speed`.
-4. Execution-profile / local-settings / prompt-suggestions: table vs compose bar
-   vs Agent Info vs generator are three different gates.
+1. ~~`nativeComposerControls` ignores the capability table~~ — **fixed**; it now
+   takes capabilities. The native tab still ignores `composerControls`, so
+   §5.1(6) (render it or stop generating it) remains open.
+2. ~~Projection injects Build/Plan whenever `composer.mode` is true, including
+   OpenCode~~ — **fixed for OpenCode** via `composer.mode: false`. Still open for
+   an ACP build that publishes no `modes`; see the last bullet of §3.3.
+3. ~~Speed is not gated by `capabilities.composer.speed`~~ — **fixed** in
+   `projectionComposer`, `nativeComposerControls`, and the unassigned composer.
+4. ~~Execution-profile / local-settings / prompt-suggestions: table vs compose bar
+   vs Agent Info vs generator are three different gates.~~ **Mostly fixed** — the
+   projection and the generator now share the table's gate. Agent Info is the
+   remaining separate gate; it still ORs the provider string against
+   `composer.executionProfiles` (§5.1(5)).
 5. `composer.provider: true` for everyone; native picker is
    `platformSelectionLocked`.
 6. Resume advertised for ACP even when the vendor cannot list sessions (410).
@@ -350,17 +378,21 @@ cheap to fix relative to vendor protocol work.
 
 ### 5.1 Cheap — table and UI alignment
 
-1. Pass capabilities into `nativeComposerControls` and skip speed / mode /
-   executionProfile / localSettings / promptSuggestions when the flag is false.
-   Stop injecting default Build/Plan for OpenCode.
-2. Set OpenCode `composer.mode: false` in the table, or rename OpenCode’s
-   control to execution profile only. Today the Build/Plan dropdown is a second
-   agent picker.
+1. **Done.** Capabilities are passed into `nativeComposerControls`, which skips
+   speed / mode / executionProfile / localSettings / promptSuggestions when the
+   flag is false. The same gates were applied to `projectionComposer`, because
+   the compose bar reads `composer` directly and never reads the generated
+   array — gating only the generator would have changed nothing a user can see.
+   OpenCode no longer gets an injected Build/Plan.
+2. **Done.** OpenCode is `composer.mode: false`; the execution-profile picker is
+   its only agent selector.
 3. Set `composer.provider: false` except OpenCode, or document it as
    launch-dialog only.
-4. Set Cursor/Grok `composer.speed: false` by default and let ACP
-   `fastModeAvailable` promote it, *or* keep the flag as “may offer” and stop
-   treating table `true` as “always show”.
+4. **Decided: keep the flag as “may offer”.** Cursor and Grok both really do own
+   a fast surface, so `composer.speed: false` would have removed a working
+   control. Table `true` is no longer treated as “always show” anywhere: every
+   speed path now requires the table *and* a live `fastModeAvailable` /
+   `supportsSpeed`.
 5. Gate Agent Info rewind / undo / share / review / steer / localSettings on
    `capabilities.actions` / `composer.*`, and drop the `?? provider === …`
    fallbacks.
@@ -469,8 +501,9 @@ research. Close the honesty gaps first.
 
 1. **Document or align Claude Native vs Tmux permissions and tab-close.** Same
    label, different safety and resume story. Product decision before code.
-2. **Stop overclaiming composer/resume flags** (OpenCode mode, ACP resume,
-   `provider: true`, Agent Info provider-string fallbacks).
+2. **Stop overclaiming composer/resume flags.** OpenCode mode and the
+   composer-control gates are done (§5.1(1)(2)(4)). Still open: ACP resume,
+   `provider: true`, and the Agent Info provider-string fallbacks.
 3. **Attachment honesty** (menu copy + dispatch re-check) for Codex / ACP /
    Tmux.
 4. **Decide whether Cursor/Grok should grow compact / slash / fork** after

@@ -1699,6 +1699,47 @@ test("MultiReviewService leaves a settled reviewer alone and releases its stop c
   });
 });
 
+test("MultiReviewService keeps its claim when a stale stop targets a settled reviewer", async () => {
+  const provider = new Provider();
+  provider.statusValue = "idle";
+  // Reviewer 1 stays running, so the workflow is still supervised while the
+  // command lands: exactly the shape of a click on a Stop button rendered from
+  // a snapshot taken before reviewer 2 finished.
+  provider.statusOverrides.set("session-1", "running");
+  await withService("env-stop-stale", provider, async ({ service, storage, start, snapshot }) => {
+    const started = await start([
+      { agent: "claude", model: "opus" },
+      { agent: "claude", model: "sonnet" },
+    ]);
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.reviewers[1]?.status === "completed";
+    });
+    const running = (await snapshot(started.id))!;
+    expect(running.phase).toBe("reviewing");
+    const disposalsBefore = provider.disposeCalls;
+
+    const noop = await service.stopReviewer(started.id, running.reviewers[1]!.id);
+    expect(noop.reviewers[1]?.status).toBe("completed");
+
+    // Releasing here would drop the lease, forget every live progress clock and
+    // dispose the provider that reviewer 1 is still running on.
+    const claim = await storage.claimMultiReviewController(started.id, "other-owner", 15_000);
+    expect(claim.granted).toBe(false);
+    expect(provider.disposeCalls).toBe(disposalsBefore);
+    expect((await snapshot(started.id))?.reviewers[0]?.status).toBe("running");
+
+    // The same holds for a reviewer id that no longer resolves.
+    await expect(service.stopReviewer(started.id, "not-a-reviewer"))
+      .rejects.toThrow("Multi review reviewer not found");
+    const afterError = await storage.claimMultiReviewController(
+      started.id, "other-owner-2", 15_000,
+    );
+    expect(afterError.granted).toBe(false);
+    expect(provider.disposeCalls).toBe(disposalsBefore);
+  }, { serviceOptions: { progressProbeIntervalMs: 0 } });
+});
+
 test("MultiReviewService reports a fully stopped panel as stopped, not as a bad report", async () => {
   const provider = new Provider();
   provider.statusValue = "running";
@@ -1800,6 +1841,52 @@ test("MultiReviewService warns about a stalled reviewer and retires the warning 
       return (await snapshot(started.id))?.reviewers[0]?.stalledSince === undefined;
     });
     expect((await snapshot(started.id))?.reviewers[0]?.progressAt).toBeDefined();
+  }, {
+    serviceOptions: {
+      progressProbeIntervalMs: 0,
+      stallWarningMs: 0,
+      stallAbandonMs: 60 * 60_000,
+    },
+  });
+});
+
+test("MultiReviewService keeps a durable stall warning across a restart baseline", async () => {
+  const provider = new Provider(false);
+  provider.statusValue = "running";
+  provider.messagesValue = [{ id: "assistant-1", role: "assistant", content: "Reading" }];
+  await withService("env-stall-restart", provider, async ({ service, storage, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.reviewers[0]?.stalledSince !== undefined;
+    });
+    const warned = (await snapshot(started.id))!.reviewers[0]!;
+
+    // A restart loses the in-memory fingerprints but not the durable clock, so
+    // the next probe reports a fresh baseline for a session that never moved.
+    await service.shutdown();
+    const restarted = new MultiReviewService(
+      storage,
+      async () => { throw new Error("unexpected command"); },
+      {
+        autoAdvance: false,
+        provider: async () => provider,
+        progressProbeIntervalMs: 0,
+        stallWarningMs: 0,
+        stallAbandonMs: 60 * 60_000,
+      },
+    );
+    try {
+      await restarted.advanceNow(started.id);
+    } finally {
+      await restarted.shutdown();
+    }
+
+    // Restarting is not evidence of progress: only an observed transcript
+    // change may retire the notice the user is looking at.
+    const after = (await snapshot(started.id))!.reviewers[0]!;
+    expect(after.status).toBe("running");
+    expect(after.stalledSince).toBe(warned.stalledSince!);
   }, {
     serviceOptions: {
       progressProbeIntervalMs: 0,

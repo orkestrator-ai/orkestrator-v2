@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import {
   MultiReviewProgressTracker,
+  baselineProgressAt,
   noProgressElapsedMs,
   progressFingerprint,
   stalledMinutes,
@@ -124,4 +125,27 @@ test("the stall clock falls back to the start time until progress is seen", () =
 test("stalled minutes never round a real stall down to zero", () => {
   expect(stalledMinutes(1_000)).toBe(1);
   expect(stalledMinutes(45 * 60_000)).toBe(45);
+});
+
+test("restart grace is bounded so repeated restarts cannot postpone the backstop", () => {
+  const now = Date.parse("2026-08-17T02:00:00.000Z");
+  const warningMs = 10 * 60_000;
+
+  // A session with no durable clock has nothing to bound: `noProgressElapsedMs`
+  // falls back to `startedAt`, which is the later timestamp for a new session.
+  expect(baselineProgressAt(undefined, warningMs, now)).toBe("2026-08-17T02:00:00.000Z");
+  expect(baselineProgressAt("not-a-date", warningMs, now)).toBe("2026-08-17T02:00:00.000Z");
+
+  // A session that was already wedged for two hours keeps everything beyond one
+  // warning interval, so a restart costs the backstop 10 minutes, not 2 hours.
+  expect(baselineProgressAt("2026-08-17T00:00:00.000Z", warningMs, now))
+    .toBe("2026-08-17T01:50:00.000Z");
+  // A clock newer than the floor is never moved forward.
+  expect(baselineProgressAt("2026-08-17T01:59:00.000Z", warningMs, now))
+    .toBe("2026-08-17T01:59:00.000Z");
+  // A zero or negative warning interval grants no grace at all.
+  expect(baselineProgressAt("2026-08-17T00:00:00.000Z", 0, now))
+    .toBe("2026-08-17T02:00:00.000Z");
+  expect(baselineProgressAt("2026-08-17T00:00:00.000Z", -1_000, now))
+    .toBe("2026-08-17T02:00:00.000Z");
 });

@@ -14,8 +14,11 @@
  * right clock, and a wall-clock turn budget the wrong one — the latter would cut
  * off a legitimately long review.
  *
- * The provider read is bounded to the latest message by the caller, and it is
- * still throttled per session rather than run on every supervisor tick.
+ * The caller asks for the newest message only. A provider whose transport can
+ * fetch a bounded tail does so; the HTTP bridge route has no tail parameter, so
+ * its provider trims the response and the read still crosses the wire in full.
+ * Either way the probe is throttled per session rather than run on every
+ * supervisor tick, and only a fixed-size digest of the tail is retained.
  *
  * It reads a tab-facing route, which is a liveness touch. That is deliberate and
  * safe here, unlike in a background reconciler: the supervisor owns these
@@ -183,4 +186,28 @@ export function noProgressElapsedMs(
 
 export function stalledMinutes(elapsedMs: number): number {
   return Math.max(1, Math.round(elapsedMs / 60_000));
+}
+
+/**
+ * The progress timestamp granted to a session whose in-memory baseline was lost.
+ *
+ * The first read after a restart cannot be compared against activity made while
+ * the process was down, so the newly observed state is given grace rather than
+ * being judged against an unknowably old digest. The grace is bounded to one
+ * warning interval and never moves an existing clock forward past that floor: a
+ * session that was already wedged for hours keeps everything beyond the floor,
+ * so restarting the backend cannot postpone the abandon backstop indefinitely.
+ *
+ * A session with no durable clock yet has nothing to bound and starts from now;
+ * `noProgressElapsedMs` still falls back to `startedAt`, which is the later of
+ * the two for a session that has only just begun.
+ */
+export function baselineProgressAt(
+  progressAt: string | undefined,
+  stallWarningMs: number,
+  now: number = Date.now(),
+): string {
+  const existing = progressAt ? Date.parse(progressAt) : Number.NaN;
+  if (!Number.isFinite(existing)) return new Date(now).toISOString();
+  return new Date(Math.max(existing, now - Math.max(0, stallWarningMs))).toISOString();
 }

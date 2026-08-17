@@ -941,6 +941,37 @@ describe("MultiReviewReviewerTab stop control", () => {
     expect(screen.getByRole("button", { name: "Stop this reviewer" })).toBeTruthy();
   });
 
+  test("lets a gone workflow displace a stale stop failure", async () => {
+    let gone = false;
+    const loadTranscript = mock(async () => {
+      if (gone) throw new Error("Multi review workflow not found: multi-1");
+      return runningSnapshot;
+    });
+    const stopReviewer = mock(async () => {
+      throw new Error("The Multi Review controller is busy");
+    });
+
+    render(<MultiReviewReviewerTab
+      data={{
+        environmentId: "env-1", workflowId: "multi-1", reviewerId: "reviewer-1", isLocal: true,
+      }}
+      isActive
+      loadTranscript={loadTranscript}
+      stopReviewer={stopReviewer}
+    />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Stop this reviewer" }));
+    expect(await screen.findByText(/controller is busy/)).toBeTruthy();
+
+    // The action failure outranks an ordinary transcript failure, but a gone
+    // workflow is terminal for this view: reporting the stale stop error there
+    // would hide why the transcript stopped refreshing.
+    gone = true;
+    fireEvent.click(screen.getByRole("button", { name: "Refresh reviewer transcript" }));
+    expect(await screen.findByText(/Multi review workflow not found/)).toBeTruthy();
+    expect(screen.queryByText(/controller is busy/) === null).toBe(true);
+  });
+
   test("fences out an older running poll after a reviewer is stopped", async () => {
     let resolveStale!: (value: MultiReviewReviewerTranscript) => void;
     const stalePoll = new Promise<MultiReviewReviewerTranscript>((resolve) => {

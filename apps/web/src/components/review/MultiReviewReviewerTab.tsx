@@ -158,7 +158,13 @@ export function MultiReviewReviewerTab({
   });
 
   const running = snapshot?.status === "running";
-  const error = actionError ?? transcriptError;
+  // A refused action stays visible until the user acts again, so an ordinary
+  // transcript failure must not displace it. A gone workflow or reviewer is the
+  // exception: it makes the action failure moot and is terminal for this view,
+  // so reporting the stale action error instead would hide why polling stopped.
+  const error = transcriptError !== null && isGoneError(transcriptError)
+    ? transcriptError
+    : actionError ?? transcriptError;
   const label = snapshot ? AGENT_LABELS[snapshot.agent] : "Reviewer";
   const stoppable = snapshot?.status === "running" || snapshot?.status === "pending";
   const statusLine = snapshot

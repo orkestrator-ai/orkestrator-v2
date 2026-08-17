@@ -43,6 +43,7 @@ import {
   DEFAULT_STALL_WARNING_MS,
   MultiReviewProgressTracker,
   PROGRESS_TRANSCRIPT_TAIL_MESSAGES,
+  baselineProgressAt,
   noProgressElapsedMs,
   stalledMinutes,
 } from "./multi-review-progress.js";
@@ -476,10 +477,15 @@ export class MultiReviewService {
         }
         return saved;
       } finally {
-        // A stale/no-op command is a short-lived claim. In particular, a stop
-        // that arrives after `ready` must not resurrect a renewable lease on a
-        // workflow the background supervisor no longer visits.
-        if (!handedToSupervisor) await this.release(workflow, token);
+        // A stale/no-op command against a settled workflow is a short-lived
+        // claim: a stop that arrives after `ready` must not resurrect a
+        // renewable lease on a workflow the background supervisor no longer
+        // visits. A supervised workflow keeps its claim, because `release` also
+        // forgets every live progress clock and drops the workflow's provider
+        // users — the reviewers still running are using both.
+        if (!handedToSupervisor && !isSupervisedPhase(workflow.phase)) {
+          await this.release(workflow, token);
+        }
       }
     });
   }
@@ -1005,10 +1011,16 @@ export class MultiReviewService {
     if (!observation.probed) return "continue";
     if (observation.baselineEstablished) {
       // The first read after a backend restart may already contain progress made
-      // while this process was down. Give that newly observed state a fresh,
-      // durable grace clock instead of comparing it to an unknowably old digest.
-      reviewer.progressAt = nowIso();
-      delete reviewer.stalledSince;
+      // while this process was down, so the newly observed state gets grace
+      // instead of being judged against an unknowably old digest. The grace is
+      // bounded to one warning interval: a reviewer that was already wedged for
+      // hours keeps the rest of its elapsed time, so a restart cannot postpone
+      // the abandon backstop indefinitely.
+      reviewer.progressAt = baselineProgressAt(reviewer.progressAt, this.stallWarningMs());
+      // Only observed progress retires a durable warning. A restart is not
+      // evidence of progress, so a still-stalled reviewer keeps its notice.
+      const graced = noProgressElapsedMs(reviewer.progressAt, reviewer.startedAt);
+      if (graced === null || graced < this.stallWarningMs()) delete reviewer.stalledSince;
       await this.save(workflow, token);
       return "continue";
     }
@@ -1061,8 +1073,10 @@ export class MultiReviewService {
     await this.assertFence(workflow.id, token);
     if (!observation.probed) return;
     if (observation.baselineEstablished) {
-      session.progressAt = nowIso();
-      delete session.stalledSince;
+      // Bounded restart grace, for the same reason as a reviewer's.
+      session.progressAt = baselineProgressAt(session.progressAt, this.stallWarningMs());
+      const graced = noProgressElapsedMs(session.progressAt, session.startedAt);
+      if (graced === null || graced < this.stallWarningMs()) delete session.stalledSince;
       await this.save(workflow, token);
       return;
     }

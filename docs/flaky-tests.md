@@ -33,8 +33,8 @@ history rather than two partial ones.
 - **Isolated rerun:** `bun run test:logged -- --name fix-web-review-tests-rerun -- bun --cwd=apps/web test src/components/review/MultiReviewTab.test.tsx --only-failures` → passed in 5.2 seconds before the aggregate run.
 - **Hypothesis:** Aggregate scheduling allowed the transcript poll to finish after the stop rejection and clear the component's shared error state before the assertion observed it.
 - **Root cause:** Transcript reads and reviewer actions shared one `error` state. Any successful poll cleared a stop-action failure even though the action had not succeeded.
-- **Fix:** Track transcript-read and action failures separately; transcript polling clears only transcript failures, while the action failure remains visible until another action or tab identity change. The regression test now forces a successful refresh after the rejected stop and asserts the action error remains.
-- **Verification:** The owning component test, web typecheck, aggregate suite, and browser smoke are rerun as part of this change.
+- **Fix:** Track transcript-read and action failures separately; transcript polling clears only transcript failures, while the action failure remains visible until another action or tab identity change. The one exception is a gone workflow or reviewer, which is terminal for the view and displaces the stale action failure rather than hiding why polling stopped. The regression test now forces a successful refresh after the rejected stop and asserts the action error remains; a sibling test pins the gone-workflow exception.
+- **Verification:** The owning component test and the web typecheck were rerun for this change, followed by the aggregate suite. A real-browser pass over the reviewer tab has not been run against this fix and is still outstanding.
 
 ## 2026-08-16 resolution sweep
 

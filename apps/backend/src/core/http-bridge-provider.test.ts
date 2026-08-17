@@ -288,6 +288,32 @@ describe("HTTP bridge provider", () => {
     }
   });
 
+  test("returns only the newest messages a bounded read asked for", async () => {
+    const { provider } = httpProvider((url) => {
+      if (url.endsWith("/messages")) {
+        return Response.json({
+          messages: [{ id: "a" }, { id: "b" }, { id: "c" }],
+        });
+      }
+      return Response.json({});
+    });
+
+    // The bridge route has no tail parameter, so a caller that asked for the
+    // newest entry must not be handed the whole transcript to compare or retain.
+    await expect(provider.messages("session-1", { limit: 1 })).resolves.toEqual([{ id: "c" }]);
+    await expect(provider.messages("session-1", { limit: 2 }))
+      .resolves.toEqual([{ id: "b" }, { id: "c" }]);
+    // A limit above the transcript length is satisfied by the whole transcript.
+    await expect(provider.messages("session-1", { limit: 10 }))
+      .resolves.toEqual([{ id: "a" }, { id: "b" }, { id: "c" }]);
+    await expect(provider.messages("session-1", {}))
+      .resolves.toEqual([{ id: "a" }, { id: "b" }, { id: "c" }]);
+    // A nonsensical bound fails loudly rather than silently reading everything.
+    await expect(provider.messages("session-1", { limit: 0 })).rejects.toThrow(RangeError);
+    await expect(provider.messages("session-1", { limit: -1 })).rejects.toThrow(RangeError);
+    await expect(provider.messages("session-1", { limit: 1.5 })).rejects.toThrow(RangeError);
+  });
+
   test("reads status and messages, dispatches prompts, and aborts sessions", async () => {
     const { provider, requests } = httpProvider((url) => {
       if (url.endsWith("/session/session%2F1")) {

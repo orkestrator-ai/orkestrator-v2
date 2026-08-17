@@ -1,5 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
-import { AlertCircle, CheckCircle2, Circle, Loader2, RefreshCw, Square, Wrench } from "lucide-react";
+import {
+  AlertCircle,
+  AlertTriangle,
+  CheckCircle2,
+  Circle,
+  Loader2,
+  RefreshCw,
+  Square,
+  Wrench,
+} from "lucide-react";
 import type { MultiReviewPhase, MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import type { MultiReviewTabData } from "@/types/paneLayout";
 import { Button } from "@/components/ui/button";
@@ -89,6 +98,18 @@ export function reviewerStatusNote(
     };
   }
   return null;
+}
+
+export function reviewerProgressSummary(
+  reviewers: MultiReviewWorkflow["reviewers"],
+): string {
+  const completed = reviewers.filter((reviewer) => reviewer.status === "completed").length;
+  const stopped = reviewers.filter((reviewer) => reviewer.status === "cancelled").length;
+  const activePanelSize = reviewers.length - stopped;
+  const completion = activePanelSize === 0
+    ? `${completed} complete`
+    : `${completed}/${activePanelSize} complete`;
+  return stopped === 0 ? completion : `${completion} · ${stopped} stopped`;
 }
 
 const NOTE_TONE_CLASS = {
@@ -235,6 +256,8 @@ function MultiReviewOverviewTab({
 
   const busy = workflow.phase === "reviewing" || workflow.phase === "consolidating"
     || workflow.phase === "fixing" || workflow.phase === "cancelling";
+  const fixSessionStalled = (workflow.phase === "consolidating" || workflow.phase === "fixing")
+    && workflow.fixSession?.stalledSince !== undefined;
   const canCancel = workflow.phase !== "completed" && workflow.phase !== "cancelled"
     && workflow.phase !== "cancelling" && workflow.phase !== "interactive";
 
@@ -247,7 +270,9 @@ function MultiReviewOverviewTab({
           </span>
           <div className="min-w-0">
             <h1 className="truncate text-sm font-semibold">Multi Review</h1>
-            <p className="truncate text-xs text-muted-foreground">{phaseCopy(workflow.phase)}</p>
+            <p className={`truncate text-xs ${fixSessionStalled ? "text-amber-500" : "text-muted-foreground"}`}>
+              {fixSessionStalled ? "No activity from the fix model" : phaseCopy(workflow.phase)}
+            </p>
           </div>
         </div>
         {busy && <Loader2 className="size-4 shrink-0 animate-spin text-cyan-400" />}
@@ -255,10 +280,30 @@ function MultiReviewOverviewTab({
 
       <ScrollArea className="min-h-0 flex-1">
         <div className="mx-auto w-full max-w-5xl space-y-4 p-4 sm:p-6">
+          {fixSessionStalled && (
+            <section
+              role="status"
+              aria-live="polite"
+              className="flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/8 p-4"
+            >
+              <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-amber-500/12 text-amber-500">
+                <AlertTriangle className="size-4" />
+              </span>
+              <div className="min-w-0">
+                <h2 className="text-sm font-semibold text-amber-500">Fix model appears stalled</h2>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  No new activity has arrived. Cancel now, or wait for the workflow to stop
+                  automatically and then retry.
+                </p>
+              </div>
+            </section>
+          )}
           <section className="rounded-xl border border-border/60 bg-card/35 p-4">
             <div className="mb-3 flex items-center justify-between gap-2">
               <h2 className="text-sm font-semibold">Review panel</h2>
-              <span className="text-xs text-muted-foreground">{workflow.reviewers.filter((item) => item.status === "completed").length}/{workflow.reviewers.length} complete</span>
+              <span className="text-xs text-muted-foreground">
+                {reviewerProgressSummary(workflow.reviewers)}
+              </span>
             </div>
             <div className="grid gap-2 sm:grid-cols-2">
               {workflow.reviewers.map((reviewer, index) => {

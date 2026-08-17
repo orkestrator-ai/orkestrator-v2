@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import {
   MultiReviewProgressTracker,
   noProgressElapsedMs,
+  progressFingerprint,
   stalledMinutes,
 } from "./multi-review-progress.js";
 
@@ -13,11 +14,11 @@ function clock(start = 0): { now: () => number; advance: (ms: number) => void } 
 test("the first observation establishes a baseline instead of claiming progress", async () => {
   const tracker = new MultiReviewProgressTracker(1_000, clock().now);
 
-  // An unseen transcript is not evidence that anything moved. Reporting it as
-  // progress would restart the stall clock on every backend restart, which is
-  // exactly when a wedged session most needs to be noticed.
+  // An unseen transcript is not evidence that anything moved. The distinct
+  // baseline signal lets the service grant restart grace without reporting a
+  // transcript comparison that never happened.
   await expect(tracker.observe("session-1", async () => [{ id: "a" }]))
-    .resolves.toEqual({ probed: true, changed: false });
+    .resolves.toEqual({ probed: true, baselineEstablished: true, changed: false });
 });
 
 test("a changed transcript is reported once the probe interval has elapsed", async () => {
@@ -27,19 +28,19 @@ test("a changed transcript is reported once the probe interval has elapsed", asy
   const read = async () => messages;
 
   await tracker.observe("session-1", read);
-  // Inside the interval the transcript is not read at all: the read pulls the
-  // whole transcript, and the supervisor ticks every second.
+  // Inside the interval the transcript is not read at all: even a bounded tail
+  // crosses a provider boundary, and the supervisor ticks every second.
   messages = [{ id: "a" }, { id: "b" }];
   await expect(tracker.observe("session-1", read))
-    .resolves.toEqual({ probed: false, changed: false });
+    .resolves.toEqual({ probed: false, baselineEstablished: false, changed: false });
 
   time.advance(1_000);
   await expect(tracker.observe("session-1", read))
-    .resolves.toEqual({ probed: true, changed: true });
+    .resolves.toEqual({ probed: true, baselineEstablished: false, changed: true });
 
   time.advance(1_000);
   await expect(tracker.observe("session-1", read))
-    .resolves.toEqual({ probed: true, changed: false });
+    .resolves.toEqual({ probed: true, baselineEstablished: false, changed: false });
 });
 
 test("a rewritten streaming entry counts as progress", async () => {
@@ -53,7 +54,7 @@ test("a rewritten streaming entry counts as progress", async () => {
   // currently streaming. Length alone would miss the second case entirely.
   messages = [{ id: "a", content: "Reading src/a.ts" }];
   await expect(tracker.observe("session-1", read))
-    .resolves.toEqual({ probed: true, changed: true });
+    .resolves.toEqual({ probed: true, baselineEstablished: false, changed: true });
 });
 
 test("a failed transcript read answers nothing learned and keeps the baseline", async () => {
@@ -66,15 +67,15 @@ test("a failed transcript read answers nothing learned and keeps the baseline", 
   // The caller fails a reviewer on the errors it sees, so a transient read
   // failure must not reach it — and it is not evidence of a stall either.
   await expect(tracker.observe("session-1", async () => { throw new Error("bridge down"); }))
-    .resolves.toEqual({ probed: false, changed: false });
+    .resolves.toEqual({ probed: false, baselineEstablished: false, changed: false });
   // The attempt still counts against the throttle, so a bridge refusing reads
   // is retried on the probe interval rather than on every supervisor tick.
   await expect(tracker.observe("session-1", async () => { throw new Error("bridge down"); }))
-    .resolves.toEqual({ probed: false, changed: false });
+    .resolves.toEqual({ probed: false, baselineEstablished: false, changed: false });
 
   time.advance(1_000);
   await expect(tracker.observe("session-1", async () => messages))
-    .resolves.toEqual({ probed: true, changed: false });
+    .resolves.toEqual({ probed: true, baselineEstablished: false, changed: false });
 });
 
 test("a read that only ever fails never invents a baseline", async () => {
@@ -86,7 +87,7 @@ test("a read that only ever fails never invents a baseline", async () => {
   // The first successful read is still a baseline, not a change: comparing it
   // against a failure would report progress that was never observed.
   await expect(tracker.observe("session-1", async () => [{ id: "a" }]))
-    .resolves.toEqual({ probed: true, changed: false });
+    .resolves.toEqual({ probed: true, baselineEstablished: true, changed: false });
 });
 
 test("forgetting a session drops its baseline", async () => {
@@ -96,7 +97,17 @@ test("forgetting a session drops its baseline", async () => {
   await tracker.observe("session-1", read);
   tracker.forget("session-1");
   await expect(tracker.observe("session-1", read))
-    .resolves.toEqual({ probed: true, changed: false });
+    .resolves.toEqual({ probed: true, baselineEstablished: true, changed: false });
+});
+
+test("progress fingerprints retain a fixed-size digest instead of transcript content", () => {
+  const secretTail = "private transcript content ".repeat(100_000);
+  const digest = progressFingerprint([{ id: "a", content: secretTail }]);
+
+  expect(digest).toHaveLength(64);
+  expect(digest).not.toContain("private transcript content");
+  expect(progressFingerprint([{ id: "a", content: `${secretTail}changed` }]))
+    .not.toBe(digest);
 });
 
 test("the stall clock falls back to the start time until progress is seen", () => {

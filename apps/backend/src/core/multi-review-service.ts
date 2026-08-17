@@ -42,6 +42,7 @@ import {
   DEFAULT_STALL_ABANDON_MS,
   DEFAULT_STALL_WARNING_MS,
   MultiReviewProgressTracker,
+  PROGRESS_TRANSCRIPT_TAIL_MESSAGES,
   noProgressElapsedMs,
   stalledMinutes,
 } from "./multi-review-progress.js";
@@ -450,25 +451,36 @@ export class MultiReviewService {
       const controlled = await this.loadControlled(workflowId);
       if (!controlled) throw new Error(`Multi review workflow not found: ${workflowId}`);
       const { workflow, token } = controlled;
-      const reviewer = workflow.reviewers.find((entry) => entry.id === reviewerId);
-      if (!reviewer) throw new Error(`Multi review reviewer not found: ${reviewerId}`);
-      // Idempotent: a double click, or a reviewer that settled between the
-      // render and the command, must not rewrite a finished result.
-      if (reviewer.status !== "pending" && reviewer.status !== "running") return workflow;
-      await this.abandonSession(workflow, reviewer, reviewer.providerSessionId);
-      if (reviewer.providerSessionId) this.progress.forget(reviewer.providerSessionId);
-      reviewer.status = "cancelled";
-      reviewer.completedAt = nowIso();
-      // The session id is kept so the read-only transcript stays reachable.
-      delete reviewer.idleResultPolls;
-      delete reviewer.stalledSince;
-      delete reviewer.schemaRepairPrompt;
-      delete reviewer.dispatchState;
-      const saved = await this.save(workflow, token);
-      // Re-enter immediately rather than waiting for the next tick: with this
-      // reviewer out of the way the pass may already be able to consolidate.
-      void this.advanceNow(workflowId);
-      return saved;
+      let handedToSupervisor = false;
+      try {
+        const reviewer = workflow.reviewers.find((entry) => entry.id === reviewerId);
+        if (!reviewer) throw new Error(`Multi review reviewer not found: ${reviewerId}`);
+        // Idempotent: a double click, or a reviewer that settled between the
+        // render and the command, must not rewrite a finished result.
+        if (reviewer.status !== "pending" && reviewer.status !== "running") return workflow;
+        await this.abandonSession(workflow, reviewer, reviewer.providerSessionId);
+        if (reviewer.providerSessionId) this.progress.forget(reviewer.providerSessionId);
+        reviewer.status = "cancelled";
+        reviewer.completedAt = nowIso();
+        // The session id is kept so the read-only transcript stays reachable.
+        delete reviewer.idleResultPolls;
+        delete reviewer.stalledSince;
+        delete reviewer.schemaRepairPrompt;
+        delete reviewer.dispatchState;
+        const saved = await this.save(workflow, token);
+        if (isSupervisedPhase(saved.phase)) {
+          handedToSupervisor = true;
+          // Re-enter immediately rather than waiting for the next tick: with this
+          // reviewer out of the way the pass may already be able to consolidate.
+          void this.advanceNow(workflowId);
+        }
+        return saved;
+      } finally {
+        // A stale/no-op command is a short-lived claim. In particular, a stop
+        // that arrives after `ready` must not resurrect a renewable lease on a
+        // workflow the background supervisor no longer visits.
+        if (!handedToSupervisor) await this.release(workflow, token);
+      }
     });
   }
 
@@ -987,10 +999,19 @@ export class MultiReviewService {
     if (!providerSessionId) return "continue";
     const observation = await this.progress.observe(
       providerSessionId,
-      () => provider.messages(providerSessionId),
+      () => provider.messages(providerSessionId, { limit: PROGRESS_TRANSCRIPT_TAIL_MESSAGES }),
     );
     await this.assertFence(workflow.id, token);
     if (!observation.probed) return "continue";
+    if (observation.baselineEstablished) {
+      // The first read after a backend restart may already contain progress made
+      // while this process was down. Give that newly observed state a fresh,
+      // durable grace clock instead of comparing it to an unknowably old digest.
+      reviewer.progressAt = nowIso();
+      delete reviewer.stalledSince;
+      await this.save(workflow, token);
+      return "continue";
+    }
     if (observation.changed) {
       reviewer.progressAt = nowIso();
       delete reviewer.stalledSince;
@@ -1033,10 +1054,18 @@ export class MultiReviewService {
   ): Promise<void> {
     const observation = await this.progress.observe(
       session.providerSessionId,
-      () => provider.messages(session.providerSessionId),
+      () => provider.messages(session.providerSessionId, {
+        limit: PROGRESS_TRANSCRIPT_TAIL_MESSAGES,
+      }),
     );
     await this.assertFence(workflow.id, token);
     if (!observation.probed) return;
+    if (observation.baselineEstablished) {
+      session.progressAt = nowIso();
+      delete session.stalledSince;
+      await this.save(workflow, token);
+      return;
+    }
     if (observation.changed) {
       session.progressAt = nowIso();
       delete session.stalledSince;

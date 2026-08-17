@@ -81,6 +81,7 @@ class Provider implements BuildPipelineProvider {
   fixStructuredFailure: StructuredOutputFailureCode | null = null;
   messagesValue: unknown[] = [];
   messagesCalls = 0;
+  readonly messageOptions: Array<{ limit?: number } | undefined> = [];
   disposeCalls = 0;
   /** Throws from `createSession` once this many sessions already exist. */
   failCreateSessionAfter: number | null = null;
@@ -121,8 +122,9 @@ class Provider implements BuildPipelineProvider {
     if (failure) throw new ProviderSessionFailedError(this.agent, failure);
     return this.statusOverrides.get(sessionId) ?? this.statusValue;
   }
-  async messages(): Promise<unknown[]> {
+  async messages(_sessionId: string, options?: { limit?: number }): Promise<unknown[]> {
     this.messagesCalls += 1;
+    this.messageOptions.push(options);
     if (this.messagesGate) await this.messagesGate;
     return this.messagesValue;
   }
@@ -1662,13 +1664,13 @@ test("MultiReviewService consolidates from the reviewers left after one is stopp
   });
 });
 
-test("MultiReviewService leaves a settled reviewer alone when it is stopped", async () => {
+test("MultiReviewService leaves a settled reviewer alone and releases its stop claim", async () => {
   const provider = new Provider();
-  await withService("env-stop-settled", provider, async ({ service, start, snapshot }) => {
+  await withService("env-stop-settled", provider, async ({ service, storage, start, snapshot }) => {
     const started = await start();
     await waitUntil(async () => {
       await service.advanceNow(started.id);
-      return (await snapshot(started.id))?.reviewers[0]?.status === "completed";
+      return (await snapshot(started.id))?.phase === "ready";
     });
     const completed = (await snapshot(started.id))!.reviewers[0]!;
 
@@ -1682,8 +1684,18 @@ test("MultiReviewService leaves a settled reviewer alone when it is stopped", as
     expect(stopped.reviewers[0]?.report).toBeDefined();
     expect(provider.aborted).toEqual([]);
 
+    const afterNoop = await storage.claimMultiReviewController(
+      started.id, "other-owner", 15_000,
+    );
+    expect(afterNoop.granted).toBe(true);
+    await storage.releaseMultiReviewController(started.id, "other-owner", afterNoop.token);
+
     await expect(service.stopReviewer(started.id, "not-a-reviewer"))
       .rejects.toThrow("Multi review reviewer not found");
+    const afterError = await storage.claimMultiReviewController(
+      started.id, "other-owner-2", 15_000,
+    );
+    expect(afterError.granted).toBe(true);
   });
 });
 
@@ -1749,6 +1761,22 @@ test("MultiReviewService abandons a reviewer whose transcript stopped moving", a
   }, { serviceOptions: { progressProbeIntervalMs: 0, stallAbandonMs: 0 } });
 });
 
+test("MultiReviewService gives a fresh reviewer baseline a grace clock", async () => {
+  const provider = new Provider();
+  provider.statusValue = "running";
+  provider.messagesValue = [{ id: "assistant-1", role: "assistant", content: "Fresh progress" }];
+  await withService("env-stall-baseline", provider, async ({ start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () =>
+      (await snapshot(started.id))?.reviewers[0]?.progressAt !== undefined);
+
+    const running = (await snapshot(started.id))!;
+    expect(running.reviewers[0]?.status).toBe("running");
+    expect(provider.aborted).toEqual([]);
+    expect(provider.messageOptions).toContainEqual({ limit: 1 });
+  }, { serviceOptions: { progressProbeIntervalMs: 0, stallAbandonMs: 0 } });
+});
+
 test("MultiReviewService warns about a stalled reviewer and retires the warning on progress", async () => {
   const provider = new Provider(false);
   provider.statusValue = "running";
@@ -1798,5 +1826,24 @@ test("MultiReviewService fails a consolidation session whose transcript stopped 
     expect(failed.error).toContain("consolidation session produced no activity");
     expect(failed.fixSession?.status).toBe("failed");
     expect(provider.aborted).toContain("session-2");
+  }, { serviceOptions: { progressProbeIntervalMs: 0, stallAbandonMs: 0 } });
+});
+
+test("MultiReviewService gives a fresh consolidation baseline a grace clock", async () => {
+  const provider = new Provider();
+  provider.messagesValue = [{ id: "assistant-1", role: "assistant", content: "Fresh merge" }];
+  provider.statusOverrides.set("session-2", "running");
+  await withService("env-stall-consolidation-baseline", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.fixSession?.progressAt !== undefined;
+    });
+
+    const consolidating = (await snapshot(started.id))!;
+    expect(consolidating.phase).toBe("consolidating");
+    expect(consolidating.fixSession?.status).toBe("running");
+    expect(provider.aborted).not.toContain("session-2");
+    expect(provider.messageOptions).toContainEqual({ limit: 1 });
   }, { serviceOptions: { progressProbeIntervalMs: 0, stallAbandonMs: 0 } });
 });

@@ -72,7 +72,8 @@ export function MultiReviewReviewerTab({
   stopReviewer = backend.stopMultiReviewReviewer,
 }: MultiReviewReviewerTabProps) {
   const [snapshot, setSnapshot] = useState<MultiReviewReviewerTranscript | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [transcriptError, setTranscriptError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
   const requestGeneration = useRef(0);
   const inFlightGeneration = useRef<number | null>(null);
@@ -88,10 +89,10 @@ export function MultiReviewReviewerTab({
       const next = await loadTranscript(data.workflowId, data.reviewerId);
       if (requestGeneration.current !== generation) return;
       setSnapshot(next);
-      setError(null);
+      setTranscriptError(null);
     } catch (reason) {
       if (requestGeneration.current !== generation) return;
-      setError(reason instanceof Error ? reason.message : String(reason));
+      setTranscriptError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       if (inFlightGeneration.current === generation) inFlightGeneration.current = null;
     }
@@ -104,12 +105,20 @@ export function MultiReviewReviewerTab({
    */
   const stop = useCallback(async () => {
     setStopping(true);
-    setError(null);
+    setActionError(null);
     try {
       await stopReviewer(data.workflowId, data.reviewerId);
+      // A poll may have captured `running` before the backend committed the stop
+      // and still be awaiting provider messages. Fence that response out, then
+      // force a new authoritative read instead of letting the in-flight guard
+      // turn this refresh into a no-op.
+      requestGeneration.current += 1;
+      inFlightGeneration.current = null;
       await refresh();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      // Transcript polling continues after a refused action, but a successful
+      // read must not erase the action failure before the user can read it.
+      setActionError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setStopping(false);
     }
@@ -117,7 +126,8 @@ export function MultiReviewReviewerTab({
 
   useEffect(() => {
     setSnapshot(null);
-    setError(null);
+    setTranscriptError(null);
+    setActionError(null);
     setStopping(false);
     requestGeneration.current += 1;
   }, [data.reviewerId, data.workflowId]);
@@ -125,14 +135,14 @@ export function MultiReviewReviewerTab({
   useEffect(() => {
     if (!isActive) return;
     void refresh();
-    const gone = error !== null && isGoneError(error);
+    const gone = transcriptError !== null && isGoneError(transcriptError);
     if (gone || (snapshot && snapshot.status !== "running" && snapshot.status !== "pending")) return;
     const interval = window.setInterval(() => void refresh(), REFRESH_INTERVAL_MS);
     return () => {
       window.clearInterval(interval);
       requestGeneration.current += 1;
     };
-  }, [isActive, refresh, snapshot?.status, error]);
+  }, [isActive, refresh, snapshot?.status, transcriptError]);
 
   const messages = useMemo(() => {
     if (!snapshot) return [];
@@ -148,6 +158,7 @@ export function MultiReviewReviewerTab({
   });
 
   const running = snapshot?.status === "running";
+  const error = actionError ?? transcriptError;
   const label = snapshot ? AGENT_LABELS[snapshot.agent] : "Reviewer";
   const stoppable = snapshot?.status === "running" || snapshot?.status === "pending";
   const statusLine = snapshot

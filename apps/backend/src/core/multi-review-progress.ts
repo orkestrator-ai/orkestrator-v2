@@ -14,18 +14,21 @@
  * right clock, and a wall-clock turn budget the wrong one — the latter would cut
  * off a legitimately long review.
  *
- * The read is expensive (it pulls the session's whole transcript), so it is
- * throttled per session rather than run on every supervisor tick.
+ * The provider read is bounded to the latest message by the caller, and it is
+ * still throttled per session rather than run on every supervisor tick.
  *
  * It reads a tab-facing route, which is a liveness touch. That is deliberate and
  * safe here, unlike in a background reconciler: the supervisor owns these
  * sessions and already reads their status every tick, so they were never
  * candidates for idle detaching or transcript eviction in the first place.
  */
+import { createHash } from "node:crypto";
 import { transcriptFingerprint } from "./build-pipeline-service-helpers.js";
 
 /** How often one running session's transcript is re-read for progress. */
 export const DEFAULT_PROGRESS_PROBE_INTERVAL_MS = 60_000;
+/** A changing tail entry is enough to detect append and streaming rewrites. */
+export const PROGRESS_TRANSCRIPT_TAIL_MESSAGES = 1;
 /** No transcript change for this long marks the session stalled in the UI. */
 export const DEFAULT_STALL_WARNING_MS = 10 * 60_000;
 /**
@@ -48,11 +51,17 @@ export interface ProgressObservation {
    * failed. Neither is evidence of a stall, so the caller must not count it.
    */
   probed: boolean;
+  /** True when this successful probe created the first comparable baseline. */
+  baselineEstablished: boolean;
   /** True when this probe saw the transcript change since the previous one. */
   changed: boolean;
 }
 
-const NOT_PROBED: ProgressObservation = { probed: false, changed: false };
+const NOT_PROBED: ProgressObservation = {
+  probed: false,
+  baselineEstablished: false,
+  changed: false,
+};
 
 /** Without a baseline there is nothing to compare, so nothing has changed. */
 function changedFrom(baseline: string | undefined, fingerprint: string): boolean {
@@ -60,12 +69,22 @@ function changedFrom(baseline: string | undefined, fingerprint: string): boolean
 }
 
 /**
+ * Convert the content-bearing shared fingerprint into fixed-size state.
+ * Transcript tails may contain megabytes of tool output, prompts, or diffs;
+ * none of that content should be retained merely to compare the next probe.
+ */
+export function progressFingerprint(messages: unknown[]): string {
+  return createHash("sha256").update(transcriptFingerprint(messages)).digest("hex");
+}
+
+/**
  * Throttled transcript-change detector.
  *
- * Fingerprints are held in memory only. Persisting one would put a transcript
- * tail — prompt and file content — into the workflow store, and the durable half
- * of the clock (`progressAt`) is a timestamp that survives a restart on its own.
- * A restart costs one baseline observation, never a false stall.
+ * Fixed-size fingerprint digests are held in memory only. The durable half of
+ * the clock (`progressAt`) is a timestamp in the workflow store. After tracker
+ * state is lost, the caller treats the first successful read as a new baseline
+ * and persists a fresh grace clock because activity during downtime cannot be
+ * compared safely.
  */
 /** `fingerprint` is undefined until a read succeeds; there is no baseline yet. */
 interface TrackedSession {
@@ -84,9 +103,9 @@ export class MultiReviewProgressTracker {
   /**
    * Read the session's transcript at most once per probe interval and report
    * whether it changed. The first observation of a session establishes the
-   * baseline and reports no change: an unseen transcript is not evidence of
-   * progress, and treating it as progress would restart the stall clock every
-   * time the backend restarted.
+   * baseline and reports no change. The separate `baselineEstablished` signal
+   * lets the caller grant restart grace without claiming that a comparison
+   * actually observed progress.
    *
    * A failed read answers "nothing learned" rather than propagating. The caller
    * runs inside a per-reviewer failure boundary, so a transient transcript read
@@ -109,15 +128,23 @@ export class MultiReviewProgressTracker {
       this.record(sessionId, { fingerprint: existing?.fingerprint, probedAt: this.now() });
       return NOT_PROBED;
     }
-    const fingerprint = transcriptFingerprint(messages);
+    const fingerprint = progressFingerprint(messages);
     // Re-read after the await: a concurrent probe for the same session may have
     // recorded a newer entry, and the older read must not overwrite it.
     const current = this.entries.get(sessionId);
     if (current && current.probedAt > timestamp) {
-      return { probed: true, changed: changedFrom(current.fingerprint, fingerprint) };
+      return {
+        probed: true,
+        baselineEstablished: current.fingerprint === undefined,
+        changed: changedFrom(current.fingerprint, fingerprint),
+      };
     }
     this.record(sessionId, { fingerprint, probedAt: this.now() });
-    return { probed: true, changed: changedFrom(existing?.fingerprint, fingerprint) };
+    return {
+      probed: true,
+      baselineEstablished: existing?.fingerprint === undefined,
+      changed: changedFrom(existing?.fingerprint, fingerprint),
+    };
   }
 
   /** Drop a settled session so its fingerprint cannot outlive the workflow. */

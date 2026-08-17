@@ -43,8 +43,6 @@ import {
   queryWaiters,
   resetSdkSessionStoreMocks,
 } from "./session-manager-test-mocks.js";
-import type { BackgroundTaskSnapshot, MessagePatchEventData, NormalizedPart, SSEEvent, SessionUsageSnapshot } from "../types/index.js";
-import { MAX_DIFF_SIDE_BYTES, MAX_TOOL_TEXT_BYTES, TRUNCATED_NOTICE } from "./part-budget.js";
 import { afterAll, afterEach, mock, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { mkdtempSync } from "node:fs";
@@ -88,10 +86,13 @@ export const sessionManagerTestHome = mkdtempSync(
 setClaudeHomeForTesting(sessionManagerTestHome);
 
 
-// The types from `../types/index.js` and the budget constants from
-// `./part-budget.js` are already imported at the top of this file. A second
-// copy of both blocks was left here by the 2026-08-16 split and fails
-// `bun run typecheck` with TS2300 on all eight identifiers.
+// Only `captureEvents` below needs a type from here. The suites that assert on
+// patches, parts, usage, background tasks or the part-budget constants import
+// those from their own source, so the harness must not re-import them: it is
+// not a re-export surface for them, and `part-budget.js` was being pulled in at
+// runtime for nothing.
+import type { SSEEvent } from "../types/index.js";
+
 
 
 export const {

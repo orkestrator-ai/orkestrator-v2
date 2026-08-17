@@ -1,15 +1,35 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import type { AgentModelRef } from "@orkestrator/protocol/native-agent";
 import type { AgentModelCatalog } from "@/lib/agent-launch";
+import { useConfigStore } from "@/stores/configStore";
 import { MultiReviewLaunchDialog, type MultiReviewLaunchSelection } from "./MultiReviewLaunchDialog";
 
 const catalog: AgentModelCatalog = {
   claude: [{ id: "opus", name: "Opus", reasoningEfforts: ["high"] }],
   codex: [{ id: "gpt-5.6", name: "GPT-5.6", reasoningEfforts: ["medium", "high"] }],
   opencode: [{ id: "provider/model", name: "OpenCode", reasoningEfforts: [] }],
+  cursor: [{ id: "grok-4.6", name: "Grok 4.6", reasoningEfforts: [] }],
 };
 
+function setFavorites(favoriteModels: AgentModelRef[]) {
+  const config = useConfigStore.getState().config;
+  useConfigStore.setState({
+    config: { ...config, global: { ...config.global, favoriteModels } },
+  });
+}
+
 afterEach(cleanup);
+beforeEach(() => setFavorites([]));
+
+/** Opens `row`'s picker, switches to the favourites view, and picks a model. */
+function chooseFavorite(row: string, name: RegExp) {
+  fireEvent.pointerDown(screen.getByRole("button", { name: `${row} model` }));
+  fireEvent.click(screen.getByRole("button", { name: "Favorite models" }));
+  fireEvent.click(
+    within(screen.getByRole("group", { name: "Models" })).getByRole("menuitemradio", { name }),
+  );
+}
 
 describe("MultiReviewLaunchDialog", () => {
   test("adds and removes reviewer model rows while retaining at least one", () => {
@@ -34,6 +54,103 @@ describe("MultiReviewLaunchDialog", () => {
     expect(onConfirm.mock.calls[0]?.[0]).toMatchObject({
       reviewers: [
         { agent: "claude", model: "opus" },
+        { agent: "claude", model: "opus" },
+      ],
+      fixModel: { agent: "claude", model: "opus" },
+    });
+  });
+
+  /**
+   * The favourites view mixes every platform's models into one list, so a row
+   * chosen there routinely belongs to a platform other than the row's current
+   * one. Each reviewer has to adopt that platform, or the launch sends a Codex
+   * or Cursor model id to Claude and the session fails on start.
+   */
+  test("adopts the platform of a favourite chosen from another provider", () => {
+    setFavorites([
+      { platform: "codex", modelId: "gpt-5.6" },
+      { platform: "cursor", modelId: "grok-4.6" },
+    ]);
+    const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
+    render(<MultiReviewLaunchDialog
+      open
+      onOpenChange={() => undefined}
+      defaultAgent="claude"
+      catalog={catalog}
+      preferredReasoningEfforts={{ codex: "high", cursor: "high" }}
+      onConfirm={onConfirm}
+    />);
+
+    chooseFavorite("Reviewer 1", /GPT-5\.6/);
+    chooseFavorite("Reviewer 2", /Grok 4\.6/);
+
+    fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
+    expect(onConfirm.mock.calls[0]?.[0]).toEqual({
+      reviewers: [
+        { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
+        { agent: "cursor", model: "grok-4.6" },
+      ],
+      fixModel: { agent: "claude", model: "opus" },
+    });
+  });
+
+  /**
+   * The consolidation row runs the deduplication turn and stays attached as the
+   * interactive fix session, so a favourite from another provider strands the
+   * whole workflow there — not just one reviewer's report — if the row keeps its
+   * old agent.
+   */
+  test("adopts the platform of a favourite chosen for the consolidation row", () => {
+    setFavorites([{ platform: "codex", modelId: "gpt-5.6" }]);
+    const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
+    render(<MultiReviewLaunchDialog
+      open
+      onOpenChange={() => undefined}
+      defaultAgent="claude"
+      catalog={catalog}
+      preferredReasoningEfforts={{ codex: "medium" }}
+      onConfirm={onConfirm}
+    />);
+
+    chooseFavorite("Consolidation & fix model", /GPT-5\.6/);
+
+    fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
+    expect(onConfirm.mock.calls[0]?.[0]).toEqual({
+      reviewers: [
+        { agent: "claude", model: "opus" },
+        { agent: "claude", model: "opus" },
+      ],
+      fixModel: { agent: "codex", model: "gpt-5.6", reasoningEffort: "medium" },
+    });
+  });
+
+  /**
+   * Switching provider on the rail used to clear the effort to `undefined`,
+   * which silently dropped the configured Codex effort that `initialRow` would
+   * have applied had the dialog opened on Codex. Both entry points must agree.
+   */
+  test("applies the configured effort when the provider rail switches platform", () => {
+    const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
+    render(<MultiReviewLaunchDialog
+      open
+      onOpenChange={() => undefined}
+      defaultAgent="claude"
+      catalog={catalog}
+      preferredReasoningEfforts={{ codex: "high" }}
+      onConfirm={onConfirm}
+    />);
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Reviewer 1 model" }));
+    fireEvent.click(screen.getByRole("button", { name: "codex models" }));
+    // Picking a provider only switches the catalog view, so the menu stays open
+    // and keeps the rest of the dialog `aria-hidden`. Dismiss it before
+    // submitting.
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
+    expect(onConfirm.mock.calls[0]?.[0]).toEqual({
+      reviewers: [
+        { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
         { agent: "claude", model: "opus" },
       ],
       fixModel: { agent: "claude", model: "opus" },

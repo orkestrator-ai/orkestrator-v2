@@ -1,0 +1,13 @@
+{
+  // Bun-typed test scaffolding. Kept as its own project so `tsconfig.json` —
+  // the one that describes what actually ships — never sees Bun's ambient
+  // globals. `src/**/*.test.ts` stays excluded here too, matching the base
+  // config; only the shared harness is checked.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node", "bun"]
+  },
+  "include": ["src/acp-test-harness.ts"],
+  "exclude": ["node_modules", "dist", "src/**/*.test.ts"]
+}

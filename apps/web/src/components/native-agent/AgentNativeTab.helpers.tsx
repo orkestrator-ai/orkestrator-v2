@@ -64,11 +64,63 @@ import {
   nativeAgentAdapters,
 } from "./adapter";
 
+/**
+ * Execution profiles offered before a tab is locked to a provider.
+ *
+ * The real list is the provider's own primary-agent names, and every source for
+ * it is keyed by a provider session id that does not exist until the tab locks:
+ * the backend reads them from interactive session metadata, so there is no
+ * session-free command to ask. The launcher therefore offers the pair OpenCode —
+ * the only platform that reaches this control today — ships by default, and the
+ * locked composer replaces them with the advertised list on first projection.
+ * An id the provider turns out not to have is dropped by `projectionComposer`
+ * rather than dispatched as an unknown agent name.
+ */
+const LAUNCH_EXECUTION_PROFILES = [
+  { id: "build", label: "Build agent" },
+  { id: "plan", label: "Plan agent" },
+] as const;
+
 function activeAgentSummary(snapshots: NativeAgentActivitySnapshot[]): string {
-  const active = snapshots.filter((snapshot) => snapshot.status === "active");
-  if (active.length === 0) return "";
-  const noun = active.length === 1 ? "sub-agent" : "sub-agents";
-  return `${active.length} ${noun} working: ${active.map((snapshot) => snapshot.label).join(", ")}.`;
+  const summaries: string[] = [];
+  const activeAgents = snapshots.filter(
+    (snapshot) => snapshot.kind === "subagent" && snapshot.status === "active",
+  );
+  if (activeAgents.length > 0) {
+    const noun = activeAgents.length === 1 ? "sub-agent" : "sub-agents";
+    summaries.push(
+      `${activeAgents.length} ${noun} working: ${activeAgents.map((snapshot) => snapshot.label).join(", ")}.`,
+    );
+  }
+
+  for (const status of ["pending", "running", "paused"] as const) {
+    const tasks = snapshots.filter(
+      (snapshot) => snapshot.kind === "background-task"
+        && snapshot.backgroundTaskStatus === status,
+    );
+    if (tasks.length === 0) continue;
+    const noun = tasks.length === 1 ? "background task" : "background tasks";
+    const verb = status === "pending" ? "starting" : status;
+    summaries.push(
+      `${tasks.length} ${noun} ${verb}: ${tasks.map((snapshot) => snapshot.label).join(", ")}.`,
+    );
+  }
+
+  return summaries.join(" ");
+}
+
+function backgroundTaskAnnouncementStatus(
+  status: NativeAgentActivitySnapshot["backgroundTaskStatus"],
+): string | undefined {
+  switch (status) {
+    case "pending": return "starting";
+    case "running": return "running";
+    case "paused": return "paused";
+    case "completed": return "completed";
+    case "failed": return "failed";
+    case "killed": return "stopped";
+    default: return undefined;
+  }
 }
 
 interface NativeAgentActivityAnnouncement {
@@ -112,6 +164,15 @@ export function useNativeAgentActivityAnnouncement(
     const lifecycleUpdates: string[] = [];
     for (const [id, previous] of previousState.snapshots) {
       const next = current.get(id);
+      if (
+        previous.kind === "background-task"
+        && next?.kind === "background-task"
+        && previous.backgroundTaskStatus !== next.backgroundTaskStatus
+      ) {
+        const status = backgroundTaskAnnouncementStatus(next.backgroundTaskStatus);
+        if (status) lifecycleUpdates.push(`${next.label} ${status}.`);
+        continue;
+      }
       if (previous.status !== "active" || !next || next.status === "active") continue;
       lifecycleUpdates.push(`${next.label} ${next.status === "failed" ? "failed" : "finished"}.`);
     }
@@ -119,6 +180,7 @@ export function useNativeAgentActivityAnnouncement(
     const activeChanged = snapshots.some((snapshot) => {
       if (snapshot.status !== "active") return false;
       const previous = previousState.snapshots.get(snapshot.id);
+      if (snapshot.kind === "background-task") return previous === undefined;
       return previous?.status !== "active" || previous.label !== snapshot.label;
     });
     const summary = activeChanged ? activeAgentSummary(snapshots) : "";
@@ -230,7 +292,8 @@ export function UnassignedNativeAgentComposer({
       modelId?: string;
       reasoningId?: string;
       fastMode: boolean;
-      mode: "build" | "plan";
+      mode?: "build" | "plan";
+      executionProfileId?: string;
     },
   ) => void;
   onResume: (platform: AgentPlatform) => void;
@@ -317,6 +380,22 @@ export function UnassignedNativeAgentComposer({
     ?? platformModels[0];
   const canConfigureReasoning = selectedAdapter?.capabilities.composer.reasoning === true;
   const canConfigureMode = selectedAdapter?.capabilities.composer.mode === true;
+  // Capability, not platform: a tab that has no conversation mode but does have
+  // execution profiles needs *some* way to pick one, because the opening prompt
+  // is dispatched before the user can reach the locked composer.
+  const canConfigureExecutionProfile = !canConfigureMode
+    && selectedAdapter?.capabilities.composer.executionProfile === true;
+  // A draft restored from a platform whose profiles differ, or persisted before
+  // this list changed, can name a profile the launcher cannot show. Fall back to
+  // the default rather than rendering a radio group with nothing selected.
+  const selectedLaunchExecutionProfile = LAUNCH_EXECUTION_PROFILES.find(
+    (profile) => profile.id === draft.executionProfileId,
+  ) ?? LAUNCH_EXECUTION_PROFILES[0];
+  // The catalogue's `supportsSpeed` describes the model; the table describes the
+  // platform. Both have to allow it, so a catalogue entry cannot reintroduce a
+  // toggle the platform has no way to apply.
+  const canConfigureSpeed = selectedAdapter?.capabilities.composer.speed === true
+    && selectedModel?.supportsSpeed === true;
   const selectedReasoningId = resolveReasoningId(
     selectedModel?.reasoning ?? [],
     draft.reasoningId,
@@ -431,8 +510,16 @@ export function UnassignedNativeAgentComposer({
     onSend(platform, prompt, {
       modelId: selectedModel?.id,
       reasoningId: selectedReasoningId,
-      fastMode: effectiveFastMode,
-      mode: draft.mode,
+      fastMode: canConfigureSpeed && effectiveFastMode,
+      // A platform with no conversation mode must not pin one on the locked
+      // tab. OpenCode would receive it as the SDK `agent` name.
+      ...(canConfigureMode ? { mode: draft.mode } : {}),
+      // Read from the resolved selection, not the raw draft: the trigger renders
+      // the same value, and dispatching an id the launcher never displayed is
+      // exactly the display/dispatch split this control exists to close.
+      ...(canConfigureExecutionProfile ? {
+        executionProfileId: selectedLaunchExecutionProfile.id,
+      } : {}),
     });
   };
 
@@ -519,6 +606,7 @@ export function UnassignedNativeAgentComposer({
                     platform: next,
                     modelId: undefined,
                     reasoningId: undefined,
+                    executionProfileId: undefined,
                     fastMode: next === "claude"
                       ? globalConfig.claudeNativeFastModeDefault ?? false
                       : next === "codex"
@@ -565,34 +653,66 @@ export function UnassignedNativeAgentComposer({
                 selectedReasoningLabel={selectedReasoningLabel}
                 onReasoningChange={canConfigureReasoning ? (reasoningId) => updateDraft(sessionKey, { reasoningId }) : undefined}
                 fastModeEnabled={effectiveFastMode}
-                fastModeAvailable={selectedModel?.supportsSpeed === true}
+                fastModeAvailable={canConfigureSpeed}
                 onFastModeChange={(fastMode) => updateDraft(sessionKey, { fastMode })}
                 disabled={disabled}
               />
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    disabled={disabled || !canConfigureMode}
-                    aria-label="Conversation mode"
-                    className="h-8 gap-1 px-2 text-xs font-normal text-muted-foreground hover:text-foreground"
-                  >
-                    {draft.mode === "plan" ? "Plan" : "Build"}
-                    <ChevronDown className="size-3" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start">
-                  <DropdownMenuRadioGroup
-                    value={draft.mode}
-                    onValueChange={(mode) => updateDraft(sessionKey, { mode: mode as "build" | "plan" })}
-                  >
-                    <DropdownMenuRadioItem value="build">Build</DropdownMenuRadioItem>
-                    <DropdownMenuRadioItem value="plan">Plan</DropdownMenuRadioItem>
-                  </DropdownMenuRadioGroup>
-                </DropdownMenuContent>
-              </DropdownMenu>
+              {canConfigureMode ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      disabled={disabled}
+                      aria-label="Conversation mode"
+                      className="h-8 gap-1 px-2 text-xs font-normal text-muted-foreground hover:text-foreground"
+                    >
+                      {draft.mode === "plan" ? "Plan" : "Build"}
+                      <ChevronDown className="size-3" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start">
+                    <DropdownMenuRadioGroup
+                      value={draft.mode}
+                      onValueChange={(mode) => updateDraft(sessionKey, { mode: mode as "build" | "plan" })}
+                    >
+                      <DropdownMenuRadioItem value="build">Build</DropdownMenuRadioItem>
+                      <DropdownMenuRadioItem value="plan">Plan</DropdownMenuRadioItem>
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : canConfigureExecutionProfile ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      disabled={disabled}
+                      aria-label="Execution profile"
+                      className="h-8 gap-1 px-2 text-xs font-normal text-muted-foreground hover:text-foreground"
+                    >
+                      {selectedLaunchExecutionProfile.label}
+                      <ChevronDown className="size-3" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start">
+                    <DropdownMenuRadioGroup
+                      value={selectedLaunchExecutionProfile.id}
+                      onValueChange={(executionProfileId) => updateDraft(sessionKey, {
+                        executionProfileId,
+                      })}
+                    >
+                      {LAUNCH_EXECUTION_PROFILES.map((profile) => (
+                        <DropdownMenuRadioItem key={profile.id} value={profile.id}>
+                          {profile.label}
+                        </DropdownMenuRadioItem>
+                      ))}
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : null}
             </>
           )}
           sendDisabled={disabled || (!draft.text.trim() && draft.attachments.length === 0)}
@@ -613,4 +733,3 @@ export function UnassignedNativeAgentComposer({
     </div>
   );
 }
-

@@ -36,6 +36,9 @@ export function registerNativeAgentCommands(
           ? args.sessionMode
           : undefined,
       fastMode: typeof args.fastMode === "boolean" ? args.fastMode : undefined,
+      executionProfileId: args.executionProfileId === undefined
+        ? undefined
+        : asNonBlankString(args.executionProfileId, "executionProfileId"),
     });
   });
 
@@ -77,6 +80,12 @@ export function registerNativeAgentCommands(
         ? { sessionMode: args.sessionMode }
         : {}),
       ...(typeof args.fastMode === "boolean" ? { fastMode: args.fastMode } : {}),
+      ...(args.executionProfileId === undefined ? {} : {
+        executionProfileId: asNonBlankString(
+          args.executionProfileId,
+          "executionProfileId",
+        ),
+      }),
     });
   });
 

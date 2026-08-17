@@ -11,6 +11,11 @@
  * imported before anything that depends on them. It is named `.ts`, not
  * `.test.ts`, so the runner does not collect it as a suite.
  *
+ * That name also keeps it inside `tsconfig.json`, which excludes `*.test.ts`.
+ * It is the only file in this package that uses `bun:test` and the `Bun`
+ * global, which is why the package's `types` includes `bun` alongside `node`.
+ * Dropping that would fail `bun run typecheck` on this file alone.
+ *
  * This assumes `bun test --parallel` (which implies `--isolate`), the mode
  * AGENTS.md mandates: each test file gets a fresh module registry, so this
  * module is evaluated once per file exactly as the duplicated preambles were.

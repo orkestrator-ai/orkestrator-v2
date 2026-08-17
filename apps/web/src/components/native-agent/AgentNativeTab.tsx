@@ -60,7 +60,13 @@ export const AgentNativeTab = memo(function AgentNativeTab(
   const lockAndSend = useCallback(async (
     platform: AgentPlatform,
     prompt: string,
-    options: { modelId?: string; reasoningId?: string; fastMode: boolean; mode: "build" | "plan" },
+    options: {
+      modelId?: string;
+      reasoningId?: string;
+      fastMode: boolean;
+      mode?: "build" | "plan";
+      executionProfileId?: string;
+    },
   ) => {
     setAwaitingDurability(true);
     setDurabilityError(null);
@@ -75,6 +81,7 @@ export const AgentNativeTab = memo(function AgentNativeTab(
         initialReasoningEffort: options.reasoningId,
         initialConversationMode: options.mode,
         initialFastMode: options.fastMode,
+        initialExecutionProfileId: options.executionProfileId,
       },
     );
     if (!lockedPlatform) {

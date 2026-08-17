@@ -393,6 +393,41 @@ describe("HTTP bridge provider", () => {
     });
   });
 
+  test("bounds Claude launch correlation metadata at the bridge boundary", async () => {
+    const { provider } = httpProvider((url) => {
+      if (url.endsWith("/messages")) return Response.json({ messages: [] });
+      return Response.json({
+        status: "idle",
+        backgroundTasks: {
+          valid: {
+            status: "running",
+            description: "Run validation",
+            toolUseId: "tool-launch-1",
+          },
+          oversized: {
+            status: "paused",
+            toolUseId: "x".repeat(513),
+          },
+        },
+      });
+    });
+
+    const snapshot = await provider.interactiveSnapshot!("session-1");
+
+    expect(snapshot.backgroundTasks).toEqual([
+      {
+        id: "valid",
+        status: "running",
+        description: "Run validation",
+        toolUseId: "tool-launch-1",
+      },
+      {
+        id: "oversized",
+        status: "paused",
+      },
+    ]);
+  });
+
   test("reads the ACP snapshot as a small status plus a bounded transcript", async () => {
     /*
      * The whole-session route returned composer, runtime and the entire

@@ -252,6 +252,7 @@ describe("reconcilePersistedLayout", () => {
       ...tab,
       initialAgentModel: `${tab.id}-model`,
       initialReasoningEffort: "xhigh",
+      initialExecutionProfileId: "plan",
     }));
 
     const restored = reconcilePersistedLayout(saved({
@@ -267,6 +268,7 @@ describe("reconcilePersistedLayout", () => {
     for (const tab of tabs) {
       expect(tab.initialAgentModel).toBe(`${tab.id}-model`);
       expect(tab.initialReasoningEffort).toBe("xhigh");
+      expect(tab.initialExecutionProfileId).toBe("plan");
     }
   });
 
@@ -281,6 +283,7 @@ describe("reconcilePersistedLayout", () => {
           claudeNativeData: { environmentId: "env-1" },
           initialAgentModel: 42,
           initialReasoningEffort: { nested: true },
+          initialExecutionProfileId: agentHandoffId,
           agentHandoffId,
           consumedAgentHandoffId: agentHandoffId,
         }],
@@ -292,6 +295,7 @@ describe("reconcilePersistedLayout", () => {
       ).tabs[0]!;
       expect(tab.initialAgentModel).toBeUndefined();
       expect(tab.initialReasoningEffort).toBeUndefined();
+      expect(tab.initialExecutionProfileId).toBeUndefined();
       expect(tab.agentHandoffId).toBeUndefined();
       expect(tab.consumedAgentHandoffId).toBeUndefined();
     }

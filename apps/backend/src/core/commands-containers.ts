@@ -1,6 +1,6 @@
 import { os, path, randomBytes, CLAUDE_BRIDGE_PORT, CODEX_BRIDGE_PORT, CURSOR_ACP_BRIDGE_PORT, DOCKER_IMAGE, DOCKER_LABEL_APP, DOCKER_LABEL_APP_VALUE, DOCKER_LABEL_ENVIRONMENT_ID, DOCKER_LABEL_ENVIRONMENT_NAME, DOCKER_LABEL_OWNER, DOCKER_LABEL_PROJECT_ID, GROK_ACP_BRIDGE_PORT, OPENCODE_SERVER_PORT, requiredAgentNetworkDomains, dockerContainerRuntimeName, dockerOwnerNamespace, defaultRepositoryConfig, ORKESTRATOR_AGENT_MCP_TOKEN_ENV, ORKESTRATOR_AGENT_MCP_URL_ENV, pathExists, runCommand } from "./commands-dependencies.js";
 import type { Environment, ClaudeEffortLevel, ClaudeModelCatalogEntry, ClaudeModelCatalogSnapshot, AgentToolConnection } from "./commands-dependencies.js";
-import { BRIDGE_TOKEN_PATTERN, retryableBridgeStartupError, CLAUDE_MODEL_CATALOG_TTL_MS, CLAUDE_MODEL_CATALOG_REQUEST_TIMEOUT_MS, CONTAINER_GITHUB_CREDENTIAL_FILE, CLAUDE_GITHUB_CREDENTIAL_FILE_ENV, CLAUDE_GITHUB_ENV_FINGERPRINT_FILE, CLAUDE_GITHUB_ENV_FINGERPRINT, OPENCODE_GITHUB_ENV_PLUGIN_PATH, OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT_FILE, OPENCODE_GITHUB_ENV_PLUGIN_SOURCE, OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT } from "./commands-runtime-state.js";
+import { AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV, BRIDGE_TOKEN_PATTERN, retryableBridgeStartupError, CLAUDE_MODEL_CATALOG_TTL_MS, CLAUDE_MODEL_CATALOG_REQUEST_TIMEOUT_MS, CONTAINER_GITHUB_CREDENTIAL_FILE, CLAUDE_GITHUB_CREDENTIAL_FILE_ENV, CLAUDE_GITHUB_ENV_FINGERPRINT_FILE, CLAUDE_GITHUB_ENV_FINGERPRINT, OPENCODE_GITHUB_ENV_PLUGIN_PATH, OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT_FILE, OPENCODE_GITHUB_ENV_PLUGIN_SOURCE, OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT } from "./commands-runtime-state.js";
 import { resolveAnthropicApiKey, resolveCursorApiKey } from "./commands-validation.js";
 import { quoteShell } from "./commands-agent-support.js";
 import { invalidateDockerContainerStateCache, isContainerRunning, getHostPort, shouldAddDockerHostGatewayAlias } from "./commands-container-exec.js";
@@ -106,7 +106,7 @@ export async function createDockerContainer(environment: Environment, context: C
   };
   if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("claude")) {
     const claudeConfigDir = context.runtimeFlavor === "agent-test"
-      ? process.env.CLAUDE_CONFIG_DIR?.trim()
+      ? process.env[AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV]?.trim()
       : path.join(home, ".claude");
     const claudeConfigFile = context.runtimeFlavor === "agent-test" && agentTestHostHome
       ? path.join(agentTestHostHome, ".claude.json")
@@ -527,4 +527,3 @@ export function isFreshClaudeModelCatalog(snapshot: ClaudeModelCatalogSnapshot |
   const fetchedAt = Date.parse(snapshot.fetchedAt);
   return Number.isFinite(fetchedAt) && Date.now() - fetchedAt < CLAUDE_MODEL_CATALOG_TTL_MS;
 }
-

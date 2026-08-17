@@ -1,4 +1,5 @@
 import * as shared from "./storage-shared.js";
+import { normalizeActionDefaults } from "@orkestrator/protocol/action-defaults";
 import {
   createHash,
   defaultConfig,
@@ -458,6 +459,10 @@ export abstract class StorageConfig extends StorageProjects {
           ? reviewValidated.defaultAgent
           : undefined,
       ),
+      // The renderer writes this object wholesale, so a malformed or partial
+      // entry must be dropped here rather than persisted and later applied to
+      // a launch the user cannot see being configured.
+      actionDefaults: normalizeActionDefaults(reviewValidated.actionDefaults),
     };
     return this.enqueueConfigMutation(async () => {
       const config = await this.loadConfig();

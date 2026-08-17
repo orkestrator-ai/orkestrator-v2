@@ -517,11 +517,33 @@ behaviour — `bridges/acp-bridge/src/testing/fake-agent.ts` labels those fixtur
 as such. If a bump adds a real state field, replace that guess with the
 observed vocabulary rather than widening the regex on a hunch.
 
+Two consequences of that send site drive how the bridge treats sub-agents, and
+both need re-checking on a bump:
+
+- **A foreground `task` is anonymous while it runs.** Its tool call spans the
+  child's whole life, and the frame that carries `description`, `prompt` and
+  `agentId` is sent only as it ends. The launch's own `rawInput` is a bare
+  `{ _toolName: "task" }` (Cursor fills `extractToolCallInput` from args that
+  are still empty at `toolCallStarted`, and that projection omits `agentId`
+  entirely), and the ACP tool result for `taskToolCall` is serialized as
+  `{ durationMs, isBackground }` — the TUI reads `result.agentId`, the ACP path
+  drops it. So nothing on the wire connects a running card to the child's
+  transcript. `acp-cursor-child-discovery.ts` infers that binding from
+  `agent-transcripts/<agentId>/` creation order instead; if a bump starts
+  reporting `agentId` earlier, prefer it and let the inference wither.
+- **The frame arrives after its card has settled.** `applyCursorTask` therefore
+  rejects only calls that were never sub-agent launches (`agentState ===
+  undefined`), not calls that are no longer active. Keep that distinction: the
+  earlier "must still be live" test silently discarded every foreground child's
+  metadata.
+
 Re-derive the table above after a bump by grepping the installed bundle:
 
 ```bash
 # Prints the extension-method constants and the single cursor/task send site.
 rg -o '.{200}cursor/task.{200}' ~/.local/share/cursor-agent/versions/<version>/*.js
+# Prints how the ACP layer serializes a completed taskToolCall result.
+rg -o '.{200}taskToolCall.{300}' ~/.local/share/cursor-agent/versions/<version>/*.js
 ```
 
 ### How to upgrade Cursor or Grok

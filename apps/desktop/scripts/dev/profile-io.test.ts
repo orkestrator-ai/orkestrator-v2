@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { appendFile, mkdir, mkdtemp, readFile, rename, rm, stat, symlink, truncate, writeFile } from "node:fs/promises";
+import { access, appendFile, mkdir, mkdtemp, readFile, rename, rm, stat, symlink, truncate, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import { parseRuntimeStatusManifest, resolveRuntimeProfile, statusManifestPath } from "../../electron/runtime-profile.js";
-import { atomicWriteJson, initializeProfile, processMatches, processStartTime, readAndValidateSentinel, reserveLoopbackPorts, seedAgentTestProviderCredentials, seedInstalledModelCatalogCaches } from "./profile-io.js";
+import { atomicWriteJson, initializeProfile, processMatches, processStartTime, readAndValidateSentinel, removeProfileState, reserveLoopbackPorts, seedAgentTestProviderCredentials, seedInstalledModelCatalogCaches } from "./profile-io.js";
 import { createBoundedLogWriter, orphanedRuntimeProcesses, stoppedRuntimeStatusIfUnchanged, stopTrackedRuntimeProcesses } from "./lifecycle.js";
 
 const directories: string[] = [];
@@ -101,6 +101,54 @@ describe("development profile lifecycle primitives", () => {
     const profilePath = await initializeProfile(profile);
     expect((await stat(profilePath)).mode & 0o777).toBe(0o600);
     await expect(readAndValidateSentinel(profile, roots)).resolves.toEqual({ version: 1, profile: "qa" });
+  });
+
+  test("full profile reset unlinks legacy Keychain state without touching the host", async () => {
+    const { root, profile } = await modelCacheFixture();
+    const hostKeychains = path.join(root, "host-keychains");
+    await mkdir(hostKeychains, { recursive: true });
+    await writeFile(path.join(hostKeychains, "login.keychain-db"), "host-login");
+    const target = path.join(
+      profile.dataDir,
+      "agent-credentials",
+      "home",
+      "Library",
+      "Keychains",
+    );
+    await mkdir(path.dirname(target), { recursive: true });
+    await symlink(hostKeychains, target);
+
+    await removeProfileState(profile, false);
+
+    expect(await access(profile.profileRoot).then(() => true, () => false)).toBe(false);
+    await expect(readFile(path.join(hostKeychains, "login.keychain-db"), "utf8"))
+      .resolves.toBe("host-login");
+  });
+
+  test("toolchain-preserving reset uses the same symlink-safe deletion path", async () => {
+    const { root, profile } = await modelCacheFixture();
+    const toolchain = path.join(profile.dataDir, "toolchains", "cursor-agent");
+    await mkdir(path.dirname(toolchain), { recursive: true });
+    await writeFile(toolchain, "managed-toolchain");
+    const hostKeychains = path.join(root, "host-keychains");
+    await mkdir(hostKeychains, { recursive: true });
+    await writeFile(path.join(hostKeychains, "login.keychain-db"), "host-login");
+    const target = path.join(
+      profile.dataDir,
+      "agent-credentials",
+      "home",
+      "Library",
+      "Keychains",
+    );
+    await mkdir(path.dirname(target), { recursive: true });
+    await symlink(hostKeychains, target);
+
+    await removeProfileState(profile, true);
+
+    await expect(readFile(toolchain, "utf8")).resolves.toBe("managed-toolchain");
+    expect(await access(target).then(() => true, () => false)).toBe(false);
+    await expect(readFile(path.join(hostKeychains, "login.keychain-db"), "utf8"))
+      .resolves.toBe("host-login");
   });
 
   test("copies stable missing model catalogue caches with owner-only permissions", async () => {

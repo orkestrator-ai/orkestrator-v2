@@ -70,10 +70,13 @@ const {
 
 const tempDirs: string[] = [];
 
-function createContext(environment: Record<string, unknown> | null = null): CommandContext {
+function createContext(
+  environment: Record<string, unknown> | null = null,
+  roots: { appRoot?: string; resourceRoot?: string } = {},
+): CommandContext {
   return {
-    appRoot: "",
-    resourceRoot: "",
+    appRoot: roots.appRoot ?? "",
+    resourceRoot: roots.resourceRoot ?? "",
     emit: mock(() => undefined),
     storage: {
       getEnvironment: mock(async () => environment),
@@ -640,10 +643,10 @@ done
       worktreePath: root,
     });
     const commands = createCommandRegistry();
-    const read = () => commands.get("get_environment_uncommitted_paths")?.(
-      { environmentId: "env-1" },
+    const read = (fingerprint = true) => commands.get("get_environment_uncommitted_paths")?.(
+      { environmentId: "env-1", ...(fingerprint ? { fingerprint: true } : {}) },
       context,
-    ) as Promise<{ head: string; paths: string[] }>;
+    ) as Promise<{ head: string; paths: string[]; fingerprint?: string }>;
 
     const initialHead = (await runCommand(
       "git",
@@ -651,12 +654,24 @@ done
       { cwd: root, timeoutMs: 30_000 },
     )).stdout.trim();
 
-    await expect(read()).resolves.toEqual({ head: initialHead, paths: [] });
+    const clean = await read();
+    expect(clean).toMatchObject({ head: initialHead, paths: [] });
+    expect(clean.fingerprint).toMatch(/^[0-9a-f]{64}$/);
 
     await fs.writeFile(path.join(root, "untracked.ts"), "export const b = 2;\n");
     await fs.writeFile(path.join(root, "committed.ts"), "export const a = 2;\n");
     const dirty = await read();
     expect([...dirty.paths].sort()).toEqual(["committed.ts", "untracked.ts"]);
+    expect(dirty.fingerprint).not.toBe(clean.fingerprint);
+
+    // The path set and HEAD stay identical, but the snapshot identity must
+    // still change when content inside those already-dirty paths changes.
+    await fs.writeFile(path.join(root, "untracked.ts"), "export const b = 3;\n");
+    await fs.writeFile(path.join(root, "committed.ts"), "export const a = 3;\n");
+    const changedContent = await read();
+    expect([...changedContent.paths].sort()).toEqual([...dirty.paths].sort());
+    expect(changedContent.head).toBe(dirty.head);
+    expect(changedContent.fingerprint).not.toBe(dirty.fingerprint);
 
     await git("add", "-A");
     // Staged-but-uncommitted still counts: the commit has not happened.
@@ -666,6 +681,86 @@ done
     const committed = await read();
     expect(committed.paths).toEqual([]);
     expect(committed.head).not.toBe(initialHead);
+
+    // Content hashing is opt-in: a caller that only compares HEAD and the path
+    // set gets the same facts without paying to hash the whole diff, and is not
+    // handed a value it could mistake for a content fingerprint.
+    await fs.writeFile(path.join(root, "later.ts"), "export const c = 1;\n");
+    const cheap = await read(false);
+    expect(cheap.fingerprint).toBeUndefined();
+    expect(cheap.paths).toEqual(["later.ts"]);
+    expect(cheap.head).toBe(committed.head);
+  });
+
+  // A local worktree runs on the user's own machine, where the backend inherits
+  // whatever PATH the OS handed Electron. A GUI launch on macOS has git in
+  // /usr/bin but no Node at all, so a probe that needed one would take every
+  // review flow down with it.
+  test("probes a local worktree without any Node on PATH", async () => {
+    const root = await createTempDir("ork-commands-io-nonode-");
+    const git = async (...args: string[]) => {
+      await runCommand("git", args, { cwd: root, timeoutMs: 30_000 });
+    };
+    await git("init", "--initial-branch=main");
+    await git("config", "user.email", "test@example.com");
+    await git("config", "user.name", "Test");
+    await fs.writeFile(path.join(root, "committed.ts"), "export const a = 1;\n");
+    await git("add", "committed.ts");
+    await git("commit", "-m", "seed");
+    await fs.writeFile(path.join(root, "untracked.ts"), "export const b = 2;\n");
+
+    // Only git on PATH, exactly as a GUI-launched macOS app sees it.
+    const bareBin = await createTempDir("ork-commands-io-barebin-");
+    const gitPath = (await runCommand("sh", ["-c", "command -v git"], { timeoutMs: 30_000 }))
+      .stdout.trim();
+    await fs.symlink(gitPath, path.join(bareBin, "git"));
+
+    // The packaged layout resolveBunBinary looks for: resources/bin/bun.
+    const resourceRoot = await createTempDir("ork-commands-io-resources-");
+    await fs.mkdir(path.join(resourceRoot, "bin"), { recursive: true });
+    const bunPath = (await runCommand("sh", ["-c", "command -v bun"], { timeoutMs: 30_000 }))
+      .stdout.trim();
+    await fs.symlink(bunPath, path.join(resourceRoot, "bin", "bun"));
+
+    const previousPath = process.env.PATH;
+    process.env.PATH = bareBin;
+    try {
+      const context = createContext({
+        id: "env-1",
+        environmentType: "local",
+        worktreePath: root,
+      }, { resourceRoot });
+      const commands = createCommandRegistry();
+      const probed = await (commands.get("get_environment_uncommitted_paths")?.(
+        { environmentId: "env-1", fingerprint: true },
+        context,
+      ) as Promise<{ head: string; paths: string[]; fingerprint?: string }>);
+
+      expect(probed.paths).toEqual(["untracked.ts"]);
+      expect(probed.fingerprint).toMatch(/^[0-9a-f]{64}$/);
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+    }
+  });
+
+  test("rejects an unknown argument to the uncommitted-path probe", async () => {
+    const root = await createTempDir("ork-commands-io-probe-args-");
+    await runCommand("git", ["init", "--initial-branch=main"], { cwd: root, timeoutMs: 30_000 });
+    const context = createContext({
+      id: "env-1",
+      environmentType: "local",
+      worktreePath: root,
+    });
+    const commands = createCommandRegistry();
+    await expect(commands.get("get_environment_uncommitted_paths")?.(
+      { environmentId: "env-1", contents: true },
+      context,
+    )).rejects.toThrow("Unexpected get_environment_uncommitted_paths field: contents");
+    await expect(commands.get("get_environment_uncommitted_paths")?.(
+      { environmentId: "env-1", fingerprint: "yes" },
+      context,
+    )).rejects.toThrow("Expected fingerprint to be a boolean");
   });
 
   // The whole reason review and verify may run writable is that validation
@@ -690,9 +785,9 @@ done
     });
     const commands = createCommandRegistry();
     const read = () => commands.get("get_environment_uncommitted_paths")?.(
-      { environmentId: "env-1" },
+      { environmentId: "env-1", fingerprint: true },
       context,
-    ) as Promise<{ head: string; paths: string[] }>;
+    ) as Promise<{ head: string; paths: string[]; fingerprint: string }>;
 
     const before = await read();
     expect(before.paths).toEqual([]);
@@ -704,6 +799,7 @@ done
     const after = await read();
     expect(after.paths).toEqual([]);
     expect(after.head).toBe(before.head);
+    expect(after.fingerprint).toBe(before.fingerprint);
 
     // A path the repository does not ignore is still reported, so the empty
     // result above is ignore semantics rather than a probe that sees nothing.

@@ -7,7 +7,7 @@ import { useEffect,useRef,type ReactNode } from "react";
 import { act,cleanup,render,screen,waitFor } from "@testing-library/react";
 
 
-import { TerminalProvider,useTerminalContext } from "@/contexts";
+import { MAX_TABS,TerminalProvider,useTerminalContext } from "@/contexts";
 
 
 import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
@@ -6511,6 +6511,166 @@ describe("TerminalContainer", () => {
         usePaneLayoutStore.getState().getPane("right", "env-visible")?.activeTabId,
       ).toBe("right-second");
     });
+  });
+
+  /**
+   * A Multi Review workflow outlives the tab that launched it, so the launcher
+   * reattaches to an already-active one rather than failing. Asking for a
+   * workflow that is still on screen must surface that tab instead of stacking
+   * a second copy of the same workflow.
+   */
+  test("reveals an open Multi Review tab instead of duplicating its workflow", async () => {
+    const results: boolean[] = [];
+    function MultiReviewReattachHarness() {
+      const { createTab } = useTerminalContext();
+      const didRunRef = useRef(false);
+      useEffect(() => {
+        if (!createTab || didRunRef.current) return;
+        didRunRef.current = true;
+        results.push(createTab("multi-review", { multiReviewId: "workflow-1" }));
+        // The reviewer transcript is a different view of the same workflow, so
+        // it stays a tab of its own rather than folding into the overview.
+        results.push(createTab("multi-review", {
+          multiReviewId: "workflow-1", multiReviewReviewerId: "reviewer-1",
+        }));
+      }, [createTab]);
+      return null;
+    }
+
+    usePaneLayoutStore.setState((state) => ({
+      environments: new Map(state.environments).set("env-visible", {
+        root: {
+          kind: "split",
+          id: "split",
+          direction: "horizontal",
+          sizes: [50, 50],
+          depth: 1,
+          children: [
+            {
+              kind: "leaf",
+              id: "left",
+              tabs: [{
+                id: "open-multi-review",
+                type: "multi-review",
+                multiReviewTabData: { environmentId: "env-visible", workflowId: "workflow-1" },
+              }],
+              activeTabId: "open-multi-review",
+            },
+            {
+              kind: "leaf",
+              id: "right",
+              tabs: [{ id: "right-only", type: "plain" }],
+              activeTabId: "right-only",
+            },
+          ],
+        },
+        activePaneId: "right",
+        containerId: "container-visible",
+      }),
+    }));
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-visible"
+          containerId="container-visible"
+          isContainerRunning
+          isActive
+        />
+        <MultiReviewReattachHarness />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => expect(results).toEqual([true, true]));
+    const layout = usePaneLayoutStore.getState();
+    // The overview request reused the open tab and focused its pane; only the
+    // reviewer transcript was actually added.
+    expect(layout.getPane("left", "env-visible")?.tabs.map((tab) => tab.id))
+      .toEqual(["open-multi-review"]);
+    expect(layout.getPane("left", "env-visible")?.activeTabId).toBe("open-multi-review");
+    expect(layout.environments.get("env-visible")?.activePaneId).toBe("left");
+    expect(
+      layout.getPane("right", "env-visible")?.tabs
+        .filter((tab) => tab.type === "multi-review")
+        .map((tab) => tab.multiReviewTabData?.reviewerId),
+    ).toEqual(["reviewer-1"]);
+  });
+
+  /**
+   * Reuse is deliberately resolved *before* the tab limit, because surfacing a
+   * tab that already exists adds nothing to the count. A full workspace is
+   * exactly when reattaching matters most, so pin both halves: the open
+   * workflow is still reachable at MAX_TABS, and a genuinely new one is still
+   * refused there.
+   */
+  test("reattaches to an open Multi Review at the tab limit but still refuses a new one", async () => {
+    const results: boolean[] = [];
+    function TabLimitHarness() {
+      const { createTab } = useTerminalContext();
+      const didRunRef = useRef(false);
+      useEffect(() => {
+        if (!createTab || didRunRef.current) return;
+        didRunRef.current = true;
+        results.push(createTab("multi-review", { multiReviewId: "workflow-1" }));
+        results.push(createTab("multi-review", { multiReviewId: "workflow-2" }));
+      }, [createTab]);
+      return null;
+    }
+
+    const filler = Array.from({ length: MAX_TABS - 1 }, (_unused, index) => ({
+      id: `filler-${index}`,
+      type: "plain" as const,
+    }));
+    usePaneLayoutStore.setState((state) => ({
+      environments: new Map(state.environments).set("env-full", {
+        root: {
+          kind: "leaf",
+          id: "only",
+          tabs: [
+            {
+              id: "open-multi-review",
+              type: "multi-review",
+              multiReviewTabData: { environmentId: "env-full", workflowId: "workflow-1" },
+            },
+            ...filler,
+          ],
+          activeTabId: "filler-0",
+        },
+        activePaneId: "only",
+        containerId: "container-full",
+      }),
+    }));
+    mockToastError.mockClear();
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-full"
+          containerId="container-full"
+          isContainerRunning
+          isActive
+        />
+        <TabLimitHarness />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => expect(results).toEqual([true, false]));
+    const layout = usePaneLayoutStore.getState();
+    const pane = layout.getPane("only", "env-full");
+    // Nothing was added: the reuse focused the existing tab and the second
+    // request was rejected by the limit.
+    expect(pane?.tabs).toHaveLength(MAX_TABS);
+    expect(pane?.tabs.filter((tab) => tab.type === "multi-review")
+      .map((tab) => tab.multiReviewTabData?.workflowId)).toEqual(["workflow-1"]);
+    expect(pane?.activeTabId).toBe("open-multi-review");
+    // Reuse must stay silent; only the refused request warns.
+    expect(mockToastError).toHaveBeenCalledTimes(1);
+    expect(mockToastError).toHaveBeenLastCalledWith(
+      "Tab limit reached",
+      expect.objectContaining({
+        description: `You can have up to ${MAX_TABS} tabs open. Close a tab and try again.`,
+      }),
+    );
   });
 
 });

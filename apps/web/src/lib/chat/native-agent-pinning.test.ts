@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { NativeMessage } from "./native-message-types";
-import { normalizeOpenCodeNativeMessage } from "./native-message-adapters";
+import {
+  applyClaudeBackgroundTaskStates,
+  normalizeNativeMessages,
+  normalizeOpenCodeNativeMessage,
+} from "./native-message-adapters";
 import {
   pinActiveNativeAgentParts,
   snapshotNativeAgentActivity,
@@ -21,6 +25,37 @@ function assistantMessage(
 }
 
 describe("pinActiveNativeAgentParts", () => {
+  test.each([
+    ["running", true],
+    ["completed", false],
+  ] as const)(
+    "pins a %s background task card: %s",
+    (status, expectPinned) => {
+      const messages = normalizeNativeMessages(
+        applyClaudeBackgroundTaskStates([
+          assistantMessage("assistant-launch", [{
+            type: "tool-invocation",
+            content: "Bash",
+            toolName: "Bash",
+            toolUseId: "bash-1",
+            toolState: "success",
+            toolArgs: { command: "bun run dev", run_in_background: true },
+          }]),
+          assistantMessage("assistant-later", [{ type: "text", content: "Still working" }]),
+        ], {
+          "bg-dev": { id: "bg-dev", toolUseId: "bash-1", status },
+        }),
+      );
+
+      const pinned = pinActiveNativeAgentParts(messages);
+      const last = pinned.at(-1);
+
+      // A task the user can still stop belongs beside the composer; a finished
+      // one belongs in the transcript where it happened.
+      expect(last?.id.endsWith(":active-agents")).toBe(expectPinned);
+    },
+  );
+
   test("moves active subagents to the bottom as temporary message rows", () => {
     const messages: NativeMessage[] = [
       assistantMessage("assistant-1", [
@@ -554,12 +589,48 @@ describe("pinActiveNativeAgentParts", () => {
         id: "task-group:task-1",
         label: "Validate the implementation",
         status: "active",
+        kind: "subagent",
       },
       {
         id: "subagent:agent-reusable",
         label: "Lovelace",
         status: "failed",
+        kind: "subagent",
       },
     ]);
+  });
+
+  test("snapshots a provider-owned task with its full lifecycle", () => {
+    const messages = normalizeNativeMessages(
+      applyClaudeBackgroundTaskStates([
+        assistantMessage("assistant-task", [{
+          type: "tool-invocation",
+          content: "Bash",
+          toolName: "Bash",
+          toolUseId: "bash-task",
+          toolState: "success",
+          toolArgs: {
+            command: "bun test",
+            description: "Run the full suite",
+            run_in_background: true,
+          },
+        }]),
+      ], {
+        "bg-suite": {
+          id: "bg-suite",
+          toolUseId: "bash-task",
+          description: "Run the full suite",
+          status: "paused",
+        },
+      }),
+    );
+
+    expect(snapshotNativeAgentActivity(messages)).toEqual([{
+      id: "background-task:bg-suite",
+      label: "Run the full suite",
+      status: "active",
+      kind: "background-task",
+      backgroundTaskStatus: "paused",
+    }]);
   });
 });

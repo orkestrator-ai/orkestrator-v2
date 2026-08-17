@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   MULTI_REVIEW_MAX_REVIEWERS,
+  MULTI_REVIEW_MAX_SNAPSHOT_PATHS,
   MULTI_REVIEW_WORKFLOW_VERSION,
   isMultiReviewTerminalPhase,
   isMultiReviewWorkflow,
@@ -149,6 +150,65 @@ describe("multi review protocol", () => {
       id: "workflow-1", environmentId: "env-1", projectId: "project-1", targetBranch: "main",
       reviewers: [reviewer, reviewer], fixModel: input.fixModel, phase: "reviewing",
       createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(), backendRevision: 1,
+    })).toBe(false);
+  });
+
+  test("validates the durable review worktree snapshot", () => {
+    const workflow = {
+      version: MULTI_REVIEW_WORKFLOW_VERSION,
+      controller: "backend",
+      id: "workflow-snapshot", environmentId: "env-1", projectId: "project-1",
+      targetBranch: "main",
+      reviewers: [{ id: "reviewer-1", agent: "claude", model: "opus", status: "pending" }],
+      fixModel: { agent: "codex", model: "gpt-5.6" },
+      reviewWorktreeSnapshot: {
+        status: "dirty",
+        head: "1".repeat(40),
+        paths: ["src/feature.ts"],
+        fingerprint: "a".repeat(64),
+        capturedAt: new Date(0).toISOString(),
+      },
+      phase: "reviewing",
+      createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(),
+      backendRevision: 1,
+    };
+
+    expect(isMultiReviewWorkflow(workflow)).toBe(true);
+    expect(isMultiReviewWorkflow({
+      ...workflow,
+      reviewWorktreeSnapshot: { ...workflow.reviewWorktreeSnapshot, fingerprint: "bad" },
+    })).toBe(false);
+    expect(isMultiReviewWorkflow({
+      ...workflow,
+      reviewWorktreeSnapshot: { ...workflow.reviewWorktreeSnapshot, status: "clean" },
+    })).toBe(false);
+    expect(isMultiReviewWorkflow({ ...workflow, reviewSnapshotStale: true })).toBe(true);
+    expect(isMultiReviewWorkflow({ ...workflow, reviewSnapshotStale: "yes" })).toBe(false);
+
+    // `Date.parse` coerces its argument, so a numeric capturedAt would sail
+    // through a check that only asserted the parse succeeded: 0 stringifies to
+    // "0", which V8 reads as a valid date.
+    for (const capturedAt of [0, 1, null, {}, ["2020-01-01"], "not a date"]) {
+      expect(isMultiReviewWorkflow({
+        ...workflow,
+        reviewWorktreeSnapshot: { ...workflow.reviewWorktreeSnapshot, capturedAt },
+      })).toBe(false);
+    }
+
+    // A clean snapshot pins the empty path set; a dirty one must name at least
+    // one path, and neither may exceed the persisted bound.
+    expect(isMultiReviewWorkflow({
+      ...workflow,
+      reviewWorktreeSnapshot: {
+        ...workflow.reviewWorktreeSnapshot, status: "clean", paths: [],
+      },
+    })).toBe(true);
+    expect(isMultiReviewWorkflow({
+      ...workflow,
+      reviewWorktreeSnapshot: {
+        ...workflow.reviewWorktreeSnapshot,
+        paths: Array.from({ length: MULTI_REVIEW_MAX_SNAPSHOT_PATHS + 1 }, () => "src/a.ts"),
+      },
     })).toBe(false);
   });
 

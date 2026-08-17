@@ -1,6 +1,6 @@
 import { createInterface } from "node:readline";
 import { spawn, type ChildProcess } from "node:child_process";
-import { cp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -65,6 +65,31 @@ function retainSafeAgentTestEnvironment(env: NodeJS.ProcessEnv): void {
 /** Isolated replacement for `~/.docker`, pointed at by `DOCKER_CONFIG`. */
 export function agentTestDockerConfigDir(isolatedCredentialRoot: string): string {
   return path.join(isolatedCredentialRoot, "docker-disabled");
+}
+
+export function agentTestKeychainDir(isolatedCredentialRoot: string): string {
+  return path.join(isolatedCredentialRoot, "home", "Library", "Keychains");
+}
+
+/**
+ * Remove the legacy host-Keychain link created by older agent-test profiles.
+ *
+ * Linking the complete writable login Keychain into a HOME used by terminals and
+ * repository-controlled subprocesses exposed unrelated services and survived a
+ * later credential opt-out. Current profiles broker provider-specific secrets at
+ * bridge startup instead, so every launch reconciles this managed target even
+ * when no Keychain-backed provider is authorized.
+ *
+ * A real directory is profile-owned state and must never be removed here.
+ */
+export async function removeAgentTestHostKeychainLink(
+  isolatedCredentialRoot: string,
+): Promise<boolean> {
+  const target = agentTestKeychainDir(isolatedCredentialRoot);
+  const existing = await lstat(target).catch(() => null);
+  if (!existing?.isSymbolicLink()) return false;
+  await rm(target, { force: true });
+  return true;
 }
 
 export function hostDockerConfigDir(
@@ -161,6 +186,7 @@ export function createBackendProcessEnvironment(
   delete env.ORKESTRATOR_DOCKER_IMAGE;
   delete env.ORKESTRATOR_CREDENTIAL_SOURCE;
   delete env.ORKESTRATOR_AGENT_TEST_HOST_HOME;
+  delete env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR;
   if (runtime?.flavor === "agent-test") {
     const allowed = new Set(runtime.credentialSources ?? []);
     const inherited = { ...parentEnv };
@@ -186,8 +212,11 @@ export function createBackendProcessEnvironment(
       if (inherited.ANTHROPIC_API_KEY) env.ANTHROPIC_API_KEY = inherited.ANTHROPIC_API_KEY;
       const claudeConfigDir = inherited.CLAUDE_CONFIG_DIR?.trim()
         || (inheritedHome ? path.join(inheritedHome, ".claude") : undefined);
-      if (claudeConfigDir) env.CLAUDE_CONFIG_DIR = claudeConfigDir;
-    } else if (runtime.isolatedCredentialRoot) {
+      if (claudeConfigDir) {
+        env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR = claudeConfigDir;
+      }
+    }
+    if (runtime.isolatedCredentialRoot) {
       env.CLAUDE_CONFIG_DIR = path.join(runtime.isolatedCredentialRoot, "claude");
     }
     if (allowed.has("codex")) {
@@ -441,6 +470,9 @@ export class BackendProcess {
         sourceDir: hostDockerConfigDir(process.env),
       }).catch((error: unknown) => {
         console.warn("[Desktop] Could not seed the isolated Docker context; falling back to the default context:", error);
+      });
+      await removeAgentTestHostKeychainLink(isolatedCredentialRoot).catch((error: unknown) => {
+        console.warn("[Desktop] Could not remove a legacy host Keychain link from the isolated profile:", error);
       });
     }
     const child = spawn(bun, args, { env, stdio: ["ignore", "pipe", "pipe"] });

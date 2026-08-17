@@ -1465,3 +1465,37 @@ Post-fix stress verification:
   same pattern in a case the earlier sweep did not convert. Nothing in the
   failing path touches the transcript, agent cards, or background tasks, which
   are the only areas the change that observed this touched.
+
+## `Electron backend command registry > rejects malformed container status framing and invalid encoded sections` (`tests/unit/electron/commands-registry-terminal.test.ts:1408`)
+
+- **Status:** open
+- **Date observed:** 2026-08-17
+- **Original command:**
+  `bun run test:logged -- --name root-tests -- bun test ./tests --parallel=4 --only-failures`,
+  at `55539f08ac3dcb3b4b9e18e522f881e9992f9057` on `unify-agent-components`.
+- **Worker configuration:** four Bun workers on the root suite alone, not under
+  `scripts/test-all.ts`. Two other suites (bridges, web) were run back to back in
+  the same session, so host load was above a quiet single-suite run.
+- **Failure:** two symptoms from one case. The assertion at
+  `commands-registry-terminal.test.ts:1418` reported
+  `expect(received).toThrow(expected)` — expected substring `"Malformed"`,
+  received `Command failed: docker exec container-1 bash -lc …` (the git-status
+  script echoed back) — and the case then timed out after 5000 ms (5019.09 ms).
+  The suite's additional `# Unhandled error between tests` is the same case, not
+  a second failure.
+- **Suite counts:** `3727 pass, 1 skip, 1 fail, 1 error. Ran 3729 tests across 178 files. [379.1s]`
+- **Isolated rerun:** `bun run test:logged -- --name root-terminal-isolated -- bun test tests/unit/electron/commands-registry-terminal.test.ts`
+  → exit 0 in 31.7 s. The same aggregate command passed at the follow-up commit
+  in the same session (79.6 s, exit 0).
+- **Hypothesis:** the case exercises a rejection path whose fake `docker exec`
+  resolves through a queued command stub, and it asserts on the rejection
+  synchronously inside a 5 s per-test budget. The received message is the
+  *unrejected* command failure rather than the framing error, which suggests the
+  stub answering a different queued invocation than the one under test — an
+  ordering dependency between queued fakes rather than plain slowness, since the
+  isolated file takes 31.7 s in total and no single case approaches 5 s there. A
+  recurrence should record which stubbed command actually answered before the
+  per-test timeout is raised; raising it would hide the ordering bug rather than
+  fix it. Nothing in the failing path touches the transcript, agent cards, or
+  background tasks, which are the only areas the change that observed this
+  touched.

@@ -184,6 +184,116 @@ describe("Claude activity in the shared native transcript", () => {
     // not treat it as evidence that the task is already on screen.
     expect(collectRenderedBackgroundTaskIds([normalized!]).size).toBe(0);
   });
+
+  const lateBackgroundLaunch = (backgroundTaskId: string): NativeMessage => ({
+    id: "assistant-late-background",
+    role: "assistant",
+    content: "",
+    createdAt: "2026-08-16T10:00:00.000Z",
+    parts: [{
+      type: "tool-invocation",
+      content: "Bash",
+      toolName: "Bash",
+      toolUseId: "bash-late",
+      toolState: "success",
+      // No `run_in_background`: this command was started in the foreground and
+      // backgrounded afterwards, so only its result names the task.
+      toolArgs: { command: "bun run dev", description: "Run the dev server" },
+      backgroundTaskId,
+    }],
+  });
+
+  test.each(["running", "paused"] as const)(
+    "cards a command backgrounded after it started, reported as %s",
+    (status) => {
+      const [decorated] = applyClaudeBackgroundTaskStates(
+        [lateBackgroundLaunch("bg-dev")],
+        { "bg-dev": { id: "bg-dev", description: "Run the dev server", status } },
+      );
+
+      expect(decorated?.parts[0]?.backgroundTask).toEqual({
+        id: "bg-dev",
+        description: "Run the dev server",
+        status,
+      });
+      expect(decorated?.parts[0]?.agentState).toBe("active");
+
+      const [normalized] = normalizeNativeMessages([decorated!]);
+      expect(normalized?.parts[0]?.type).toBe("task-group");
+      expect(collectRenderedBackgroundTaskIds([normalized!])).toEqual(
+        new Set(["bg-dev"]),
+      );
+    },
+  );
+
+  test("recovers a late launch id from an inline result when nothing deferred it", () => {
+    // Optimistic and bridge-direct messages still carry their result inline,
+    // which is the only path on which the output scan can fire.
+    const message = lateBackgroundLaunch("");
+    delete message.parts[0]!.backgroundTaskId;
+    message.parts[0]!.toolOutput =
+      "Command was manually backgrounded by user with ID: bg-dev";
+
+    const [decorated] = applyClaudeBackgroundTaskStates([message], {
+      "bg-dev": { id: "bg-dev", status: "running" },
+    });
+    expect(decorated?.parts[0]?.backgroundTask).toMatchObject({
+      id: "bg-dev",
+      status: "running",
+    });
+  });
+
+  test("refuses to card a non-shell row whose result merely quotes the note", () => {
+    const quotedNote: NativeMessage = {
+      id: "assistant-read",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-08-16T10:00:00.000Z",
+      parts: [{
+        type: "tool-invocation",
+        content: "Read",
+        toolName: "Read",
+        toolUseId: "read-1",
+        toolState: "success",
+        toolArgs: { file_path: "/repo/native-message-adapters.ts" },
+        toolOutput: "Command running in background with ID: bg-dev. …",
+      }],
+    };
+    const [decorated] = applyClaudeBackgroundTaskStates([quotedNote], {
+      "bg-dev": { id: "bg-dev", description: "Run the dev server", status: "running" },
+    });
+
+    expect(decorated?.parts[0]?.backgroundTask).toBeUndefined();
+    const [normalized] = normalizeNativeMessages([decorated!]);
+    expect(collectRenderedBackgroundTaskIds([normalized!]).size).toBe(0);
+  });
+
+  test("leaves an action row a plain tool row even once it carries lifecycle", () => {
+    // `TaskOutput` is decorated with the task's status so the row can label it,
+    // but it launched nothing: promoting it would put a second card — and a
+    // second stop control — on screen for one task.
+    const actionRow: NativeMessage = {
+      id: "assistant-output",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-08-16T10:00:00.000Z",
+      parts: [{
+        type: "tool-invocation",
+        content: "TaskOutput",
+        toolName: "TaskOutput",
+        toolState: "success",
+        toolArgs: { task_id: "bg-dev" },
+      }],
+    };
+    const [decorated] = applyClaudeBackgroundTaskStates([actionRow], {
+      "bg-dev": { id: "bg-dev", description: "Run the dev server", status: "running" },
+    });
+
+    expect(decorated?.parts[0]?.backgroundTask).toMatchObject({ id: "bg-dev" });
+    const [normalized] = normalizeNativeMessages([decorated!]);
+    expect(normalized?.parts[0]?.type).toBe("tool-group");
+    expect(collectRenderedBackgroundTaskIds([normalized!]).size).toBe(0);
+  });
 });
 
 describe("native message adapters", () => {

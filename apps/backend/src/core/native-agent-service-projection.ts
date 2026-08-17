@@ -1,4 +1,5 @@
 import * as shared from "./native-agent-service-shared.js";
+import { recoverBackgroundTaskLaunchId } from "@orkestrator/protocol/native-agent";
 import {
   NATIVE_DISCOVERY_RETRY_MS,
   NATIVE_MODEL_CATALOG_CACHE_LIMIT,
@@ -120,50 +121,21 @@ export type NativeAgentServiceLayerTypes = [
 
 import { NativeAgentServiceDispatch } from "./native-agent-service-dispatch.ts";
 
-const BACKGROUND_TASK_ID_MAX_LENGTH = 512;
-const BACKGROUND_TASK_LAUNCH_SCAN_BYTES = 4_096;
-const BACKGROUND_TASK_LAUNCH_ID_PATTERN =
-  /\bbackground(?:ed by user)?\s*(?:with ID:|\(ID:)\s*([^\s.)]+)/i;
-
-function boundedBackgroundTaskId(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const id = value.trim();
-  return id && id.length <= BACKGROUND_TASK_ID_MAX_LENGTH ? id : undefined;
-}
-
 /**
  * Preserve only the opaque launch id before the full result moves behind a
- * detail reference. The scan is deliberately bounded so projection never
- * parses a multi-megabyte tool result merely to decorate one transcript row.
+ * detail reference.
+ *
+ * This is the renderer's only chance to see the text: `projectionPart` strips
+ * `toolOutput` from every part it sends. The recovery rule itself lives in
+ * `@orkestrator/protocol` so both sides of the boundary agree on which rows
+ * own a task — a command backgrounded with Ctrl+B or by a foreground timeout
+ * carries no `run_in_background` argument, and would otherwise be invisible.
  */
 function backgroundTaskIdFromProjectedLaunch(
   part: Record<string, unknown>,
 ): string | undefined {
-  if (part.type !== "tool-invocation" || typeof part.toolOutput !== "string") {
-    return undefined;
-  }
-  const args = part.toolArgs;
-  if (!args || typeof args !== "object" || Array.isArray(args)) return undefined;
-  if ((args as Record<string, unknown>).run_in_background !== true) return undefined;
-
-  const boundedOutput = part.toolOutput.slice(0, BACKGROUND_TASK_LAUNCH_SCAN_BYTES);
-  const textMatch = boundedOutput.match(BACKGROUND_TASK_LAUNCH_ID_PATTERN);
-  const textId = boundedBackgroundTaskId(textMatch?.[1]);
-  if (textId) return textId;
-
-  if (part.toolOutput.length > BACKGROUND_TASK_LAUNCH_SCAN_BYTES) return undefined;
-  try {
-    const parsed = JSON.parse(part.toolOutput) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return undefined;
-    }
-    const record = parsed as Record<string, unknown>;
-    return boundedBackgroundTaskId(
-      record.backgroundTaskId ?? record.task_id ?? record.taskId,
-    );
-  } catch {
-    return undefined;
-  }
+  if (part.type !== "tool-invocation") return undefined;
+  return recoverBackgroundTaskLaunchId(part);
 }
 
 export abstract class NativeAgentServiceProjection extends NativeAgentServiceDispatch {

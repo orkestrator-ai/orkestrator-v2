@@ -3540,6 +3540,129 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
     expect(screen.getByRole("button", { name: "Stop Run the full suite" })).toBeTruthy();
   });
 
+  test("frees the stop control again when an accepted stop left the task alive", async () => {
+    // The backend took the request, so the button holds to prevent a duplicate.
+    // If the next authoritative snapshot still shows live work, holding forever
+    // would leave the only way to ask again permanently disabled.
+    const message = (status: "running" | "paused") => makeMessage([{
+      type: "tool-invocation",
+      content: "Bash",
+      toolName: "Bash",
+      toolState: "success",
+      toolArgs: { command: "bun run dev", run_in_background: true },
+      backgroundTask: { id: "bg-dev", description: "Run the dev server", status },
+    }]);
+    const view = render(
+      <NativeMessage message={message("running")} stopBackgroundTask={async () => true} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop Run the dev server" }));
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Stop Run the dev server" })
+          .hasAttribute("disabled"),
+      ).toBe(true);
+    });
+
+    view.rerender(
+      <NativeMessage message={message("paused")} stopBackgroundTask={async () => true} />,
+    );
+    expect(
+      screen.getByRole("button", { name: "Stop Run the dev server" })
+        .hasAttribute("disabled"),
+    ).toBe(false);
+  });
+
+  test("cards a command backgrounded after it started, with a stop control", () => {
+    // Ctrl+B and a foreground timeout both background a command launched
+    // without `run_in_background`, so the argument alone cannot route this row.
+    render(
+      <NativeMessage
+        stopBackgroundTask={async () => true}
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "Bash",
+          toolName: "Bash",
+          toolState: "success",
+          toolArgs: { command: "bun run dev", description: "Run the dev server" },
+          backgroundTask: {
+            id: "bg-dev",
+            description: "Run the dev server",
+            status: "running",
+          },
+        }])}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /Task Run the dev server Running/ }))
+      .toBeTruthy();
+    expect(screen.getByRole("button", { name: "Stop Run the dev server" })).toBeTruthy();
+  });
+
+  test("loads a background task card's deferred launch output once expanded", async () => {
+    const loadToolDetails = mock(async (detailRef: string) => ({
+      detailRef,
+      toolOutput: "Command running in background with ID: bg-suite.",
+    }));
+    render(
+      <NativeMessage
+        loadToolDetails={loadToolDetails}
+        stopBackgroundTask={async () => true}
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "Bash",
+          toolName: "Bash",
+          toolState: "success",
+          toolArgs: { command: "bun test", run_in_background: true },
+          // The projection defers every tool result, so this is the only way
+          // the card can ever reach the launch output.
+          detailRef: "detail-background-launch",
+          backgroundTask: {
+            id: "bg-suite",
+            description: "Run the full suite",
+            status: "running",
+          },
+        }])}
+      />,
+    );
+
+    expect(loadToolDetails).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /Task Run the full suite/ }));
+    await waitFor(() =>
+      expect(loadToolDetails).toHaveBeenCalledWith("detail-background-launch")
+    );
+    expect(
+      await screen.findByText("Command running in background with ID: bg-suite."),
+    ).toBeTruthy();
+  });
+
+  test("surfaces a failed deferred load on the background task card", async () => {
+    render(
+      <NativeMessage
+        loadToolDetails={mock(async () => {
+          throw new Error("Tool details expired");
+        })}
+        stopBackgroundTask={async () => true}
+        message={makeMessage([{
+          type: "tool-invocation",
+          content: "Bash",
+          toolName: "Bash",
+          toolState: "success",
+          toolArgs: { command: "bun test", run_in_background: true },
+          detailRef: "detail-background-launch-error",
+          backgroundTask: {
+            id: "bg-error",
+            description: "Run the failing suite",
+            status: "running",
+          },
+        }])}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Task Run the failing suite/ }));
+    expect(await screen.findByText("Tool details expired")).toBeTruthy();
+  });
+
   test("shows a failed task action instead of the task's own lifecycle state", () => {
     render(
       <NativeMessage

@@ -30,6 +30,7 @@ import {
   type NativeAgentStatus,
 } from "@/lib/chat/native-agent-status";
 import { nativeAgentLatestActivity } from "@/lib/chat/native-agent-preview";
+import { isTaskTool } from "@/lib/chat/native-message-adapters";
 import {
   type NativeAgentGroupPart,
   type NativeBackgroundTask,
@@ -44,6 +45,7 @@ import {
   NativeMessagePartRenderer,
   markdownComponents,
   useAgentExpansion,
+  useDeferredToolResult,
 } from "./NativeMessage.shared";
 
 function getSubagentStatusLabel(status: NativeAgentStatus): string {
@@ -70,13 +72,6 @@ function getSubagentStatusClasses(status: NativeAgentStatus): string {
 
 function isTerminalAgentStatus(status: NativeAgentStatus): boolean {
   return status === "finished" || status === "failed";
-}
-
-function isSubagentLaunchTool(toolName?: string): boolean {
-  const normalized = toolName?.trim().toLowerCase();
-  return normalized === "task"
-    || normalized === "agent"
-    || normalized === "spawn_subagent";
 }
 
 interface SubagentPreview {
@@ -442,11 +437,16 @@ function StopBackgroundTaskButton({
   const stopBackgroundTask = onStop ?? contextStop;
   const [stopping, setStopping] = useState(false);
   const taskId = task.id;
+  const status = task.status;
 
-  // A stop that succeeded leaves the button disabled until the authoritative
-  // snapshot reports a terminal status, which is what unmounts this control.
-  // A tab remounted mid-stop starts from the snapshot, never from this flag.
-  useEffect(() => { setStopping(false); }, [taskId]);
+  /*
+   * A stop that succeeded leaves the button disabled until the task's own
+   * lifecycle moves, which normally means a terminal status that unmounts this
+   * control. Releasing on *any* status change is what stops a request the
+   * provider accepted but did not honour from disabling the only way to ask
+   * again. A tab remounted mid-stop starts from the snapshot, never this flag.
+   */
+  useEffect(() => { setStopping(false); }, [status, taskId]);
 
   const label = backgroundTaskLabel(task);
   const stop = useCallback(async () => {
@@ -502,6 +502,7 @@ export function BackgroundTaskCard({
   task,
   command,
   result,
+  resultPending = false,
   open,
   onOpenChange,
   onStop,
@@ -512,6 +513,11 @@ export function BackgroundTaskCard({
   command?: string;
   /** Launch output, shown in the expanded body. */
   result?: string;
+  /**
+   * True while the launch output is still behind a detail reference. The row
+   * has to be expandable before it is in hand, or it could never be fetched.
+   */
+  resultPending?: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** Overrides `BackgroundTaskStopContext` for cards rendered outside a message. */
@@ -524,7 +530,7 @@ export function BackgroundTaskCard({
   // The header already carries the description, so the collapsed second line is
   // for what it does not say: the command actually running.
   const preview = command && command !== description ? command : undefined;
-  const hasBody = Boolean(command || result);
+  const hasBody = Boolean(command || result || resultPending);
 
   // The failure belongs to the attempt, not the task: a later status change
   // means the question the message answered is no longer being asked.
@@ -834,7 +840,7 @@ export function TaskGroupPart({
   const [isOpen, setIsOpen] = useAgentExpansion(part, partKey);
   const [stopError, setStopError] = useState<string | null>(null);
   const backgroundTask = part.task.backgroundTask;
-  const backgroundAgentTask = backgroundTask && isSubagentLaunchTool(part.task.toolName)
+  const backgroundAgentTask = backgroundTask && isTaskTool(part.task.toolName)
     ? backgroundTask
     : undefined;
   const standaloneBackgroundTask = backgroundTask && !backgroundAgentTask
@@ -881,9 +887,12 @@ export function TaskGroupPart({
   const hideCounts = useContext(AgentPlatformContext) === "cursor";
   const durationMs = numberToolArg(part.task.toolArgs, "durationMs");
   // See `SubagentPart`: the parse is proportional to the 512 KiB output cap.
+  // The projection defers every tool result, so the launch output an agent card
+  // shows is fetched on first expansion rather than read off the part.
+  const deferredResult = useDeferredToolResult(part.task, isOpen);
   const result = useMemo(
-    () => usefulAgentOutput(part.task.toolOutput),
-    [part.task.toolOutput],
+    () => usefulAgentOutput(deferredResult.toolOutput) ?? deferredResult.toolError,
+    [deferredResult.toolError, deferredResult.toolOutput],
   );
   const preview = useMemo(() => {
     const latest = nativeAgentLatestActivity(part);
@@ -907,6 +916,7 @@ export function TaskGroupPart({
         task={standaloneBackgroundTask}
         command={stringToolArg(part.task.toolArgs, "command") ?? prompt}
         result={result}
+        resultPending={Boolean(part.task.detailRef) && result === undefined}
         open={isOpen}
         onOpenChange={setIsOpen}
         embedded={embedded}

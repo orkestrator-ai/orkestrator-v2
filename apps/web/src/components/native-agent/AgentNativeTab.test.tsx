@@ -1969,6 +1969,86 @@ describe("AgentNativeTab", () => {
       ));
     });
 
+    test("retires the fallback card once the transcript renders the same task", async () => {
+      /*
+       * The pinned card exists only because the transcript cannot show the
+       * task. The moment the launch row arrives, keeping both would put two
+       * stop controls on screen for one task, and the reader could not tell
+       * which of the two the task actually belongs to.
+       */
+      const launchRow = {
+        id: "assistant-late-launch",
+        role: "assistant" as const,
+        content: "",
+        createdAt: "2026-08-16T10:00:00.000Z",
+        parts: [{
+          type: "tool-invocation",
+          content: "Bash",
+          toolName: "Bash",
+          toolUseId: "bash-launch",
+          toolState: "success",
+          toolArgs: {
+            command: "bun run dev",
+            description: "Run the dev server",
+            run_in_background: true,
+          },
+        }],
+      };
+      const seed = (messages: unknown[]) => seedProjection({
+        backgroundTasks: [{
+          id: "bg-dev",
+          toolUseId: "bash-launch",
+          description: "Run the dev server",
+          status: "running",
+        }],
+        messages: messages as never,
+      });
+
+      seed([]);
+      const view = render(
+        <AgentNativeTab
+          tabId="tab-claude-fallback-retire"
+          data={identity("claude")}
+          isActive
+          refreshRequestId={0}
+        />,
+      );
+
+      expect(await screen.findByRole("button", {
+        name: /Task Run the dev server Running/,
+      })).toBeTruthy();
+      expect(screen.getAllByRole("button", { name: "Stop Run the dev server" }))
+        .toHaveLength(1);
+
+      seed([launchRow]);
+      view.rerender(
+        <AgentNativeTab
+          tabId="tab-claude-fallback-retire"
+          data={identity("claude")}
+          isActive
+          refreshRequestId={1}
+        />,
+      );
+
+      /*
+       * The launch row now owns the task, so the fallback withdraws. It goes to
+       * zero here rather than one because this harness does not paint
+       * virtualized transcript rows — only the dock, which is where the
+       * fallback lives. `native-message-adapters.test.ts` covers the other half:
+       * that this same row does render a card carrying the task's id.
+       */
+      await waitFor(() => expect(
+        screen.queryByRole("button", { name: "Stop Run the dev server" }) === null,
+      ).toBe(true));
+      expect(screen.queryByRole("button", {
+        name: /Task Run the dev server Running/,
+      }) === null).toBe(true);
+      // The task is still live, and the tab still says so.
+      expect(await screen.findByRole("status", {
+        name: "1 background task running: Run the dev server.",
+      })).toBeTruthy();
+    });
+
     test("announces background task pause and stop lifecycle accurately", async () => {
       const seedBackgroundStatus = (
         status: "running" | "paused" | "killed",

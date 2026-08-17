@@ -12,6 +12,10 @@ import type {
   NativeTaskGroupPart,
   NativeToolGroupPart,
 } from "./native-message-types";
+import {
+  isBackgroundCapableShellTool,
+  recoverBackgroundTaskLaunchId,
+} from "@orkestrator/protocol/native-agent";
 import { parseLocalFilePathFromUrl } from "./file-url";
 import type { AcpMessage } from "@/lib/acp-client";
 
@@ -92,8 +96,16 @@ export function parseNativeAttachmentsFromContent(
   return { cleanContent, attachments };
 }
 
-function isTaskTool(toolName?: string): boolean {
-  const normalized = toolName?.toLowerCase();
+/**
+ * True for a tool whose call launches a subagent.
+ *
+ * Exported because the renderer routes a promoted launch on the same answer:
+ * a subagent card renders the group's captured child tools, a background-task
+ * card has none to render. Two copies of this list would let those decisions
+ * disagree and silently drop a child's captured activity.
+ */
+export function isTaskTool(toolName?: string): boolean {
+  const normalized = toolName?.trim().toLowerCase();
   return normalized === "task"
     || normalized === "agent"
     || normalized === "spawn_subagent";
@@ -138,8 +150,13 @@ export function normalizeClaudePart(part: ClaudeMessagePart): NativeMessagePart 
 function isBackgroundTaskLaunchPart(
   part: Extract<NativeMessagePart, { type: "tool-invocation" }>,
 ): boolean {
+  if (part.backgroundTask === undefined) return false;
+  // A row that merely acts on a task by id — TaskOutput, TaskStop — is
+  // decorated with the same lifecycle but launched nothing, so it stays an
+  // ordinary tool row rather than becoming a second card for one task.
+  if (isBackgroundTaskActionTool(part.toolName)) return false;
   return part.toolArgs?.run_in_background === true
-    && part.backgroundTask !== undefined;
+    || isBackgroundCapableShellTool(part.toolName);
 }
 
 function groupTaskParts(
@@ -671,41 +688,40 @@ export function isBackgroundTaskActionTool(toolName?: string): boolean {
   return normalized !== undefined && BACKGROUND_TASK_ACTION_TOOL_NAMES.has(normalized);
 }
 
-function isBackgroundTaskLaunch(part: ClaudeMessagePart): boolean {
-  return (
-    part.type === "tool-invocation"
-    && part.toolArgs?.run_in_background === true
-  );
-}
-
-/*
- * Claude emits three different notes when a command ends up in the background,
- * and all three carry the same durable id:
- *   "Command running in background with ID: <id>. …"
- *   "Command was manually backgrounded by user with ID: <id>"
- *   "…timeout and was moved to the background (ID: <id>). …"
- * Matching only the first would leave Ctrl+B and timeout-backgrounded commands
- * unnamed and unlabelled after a transcript rehydration.
+/**
+ * The id of the background task this row launched, if it launched one.
+ *
+ * `backgroundTaskId` is the projection's recovery, performed before the result
+ * moved behind a detail reference — which is every projected row, so it is the
+ * path that actually fires in the app. The output scan still matters for
+ * optimistic and bridge-direct messages that carry their result inline.
  */
-const LAUNCH_TASK_ID_PATTERN =
-  /\bbackground(?:ed by user)?\s*(?:with ID:|\(ID:)\s*([^\s.)]+)/i;
-
 function backgroundTaskIdFromLaunchOutput(
-  part: Pick<ClaudeMessagePart, "backgroundTaskId" | "toolOutput">,
+  part: Pick<
+    ClaudeMessagePart,
+    "backgroundTaskId" | "toolArgs" | "toolName" | "toolOutput"
+  >,
 ): string | undefined {
   if (part.backgroundTaskId) return part.backgroundTaskId;
-  const output = part.toolOutput;
-  if (!output) return undefined;
+  return recoverBackgroundTaskLaunchId(part);
+}
 
-  const textMatch = output.match(LAUNCH_TASK_ID_PATTERN);
-  if (textMatch?.[1]) return textMatch[1];
-
-  try {
-    const parsed = JSON.parse(output) as Record<string, unknown>;
-    return stringArgument(parsed, "backgroundTaskId", "task_id", "taskId");
-  } catch {
-    return undefined;
-  }
+/**
+ * True for a tool row that owns a background task.
+ *
+ * An explicit `run_in_background` argument is the common case. A shell row
+ * whose result named a task id is the other one: Claude backgrounds a running
+ * command on Ctrl+B and on a foreground timeout, and neither can change the
+ * arguments the command was launched with, so the argument alone would leave
+ * both unlabelled and uncontrollable.
+ */
+function isBackgroundTaskLaunch(
+  part: ClaudeMessagePart,
+  recoveredId: string | undefined,
+): boolean {
+  if (part.type !== "tool-invocation") return false;
+  return part.toolArgs?.run_in_background === true
+    || (recoveredId !== undefined && isBackgroundCapableShellTool(part.toolName));
 }
 
 function sameBackgroundTask(
@@ -755,9 +771,7 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
       if (isTaskTool(part.toolName) && part.agentState === undefined) {
         hasSubagentLaunch = true;
       }
-      const recoveredId = isBackgroundTaskLaunch(part)
-        ? backgroundTaskIdFromLaunchOutput(part)
-        : undefined;
+      const recoveredId = backgroundTaskIdFromLaunchOutput(part);
       const authoritative = (part.toolUseId
         ? tasksByToolUseId.get(part.toolUseId)
         : undefined)
@@ -792,9 +806,7 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
       if (part.type !== "tool-invocation") return part;
 
       const isAgentTool = isTaskTool(part.toolName);
-      const recoveredId = isBackgroundTaskLaunch(part)
-        ? backgroundTaskIdFromLaunchOutput(part)
-        : undefined;
+      const recoveredId = backgroundTaskIdFromLaunchOutput(part);
       const authoritativeLaunch = (part.toolUseId
         ? tasksByToolUseId.get(part.toolUseId)
         : undefined)
@@ -826,7 +838,7 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
             : "active";
       }
 
-      if (!isAgentTool && isBackgroundTaskLaunch(part)) {
+      if (!isAgentTool && isBackgroundTaskLaunch(part, recoveredId)) {
         const launch =
           authoritativeLaunch
           ?? (recoveredId ? tasksById.get(recoveredId) : undefined)

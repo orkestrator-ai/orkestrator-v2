@@ -2,6 +2,8 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
+  useState,
   type AnchorHTMLAttributes,
   type ReactNode,
 } from "react";
@@ -126,6 +128,64 @@ export function cacheToolDetails(details: NativeAgentToolDetails): void {
     if (entry) toolDetailBrowserCacheBytes -= entry.bytes;
     toolDetailBrowserCache.delete(oldest);
   }
+}
+
+/**
+ * A tool row's own result, fetched on first expansion when the projection has
+ * moved it behind a detail reference.
+ *
+ * Agent and background-task cards render a launch result inside their own
+ * layout rather than as a whole tool row, so they cannot reuse
+ * `DeferredToolMessagePart`. Without this they show an empty body for every
+ * projected row: `projectionPart` strips `toolOutput` from *every* part it
+ * sends, so the inline field survives only on optimistic and bridge-direct
+ * messages.
+ */
+export function useDeferredToolResult(
+  source: { toolOutput?: string; toolError?: string; detailRef?: string },
+  open: boolean,
+): { toolOutput?: string; toolError?: string } {
+  const loadToolDetails = useContext(ToolDetailLoaderContext);
+  const detailRef = source.detailRef;
+  const [details, setDetails] = useState<NativeAgentToolDetails | undefined>(
+    () => (detailRef ? cachedToolDetails(detailRef) : undefined),
+  );
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setDetails(detailRef ? cachedToolDetails(detailRef) : undefined);
+    setLoadError(null);
+  }, [detailRef]);
+
+  useEffect(() => {
+    if (!open || !detailRef || details || loadError || !loadToolDetails) return;
+    let cancelled = false;
+    void loadToolDetails(detailRef)
+      .then((loaded) => {
+        if (cancelled) return;
+        cacheToolDetails(loaded);
+        setDetails(loaded);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setLoadError(
+          error instanceof Error ? error.message : "Tool details are unavailable",
+        );
+      });
+    return () => { cancelled = true; };
+  }, [detailRef, details, loadError, loadToolDetails, open]);
+
+  // An inline result is already the whole answer; only a deferred one needs
+  // anything fetched.
+  if (source.toolOutput !== undefined || source.toolError !== undefined) {
+    return { toolOutput: source.toolOutput, toolError: source.toolError };
+  }
+  if (details) {
+    return { toolOutput: details.toolOutput, toolError: details.toolError };
+  }
+  if (loadError) return { toolError: loadError };
+  if (detailRef && open) return { toolOutput: "Loading tool details…" };
+  return {};
 }
 
 export function getAgentExpansionKey(

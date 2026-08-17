@@ -2082,7 +2082,15 @@ describe("AgentNativeTab", () => {
         .toBe(true);
     });
 
-    test("keeps an unrendered live task available as one fallback card", async () => {
+    test("still reports a live task the transcript cannot show", async () => {
+      /*
+       * The card itself is a transcript row, which this harness does not paint
+       * — see the note in the sibling test. What stays observable here is that
+       * the tab knows about a task with no launch row at all, which is the
+       * condition the synthesised row exists for.
+       * `native-message-adapters.test.ts` covers the row it builds, and
+       * `NativeMessage.test.tsx` covers that row rendering as a stoppable card.
+       */
       seedProjection({
         backgroundTasks: [{
           id: "orphan-task",
@@ -2100,23 +2108,18 @@ describe("AgentNativeTab", () => {
         />,
       );
 
-      expect(await screen.findByRole("button", {
-        name: /Task Watch the server Running/,
+      expect(await screen.findByRole("status", {
+        name: "1 background task running: Watch the server.",
       })).toBeTruthy();
-      expect(screen.getAllByRole("button", { name: "Stop Watch the server" }))
-        .toHaveLength(1);
-      fireEvent.click(screen.getByRole("button", { name: "Stop Watch the server" }));
-      await waitFor(() => expect(stopNativeAgentBackgroundTaskMock).toHaveBeenCalledWith(
-        expect.objectContaining({ taskId: "orphan-task" }),
-      ));
     });
 
-    test("retires the fallback card once the transcript renders the same task", async () => {
+    test("keeps reporting the task once the transcript renders its launch", async () => {
       /*
-       * The pinned card exists only because the transcript cannot show the
-       * task. The moment the launch row arrives, keeping both would put two
-       * stop controls on screen for one task, and the reader could not tell
-       * which of the two the task actually belongs to.
+       * The synthesised row exists only because the transcript cannot show the
+       * task. The moment the launch row arrives it withdraws, since keeping both
+       * would put two stop controls on screen for one task with nothing to tell
+       * the reader which is which — `native-message-adapters.test.ts` asserts
+       * that handover directly, because neither card is paintable here.
        */
       const launchRow = {
         id: "assistant-late-launch",
@@ -2156,11 +2159,9 @@ describe("AgentNativeTab", () => {
         />,
       );
 
-      expect(await screen.findByRole("button", {
-        name: /Task Run the dev server Running/,
+      expect(await screen.findByRole("status", {
+        name: "1 background task running: Run the dev server.",
       })).toBeTruthy();
-      expect(screen.getAllByRole("button", { name: "Stop Run the dev server" }))
-        .toHaveLength(1);
 
       seed([launchRow]);
       view.rerender(
@@ -2172,20 +2173,8 @@ describe("AgentNativeTab", () => {
         />,
       );
 
-      /*
-       * The launch row now owns the task, so the fallback withdraws. It goes to
-       * zero here rather than one because this harness does not paint
-       * virtualized transcript rows — only the dock, which is where the
-       * fallback lives. `native-message-adapters.test.ts` covers the other half:
-       * that this same row does render a card carrying the task's id.
-       */
-      await waitFor(() => expect(
-        screen.queryByRole("button", { name: "Stop Run the dev server" }) === null,
-      ).toBe(true));
-      expect(screen.queryByRole("button", {
-        name: /Task Run the dev server Running/,
-      }) === null).toBe(true);
-      // The task is still live, and the tab still says so.
+      // The task is still live, and the tab still says so — now on the strength
+      // of the launch row the transcript finally supplied.
       expect(await screen.findByRole("status", {
         name: "1 background task running: Run the dev server.",
       })).toBeTruthy();

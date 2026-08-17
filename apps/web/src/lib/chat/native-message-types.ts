@@ -40,6 +40,15 @@ export interface NativeBackgroundTask {
   description?: string;
   /** Absent when recovered from transcript tool results rather than a snapshot. */
   status?: NativeBackgroundTaskStatus;
+  /**
+   * Backend-reported terminal edge, as an ISO timestamp.
+   *
+   * The transcript position a settled card holds is read from this, so the
+   * renderer never has to observe the transition itself. Absent while the task
+   * is live, and for a bridge that predates the field — which reads as "no
+   * recorded position", leaving the card in its launch row.
+   */
+  settledAt?: string;
 }
 
 /**
@@ -60,6 +69,15 @@ export interface NativeBasePart {
   filename?: string;
   /** Provider timestamp for when this individual message part first arrived. */
   createdAt?: string;
+  /**
+   * Backend timestamp for when this part's long-running child went terminal.
+   *
+   * Distinct from `createdAt`, which is the launch. This is the position a
+   * settled agent card holds — the transcript had reached here when the child
+   * stopped — and it is stamped by the bridge from the record carrying the
+   * result, so it is identical every time the transcript is replayed.
+   */
+  settledAt?: string;
   sourcePartId?: string;
   sourceMessageId?: string;
   fileUrl?: string;

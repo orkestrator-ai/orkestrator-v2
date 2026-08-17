@@ -428,6 +428,45 @@ describe("HTTP bridge provider", () => {
     ]);
   });
 
+  test("carries a terminal task's settle position and withholds a live one's", async () => {
+    /*
+     * `settledAt` is the position a finished card holds in the transcript, so it
+     * is the backend's answer to "where does this belong" rather than a detail.
+     * A live task has no position — it belongs at the bottom until it stops —
+     * and a stale edge left on one that was revived would drag its card back up
+     * the conversation.
+     */
+    const { provider } = httpProvider((url) => {
+      if (url.endsWith("/messages")) return Response.json({ messages: [] });
+      return Response.json({
+        status: "idle",
+        backgroundTasks: {
+          finished: {
+            status: "completed",
+            endedAt: Date.parse("2026-08-17T10:30:00.000Z"),
+          },
+          revived: {
+            status: "running",
+            endedAt: Date.parse("2026-08-17T10:00:00.000Z"),
+          },
+          unstamped: { status: "failed" },
+        },
+      });
+    });
+
+    const snapshot = await provider.interactiveSnapshot!("session-1");
+
+    expect(snapshot.backgroundTasks).toEqual([
+      {
+        id: "finished",
+        status: "completed",
+        settledAt: "2026-08-17T10:30:00.000Z",
+      },
+      { id: "revived", status: "running" },
+      { id: "unstamped", status: "failed" },
+    ]);
+  });
+
   test("reads the ACP snapshot as a small status plus a bounded transcript", async () => {
     /*
      * The whole-session route returned composer, runtime and the entire

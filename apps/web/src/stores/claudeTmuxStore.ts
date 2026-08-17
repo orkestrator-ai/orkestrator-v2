@@ -817,7 +817,7 @@ function applyLine(state: TmuxTabState, line: TranscriptLine): TmuxTabState {
     parts.length > 0 &&
     parts.every((p) => p.type === "tool-result");
   if (allToolResults) {
-    const merged = mergeToolResultsIntoPrior(state.messages, parts);
+    const merged = mergeToolResultsIntoPrior(state.messages, parts, timestamp);
     if (merged) return { ...state, messages: merged };
   }
 
@@ -1024,6 +1024,15 @@ function canCompactAssistantMessages(
 function mergeToolResultsIntoPrior(
   messages: ClaudeMessage[],
   resultParts: ClaudeMessagePart[],
+  /**
+   * Timestamp of the record carrying these results.
+   *
+   * A tool that launched a long-running child settles here, and that is the
+   * transcript position its card holds once it stops — see `settledAt` on the
+   * shared part type. Read from the record rather than a clock so replaying the
+   * same transcript, on this tab or the next, reproduces the same position.
+   */
+  settledAt: string,
 ): ClaudeMessage[] | null {
   const resultIds = new Set(
     resultParts
@@ -1051,6 +1060,8 @@ function mergeToolResultsIntoPrior(
             toolState: match.toolState,
             toolOutput: match.toolOutput ?? p.toolOutput,
             toolError: match.toolError ?? p.toolError,
+            // A tool settles once; a repeated result must not move its card.
+            settledAt: p.settledAt ?? settledAt,
             // The task list state the backend derived for this result belongs
             // on the invocation, which is what TodoToolPart renders.
             taskSnapshot: match.taskSnapshot ?? p.taskSnapshot,

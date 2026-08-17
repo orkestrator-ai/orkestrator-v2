@@ -85,8 +85,29 @@ function normalizeClaudeBackgroundTasks(
       ...(typeof task.toolUseId === "string" && task.toolUseId.length <= 512
         ? { toolUseId: task.toolUseId }
         : {}),
+      ...settledAtFromEndedAt(task.endedAt, task.status),
     }];
   });
+}
+
+/**
+ * The bridge's terminal-edge clock, as the position-bearing `settledAt`.
+ *
+ * Only a terminal task carries one. A live task with a stale `endedAt` — a
+ * paused task that ran before, a record the provider revived — would otherwise
+ * hand the renderer a position for work that is running again, which is exactly
+ * the state that belongs at the bottom of the transcript instead.
+ */
+function settledAtFromEndedAt(
+  endedAt: unknown,
+  status: unknown,
+): { settledAt?: string } {
+  const live = status === "pending" || status === "running" || status === "paused";
+  if (live || typeof endedAt !== "number" || !Number.isFinite(endedAt)) return {};
+  const settledAt = new Date(endedAt);
+  return Number.isFinite(settledAt.getTime())
+    ? { settledAt: settledAt.toISOString() }
+    : {};
 }
 
 const CLAUDE_BUILT_IN_SLASH_COMMANDS: readonly NativeAgentSlashCommand[] = [

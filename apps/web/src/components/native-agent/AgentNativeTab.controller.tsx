@@ -106,7 +106,10 @@ import {
   type AgentNativeTabProps,
 } from "./adapter";
 import {
+  DEFAULT_EXECUTION_PROFILE_ID,
   extractNativePlanContent,
+  LAUNCH_EXECUTION_PROFILES,
+  nativeComposeProfileLabel,
   useNativeAgentActivityAnnouncement,
 } from "./AgentNativeTab.helpers";
 import { NativeAgentInteractionCard } from "./NativeAgentInteractionCard";
@@ -582,6 +585,49 @@ export function SharedNativeAgentController({
     });
   }, [data.environmentId, sessionKey]);
 
+  /**
+   * OpenCode has no conversation-mode list; Plan/Build are primary agents.
+   * Fall back to the built-in pair when the live agent listing has not arrived
+   * yet so an existing session can still switch before `app.agents` returns.
+   */
+  const composeExecutionProfiles = useMemo(() => {
+    if (adapter.capabilities.composer.mode) return [];
+    if (adapter.capabilities.composer.executionProfile !== true) return [];
+    const profiles = composer?.executionProfiles ?? [];
+    return profiles.length > 0 ? profiles : [...LAUNCH_EXECUTION_PROFILES];
+  }, [
+    adapter.capabilities.composer.executionProfile,
+    adapter.capabilities.composer.mode,
+    composer?.executionProfiles,
+  ]);
+  /**
+   * The profile the next prompt will actually run under.
+   *
+   * Display and dispatch must read this one value. A trigger that showed the
+   * first listed agent while `executionAgent` went out `undefined` ran the turn
+   * under OpenCode's own `build` default while naming a different agent — the
+   * one thing an agent picker must never do. The projection leaves
+   * `selectedExecutionProfileId` undefined whenever no id was ever stored, an
+   * id was cleared to null from the agent-information panel, or a stored id is
+   * absent from the arrived listing, and `app.agents` has no defined order, so
+   * the first entry is an arbitrary primary agent.
+   *
+   * Preferring the listed `build` keeps the provider default honest; falling
+   * back to the first entry covers an agent set with no `build`, where the
+   * provider default names an agent that does not exist and the shown one is
+   * the only valid thing to send.
+   *
+   * Synthesised only when this tab owns a compose-bar profile list. Claude's
+   * subagent has no provider-side default, so leaving it undefined is correct
+   * and inventing one would silently route the turn to a subagent.
+   */
+  const effectiveComposeProfileId = composer?.selectedExecutionProfileId
+    ?? (composeExecutionProfiles.find(
+      (profile) => profile.id === DEFAULT_EXECUTION_PROFILE_ID,
+    ) ?? composeExecutionProfiles[0])?.id;
+  const selectedComposeProfileId = effectiveComposeProfileId
+    ?? DEFAULT_EXECUTION_PROFILE_ID;
+
   const submit = useCallback(async (
     text: string,
     requestId?: string,
@@ -726,10 +772,10 @@ export function SharedNativeAgentController({
       mode: composer?.selectedModeId,
       fastMode: composer?.fastModeEnabled ?? undefined,
       subAgent: platform === "claude"
-        ? composer?.selectedExecutionProfileId
+        ? effectiveComposeProfileId
         : undefined,
       executionAgent: platform === "opencode"
-        ? composer?.selectedExecutionProfileId
+        ? effectiveComposeProfileId
         : undefined,
       includeLocalSettings: platform === "claude"
         ? composer?.includeLocalSettings
@@ -788,7 +834,7 @@ export function SharedNativeAgentController({
     composer?.selectedModeId,
     composer?.selectedModelId,
     composer?.selectedReasoningId,
-    composer?.selectedExecutionProfileId,
+    effectiveComposeProfileId,
     composer?.includeLocalSettings,
     composer?.promptSuggestionsEnabled,
     canQueue,
@@ -857,15 +903,33 @@ export function SharedNativeAgentController({
 
   const cycleMode = useMemo(() => {
     const modes = composer?.modes ?? [];
-    if (modes.length < 2 || settingsLocked) return undefined;
+    if (modes.length >= 2 && !settingsLocked) {
+      return () => {
+        const index = modes.findIndex(
+          (mode) => mode.id === (composer?.selectedModeId ?? "build"),
+        );
+        const next = modes[(index + 1) % modes.length];
+        if (next) void updateControlsSafely({ mode: next.id });
+      };
+    }
+    if (composeExecutionProfiles.length < 2 || settingsLocked) return undefined;
     return () => {
-      const index = modes.findIndex(
-        (mode) => mode.id === (composer?.selectedModeId ?? "build"),
+      const index = composeExecutionProfiles.findIndex(
+        (profile) => profile.id === selectedComposeProfileId,
       );
-      const next = modes[(index + 1) % modes.length];
-      if (next) void updateControlsSafely({ mode: next.id });
+      const next = composeExecutionProfiles[
+        (index + 1) % composeExecutionProfiles.length
+      ];
+      if (next) void updateControlsSafely({ executionProfileId: next.id });
     };
-  }, [composer?.modes, composer?.selectedModeId, settingsLocked, updateControlsSafely]);
+  }, [
+    composeExecutionProfiles,
+    composer?.modes,
+    composer?.selectedModeId,
+    selectedComposeProfileId,
+    settingsLocked,
+    updateControlsSafely,
+  ]);
 
   const stopSafely = useCallback(async () => {
     try {
@@ -1392,7 +1456,7 @@ export function SharedNativeAgentController({
               reasoningId: composer?.selectedReasoningId,
               fastMode: composer?.fastModeEnabled ?? undefined,
               mode: composer?.selectedModeId,
-              executionProfileId: composer?.selectedExecutionProfileId,
+              executionProfileId: effectiveComposeProfileId,
               includeLocalSettings: composer?.includeLocalSettings,
               promptSuggestions: composer?.promptSuggestionsEnabled,
             }).then(() => {
@@ -1526,6 +1590,7 @@ export function SharedNativeAgentController({
                   : undefined}
                 fastModeEnabled={composer.fastModeEnabled}
                 fastModeAvailable={composer.fastModeAvailable}
+                speedCapable={adapter.capabilities.composer.speed}
                 onFastModeChange={composer.fastModeAvailable
                   ? (fastMode) => { void updateControlsSafely({ fastMode }); }
                   : undefined}
@@ -1554,6 +1619,41 @@ export function SharedNativeAgentController({
                       {composer.modes.map((mode) => (
                         <DropdownMenuRadioItem key={mode.id} value={mode.id}>
                           {mode.label}
+                        </DropdownMenuRadioItem>
+                      ))}
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : composeExecutionProfiles.length > 0 ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      disabled={settingsLocked}
+                      className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                      title="Choose mode"
+                    >
+                      <ChevronDown className="h-3 w-3" />
+                      <span>
+                        {nativeComposeProfileLabel(
+                          selectedComposeProfileId,
+                          composeExecutionProfiles.find(
+                            (profile) => profile.id === selectedComposeProfileId,
+                          )?.label,
+                        )}
+                      </span>
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start">
+                    <DropdownMenuRadioGroup
+                      value={selectedComposeProfileId}
+                      onValueChange={(executionProfileId) => {
+                        void updateControlsSafely({ executionProfileId });
+                      }}
+                    >
+                      {composeExecutionProfiles.map((profile) => (
+                        <DropdownMenuRadioItem key={profile.id} value={profile.id}>
+                          {nativeComposeProfileLabel(profile.id, profile.label)}
                         </DropdownMenuRadioItem>
                       ))}
                     </DropdownMenuRadioGroup>

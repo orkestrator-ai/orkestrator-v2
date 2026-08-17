@@ -546,9 +546,9 @@ describe("AgentNativeTab", () => {
 
     expect(screen.queryByRole("button", { name: "Conversation mode" }) === null).toBe(true);
     const profileButton = await screen.findByRole("button", { name: "Execution profile" });
-    expect(profileButton.textContent).toContain("Build agent");
+    expect(profileButton.textContent).toContain("Build");
     fireEvent.pointerDown(profileButton);
-    fireEvent.click(await screen.findByRole("menuitemradio", { name: "Plan agent" }));
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "Plan" }));
 
     const input = screen.getByRole("textbox");
     fireEvent.input(input, { target: { textContent: "Plan the change" } });
@@ -573,6 +573,69 @@ describe("AgentNativeTab", () => {
     ));
     expect(JSON.stringify(flushPaneLayoutNowMock.mock.calls[0]?.[1]))
       .toContain('"initialExecutionProfileId":"plan"');
+  });
+
+  test("cycles the launcher's execution profile with Shift+Tab", async () => {
+    // Shift+Tab is the Plan/Build toggle on a platform with conversation modes.
+    // A platform whose Plan/Build is an execution profile has to answer the same
+    // keystroke, and the two handlers must stay mutually exclusive so one
+    // keystroke never writes both fields.
+    getNativeAgentModelCatalogMock.mockImplementation(async () => [
+      {
+        platform: "opencode",
+        id: "opencode/sonnet",
+        label: "OpenCode Sonnet",
+        supportsSpeed: false,
+        supportsMode: false,
+      },
+    ] as never);
+    useEnvironmentStore.setState({
+      environments: [{
+        id: "env-1",
+        projectId: "project-1",
+        name: "Profile cycle",
+        order: 0,
+        setupPhase: "ready",
+      } as never],
+    });
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["opencode"],
+      favoriteModels: [],
+    } as never);
+    const tabId = "tab-opencode-profile-cycle";
+    seedUnassignedPane(tabId);
+    const sessionKey = createSessionKey("env-1", tabId);
+    useNativeComposeStore.getState().updateDraft(sessionKey, {
+      platform: "opencode",
+      modelId: "opencode/sonnet",
+    });
+
+    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+
+    const profileButton = await screen.findByRole("button", { name: "Execution profile" });
+    expect(profileButton.textContent).toContain("Build");
+    const input = screen.getByRole("textbox");
+
+    fireEvent.keyDown(input, { key: "Tab", shiftKey: true });
+    await waitFor(() => expect(
+      useNativeComposeStore.getState().drafts.get(sessionKey)?.executionProfileId,
+    ).toBe("plan"));
+    // The conversation-mode field still holds its default: only one of the two
+    // handlers may claim the keystroke, and the mode one would have flipped
+    // this to "plan".
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.mode)
+      .toBe("build");
+
+    // Wraps back round rather than running off the end of the pair.
+    fireEvent.keyDown(input, { key: "Tab", shiftKey: true });
+    await waitFor(() => expect(
+      useNativeComposeStore.getState().drafts.get(sessionKey)?.executionProfileId,
+    ).toBe("build"));
+
+    // A plain Tab is still the browser's focus move, not a profile change.
+    fireEvent.keyDown(input, { key: "Tab" });
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.executionProfileId)
+      .toBe("build");
   });
 
   test("drops the previous platform's effort when one click also switches platform", async () => {
@@ -2229,6 +2292,9 @@ describe("AgentNativeTab", () => {
       recoverableDispatch?: NativeAgentSessionProjection["recoverableDispatch"];
       notices?: NativeAgentSessionProjection["notices"];
       composer?: Partial<NonNullable<NativeAgentSessionProjection["composer"]>>;
+      composerCapabilities?: Partial<
+        NativeAgentSessionProjection["capabilities"]["composer"]
+      >;
       contextUsage?: NativeAgentSessionProjection["contextUsage"];
       backgroundTasks?: NativeAgentSessionProjection["backgroundTasks"];
     } = {}) {
@@ -2296,6 +2362,7 @@ describe("AgentNativeTab", () => {
             ...(overrides.promptSuggestions === undefined
               ? {}
               : { promptSuggestions: true }),
+            ...overrides.composerCapabilities,
           },
           ...(overrides.actions ? { actions: overrides.actions } : {}),
         },
@@ -3052,6 +3119,203 @@ describe("AgentNativeTab", () => {
       expect(updateNativeAgentControlsMock.mock.calls.at(-1)?.[0]).toMatchObject({
         update: { mode: "plan" },
       });
+    });
+
+    test("lets an existing OpenCode session switch Plan/Build from the compose bar", async () => {
+      seedProjection({
+        composer: {
+          modes: [],
+          selectedModeId: undefined,
+          fastModeEnabled: null,
+          fastModeAvailable: false,
+          executionProfiles: [
+            { id: "build", label: "build" },
+            { id: "plan", label: "plan" },
+            { id: "reviewer", label: "Reviewer" },
+          ],
+          selectedExecutionProfileId: "build",
+        },
+        composerCapabilities: {
+          speed: false,
+          mode: false,
+          executionProfile: true,
+        },
+      });
+      render(<AgentNativeTab tabId="tab-opencode-mode" data={identity("opencode")} isActive />);
+
+      const trigger = await screen.findByTitle("Choose mode");
+      expect(trigger.textContent).toContain("Build");
+      expect(screen.getByTitle(/Choose model/).textContent).not.toContain("speed");
+
+      const input = screen.getByRole("textbox");
+      fireEvent.keyDown(input, { key: "Tab", shiftKey: true });
+      await waitFor(() => expect(updateNativeAgentControlsMock).toHaveBeenCalled());
+      expect(updateNativeAgentControlsMock.mock.calls.at(-1)?.[0]).toMatchObject({
+        update: { executionProfileId: "plan" },
+      });
+
+      fireEvent.pointerDown(trigger);
+      fireEvent.click(await screen.findByRole("menuitemradio", { name: "Reviewer" }));
+      await waitFor(() => expect(updateNativeAgentControlsMock.mock.calls.length).toBeGreaterThan(1));
+      expect(updateNativeAgentControlsMock.mock.calls.at(-1)?.[0]).toMatchObject({
+        update: { executionProfileId: "reviewer" },
+      });
+    });
+
+    test("keeps Plan/Build on an OpenCode session whose agent list has not arrived", async () => {
+      seedProjection({
+        composer: {
+          modes: [],
+          selectedModeId: undefined,
+          executionProfiles: [],
+          selectedExecutionProfileId: undefined,
+        },
+        composerCapabilities: {
+          speed: false,
+          mode: false,
+          executionProfile: true,
+        },
+      });
+      render(<AgentNativeTab tabId="tab-opencode-fallback-mode" data={identity("opencode")} isActive />);
+
+      const trigger = await screen.findByTitle("Choose mode");
+      expect(trigger.textContent).toContain("Build");
+      fireEvent.pointerDown(trigger);
+      fireEvent.click(await screen.findByRole("menuitemradio", { name: "Plan" }));
+      await waitFor(() => expect(updateNativeAgentControlsMock).toHaveBeenCalled());
+      expect(updateNativeAgentControlsMock.mock.calls.at(-1)?.[0]).toMatchObject({
+        update: { executionProfileId: "plan" },
+      });
+    });
+
+    test("dispatches the execution profile the compose bar is showing", async () => {
+      // The projection leaves `selectedExecutionProfileId` undefined whenever no
+      // id was ever stored, one was cleared to null from the agent-information
+      // panel, or a stored id is missing from the arrived listing. `app.agents`
+      // has no defined order, so the first entry is an arbitrary primary agent —
+      // showing it while dispatching `undefined` ran the turn under OpenCode's
+      // own `build` default under a different agent's name.
+      seedProjection({
+        composer: {
+          modes: [],
+          selectedModeId: undefined,
+          executionProfiles: [
+            { id: "reviewer", label: "Reviewer" },
+            { id: "build", label: "build" },
+            { id: "plan", label: "plan" },
+          ],
+          selectedExecutionProfileId: undefined,
+        },
+        composerCapabilities: { speed: false, mode: false, executionProfile: true },
+      });
+      render(
+        <AgentNativeTab tabId="tab-opencode-default-profile" data={identity("opencode")} isActive />,
+      );
+
+      const trigger = await screen.findByTitle("Choose mode");
+      // The listed `build`, not `executionProfiles[0]`.
+      expect(trigger.textContent).toContain("Build");
+
+      const input = screen.getByRole("textbox");
+      fireEvent.input(input, { target: { textContent: "Do the thing" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalled());
+      expect(dispatchNativeAgentIntentMock.mock.calls.at(-1)?.[0]).toMatchObject({
+        agent: "opencode",
+        executionAgent: "build",
+      });
+    });
+
+    test("dispatches the first listed profile when the agent set has no build", async () => {
+      // A custom agent set with no `build` makes OpenCode's own default name an
+      // agent that does not exist, so the shown entry is the only valid thing to
+      // send — and it still has to be the one the trigger names.
+      seedProjection({
+        composer: {
+          modes: [],
+          selectedModeId: undefined,
+          executionProfiles: [
+            { id: "reviewer", label: "Reviewer" },
+            { id: "deploy", label: "Deploy" },
+          ],
+          selectedExecutionProfileId: undefined,
+        },
+        composerCapabilities: { speed: false, mode: false, executionProfile: true },
+      });
+      render(
+        <AgentNativeTab tabId="tab-opencode-no-build" data={identity("opencode")} isActive />,
+      );
+
+      const trigger = await screen.findByTitle("Choose mode");
+      expect(trigger.textContent).toContain("Reviewer");
+
+      const input = screen.getByRole("textbox");
+      fireEvent.input(input, { target: { textContent: "Do the thing" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalled());
+      expect(dispatchNativeAgentIntentMock.mock.calls.at(-1)?.[0]).toMatchObject({
+        agent: "opencode",
+        executionAgent: "reviewer",
+      });
+    });
+
+    test("does not invent a Claude subagent when none is selected", async () => {
+      // Claude's execution profile is a subagent, and it has no provider-side
+      // default. Synthesising one here would silently route the turn away from
+      // the main agent.
+      seedProjection({
+        composer: {
+          executionProfiles: [
+            { id: "reviewer", label: "Reviewer" },
+            { id: "planner", label: "Planner" },
+          ],
+          selectedExecutionProfileId: undefined,
+        },
+        composerCapabilities: { executionProfile: true },
+      });
+      render(
+        <AgentNativeTab tabId="tab-claude-no-subagent" data={identity("claude")} isActive />,
+      );
+
+      const input = await screen.findByRole("textbox");
+      fireEvent.input(input, { target: { textContent: "Do the thing" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalled());
+      expect(dispatchNativeAgentIntentMock.mock.calls.at(-1)?.[0]).toMatchObject({
+        agent: "claude",
+        subAgent: undefined,
+      });
+    });
+
+    test("locks the execution-profile control while a turn is settling", async () => {
+      seedProjection({
+        phase: "running",
+        composer: {
+          modes: [],
+          selectedModeId: undefined,
+          executionProfiles: [
+            { id: "build", label: "build" },
+            { id: "plan", label: "plan" },
+          ],
+          selectedExecutionProfileId: "build",
+        },
+        composerCapabilities: { speed: false, mode: false, executionProfile: true },
+      });
+      render(
+        <AgentNativeTab tabId="tab-opencode-locked-profile" data={identity("opencode")} isActive />,
+      );
+
+      const trigger = await screen.findByTitle("Choose mode");
+      expect((trigger as HTMLButtonElement).disabled).toBe(true);
+
+      // Shift+Tab has to be inert too: `cycleMode` is the same gate, and a
+      // keystroke that bypassed the disabled trigger would change the agent
+      // mid-turn.
+      updateNativeAgentControlsMock.mockClear();
+      const input = screen.getByRole("textbox");
+      fireEvent.keyDown(input, { key: "Tab", shiftKey: true });
+      await Promise.resolve();
+      expect(updateNativeAgentControlsMock).not.toHaveBeenCalled();
     });
 
     test("keeps advanced session settings out of the input bar", async () => {

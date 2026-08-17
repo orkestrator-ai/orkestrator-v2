@@ -975,6 +975,54 @@ describe("AgentModelPicker", () => {
       .toBe("false");
   });
 
+  test("does not paint speed onto the trigger when the platform has no speed surface", () => {
+    setMobileViewport(false);
+    renderPicker({
+      fastModeEnabled: null,
+      fastModeAvailable: false,
+      speedCapable: false,
+      onFastModeChange: undefined,
+      selectedReasoningLabel: "Default",
+    });
+    const trigger = screen.getByRole("button", {
+      name: "A model name that can become very long (Default)",
+    });
+    expect(trigger.textContent).toContain("Default");
+    expect(trigger.textContent).not.toContain("speed");
+    expect(trigger.textContent).not.toContain("?");
+    expect(trigger.getAttribute("title")).toBe("Choose model and reasoning");
+  });
+
+  test("still reports unknown speed on a speed-capable platform with no callback yet", () => {
+    // Claude and Codex own speed but pass through a window where the composer
+    // snapshot has not arrived: `fastModeAvailable` is false, so there is no
+    // callback, and `fastModeEnabled` is null. That is the case the hint exists
+    // for, and gating it on the callback rather than the platform would hide it.
+    setMobileViewport(false);
+    renderPicker({
+      fastModeEnabled: null,
+      fastModeAvailable: false,
+      speedCapable: true,
+      onFastModeChange: undefined,
+      selectedReasoningLabel: "Default",
+    });
+    const trigger = screen.getByRole("button", { name: /speed unknown/ });
+    expect(trigger.textContent).toContain("? speed");
+  });
+
+  test("treats a speed-capable platform as the default when the prop is omitted", () => {
+    // The prop defaults to true so an existing caller keeps the hint; only a
+    // platform that explicitly has no speed surface opts out.
+    setMobileViewport(false);
+    renderPicker({
+      fastModeEnabled: null,
+      fastModeAvailable: false,
+      onFastModeChange: undefined,
+      selectedReasoningLabel: "Default",
+    });
+    expect(screen.getByRole("button", { name: /speed unknown/ })).toBeTruthy();
+  });
+
   test("renders the fast-only trigger branch when there is no reasoning label", () => {
     setMobileViewport(false);
     renderPicker({

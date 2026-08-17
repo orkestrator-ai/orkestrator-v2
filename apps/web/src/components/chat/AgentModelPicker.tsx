@@ -73,6 +73,17 @@ interface AgentModelPickerProps {
   onReasoningChange?: (reasoningId: string) => void;
   fastModeEnabled?: boolean | null;
   fastModeAvailable?: boolean;
+  /**
+   * Whether the selected platform has a speed surface at all.
+   *
+   * Distinct from `fastModeAvailable`, which describes this session and model.
+   * A platform with no surface (OpenCode encodes speed in the model name) sends
+   * `fastModeEnabled: null` permanently, and that is "not applicable" rather
+   * than "not yet known" — only a platform that owns speed can have a genuinely
+   * unknown value, which is the pre-snapshot window Claude and Codex pass
+   * through before their composer state arrives.
+   */
+  speedCapable?: boolean;
   onFastModeChange?: (enabled: boolean) => void;
   disabled?: boolean;
   title?: string;
@@ -501,6 +512,7 @@ export function AgentModelPicker({
   onReasoningChange,
   fastModeEnabled = false,
   fastModeAvailable = false,
+  speedCapable = true,
   onFastModeChange,
   disabled = false,
   title,
@@ -607,13 +619,19 @@ export function AgentModelPicker({
   const triggerPlatform = selectedPlatform
     ?? models.find((model) => model.id === selectedModelId)?.platform
     ?? models[0]?.platform;
-  const fastModeUnknown = fastModeEnabled === null;
+  const showSpeedControls = Boolean(onFastModeChange);
+  // `fastModeEnabled === null` is an unknown snapshot only on a platform that
+  // owns speed at all. OpenCode has no speed surface — it encodes speed in the
+  // model name — so its permanently-null flag must not paint "? speed" onto the
+  // trigger. Gating on `onFastModeChange` instead would also hide the hint from
+  // Claude and Codex, whose callback is absent for exactly as long as the value
+  // is unknown, which is the window the hint exists to describe.
+  const fastModeUnknown = speedCapable && fastModeEnabled === null;
   const showReasoningControls = reasoningOptions.length > 0;
   const displayLabel = selectedReasoningLabel
     ? `${selectedModelLabel} (${selectedReasoningLabel}${fastModeEnabled ? " ⚡" : ""}${fastModeUnknown ? "; speed unknown" : ""})`
     : `${selectedModelLabel}${fastModeEnabled ? " (⚡)" : fastModeUnknown ? " (speed unknown)" : ""}`;
   const moreModelCount = Math.max(0, visibleModels.length - VISIBLE_MODEL_ROWS);
-  const showSpeedControls = Boolean(onFastModeChange);
   const canReorderFavorites = catalogView === "favorites"
     && Boolean(onReorderFavorites)
     && !normalizedSearch

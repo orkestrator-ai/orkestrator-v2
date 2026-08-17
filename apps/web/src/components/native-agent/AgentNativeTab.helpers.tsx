@@ -7,7 +7,11 @@ import {
 } from "react";
 import { ChevronDown, History } from "lucide-react";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import { resolveReasoningId, type AgentModel } from "@orkestrator/protocol/native-agent";
+import {
+  resolveReasoningId,
+  type AgentModel,
+  type FallbackExecutionProfileId,
+} from "@orkestrator/protocol/native-agent";
 import { Button } from "@/components/ui/button";
 import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
 import { FileMentionMenu } from "@/components/chat/FileMentionMenu";
@@ -65,7 +69,8 @@ import {
 } from "./adapter";
 
 /**
- * Execution profiles offered before a tab is locked to a provider.
+ * Execution profiles offered before a tab is locked to a provider, and the
+ * Plan/Build labels used on the locked OpenCode compose bar for those two ids.
  *
  * The real list is the provider's own primary-agent names, and every source for
  * it is keyed by a provider session id that does not exist until the tab locks:
@@ -75,11 +80,35 @@ import {
  * locked composer replaces them with the advertised list on first projection.
  * An id the provider turns out not to have is dropped by `projectionComposer`
  * rather than dispatched as an unknown agent name.
+ *
+ * Typed against `FallbackExecutionProfileId` so this list cannot grow past what
+ * `updateProjectionControls` will accept without a listing to check against —
+ * an extra entry here would render a control whose every selection 400s.
  */
-const LAUNCH_EXECUTION_PROFILES = [
-  { id: "build", label: "Build agent" },
-  { id: "plan", label: "Plan agent" },
-] as const;
+export const LAUNCH_EXECUTION_PROFILES = [
+  { id: "build", label: "Build" },
+  { id: "plan", label: "Plan" },
+] as const satisfies ReadonlyArray<{
+  id: FallbackExecutionProfileId;
+  label: string;
+}>;
+
+/**
+ * The profile OpenCode itself falls back to when a prompt carries no agent.
+ *
+ * `opencode-provider` sends `agent: options.executionAgent ?? "build"`, so this
+ * is the name a turn with no explicit selection runs under. The compose bar has
+ * to show the same thing rather than the first entry of an unordered listing.
+ */
+export const DEFAULT_EXECUTION_PROFILE_ID: FallbackExecutionProfileId = "build";
+
+/** Title-case the built-in OpenCode agents; leave custom primary agents as listed. */
+export function nativeComposeProfileLabel(id: string, label?: string): string {
+  if (id === "plan") return "Plan";
+  if (id === "build") return "Build";
+  const trimmed = label?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : id;
+}
 
 function activeAgentSummary(snapshots: NativeAgentActivitySnapshot[]): string {
   const summaries: string[] = [];
@@ -562,6 +591,17 @@ export function UnassignedNativeAgentComposer({
               updateDraft(sessionKey, { mode: draft.mode === "plan" ? "build" : "plan" });
               return;
             }
+            if (event.key === "Tab" && event.shiftKey && canConfigureExecutionProfile) {
+              event.preventDefault();
+              const index = LAUNCH_EXECUTION_PROFILES.findIndex(
+                (profile) => profile.id === selectedLaunchExecutionProfile.id,
+              );
+              const next = LAUNCH_EXECUTION_PROFILES[
+                (index + 1) % LAUNCH_EXECUTION_PROFILES.length
+              ];
+              if (next) updateDraft(sessionKey, { executionProfileId: next.id });
+              return;
+            }
             if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
             event.preventDefault();
             send();
@@ -654,6 +694,7 @@ export function UnassignedNativeAgentComposer({
                 onReasoningChange={canConfigureReasoning ? (reasoningId) => updateDraft(sessionKey, { reasoningId }) : undefined}
                 fastModeEnabled={effectiveFastMode}
                 fastModeAvailable={canConfigureSpeed}
+                speedCapable={selectedAdapter?.capabilities.composer.speed === true}
                 onFastModeChange={(fastMode) => updateDraft(sessionKey, { fastMode })}
                 disabled={disabled}
               />

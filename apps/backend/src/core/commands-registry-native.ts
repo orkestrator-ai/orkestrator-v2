@@ -1,6 +1,6 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import { BUILD_PIPELINE_AGENTS, nativeAgentSessionStorageKey } from "./commands-dependencies.js";
-import { asString, asRecord, asOptionalAgentInteractionOrigin, asOptionalAgentInteractionPolicy, asRequiredBoolean, asPositiveInteger, asNonBlankString, asDispatchNativeAgentPromptInput, asNativeAgentControlUpdate, asNativeAgentSessionAction } from "./commands-helpers.js";
+import { asString, asRecord, asOptionalAgentInteractionOrigin, asOptionalAgentInteractionPolicy, asRequiredBoolean, asPositiveInteger, asNonBlankString, asBoundedNonBlankString, MAX_EXECUTION_PROFILE_ID_LENGTH, asDispatchNativeAgentPromptInput, asNativeAgentControlUpdate, asNativeAgentSessionAction } from "./commands-helpers.js";
 
 export function registerNativeAgentCommands(
   register: CommandRegistrar,
@@ -38,7 +38,11 @@ export function registerNativeAgentCommands(
       fastMode: typeof args.fastMode === "boolean" ? args.fastMode : undefined,
       executionProfileId: args.executionProfileId === undefined
         ? undefined
-        : asNonBlankString(args.executionProfileId, "executionProfileId"),
+        : asBoundedNonBlankString(
+          args.executionProfileId,
+          "executionProfileId",
+          MAX_EXECUTION_PROFILE_ID_LENGTH,
+        ),
     });
   });
 
@@ -81,9 +85,10 @@ export function registerNativeAgentCommands(
         : {}),
       ...(typeof args.fastMode === "boolean" ? { fastMode: args.fastMode } : {}),
       ...(args.executionProfileId === undefined ? {} : {
-        executionProfileId: asNonBlankString(
+        executionProfileId: asBoundedNonBlankString(
           args.executionProfileId,
           "executionProfileId",
+          MAX_EXECUTION_PROFILE_ID_LENGTH,
         ),
       }),
     });

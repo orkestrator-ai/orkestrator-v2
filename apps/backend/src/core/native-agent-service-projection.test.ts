@@ -785,10 +785,87 @@ describe("NativeAgentService", () => {
 
       const projection = await service.getProjection(identity);
       expect(projection?.composer?.selectedExecutionProfileId).toBe("plan");
-      // No list means no control to render it in, but the choice survives for
-      // the dispatch that follows.
+      // The generated control list stays empty — the native tab supplies a
+      // Plan/Build fallback itself rather than reading composerControls.
       expect(projection?.composer?.executionProfiles).toBeUndefined();
       expect(projection?.composerControls.map((control) => control.id)).toEqual([]);
+    });
+  });
+
+  test("accepts an execution-profile update while the provider's agent list is unavailable", async () => {
+    // Same empty-list rule as projection: the listing has not arrived, so a
+    // Plan/Build choice from the compose bar must persist rather than 400.
+    const stub = createProviderStub("opencode", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: [],
+        composer: {
+          models: [],
+          fastModeEnabled: false,
+          fastModeAvailable: false,
+          modes: [],
+          executionProfiles: [],
+        },
+      }),
+    });
+    await withService({
+      prefix: "orkestrator-native-pending-execution-profile-update-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "opencode" as const,
+        logicalSessionKey: "env-env-1:tab-pending-profile-update",
+      };
+      await service.ensureSession(identity);
+      await service.updateProjectionControls({
+        ...identity,
+        update: { executionProfileId: "plan" },
+      });
+      await expect(service.getProjection(identity)).resolves.toMatchObject({
+        composer: { selectedExecutionProfileId: "plan" },
+      });
+    });
+  });
+
+  test("rejects a non-fallback execution profile while the agent list is unavailable", async () => {
+    // The empty-list exemption is for the two ids the compose bar can offer
+    // without a listing, not a hole. Anything else is unverifiable and is
+    // forwarded verbatim as the provider's `agent` name, so it must still 400.
+    const stub = createProviderStub("opencode", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: [],
+        composer: {
+          models: [],
+          fastModeEnabled: false,
+          fastModeAvailable: false,
+          modes: [],
+          executionProfiles: [],
+        },
+      }),
+    });
+    await withService({
+      prefix: "orkestrator-native-unknown-execution-profile-update-",
+      provider: async () => stub.provider,
+    }, async ({ service }) => {
+      const identity = {
+        environmentId: "env-1",
+        agent: "opencode" as const,
+        logicalSessionKey: "env-env-1:tab-unknown-profile-update",
+      };
+      await service.ensureSession(identity);
+      await expect(service.updateProjectionControls({
+        ...identity,
+        update: { executionProfileId: "totally-unknown-agent" },
+      })).rejects.toThrow("Native agent execution profile is invalid");
+      await expect(service.updateProjectionControls({
+        ...identity,
+        update: { executionProfileId: "x".repeat(5_000) },
+      })).rejects.toThrow("Native agent execution profile is invalid");
+      // Nothing was persisted, so the projection still carries no selection.
+      const projection = await service.getProjection(identity);
+      expect(projection?.composer?.selectedExecutionProfileId).toBeUndefined();
     });
   });
 

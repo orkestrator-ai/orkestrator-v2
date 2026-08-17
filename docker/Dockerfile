@@ -205,22 +205,24 @@ USER root
 RUN playwright install --with-deps chromium \
   && chown -R node:node /ms-playwright \
   && apt-get clean && rm -rf /var/lib/apt/lists/*
-USER node
 
 # Fail the build if the browser cannot actually start — a missing shared library
-# is the usual way this install "succeeds" and then fails on first use. Launched
-# with default options, which is how an agent will launch it.
+# is the usual way this install "succeeds" and then fails on first use.
+#
+# Checked once per container identity rather than once per image. Chromium
+# refuses to start as uid 0 unless it is launched with --no-sandbox, which is
+# precisely what Playwright's default `chromiumSandbox: false` passes — so "works
+# for the `orkroot` root terminal" is a separate claim from "works for `node`",
+# and each is proven rather than inferred from the other. `orkroot` is created
+# further down but is only uid 0 with HOME=/root, which is what `USER root` is
+# here.
+COPY docker/verify-playwright.cjs /usr/local/share/verify-playwright.cjs
 RUN playwright --version \
-  && NODE_PATH=/usr/local/share/npm-global/lib/node_modules node -e "\
-const { chromium } = require('playwright'); \
-chromium.launch().then(async (browser) => { \
-  const page = await browser.newPage(); \
-  await page.setContent('<h1>playwright-ok</h1>'); \
-  const text = await page.textContent('h1'); \
-  await browser.close(); \
-  if (text !== 'playwright-ok') throw new Error('unexpected page content'); \
-  console.log('chromium launch verified'); \
-});"
+  && NODE_PATH=/usr/local/share/npm-global/lib/node_modules \
+     node /usr/local/share/verify-playwright.cjs
+USER node
+RUN NODE_PATH=/usr/local/share/npm-global/lib/node_modules \
+    node /usr/local/share/verify-playwright.cjs
 
 # Build both bridge servers from a filtered monorepo install. They import the
 # shared @orkestrator/protocol workspace package, so copying either bridge as a

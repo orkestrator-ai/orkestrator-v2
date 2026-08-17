@@ -180,3 +180,48 @@ test("Docker fixture rejects containers owned by another profile", async ({ page
     spawnSync("docker", ["rm", "-f", foreignContainerId], { encoding: "utf8" });
   }
 });
+
+test("Docker fixture ships a Playwright browser that launches for both container users", async ({ page }) => {
+  test.skip(process.env.ORKESTRATOR_AGENT_TEST_DOCKER !== "1", "requires an agent-test profile seeded with a container fixture");
+  // Chromium's first launch pays for process startup in a cold container.
+  test.setTimeout(180_000);
+
+  const status = await profileStatus();
+  expect(status.status).toBe("ready");
+  const invoke = await authenticatedInvoke(page, status);
+  const projects = await invoke<Project[]>("get_projects");
+  const fixture = projects.find((project) => project.localPath === status.testProject);
+  expect(fixture).toBeTruthy();
+  const environments = await invoke<Environment[]>("get_environments", { projectId: fixture!.id });
+  const containerFixture = environments.find((environment) => environment.name === "fixture-container");
+  expect(containerFixture?.containerId).toBeTruthy();
+  expect(containerFixture?.status).toBe("running");
+  const containerId = containerFixture!.containerId!;
+
+  // Chromium puts renderer shared memory in /dev/shm. Docker's 64MB default is
+  // well under what a real page needs and fails as a mid-run renderer crash, so
+  // assert the mount the container was actually created with rather than the
+  // argv that asked for it.
+  const shm = spawnSync("docker", [
+    "exec", containerId, "sh", "-c", "df -k /dev/shm | awk 'NR==2 {print $2}'",
+  ], { encoding: "utf8" });
+  expect(shm.status, shm.stderr).toBe(0);
+  const shmMegabytes = Number(shm.stdout.trim()) / 1024;
+  expect(shmMegabytes).toBeGreaterThanOrEqual(512);
+
+  // The image build proves the browser starts at build time; this proves it in a
+  // running container, where the firewall is up and the workspace is mounted —
+  // and for both identities, because Chromium refuses to run as uid 0 unless
+  // Playwright's default `chromiumSandbox: false` supplies --no-sandbox.
+  for (const user of ["node", "orkroot"]) {
+    const launch = spawnSync("docker", [
+      "exec",
+      "-u", user,
+      "-e", "NODE_PATH=/usr/local/share/npm-global/lib/node_modules",
+      containerId,
+      "node", "/usr/local/share/verify-playwright.cjs",
+    ], { encoding: "utf8" });
+    expect(launch.status, `${user}: ${launch.stderr}`).toBe(0);
+    expect(launch.stdout).toContain("chromium launch verified");
+  }
+});

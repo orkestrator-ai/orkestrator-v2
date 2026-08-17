@@ -41,6 +41,15 @@ export async function createDockerContainer(environment: Environment, context: C
     "/workspace",
     "--cap-add",
     "NET_ADMIN",
+    // The image ships Chromium for Playwright, and Chromium puts its renderer
+    // shared memory in /dev/shm. Docker's 64MB default is far below what a real
+    // page needs, and the failure mode is a renderer crash mid-run ("Target
+    // page, context or browser has been closed") rather than a launch error, so
+    // it does not show up until an agent loads something non-trivial. Raise the
+    // mount instead of `--ipc=host`, which would also work but shares the host
+    // IPC namespace and weakens the container boundary.
+    "--shm-size",
+    "1g",
     // Linux Engine does not provide Docker Desktop's host.docker.internal DNS
     // entry automatically. Do not add this override on macOS/Windows: there it
     // shadows Docker Desktop's working DNS address with the VM bridge gateway.

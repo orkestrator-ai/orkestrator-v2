@@ -100,6 +100,7 @@ describe("useVirtuosoScrollState", () => {
     clearPersistedVirtuosoState("test-key");
     clearPersistedVirtuosoState("key-a");
     clearPersistedVirtuosoState("key-b");
+    clearPersistedVirtuosoState("unrestorable-key");
   });
 
   describe("initial state", () => {
@@ -1257,6 +1258,63 @@ describe("useVirtuosoScrollState", () => {
       } finally {
         document.body.removeChild(el);
       }
+    });
+
+    test("refuses an unrestorable persisted snapshot instead of handing it to restoreStateFrom", () => {
+      const persistKey = "unrestorable-key";
+      // This is one of the shapes that throws "Failed binary finding record in
+      // array" from inside a render when passed to restoreStateFrom. Persisting
+      // it and remounting must not restore it, and must drop it from the map
+      // so a later retry cannot replay the crash.
+      const poison = {
+        ranges: [{ startIndex: -3, endIndex: Number.NaN, size: Number.NaN }],
+        scrollTop: 500,
+      } as StateSnapshot;
+      const healthy: StateSnapshot = {
+        ranges: [{ startIndex: 0, endIndex: Number.POSITIVE_INFINITY, size: 34 }],
+        scrollTop: 120,
+      };
+
+      const { result, rerender } = renderHook(
+        ({ isActive }) => useVirtuosoScrollState({ isActive, persistKey }),
+        { initialProps: { isActive: true } },
+      );
+
+      result.current.virtuosoRef.current = {
+        scrollToIndex: () => {},
+        getState: (cb: (state: any) => void) => cb(poison),
+      } as any;
+
+      rerender({ isActive: false });
+
+      const { result: refused } = renderHook(() =>
+        useVirtuosoScrollState({ persistKey }),
+      );
+      expect(refused.current.scrollProps.restoreStateFrom).toBeUndefined();
+
+      // A later remount must also refuse: the initializer deletes the poison
+      // so retry cannot restore it from the module-level map.
+      const { result: stillRefused } = renderHook(() =>
+        useVirtuosoScrollState({ persistKey }),
+      );
+      expect(stillRefused.current.scrollProps.restoreStateFrom).toBeUndefined();
+
+      // The key is not bricked: a later well-formed snapshot still restores.
+      const { result: writer, rerender: rerenderWriter } = renderHook(
+        ({ isActive }) => useVirtuosoScrollState({ isActive, persistKey }),
+        { initialProps: { isActive: true } },
+      );
+      writer.current.virtuosoRef.current = {
+        scrollToIndex: () => {},
+        getState: (cb: (state: any) => void) => cb(healthy),
+      } as any;
+      rerenderWriter({ isActive: false });
+
+      const { result: restored } = renderHook(() =>
+        useVirtuosoScrollState({ persistKey }),
+      );
+      expect(restored.current.scrollProps.restoreStateFrom).toEqual(healthy);
+      clearPersistedVirtuosoState(persistKey);
     });
 
     test("restores snapshot even when user was sticky (avoids mount-from-top flash)", () => {

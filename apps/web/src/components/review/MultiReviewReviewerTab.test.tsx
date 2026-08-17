@@ -1,5 +1,5 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 /*
  * One transcript row that a renderer cannot survive must degrade to its own
@@ -146,6 +146,75 @@ describe("MultiReviewReviewerTab message containment", () => {
       // The header and read-only status line stay up: the view survived.
       expect(screen.getByText("Claude review")).toBeTruthy();
       expect(screen.queryByText("poison frame") === null).toBe(true);
+    });
+  });
+
+  test("retries a failed row when a later transcript refresh replaces the message", async () => {
+    // Same refresh() the 4s poll uses. The first snapshot injects a renderer
+    // throw; the next snapshot keeps the message id but is a new object without
+    // the poison, which is the resetKey change the row boundary retries on.
+    let loads = 0;
+    const loadTranscript = mock(async () => {
+      loads += 1;
+      const midContent = loads === 1
+        ? "poison frame"
+        : "Captured the worktree snapshot";
+      return {
+        workflowId: "multi-1",
+        reviewerId: "reviewer-1",
+        agent: "claude" as const,
+        model: "default",
+        status: "running" as const,
+        startedAt: "2026-08-17T00:00:00.000Z",
+        messages: [{
+          id: "healthy-before",
+          role: "assistant" as const,
+          content: "Inspecting the changed files",
+          createdAt: "2026-08-17T00:00:01.000Z",
+          parts: [{ type: "text" as const, content: "Inspecting the changed files" }],
+        }, {
+          id: "row-mid",
+          role: "assistant" as const,
+          content: midContent,
+          createdAt: "2026-08-17T00:00:02.000Z",
+          parts: [{ type: "text" as const, content: midContent }],
+        }, {
+          id: "healthy-after",
+          role: "assistant" as const,
+          content: "Running the validation suite",
+          createdAt: "2026-08-17T00:00:03.000Z",
+          parts: [{ type: "text" as const, content: "Running the validation suite" }],
+        }],
+      };
+    });
+
+    await withSilencedReactErrors(async () => {
+      render(
+        <MultiReviewReviewerTab
+          data={{
+            environmentId: "env-1",
+            workflowId: "multi-1",
+            reviewerId: "reviewer-1",
+            isLocal: true,
+          }}
+          isActive
+          loadTranscript={loadTranscript}
+        />,
+      );
+
+      expect(
+        await screen.findByText(/One message could not be displayed/),
+      ).toBeTruthy();
+      expect(screen.getByText("Inspecting the changed files")).toBeTruthy();
+      expect(screen.getByText("Running the validation suite")).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: "Refresh reviewer transcript" }));
+
+      expect(await screen.findByText("Captured the worktree snapshot")).toBeTruthy();
+      expect(screen.queryByText(/One message could not be displayed/) === null).toBe(true);
+      expect(screen.getByText("Inspecting the changed files")).toBeTruthy();
+      expect(screen.getByText("Running the validation suite")).toBeTruthy();
+      expect(screen.getByText("Claude review")).toBeTruthy();
     });
   });
 });

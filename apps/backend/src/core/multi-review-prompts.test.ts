@@ -29,6 +29,7 @@ describe("multi review reviewer prompt", () => {
         status: "dirty",
         head: "1111111111111111111111111111111111111111",
         paths: ["src/feature.ts", "src/feature.test.ts"],
+        fingerprint: "a".repeat(64),
       },
     });
 
@@ -37,6 +38,7 @@ describe("multi review reviewer prompt", () => {
     expect(prompt).toContain("- `src/feature.ts`");
     expect(prompt).toContain("- `src/feature.test.ts`");
     expect(prompt).toContain("Nothing in this review commits them");
+    expect(prompt).toContain("**Captured worktree fingerprint**");
     expect(prompt).toContain("never review a fresh clone, checkout, or worktree that omits them");
     // Step 1 reconciles against the state "above", so the order is load-bearing.
     expect(prompt.indexOf("**Authoritative worktree state**"))

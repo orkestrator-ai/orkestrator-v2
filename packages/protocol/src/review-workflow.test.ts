@@ -1052,6 +1052,11 @@ describe("review body assembly", () => {
 
     expect(body).toContain("Review and validate that snapshot in this worktree");
     expect(body).toContain("otherwise validate in place");
+    expect(body).toContain("Plan validation for the complete fixed worktree snapshot");
+    expect(body).toContain("exactly once for this worktree snapshot");
+    expect(body).toContain("same immutable head and uncommitted-overlay fingerprint");
+    expect(body).not.toContain("Plan validation for the fixed head commit");
+    expect(body).not.toContain("exactly once for this head commit");
     // Uncommitted paths are the change under review here, so they can no longer
     // be the reason validation is skipped.
     expect(body).not.toContain("blocks validation only when it can change validation inputs");

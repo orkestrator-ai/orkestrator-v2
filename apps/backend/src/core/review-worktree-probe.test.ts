@@ -5,6 +5,7 @@ import {
 } from "./review-worktree-probe.js";
 
 const HEAD = "1111111111111111111111111111111111111111";
+const FINGERPRINT = "a".repeat(64);
 
 function invoker(results: Array<unknown | Error>) {
   const commands: Array<{ command: string; args?: Record<string, unknown> }> = [];
@@ -31,11 +32,16 @@ test("reports a clean worktree and its head", async () => {
 });
 
 test("reports the uncommitted paths verbatim", async () => {
-  const { invoke } = invoker([{ head: HEAD, paths: ["src/a.ts", "docs/b.md"] }]);
+  const { invoke } = invoker([{
+    head: HEAD,
+    paths: ["src/a.ts", "docs/b.md"],
+    fingerprint: FINGERPRINT,
+  }]);
   await expect(probeReviewWorktreeOnce(invoke, "env-1")).resolves.toEqual({
     status: "dirty",
     head: HEAD,
     paths: ["src/a.ts", "docs/b.md"],
+    fingerprint: FINGERPRINT,
   });
 });
 
@@ -46,6 +52,7 @@ test("treats an unusable probe result as unknown", async () => {
     { head: "not-a-sha", paths: [] },
     { head: HEAD, paths: "src/a.ts" },
     { head: HEAD, paths: [1] },
+    { head: HEAD, paths: [], fingerprint: "not-a-fingerprint" },
     {},
     null,
   ]) {

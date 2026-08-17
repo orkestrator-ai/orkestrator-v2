@@ -958,7 +958,7 @@ export function buildReviewBody(opts: ReviewBodyOptions): string {
 The change under review may be committed, entirely uncommitted, or a mix of both. Committing is not your job here: do not edit source files, stage paths, or create a commit during this review. Validation commands may write generated artifacts and tool caches.
 
 1. Run \`git status --porcelain\` and \`git diff HEAD\`, and record every uncommitted path. If the authoritative worktree state above already reports this, reconcile against it and report any disagreement as a limitation rather than re-deriving it.
-2. Record the immutable head and base commits with \`git rev-parse HEAD\` and \`git rev-parse origin/${targetBranch}^{commit}\`.
+2. Record the immutable head and base commits with \`git rev-parse HEAD\` and \`git rev-parse origin/${targetBranch}^{commit}\`, plus the authoritative worktree fingerprint above when one was supplied.
 3. The review snapshot is this worktree as it now stands: the committed range \`origin/${targetBranch}...HEAD\`, plus every uncommitted tracked modification and untracked file recorded in step 1. Exclude an uncommitted path only when it is generated, vendored, binary, a suspected secret, or clearly unrelated, and record each exclusion with its reason.
 4. An empty committed range is not an empty change. When \`origin/${targetBranch}...HEAD\` produces no diff and uncommitted paths exist, those paths are the entire change under review. Never report that there is nothing to review while they exist.
 5. Review and validate that snapshot in this worktree. Do not clone the repository, check out another ref, or \`git worktree add\` a separate copy and review that instead: a fresh checkout pinned to the captured head does not contain the uncommitted work, so it would review the wrong source and report an empty change. If you create an isolated worktree to parallelise validation, reproduce the uncommitted overlay inside it first; otherwise validate in place.
@@ -1057,11 +1057,11 @@ ${preparationSection}
 
 ## Step 2: Run Tests
 
-Plan validation for the fixed head commit, then start it before detailed code analysis when the provider can run it independently:
+Plan validation for the ${preparationMode === "commit" ? "fixed head commit" : "complete fixed worktree snapshot"}, then start it before detailed code analysis when the provider can run it independently:
 1. Enforce the snapshot precondition from Step 1 before running any validation command.
 2. Identify the project's test runner and repository-specific validation guidance.
-3. Run the relevant full test suite, typechecking, and build validation exactly once for this head commit.
-4. Reuse a supplied validation result only when it identifies the same immutable head, exact command, configuration, environment, and toolchain. Otherwise run the command.
+3. Run the relevant full test suite, typechecking, and build validation exactly once for this ${preparationMode === "commit" ? "head commit" : "worktree snapshot"}.
+4. Reuse a supplied validation result only when it identifies the same ${preparationMode === "commit" ? "immutable head" : "immutable head and uncommitted-overlay fingerprint"}, exact command, configuration, environment, and toolchain. Otherwise run the command.
 5. For a non-trivial validation workload, use one native worker to run validation while the primary reviewer begins Step 3. Otherwise run it directly.
 6. If any tests fail, record every available failure with the test name, file, and error message.
 7. Await all validation before producing the final report.

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  MULTI_REVIEW_MAX_SNAPSHOT_PATHS,
   MULTI_REVIEW_WORKFLOW_VERSION,
   isMultiReviewTerminalPhase,
   isMultiReviewWorkflow,
@@ -8,6 +9,7 @@ import {
   type MultiReviewModelSelection,
   type MultiReviewReviewerTranscript,
   type MultiReviewWorkflow,
+  type MultiReviewWorktreeSnapshot,
   type StartMultiReviewInput,
 } from "@orkestrator/protocol/multi-review";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
@@ -76,6 +78,13 @@ class FixResultValidationError extends Error {
     super(`${message}${detailText}`);
     this.name = "FixResultValidationError";
     this.issues = [{ path, code: "invalid_value", message: this.message }];
+  }
+}
+
+class ReviewSnapshotChangedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ReviewSnapshotChangedError";
   }
 }
 
@@ -243,6 +252,7 @@ export class MultiReviewService {
     if (!environment || environment.projectId !== input.projectId || environment.deletionRequestedAt) {
       throw new Error("The review environment is unavailable");
     }
+    const reviewWorktreeSnapshot = await this.captureReviewWorktreeSnapshot(input.environmentId);
     const timestamp = nowIso();
     const workflow: MultiReviewWorkflow = {
       version: MULTI_REVIEW_WORKFLOW_VERSION,
@@ -256,6 +266,7 @@ export class MultiReviewService {
         id: randomUUID(), ...selection, status: "pending" as const,
       })),
       fixModel: input.fixModel,
+      reviewWorktreeSnapshot,
       phase: "reviewing",
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -351,39 +362,69 @@ export class MultiReviewService {
       if (!controlled) throw new Error(`Multi review workflow not found: ${workflowId}`);
       const { workflow, token } = controlled;
       if (workflow.phase !== "failed") return workflow;
-      // Reviewer failures are independent, so a single pass can fail several of
-      // them at once. Restoring only the first would consolidate from fewer
-      // reviewers than the user asked for, without saying so.
-      const failedReviewers = workflow.reviewers.filter((reviewer) => reviewer.status === "failed");
-      if (failedReviewers.length > 0) {
-        for (const failedReviewer of failedReviewers) {
-          // Retrying allocates a fresh session, so the abandoned one must be
-          // aborted while its id is still known. Clearing the id first would
-          // leave a provider turn running that nothing can ever reach again.
-          await this.abandonSession(workflow, failedReviewer, failedReviewer.providerSessionId);
-          failedReviewer.status = "pending";
-          delete failedReviewer.error;
-          delete failedReviewer.providerSessionId;
-          delete failedReviewer.sessionKey;
-          delete failedReviewer.requestId;
-          delete failedReviewer.dispatchState;
-          delete failedReviewer.schemaRepairAttempts;
-          delete failedReviewer.schemaRepairPrompt;
-          delete failedReviewer.idleResultPolls;
+      if (workflow.reviewSnapshotStale === true) {
+        const replacement = await this.captureReviewWorktreeSnapshot(workflow.environmentId);
+        for (const reviewer of workflow.reviewers) {
+          await this.abandonSession(workflow, reviewer, reviewer.providerSessionId);
+          reviewer.status = "pending";
+          delete reviewer.error;
+          delete reviewer.report;
+          delete reviewer.providerSessionId;
+          delete reviewer.sessionKey;
+          delete reviewer.requestId;
+          delete reviewer.dispatchState;
+          delete reviewer.schemaRepairAttempts;
+          delete reviewer.schemaRepairPrompt;
+          delete reviewer.idleResultPolls;
+          delete reviewer.startedAt;
+          delete reviewer.completedAt;
         }
-        workflow.phase = "reviewing";
-      } else if (workflow.consolidatedReport && workflow.fixSession) {
-        workflow.phase = "ready";
-        workflow.fixSession.status = "idle";
-        delete workflow.addressPromptPending;
-        delete workflow.activeRequest;
-      } else {
         await this.abandonSession(
           workflow, workflow.fixModel, workflow.fixSession?.providerSessionId,
         );
-        workflow.phase = "consolidating";
+        workflow.reviewWorktreeSnapshot = replacement;
+        workflow.phase = "reviewing";
+        delete workflow.reviewSnapshotStale;
         delete workflow.fixSession;
         delete workflow.activeRequest;
+        delete workflow.consolidatedReport;
+        delete workflow.fixResult;
+        delete workflow.addressPromptPending;
+      } else {
+        // Reviewer failures are independent, so a single pass can fail several of
+        // them at once. Restoring only the first would consolidate from fewer
+        // reviewers than the user asked for, without saying so.
+        const failedReviewers = workflow.reviewers.filter((reviewer) => reviewer.status === "failed");
+        if (failedReviewers.length > 0) {
+          for (const failedReviewer of failedReviewers) {
+            // Retrying allocates a fresh session, so the abandoned one must be
+            // aborted while its id is still known. Clearing the id first would
+            // leave a provider turn running that nothing can ever reach again.
+            await this.abandonSession(workflow, failedReviewer, failedReviewer.providerSessionId);
+            failedReviewer.status = "pending";
+            delete failedReviewer.error;
+            delete failedReviewer.providerSessionId;
+            delete failedReviewer.sessionKey;
+            delete failedReviewer.requestId;
+            delete failedReviewer.dispatchState;
+            delete failedReviewer.schemaRepairAttempts;
+            delete failedReviewer.schemaRepairPrompt;
+            delete failedReviewer.idleResultPolls;
+          }
+          workflow.phase = "reviewing";
+        } else if (workflow.consolidatedReport && workflow.fixSession) {
+          workflow.phase = "ready";
+          workflow.fixSession.status = "idle";
+          delete workflow.addressPromptPending;
+          delete workflow.activeRequest;
+        } else {
+          await this.abandonSession(
+            workflow, workflow.fixModel, workflow.fixSession?.providerSessionId,
+          );
+          workflow.phase = "consolidating";
+          delete workflow.fixSession;
+          delete workflow.activeRequest;
+        }
       }
       delete workflow.error;
       const saved = await this.save(workflow, token);
@@ -694,7 +735,9 @@ export class MultiReviewService {
       try {
         done = await this.advanceReviewer(workflow, token, reviewer, index);
       } catch (error) {
-        if (error instanceof ControllerFenceError) throw error;
+        if (error instanceof ControllerFenceError || error instanceof ReviewSnapshotChangedError) {
+          throw error;
+        }
         // A reviewer is one independent input to the consolidated result. Keep
         // its failure local so the remaining reviewers can still produce a
         // valid report for the workflow.
@@ -784,13 +827,17 @@ export class MultiReviewService {
       // Built before the dispatch is journaled: the worktree probe is a command
       // round trip that can be slow or fail, and nothing about it is ambiguous
       // while `dispatchState` is still `prepared`.
-      const prompt = reviewer.schemaRepairPrompt ?? createMultiReviewerPrompt({
-        targetBranch: workflow.targetBranch,
-        reviewInstruction: workflow.reviewInstruction,
-        reviewerNumber: index + 1,
-        reviewerCount: workflow.reviewers.length,
-        worktree: await this.reviewWorktree(workflow),
-      });
+      const reviewSnapshot = await this.assertReviewSnapshotCurrent(workflow);
+      let prompt = reviewer.schemaRepairPrompt;
+      if (!prompt) {
+        prompt = createMultiReviewerPrompt({
+          targetBranch: workflow.targetBranch,
+          reviewInstruction: workflow.reviewInstruction,
+          reviewerNumber: index + 1,
+          reviewerCount: workflow.reviewers.length,
+          worktree: this.promptWorktreeSnapshot(reviewSnapshot),
+        });
+      }
       await this.assertFence(workflow.id, token);
       reviewer.dispatchState = "dispatching";
       await this.save(workflow, token);
@@ -981,10 +1028,15 @@ export class MultiReviewService {
       // Built while the dispatch is still unjournaled, for the same reason the
       // reviewer prompt is: the worktree probe must not widen the window in
       // which a crash leaves the turn ambiguous.
-      const prompt = request.schemaRepairPrompt ?? (request.kind === "consolidate"
-        ? createMultiReviewConsolidationPrompt({
+      const reviewSnapshot = request.kind === "consolidate"
+        ? await this.assertReviewSnapshotCurrent(workflow)
+        : undefined;
+      let prompt = request.schemaRepairPrompt;
+      if (!prompt) {
+        if (request.kind === "consolidate") {
+          prompt = createMultiReviewConsolidationPrompt({
             targetBranch: workflow.targetBranch,
-            worktree: await this.reviewWorktree(workflow),
+            worktree: this.promptWorktreeSnapshot(reviewSnapshot!),
             reports: workflow.reviewers.flatMap((reviewer) =>
               reviewer.status === "completed" && reviewer.report
                 ? [{
@@ -994,8 +1046,11 @@ export class MultiReviewService {
                     report: reviewer.report,
                   }]
                 : []),
-          })
-        : addressPrompt(workflow.consolidatedReport!));
+          });
+        } else {
+          prompt = addressPrompt(workflow.consolidatedReport!);
+        }
+      }
       await this.assertFence(workflow.id, token);
       request.state = "dispatching";
       await this.save(workflow, token);
@@ -1218,6 +1273,9 @@ export class MultiReviewService {
     const failedDuringReview = workflow.phase === "reviewing";
     workflow.phase = "failed";
     workflow.error = errorMessage(error).slice(0, 4_096);
+    if (error instanceof ReviewSnapshotChangedError) {
+      workflow.reviewSnapshotStale = true;
+    }
     if (failedDuringReview) {
       // This failure abandons every live reviewer session, so none of them may
       // stay `running` on a settled workflow: `hasWorkflowActivity` reads that
@@ -1295,22 +1353,74 @@ export class MultiReviewService {
     return this.options.controllerLeaseMs ?? CONTROLLER_LEASE_MS;
   }
 
-  /**
-   * What the backend observed in the environment worktree as this prompt was
-   * built.
-   *
-   * A Multi Review starts from whatever state the user is in, so an entirely
-   * uncommitted change is ordinary rather than exceptional — and nothing in the
-   * workflow commits it. Each prompt carries a fresh observation instead of a
-   * persisted one: reviewers run for many minutes, and a stale "clean" would be
-   * worse evidence than none. An unknown state is not fatal; the reviewer
-   * establishes it in Step 1 and records the disagreement as a limitation.
-   */
-  private reviewWorktree(workflow: MultiReviewWorkflow): Promise<ReviewWorktreeSnapshot> {
-    return probeReviewWorktree(
+  /** Captures the one durable source identity every review turn must share. */
+  private async captureReviewWorktreeSnapshot(
+    environmentId: string,
+  ): Promise<MultiReviewWorktreeSnapshot> {
+    const observed = await probeReviewWorktree(
       (command, args) => this.invoke(command, args),
-      workflow.environmentId,
+      environmentId,
     );
+    if (observed.status === "unknown") {
+      throw new Error(
+        `Multi Review cannot start because the backend could not capture the environment Git state: ${observed.reason}`,
+      );
+    }
+    if (!observed.fingerprint) {
+      throw new Error("Multi Review cannot start because the worktree probe returned no content fingerprint");
+    }
+    const paths = observed.status === "dirty" ? [...observed.paths] : [];
+    if (paths.length > MULTI_REVIEW_MAX_SNAPSHOT_PATHS) {
+      throw new Error(
+        `Multi Review cannot start because the worktree has more than ${MULTI_REVIEW_MAX_SNAPSHOT_PATHS} uncommitted paths`,
+      );
+    }
+    return {
+      status: observed.status,
+      head: observed.head,
+      paths,
+      fingerprint: observed.fingerprint,
+      capturedAt: nowIso(),
+    };
+  }
+
+  private promptWorktreeSnapshot(
+    snapshot: MultiReviewWorktreeSnapshot,
+  ): ReviewWorktreeSnapshot {
+    return snapshot.status === "clean"
+      ? { status: "clean", head: snapshot.head, fingerprint: snapshot.fingerprint }
+      : {
+          status: "dirty",
+          head: snapshot.head,
+          paths: [...snapshot.paths],
+          fingerprint: snapshot.fingerprint,
+        };
+  }
+
+  /** Fails closed before dispatch when the long-running review source drifted. */
+  private async assertReviewSnapshotCurrent(
+    workflow: MultiReviewWorkflow,
+  ): Promise<MultiReviewWorktreeSnapshot> {
+    const baseline = workflow.reviewWorktreeSnapshot;
+    if (!baseline) {
+      throw new ReviewSnapshotChangedError(
+        "Multi Review cannot continue because its starting worktree snapshot was not recorded",
+      );
+    }
+    let current: MultiReviewWorktreeSnapshot;
+    try {
+      current = await this.captureReviewWorktreeSnapshot(workflow.environmentId);
+    } catch (error) {
+      throw new ReviewSnapshotChangedError(
+        `Multi Review cannot verify its worktree snapshot: ${errorMessage(error)}`,
+      );
+    }
+    if (current.head !== baseline.head || current.fingerprint !== baseline.fingerprint) {
+      throw new ReviewSnapshotChangedError(
+        "Multi Review stopped because the environment worktree changed after the review started. Retry to review the new snapshot.",
+      );
+    }
+    return baseline;
   }
 
   private providerKey(

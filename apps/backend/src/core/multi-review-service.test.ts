@@ -29,6 +29,18 @@ import { REVIEW_FIX_RESULT_JSON_SCHEMA } from "./looped-review-prompts.js";
 import { StorageService } from "./storage.js";
 import { MultiReviewService } from "./multi-review-service.js";
 
+const REVIEW_HEAD = "1111111111111111111111111111111111111111";
+const REVIEW_FINGERPRINT = "a".repeat(64);
+
+async function stableReviewInvoker<T>(command: string): Promise<T> {
+  if (command !== "get_environment_uncommitted_paths") throw new Error("unexpected command");
+  return {
+    head: REVIEW_HEAD,
+    paths: [],
+    fingerprint: REVIEW_FINGERPRINT,
+  } as T;
+}
+
 const cleanReport: StructuredReviewReport = {
   reviewScope: { targetBranch: "main", baseRef: "origin/main...HEAD", commit: null,
     filesReviewed: ["src/a.ts"], filesSkipped: [], filesLeftUncommitted: [], commandsRun: [],
@@ -438,8 +450,9 @@ test("MultiReviewService tells every reviewer about the uncommitted change", asy
       commands.push(command);
       if (command !== "get_environment_uncommitted_paths") throw new Error("unexpected command");
       return {
-        head: "1111111111111111111111111111111111111111",
+        head: REVIEW_HEAD,
         paths: ["src/feature.ts"],
+        fingerprint: REVIEW_FINGERPRINT,
       };
     }) as <T>(command: string, args?: Record<string, unknown>) => Promise<T>,
   });
@@ -461,23 +474,85 @@ test("MultiReviewService reports a clean worktree and dispatches without it when
     expect(consolidation.prompt).not.toContain("examined an incomplete snapshot");
   }, {
     invoke: (async () => ({
-      head: "1111111111111111111111111111111111111111",
+      head: REVIEW_HEAD,
       paths: [],
+      fingerprint: REVIEW_FINGERPRINT,
     })) as <T>() => Promise<T>,
   });
 
-  // A failed probe is corroborating evidence lost, not a reason to abandon the
-  // review: the body still makes the reviewer establish the state in Step 1.
+  // Without a durable content identity, independent reports cannot safely be
+  // combined as one review.
   const unknown = new Provider();
-  await withService("env-unprobeable-worktree", unknown, async ({ service, start, snapshot }) => {
-    const started = await start();
+  await withService("env-unprobeable-worktree", unknown, async ({ start }) => {
+    await expect(start()).rejects.toThrow("could not capture the environment Git state");
+    expect(unknown.sends.size).toBe(0);
+  }, {
+    invoke: (async () => { throw new Error("git unavailable"); }) as <T>() => Promise<T>,
+  });
+});
+
+test("MultiReviewService stops when the snapshot changes between reviewers and retries all reviewers", async () => {
+  const provider = new Provider();
+  const replacementFingerprint = "b".repeat(64);
+  let probes = 0;
+  await withService("env-reviewer-snapshot-drift", provider, async ({ service, start, snapshot }) => {
+    const started = await start([
+      { agent: "claude", model: "opus" },
+      { agent: "claude", model: "sonnet" },
+    ]);
+    await waitUntil(async () => (await snapshot(started.id))?.phase === "failed");
+
+    const failed = (await snapshot(started.id))!;
+    expect(failed.reviewSnapshotStale).toBe(true);
+    expect(failed.error).toContain("worktree changed after the review started");
+    expect(failed.reviewers.map((reviewer) => reviewer.status)).toEqual(["completed", "failed"]);
+    expect([...provider.sends.values()].filter((sent) =>
+      sent.prompt.includes("You are independent reviewer"))).toHaveLength(1);
+
+    const retried = await service.retry(started.id);
+    expect(retried.phase).toBe("reviewing");
+    expect(retried.reviewSnapshotStale).toBeUndefined();
+    expect(retried.reviewWorktreeSnapshot?.fingerprint).toBe(replacementFingerprint);
+    expect(retried.reviewers.every((reviewer) => reviewer.status === "pending")).toBe(true);
     await waitUntil(async () => {
       await service.advanceNow(started.id);
       return (await snapshot(started.id))?.phase === "ready";
     });
-    const reviewer = [...unknown.sends.values()]
-      .find((sent) => sent.prompt.includes("You are independent reviewer"))!;
-    expect(reviewer.prompt).toContain("could not determine the worktree state");
+  }, {
+    invoke: (async () => {
+      probes += 1;
+      return {
+        head: REVIEW_HEAD,
+        paths: ["src/feature.ts"],
+        fingerprint: probes <= 2 ? REVIEW_FINGERPRINT : replacementFingerprint,
+      };
+    }) as <T>() => Promise<T>,
+  });
+});
+
+test("MultiReviewService refuses to consolidate reports after snapshot drift", async () => {
+  const provider = new Provider();
+  let probes = 0;
+  await withService("env-consolidation-snapshot-drift", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => (await snapshot(started.id))?.phase === "consolidating");
+    await service.advanceNow(started.id);
+
+    const failed = (await snapshot(started.id))!;
+    expect(failed.phase).toBe("failed");
+    expect(failed.reviewSnapshotStale).toBe(true);
+    expect(failed.consolidatedReport).toBeUndefined();
+    expect([...provider.sends.values()].some((sent) =>
+      sent.prompt.includes("<multi-review-reports-json>"))).toBe(false);
+  }, {
+    invoke: (async () => {
+      probes += 1;
+      return {
+        head: REVIEW_HEAD,
+        paths: ["src/feature.ts"],
+        fingerprint: probes <= 2 ? REVIEW_FINGERPRINT : "c".repeat(64),
+      };
+    }) as <T>() => Promise<T>,
   });
 });
 
@@ -492,7 +567,7 @@ async function withService(
   }) => Promise<void>,
   options: {
     createProvider?: () => Promise<BuildPipelineProvider>;
-    /** Backend command runner; defaults to one that refuses every command. */
+    /** Backend command runner; defaults to a stable clean review snapshot. */
     invoke?: <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
   } = {},
 ): Promise<void> {
@@ -507,7 +582,14 @@ async function withService(
   });
   const service = new MultiReviewService(
     storage,
-    options.invoke ?? (async () => { throw new Error("unexpected command"); }),
+    options.invoke ?? (async (command: string) => {
+      if (command !== "get_environment_uncommitted_paths") throw new Error("unexpected command");
+      return {
+        head: REVIEW_HEAD,
+        paths: [],
+        fingerprint: REVIEW_FINGERPRINT,
+      } as never;
+    }),
     {
       autoAdvance: false,
       provider: options.createProvider ?? (async () => provider),
@@ -815,7 +897,7 @@ test("MultiReviewService clears stale review activity when it rehydrates", async
   );
   const service = new MultiReviewService(
     storage,
-    async () => { throw new Error("unexpected command"); },
+    stableReviewInvoker,
     { autoAdvance: false },
   );
   try {
@@ -846,7 +928,7 @@ test("MultiReviewService rehydrates active review activity without a renderer", 
   provider.statusValue = "running";
   const first = new MultiReviewService(
     storage,
-    async () => { throw new Error("unexpected command"); },
+    stableReviewInvoker,
     { autoAdvance: false, provider: async () => provider },
   );
   const started = await first.start({
@@ -866,7 +948,7 @@ test("MultiReviewService rehydrates active review activity without a renderer", 
   );
   const restored = new MultiReviewService(
     storage,
-    async () => { throw new Error("unexpected command"); },
+    stableReviewInvoker,
     { autoAdvance: false, provider: async () => provider },
   );
   try {
@@ -896,7 +978,7 @@ test("MultiReviewService owns fan-out, consolidation, and the interactive fix ha
     order: 0, environmentType: "local", worktreePath: "/tmp/review", setupScriptsComplete: true,
   });
   const provider = new Provider();
-  const service = new MultiReviewService(storage, async () => { throw new Error("unexpected command"); }, {
+  const service = new MultiReviewService(storage, stableReviewInvoker, {
     autoAdvance: false,
     provider: async () => provider,
   });
@@ -943,7 +1025,7 @@ test("MultiReviewService fails an idle reviewer that never returns structured ou
     order: 0, environmentType: "local", worktreePath: "/tmp/review", setupScriptsComplete: true,
   });
   const provider = new Provider(false);
-  const service = new MultiReviewService(storage, async () => { throw new Error("unexpected command"); }, {
+  const service = new MultiReviewService(storage, stableReviewInvoker, {
     autoAdvance: false,
     provider: async () => provider,
   });
@@ -974,7 +1056,7 @@ test("MultiReviewService leaves an interactive handoff idle for the native tab",
     order: 0, environmentType: "local", worktreePath: "/tmp/review", setupScriptsComplete: true,
   });
   const provider = new Provider();
-  const service = new MultiReviewService(storage, async () => { throw new Error("unexpected command"); }, {
+  const service = new MultiReviewService(storage, stableReviewInvoker, {
     autoAdvance: false,
     provider: async () => provider,
   });
@@ -1017,7 +1099,7 @@ test("MultiReviewService persists cancellation until an aborting consolidation p
   // Pin the consolidation session before start() kicks the first advance so a
   // coalesced run cannot skip consolidating and land on ready.
   provider.statusOverrides.set("session-2", "running");
-  const service = new MultiReviewService(storage, async () => { throw new Error("unexpected command"); }, {
+  const service = new MultiReviewService(storage, stableReviewInvoker, {
     autoAdvance: false,
     provider: async () => provider,
   });
@@ -1076,7 +1158,7 @@ test("MultiReviewService settles cancellation when the aborted session reports a
   });
   const provider = new Provider();
   provider.statusOverrides.set("session-2", "running");
-  const service = new MultiReviewService(storage, async () => { throw new Error("unexpected command"); }, {
+  const service = new MultiReviewService(storage, stableReviewInvoker, {
     autoAdvance: false,
     provider: async () => provider,
   });
@@ -1130,7 +1212,7 @@ test("MultiReviewService coalesces repeated advances while a provider call is bl
   const provider = new Provider();
   provider.statusValue = "running";
   const release = provider.blockStatus();
-  const service = new MultiReviewService(storage, async () => { throw new Error("unexpected command"); }, {
+  const service = new MultiReviewService(storage, stableReviewInvoker, {
     autoAdvance: false,
     provider: async () => provider,
   });
@@ -1167,7 +1249,7 @@ test("MultiReviewService renews its lease while a provider call is blocked", asy
   const provider = new Provider();
   provider.statusValue = "running";
   const release = provider.blockStatus();
-  const service = new MultiReviewService(storage, async () => { throw new Error("unexpected command"); }, {
+  const service = new MultiReviewService(storage, stableReviewInvoker, {
     pollIntervalMs: 50,
     controllerLeaseMs: 2_000,
     controllerRenewMs: 100,
@@ -1208,7 +1290,7 @@ test("MultiReviewService atomically admits only one active workflow per environm
   });
   const provider = new Provider();
   provider.statusValue = "running";
-  const service = new MultiReviewService(storage, async () => { throw new Error("unexpected command"); }, {
+  const service = new MultiReviewService(storage, stableReviewInvoker, {
     autoAdvance: false,
     provider: async () => provider,
   });

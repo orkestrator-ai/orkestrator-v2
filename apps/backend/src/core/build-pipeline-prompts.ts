@@ -53,8 +53,8 @@ export function buildPrompt(pipeline: BuildPipeline, notes: string): string {
  * the pipeline's own evidence rather than something the reviewer re-derives.
  */
 export type ReviewWorktreeSnapshot =
-  | { status: "clean"; head: string }
-  | { status: "dirty"; paths: string[]; head: string }
+  | { status: "clean"; head: string; fingerprint?: string }
+  | { status: "dirty"; paths: string[]; head: string; fingerprint?: string }
   | { status: "unknown"; reason: string; head?: never };
 
 /**
@@ -94,14 +94,21 @@ export function worktreeSnapshotSection(
   snapshot: ReviewWorktreeSnapshot,
   wording: WorktreeSnapshotWording = BUILD_PIPELINE_WORKTREE_WORDING,
 ): string {
-  if (snapshot.status === "clean") return wording.clean;
   if (snapshot.status === "unknown") {
     return `**Authoritative worktree state**: the backend could not determine the worktree state (${snapshot.reason}). Establish it yourself in Step 1 and record it as a limitation.`;
   }
+  const identity = [
+    `**Captured environment HEAD**: \`${snapshot.head}\``,
+    snapshot.fingerprint
+      ? `**Captured worktree fingerprint**: \`${snapshot.fingerprint}\``
+      : "",
+  ].filter(Boolean);
+  if (snapshot.status === "clean") return [wording.clean, ...identity].join("\n");
   const shown = snapshot.paths.slice(0, MAX_REPORTED_UNCOMMITTED_PATHS);
   const omitted = snapshot.paths.length - shown.length;
   return [
     wording.dirty,
+    ...identity,
     // Path text comes from the repository, so it is untrusted: fence it as code
     // rather than letting a crafted filename render as prompt markup.
     ...shown.map((filePath) => `- \`${filePath.replaceAll("`", "'")}\``),

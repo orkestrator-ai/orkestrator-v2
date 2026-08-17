@@ -643,7 +643,7 @@ done
     const read = () => commands.get("get_environment_uncommitted_paths")?.(
       { environmentId: "env-1" },
       context,
-    ) as Promise<{ head: string; paths: string[] }>;
+    ) as Promise<{ head: string; paths: string[]; fingerprint: string }>;
 
     const initialHead = (await runCommand(
       "git",
@@ -651,12 +651,24 @@ done
       { cwd: root, timeoutMs: 30_000 },
     )).stdout.trim();
 
-    await expect(read()).resolves.toEqual({ head: initialHead, paths: [] });
+    const clean = await read();
+    expect(clean).toMatchObject({ head: initialHead, paths: [] });
+    expect(clean.fingerprint).toMatch(/^[0-9a-f]{64}$/);
 
     await fs.writeFile(path.join(root, "untracked.ts"), "export const b = 2;\n");
     await fs.writeFile(path.join(root, "committed.ts"), "export const a = 2;\n");
     const dirty = await read();
     expect([...dirty.paths].sort()).toEqual(["committed.ts", "untracked.ts"]);
+    expect(dirty.fingerprint).not.toBe(clean.fingerprint);
+
+    // The path set and HEAD stay identical, but the snapshot identity must
+    // still change when content inside those already-dirty paths changes.
+    await fs.writeFile(path.join(root, "untracked.ts"), "export const b = 3;\n");
+    await fs.writeFile(path.join(root, "committed.ts"), "export const a = 3;\n");
+    const changedContent = await read();
+    expect([...changedContent.paths].sort()).toEqual([...dirty.paths].sort());
+    expect(changedContent.head).toBe(dirty.head);
+    expect(changedContent.fingerprint).not.toBe(dirty.fingerprint);
 
     await git("add", "-A");
     // Staged-but-uncommitted still counts: the commit has not happened.
@@ -692,7 +704,7 @@ done
     const read = () => commands.get("get_environment_uncommitted_paths")?.(
       { environmentId: "env-1" },
       context,
-    ) as Promise<{ head: string; paths: string[] }>;
+    ) as Promise<{ head: string; paths: string[]; fingerprint: string }>;
 
     const before = await read();
     expect(before.paths).toEqual([]);
@@ -704,6 +716,7 @@ done
     const after = await read();
     expect(after.paths).toEqual([]);
     expect(after.head).toBe(before.head);
+    expect(after.fingerprint).toBe(before.fingerprint);
 
     // A path the repository does not ignore is still reported, so the empty
     // result above is ignore semantics rather than a probe that sees nothing.

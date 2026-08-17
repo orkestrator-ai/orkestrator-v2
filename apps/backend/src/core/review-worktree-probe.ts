@@ -20,23 +20,26 @@ export async function probeReviewWorktreeOnce(
   environmentId: string,
 ): Promise<ReviewWorktreeSnapshot> {
   try {
-    const result = await invoke<{ head?: unknown; paths?: unknown }>(
+    const result = await invoke<{ head?: unknown; paths?: unknown; fingerprint?: unknown }>(
       "get_environment_uncommitted_paths",
       { environmentId },
     );
     const paths = result?.paths;
     const head = result?.head;
+    const fingerprint = result?.fingerprint;
     if (
       typeof head !== "string"
       || !/^[0-9a-f]{40,64}$/i.test(head)
       || !Array.isArray(paths)
       || paths.some((entry) => typeof entry !== "string")
+      || (fingerprint !== undefined
+        && (typeof fingerprint !== "string" || !/^[0-9a-f]{64}$/i.test(fingerprint)))
     ) {
       return { status: "unknown", reason: "the worktree probe returned an unusable result" };
     }
     return paths.length === 0
-      ? { status: "clean", head }
-      : { status: "dirty", paths: paths as string[], head };
+      ? { status: "clean", head, ...(fingerprint ? { fingerprint } : {}) }
+      : { status: "dirty", paths: paths as string[], head, ...(fingerprint ? { fingerprint } : {}) };
   } catch (error) {
     // The message can quote repository paths, so only the error class name is
     // kept, and only after stripping anything that is not a bare identifier.

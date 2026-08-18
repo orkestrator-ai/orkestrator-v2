@@ -17,10 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { usePromptDeadline } from "@/hooks/usePromptDeadline";
 import { cn } from "@/lib/utils";
-import {
-  nativeAgentInteractionDraftKey,
-  usePromptDraftField,
-} from "@/stores/promptDraftStore";
+import { nativeAgentInteractionDraftKey, usePromptDraftField } from "@/stores/promptDraftStore";
 import { useInteractionResolver } from "@/components/native-agent/use-interaction-resolver";
 
 type Answer = { optionIds: string[]; freeText: string };
@@ -60,14 +57,9 @@ export function NativeAgentQuestionCard({
   onResolve,
 }: {
   interaction: AgentInteractionRequest;
-  onResolve: (
-    resolution: AgentInteractionResolution,
-  ) => Promise<AgentInteractionApplyOutcome>;
+  onResolve: (resolution: AgentInteractionResolution) => Promise<AgentInteractionApplyOutcome>;
 }) {
-  const draftKey = nativeAgentInteractionDraftKey(
-    interaction.sessionId,
-    interaction.id,
-  );
+  const draftKey = nativeAgentInteractionDraftKey(interaction.sessionId, interaction.id);
   const questions = interaction.presentation.questions;
   const [answers, setAnswers] = usePromptDraftField<Record<string, Answer>>(
     draftKey,
@@ -111,31 +103,29 @@ export function NativeAgentQuestionCard({
     draftKey,
     onResolve,
     blocked: expired,
-    buildAnswers: () => questions.flatMap((question) => {
-      const answer = answerFor(question);
-      if (!isAnswered(answer)) return [];
-      return [{
-        questionId: question.id,
-        ...(answer.optionIds.length ? { optionIds: answer.optionIds } : {}),
-        ...(answer.freeText.trim() ? { freeText: answer.freeText.trim() } : {}),
-      }];
-    }),
+    buildAnswers: () =>
+      questions.flatMap((question) => {
+        const answer = answerFor(question);
+        if (!isAnswered(answer)) return [];
+        return [
+          {
+            questionId: question.id,
+            ...(answer.optionIds.length ? { optionIds: answer.optionIds } : {}),
+            ...(answer.freeText.trim() ? { freeText: answer.freeText.trim() } : {}),
+          },
+        ];
+      }),
   });
 
   const count = questions.length;
   // A stale draft index survives a request replacing another in place, so it is
   // clamped rather than trusted.
-  const index = Number.isInteger(storedIndex) && storedIndex >= 0 && storedIndex < count
-    ? storedIndex
-    : 0;
+  const index =
+    Number.isInteger(storedIndex) && storedIndex >= 0 && storedIndex < count ? storedIndex : 0;
   const question = questions[index];
   const disabled = submitting || expired;
-  const answeredCount = questions.filter((entry) =>
-    isAnswered(answerFor(entry)),
-  ).length;
-  const canSubmit = questions.every((entry) =>
-    !entry.required || isAnswered(answerFor(entry)),
-  );
+  const answeredCount = questions.filter((entry) => isAnswered(answerFor(entry))).length;
+  const canSubmit = questions.every((entry) => !entry.required || isAnswered(answerFor(entry)));
 
   const updateAnswer = (
     targetQuestion: AgentInteractionQuestion,
@@ -154,22 +144,23 @@ export function NativeAgentQuestionCard({
   // A question with no options has nothing to choose between, so its field is
   // the answer and is shown unconditionally.
   const hasOptions = question.options.length > 0;
-  const showFreeText = question.allowFreeText
-    && (!hasOptions || customOpen[question.id] === true);
+  const showFreeText = question.allowFreeText && (!hasOptions || customOpen[question.id] === true);
   const isLast = index === count - 1;
 
   const selectOption = (optionId: string) => {
     const selected = answer.optionIds.includes(optionId);
-    updateAnswer(question, (current) => question.multiple
-      ? {
-          ...current,
-          optionIds: selected
-            ? current.optionIds.filter((id) => id !== optionId)
-            : [...current.optionIds, optionId],
-        }
-      // The question asked for one answer, so a pick replaces both the previous
-      // option and anything typed under "Something else".
-      : { optionIds: [optionId], freeText: "" });
+    updateAnswer(question, (current) =>
+      question.multiple
+        ? {
+            ...current,
+            optionIds: selected
+              ? current.optionIds.filter((id) => id !== optionId)
+              : [...current.optionIds, optionId],
+          }
+        : // The question asked for one answer, so a pick replaces both the previous
+          // option and anything typed under "Something else".
+          { optionIds: [optionId], freeText: "" },
+    );
     if (!question.multiple) {
       setCustomOpen((current) => ({ ...current, [question.id]: false }));
     }
@@ -281,9 +272,7 @@ export function NativeAgentQuestionCard({
       <div
         id={`question-panel-${interaction.id}-${question.id}`}
         role={count > 1 ? "tabpanel" : undefined}
-        aria-labelledby={
-          count > 1 ? `question-tab-${interaction.id}-${question.id}` : undefined
-        }
+        aria-labelledby={count > 1 ? `question-tab-${interaction.id}-${question.id}` : undefined}
         className="px-3 py-3"
       >
         {count === 1 && question.description ? (
@@ -294,9 +283,7 @@ export function NativeAgentQuestionCard({
         <p className="text-sm leading-relaxed text-foreground">
           {question.prompt}
           {question.multiple ? (
-            <span className="ml-1.5 text-xs text-muted-foreground">
-              (select all that apply)
-            </span>
+            <span className="ml-1.5 text-xs text-muted-foreground">(select all that apply)</span>
           ) : null}
         </p>
 
@@ -371,32 +358,40 @@ export function NativeAgentQuestionCard({
           <div className="mt-2">
             {question.secret ? (
               <Input
-                ref={(element) => { freeTextRef.current = element; }}
+                ref={(element) => {
+                  freeTextRef.current = element;
+                }}
                 type="password"
                 autoComplete="off"
                 aria-label={responseLabel}
                 value={answer.freeText}
                 disabled={disabled}
-                onChange={(event) => updateAnswer(question, (current) => ({
-                  ...current,
-                  freeText: event.target.value,
-                  ...(question.multiple ? {} : { optionIds: [] }),
-                }))}
+                onChange={(event) =>
+                  updateAnswer(question, (current) => ({
+                    ...current,
+                    freeText: event.target.value,
+                    ...(question.multiple ? {} : { optionIds: [] }),
+                  }))
+                }
               />
             ) : (
               <textarea
-                ref={(element) => { freeTextRef.current = element; }}
+                ref={(element) => {
+                  freeTextRef.current = element;
+                }}
                 aria-label={responseLabel}
                 rows={3}
                 value={answer.freeText}
                 disabled={disabled}
                 placeholder="Type your answer"
                 className="w-full resize-y rounded-md border border-border/60 bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-                onChange={(event) => updateAnswer(question, (current) => ({
-                  ...current,
-                  freeText: event.target.value,
-                  ...(question.multiple ? {} : { optionIds: [] }),
-                }))}
+                onChange={(event) =>
+                  updateAnswer(question, (current) => ({
+                    ...current,
+                    freeText: event.target.value,
+                    ...(question.multiple ? {} : { optionIds: [] }),
+                  }))
+                }
               />
             )}
             {question.secret ? (
@@ -420,8 +415,7 @@ export function NativeAgentQuestionCard({
         >
           <AlertTriangle className="size-3.5 shrink-0" aria-hidden />
           <span className="min-w-0 flex-1">
-            {error
-              ?? "This question has an invalid deadline and cannot be answered safely."}
+            {error ?? "This question has an invalid deadline and cannot be answered safely."}
           </span>
         </div>
       ) : null}
@@ -434,7 +428,9 @@ export function NativeAgentQuestionCard({
             variant="ghost"
             className="mr-auto text-muted-foreground hover:text-foreground"
             disabled={disabled}
-            onClick={() => { void resolve("deny"); }}
+            onClick={() => {
+              void resolve("deny");
+            }}
           >
             {interaction.presentation.declineLabel ?? "Dismiss"}
           </Button>
@@ -454,7 +450,9 @@ export function NativeAgentQuestionCard({
               type="button"
               size="sm"
               disabled={disabled || !canSubmit}
-              onClick={() => { void resolve("answer"); }}
+              onClick={() => {
+                void resolve("answer");
+              }}
             >
               {interaction.presentation.confirmLabel ?? "Submit"}
             </Button>

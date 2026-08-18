@@ -1228,9 +1228,8 @@ export function SharedNativeAgentController({
   const pinnedInteractions = allInteractions.filter(
     (interaction) => interaction.kind !== "question",
   );
-  const composerCentered = messages.length === 0
-    && !isTurnActive
-    && questionInteractions.length === 0;
+  const composerCentered =
+    messages.length === 0 && !isTurnActive && questionInteractions.length === 0;
 
   /**
    * The rendered list is also what decides whether anything is pinned at all, so

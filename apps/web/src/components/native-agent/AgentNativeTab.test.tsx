@@ -330,15 +330,17 @@ function pendingInteraction(
     presentation: question
       ? {
           title: "Claude needs input",
-          questions: [{
-            id: "q0",
-            prompt: "Which approach?",
-            required: true,
-            multiple: false,
-            secret: false,
-            allowFreeText: true,
-            options: [],
-          }],
+          questions: [
+            {
+              id: "q0",
+              prompt: "Which approach?",
+              required: true,
+              multiple: false,
+              secret: false,
+              allowFreeText: true,
+              options: [],
+            },
+          ],
         }
       : {
           title: "Approve command",
@@ -518,13 +520,7 @@ describe("AgentNativeTab", () => {
       ],
     }));
 
-    render(
-      <AgentNativeTab
-        tabId="tab-question-routing"
-        data={identity("claude")}
-        isActive
-      />,
-    );
+    render(<AgentNativeTab tabId="tab-question-routing" data={identity("claude")} isActive />);
 
     const question = await screen.findByTestId("agent-question-card");
     const transcript = screen.getByTestId("native-agent-transcript-test-list");

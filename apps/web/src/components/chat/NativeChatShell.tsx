@@ -373,10 +373,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
               )}
 
               {hasTranscriptCards && (
-                <div
-                  data-testid="transcript-cards"
-                  className="px-3 py-3 @sm:px-6"
-                >
+                <div data-testid="transcript-cards" className="px-3 py-3 @sm:px-6">
                   <div className="mx-auto flex max-w-3xl min-w-0 flex-col gap-3">
                     {transcriptCards}
                   </div>

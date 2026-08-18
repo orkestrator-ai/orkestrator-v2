@@ -125,18 +125,16 @@ describe("NativeAgentQuestionCard", () => {
     fireEvent.click(screen.getByRole("button", { name: "Something else" }));
     fireEvent.click(screen.getByRole("button", { name: "Something else" }));
 
-    expect(
-      (screen.getByLabelText("Which approach? response") as HTMLTextAreaElement).value,
-    ).toBe("");
+    expect((screen.getByLabelText("Which approach? response") as HTMLTextAreaElement).value).toBe(
+      "",
+    );
   });
 
   test("keeps a custom answer alongside options in a multi-select question", async () => {
     const onResolve = mock(async (_resolution: AgentInteractionResolution) => applied());
     render(
       <NativeAgentQuestionCard
-        interaction={request([
-          question({ id: "q0", multiple: true, options: TWO_OPTIONS }),
-        ])}
+        interaction={request([question({ id: "q0", multiple: true, options: TWO_OPTIONS })])}
         onResolve={onResolve}
       />,
     );
@@ -215,26 +213,23 @@ describe("NativeAgentQuestionCard", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "TypeScript" }));
     // Answering the visible question is not enough; the first one is still open.
-    expect((screen.getByRole("button", { name: "Submit" }) as HTMLButtonElement).disabled)
-      .toBe(true);
+    expect((screen.getByRole("button", { name: "Submit" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Previous question" }));
     fireEvent.click(screen.getByRole("button", { name: "Rust" }));
     fireEvent.click(screen.getByRole("button", { name: "Next question" }));
-    expect((screen.getByRole("button", { name: "Submit" }) as HTMLButtonElement).disabled)
-      .toBe(false);
+    expect((screen.getByRole("button", { name: "Submit" }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
   });
 
   test("keeps a secret answer live-only and discards it across unmount", async () => {
     const onResolve = mock(async (_resolution: AgentInteractionResolution) => applied());
-    const interaction = request([
-      question({ id: "q0", prompt: "Access token", secret: true }),
-    ]);
+    const interaction = request([question({ id: "q0", prompt: "Access token", secret: true })]);
     const view = render(
-      <NativeAgentQuestionCard
-        interaction={interaction}
-        onResolve={onResolve}
-      />,
+      <NativeAgentQuestionCard interaction={interaction} onResolve={onResolve} />,
     );
 
     const input = screen.getByLabelText("Access token response") as HTMLInputElement;
@@ -246,8 +241,7 @@ describe("NativeAgentQuestionCard", () => {
 
     view.unmount();
     render(<NativeAgentQuestionCard interaction={interaction} onResolve={onResolve} />);
-    expect((screen.getByLabelText("Access token response") as HTMLInputElement).value)
-      .toBe("");
+    expect((screen.getByLabelText("Access token response") as HTMLInputElement).value).toBe("");
 
     fireEvent.change(screen.getByLabelText("Access token response"), {
       target: { value: "send-live" },
@@ -266,9 +260,7 @@ describe("NativeAgentQuestionCard", () => {
       question({ id: "q1", prompt: "Any notes?", required: false }),
     ]);
     const onResolve = mock(async (_resolution: AgentInteractionResolution) => applied());
-    render(
-      <NativeAgentQuestionCard interaction={interaction} onResolve={onResolve} />,
-    );
+    render(<NativeAgentQuestionCard interaction={interaction} onResolve={onResolve} />);
 
     fireEvent.click(screen.getByRole("button", { name: "TypeScript" }));
     fireEvent.click(screen.getByRole("button", { name: "Next question" }));
@@ -276,9 +268,7 @@ describe("NativeAgentQuestionCard", () => {
 
     await waitFor(() => expect(onResolve).toHaveBeenCalledTimes(1));
     const resolution = onResolve.mock.calls[0]?.[0];
-    expect(resolution?.answer?.answers).toEqual([
-      { questionId: "q0", optionIds: ["o0"] },
-    ]);
+    expect(resolution?.answer?.answers).toEqual([{ questionId: "q0", optionIds: ["o0"] }]);
     expect(isAgentInteractionResolution(resolution, interaction)).toBe(true);
   });
 
@@ -302,15 +292,20 @@ describe("NativeAgentQuestionCard", () => {
     await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
     expect(screen.getByRole("alert").textContent).toContain("safe to retry");
     // The selection survives, so the same answer can simply be sent again.
-    expect(
-      screen.getByRole("button", { name: "TypeScript" }).getAttribute("aria-pressed"),
-    ).toBe("true");
+    expect(screen.getByRole("button", { name: "TypeScript" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
   });
 
   test("restores the answer and the open question from the draft store", () => {
     const questions = [
       question({ id: "q0", description: "Language", options: TWO_OPTIONS }),
-      question({ id: "q1", prompt: "Which runtime?", description: "Runtime", options: TWO_OPTIONS }),
+      question({
+        id: "q1",
+        prompt: "Which runtime?",
+        description: "Runtime",
+        options: TWO_OPTIONS,
+      }),
     ];
     const { unmount } = render(
       <NativeAgentQuestionCard
@@ -331,9 +326,7 @@ describe("NativeAgentQuestionCard", () => {
     );
 
     expect(screen.getByText("Which runtime?")).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: "Rust" }).getAttribute("aria-pressed"),
-    ).toBe("true");
+    expect(screen.getByRole("button", { name: "Rust" }).getAttribute("aria-pressed")).toBe("true");
   });
 
   test("declines the question through the dismiss action", async () => {

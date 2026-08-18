@@ -11,10 +11,7 @@ import { Input } from "@/components/ui/input";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import { usePromptDeadline } from "@/hooks/usePromptDeadline";
 import { openInBrowser } from "@/lib/backend";
-import {
-  nativeAgentInteractionDraftKey,
-  usePromptDraftField,
-} from "@/stores/promptDraftStore";
+import { nativeAgentInteractionDraftKey, usePromptDraftField } from "@/stores/promptDraftStore";
 import { useInteractionResolver } from "@/components/native-agent/use-interaction-resolver";
 
 type Answer = { optionIds: string[]; freeText: string };

@@ -10,6 +10,8 @@ import { dockerExecDetached, checkHttpHealth, isHttpServerReachable, waitForHeal
 import type { LocalServerKind } from "./commands-runtime-state.js";
 import type { CommandContext } from "./commands-context.js";
 
+const AGENT_TEST_LOCAL_GIT_REMOTE_PATH = "/orkestrator-agent-test-origin.git";
+
 export async function createDockerContainer(environment: Environment, context: CommandContext): Promise<string> {
   const project = await context.storage.getProject(environment.projectId);
   if (!project) throw new Error(`Project not found: ${environment.projectId}`);
@@ -19,6 +21,25 @@ export async function createDockerContainer(environment: Environment, context: C
   if (configuredFilesToCopy.length > 0 && !project.localPath) {
     throw new Error("Project has files configured to copy, but no local path is set");
   }
+  // Agent-test fixtures use a deterministic bare repository on the host. A host
+  // absolute path is not meaningful inside a container, so expose that one
+  // verified test-only remote at a fixed path and clone from there. Keep it
+  // writable because fixture branches exercise the normal commit-and-push path.
+  // Production repositories and non-local test URLs keep their original value.
+  const expectedAgentTestGitRemote = path.join(
+    path.dirname(context.storage.getDataDir()),
+    "fixtures",
+    "origin.git",
+  );
+  const agentTestLocalGitRemote = context.runtimeFlavor === "agent-test"
+    && path.isAbsolute(project.gitUrl)
+    && path.resolve(project.gitUrl) === path.resolve(expectedAgentTestGitRemote)
+    && await pathExists(project.gitUrl)
+    ? project.gitUrl
+    : null;
+  const containerGitUrl = agentTestLocalGitRemote
+    ? AGENT_TEST_LOCAL_GIT_REMOTE_PATH
+    : project.gitUrl;
   const dockerOwner = dockerOwnerNamespace(context.storage.getDataDir());
   const args = [
     "create",
@@ -41,6 +62,18 @@ export async function createDockerContainer(environment: Environment, context: C
     "/workspace",
     "--cap-add",
     "NET_ADMIN",
+    // The image ships Chromium for Playwright, and Chromium puts its renderer
+    // shared memory in /dev/shm. Docker's 64MB default is far below what a real
+    // page needs, and the failure mode is a renderer crash mid-run ("Target
+    // page, context or browser has been closed") rather than a launch error, so
+    // it does not show up until an agent loads something non-trivial. Raise the
+    // mount instead of `--ipc=host`, which would also work but shares the host
+    // IPC namespace and weakens the container boundary.
+    "--shm-size",
+    "1g",
+    ...(agentTestLocalGitRemote
+      ? ["-v", `${agentTestLocalGitRemote}:${AGENT_TEST_LOCAL_GIT_REMOTE_PATH}`]
+      : []),
     // Linux Engine does not provide Docker Desktop's host.docker.internal DNS
     // entry automatically. Do not add this override on macOS/Windows: there it
     // shadows Docker Desktop's working DNS address with the VM bridge gateway.
@@ -48,7 +81,7 @@ export async function createDockerContainer(environment: Environment, context: C
       ? ["--add-host", "host.docker.internal:host-gateway"]
       : []),
     "-e",
-    `GIT_URL=${project.gitUrl}`,
+    `GIT_URL=${containerGitUrl}`,
     "-e",
     `GIT_BRANCH=${environment.branch}`,
     "-e",

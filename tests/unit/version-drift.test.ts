@@ -61,6 +61,35 @@ function expectExactVersion(pkgJsonRel: string, depName: string): string {
   return raw;
 }
 
+/** The resolved version bun actually installs, not the range package.json declares. */
+function lockfileResolvedVersion(rel: string, name: string): string {
+  const lock = JSON.parse(read(rel).replace(/,(\s*[}\]])/g, "$1")) as {
+    packages?: Record<string, unknown[]>;
+  };
+  const entry = lock.packages?.[name]?.[0];
+  if (typeof entry !== "string") {
+    throw new Error(`Expected ${rel} to resolve ${name}`);
+  }
+  // "playwright@1.61.1" — the name may itself contain "@" for a scoped package.
+  const version = entry.slice(entry.lastIndexOf("@") + 1);
+  if (!/^\d+\.\d+\.\d+/.test(version)) {
+    throw new Error(`Unexpected resolved spec for ${name} in ${rel}: ${entry}`);
+  }
+  return version;
+}
+
+/**
+ * The Dockerfile with comment lines removed. Assertions about what the image
+ * does must read this: a `#` line quoting an instruction is documentation, and
+ * matching it would let the instruction be deleted without failing anything.
+ */
+function dockerfileInstructions(): string {
+  return read("docker/Dockerfile")
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith("#"))
+    .join("\n");
+}
+
 function getDockerfileArg(argName: string): string {
   const dockerfile = read("docker/Dockerfile");
   const match = dockerfile.match(new RegExp(`^ARG\\s+${argName}=(\\S+)`, "m"));
@@ -542,6 +571,133 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     expect(dockerfile).toContain('RUN "$CLAUDE_CLI_PATH" --version');
     expect(dockerfile).toContain('&& "$CODEX_CLI_PATH" --version');
     expect(dockerfile).toContain('&& "$OPENCODE_CLI_PATH" --version');
+  });
+
+  test("Playwright: the container pin tracks the version the repo actually resolves", () => {
+    // Browser revisions are tied to the Playwright package. Keep the complete
+    // resolved version aligned so a lockfile update cannot leave the image on a
+    // different package/browser manifest while this guard still passes.
+    //
+    // Compared against the lockfile, not the `^`/`~` range in package.json: the
+    // range's floor stays put across a resolution bump, so asserting on it would
+    // pass through exactly the drift this test exists to catch.
+    const dockerfilePin = getDockerfileArg("PLAYWRIGHT_VERSION");
+    const resolved = lockfileResolvedVersion("bun.lock", "playwright");
+
+    expect(dockerfilePin).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(dockerfilePin).toBe(resolved);
+
+    // `@playwright/test` drags in its own pinned `playwright`, so a split
+    // between the two would silently resolve a second browser revision.
+    expect(lockfileResolvedVersion("bun.lock", "@playwright/test")).toBe(resolved);
+  });
+
+  test("Docker: Playwright ships a usable browser, and never branded Chrome", () => {
+    // Every assertion below is about what the image *does*, so all of them read
+    // the instruction stream. Matching the raw file would let a comment that
+    // merely quotes one of these lines stand in for the instruction itself.
+    const instructions = dockerfileInstructions();
+
+    // Baked in because the restricted-network firewall is not a reliable path to
+    // Playwright's CDN: a container that had to install its own browser on first
+    // use would fail there.
+    expect(instructions).toContain("ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright");
+    expect(instructions).toContain("playwright install --with-deps chromium");
+    // Both container users must be able to read the shared browser root, and
+    // `node` must be able to add a browser to it.
+    expect(instructions).toContain("chown -R node:node /ms-playwright");
+
+    // `playwright install chrome` pulls Google's own package, which has no
+    // linux/arm64 build — it would break the image build on Apple Silicon.
+    expect(instructions).not.toMatch(/playwright install[^\n]*\bchrome\b/);
+  });
+
+  test("Docker: the Chromium launch check runs as `node` and as uid 0", () => {
+    // Chromium will not start as uid 0 without --no-sandbox, which Playwright
+    // supplies only because `chromiumSandbox` defaults to false. That makes the
+    // root-terminal path a separate claim from the `node` path, and the image
+    // build is the only place either is proven — so both must be exercised.
+    const instructions = dockerfileInstructions();
+    const verifyRuns = [...instructions.matchAll(
+      /node\s+\/usr\/local\/share\/verify-playwright\.cjs/g,
+    )].map((match) => match.index);
+    expect(verifyRuns).toHaveLength(2);
+
+    // The two runs must straddle the USER switch; two checks as the same user
+    // would satisfy the count above while proving only one identity.
+    const [rootRun, nodeRun] = verifyRuns as [number, number];
+    const rootUser = instructions.lastIndexOf("USER root", rootRun);
+    const userNode = instructions.indexOf("USER node", rootRun);
+    expect(rootUser).toBeGreaterThan(-1);
+    expect(rootRun).toBeGreaterThan(rootUser);
+    expect(userNode).toBeGreaterThan(rootRun);
+    expect(nodeRun).toBeGreaterThan(userNode);
+
+    // Default options only: an explicit `chromiumSandbox: true` or a hand-added
+    // --no-sandbox would make the check stop resembling how an agent launches it.
+    // Comments stripped for the same reason as the Dockerfile above: the script's
+    // header explains why `chromiumSandbox` is left alone, and that prose must
+    // not be what satisfies an assertion about the code.
+    const script = read("docker/verify-playwright.cjs")
+      .split("\n")
+      .filter((line) => !line.trimStart().startsWith("//"))
+      .join("\n");
+    expect(script).toContain("chromium.launch()");
+    expect(script).not.toContain("chromiumSandbox");
+    expect(script).not.toContain("no-sandbox");
+  });
+
+  test("Docker: containers get a /dev/shm large enough for Chromium", () => {
+    // Docker's 64MB default is well under what a Chromium renderer needs, and it
+    // fails as a mid-run renderer crash rather than a launch error — invisible
+    // until an agent loads a real page. `--ipc=host` is the other documented fix
+    // but shares the host IPC namespace, so the mount size is what is asserted.
+    const containers = read("apps/backend/src/core/commands-containers.ts");
+    const shmIndex = containers.indexOf('"--shm-size"');
+    expect(shmIndex).toBeGreaterThan(-1);
+    const size = containers.slice(shmIndex).match(/"--shm-size",\s*"(\d+)([mg])"/i);
+    expect(size).not.toBeNull();
+    const megabytes = size![2].toLowerCase() === "g"
+      ? Number(size![1]) * 1024
+      : Number(size![1]);
+    expect(megabytes).toBeGreaterThanOrEqual(512);
+  });
+
+  test("allowlists: every host required by the image is in all three default lists", () => {
+    // Three independent default lists reach containers by different routes: the
+    // backend's is persisted on a new install, the renderer's seeds an unwritten
+    // config, and the firewall script's is the fallback when ALLOWED_DOMAINS is
+    // absent. A host added to one and forgotten in the others is reachable or
+    // not depending on which path a given install took.
+    const literal = (rel: string, open: string, close: string) => {
+      const source = read(rel);
+      const from = source.indexOf(open);
+      if (from < 0) throw new Error(`Expected ${open} in ${rel}`);
+      const to = source.indexOf(close, from + open.length);
+      if (to < 0) throw new Error(`Unterminated ${open} in ${rel}`);
+      return source.slice(from, to);
+    };
+
+    const lists = {
+      backend: literal(
+        "apps/backend/src/core/storage-shared-core.ts",
+        "export const DEFAULT_ALLOWED_DOMAINS = [",
+        "];",
+      ),
+      renderer: literal("apps/web/src/stores/configStore.ts", "allowedDomains: [", "],"),
+      firewall: literal("docker/init-firewall.sh", "DOMAIN_ARRAY=(", "\n    )"),
+    };
+
+    // Not the full union — the three lists are deliberately different sizes.
+    // These are the hosts the image itself depends on being reachable.
+    for (const host of ["github.com", "registry.npmjs.org", "cdn.playwright.dev"]) {
+      expect({
+        host,
+        backend: lists.backend.includes(`"${host}"`),
+        renderer: lists.renderer.includes(`"${host}"`),
+        firewall: lists.firewall.includes(`"${host}"`),
+      }).toEqual({ host, backend: true, renderer: true, firewall: true });
+    }
   });
 
   test("managed manifest covers every supported platform and architecture with immutable checksums", () => {

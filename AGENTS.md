@@ -342,29 +342,121 @@ When touching the app-server engine:
 
 ### Docker
 
-| File                      | Purpose                |
-| ------------------------- | ---------------------- |
-| `docker/Dockerfile`       | Base image definition  |
-| `docker/entrypoint.sh`    | Container entrypoint   |
-| `docker/init-firewall.sh` | Network firewall rules |
+| File                           | Purpose                                                  |
+| ------------------------------ | -------------------------------------------------------- |
+| `docker/Dockerfile`            | Base image definition                                    |
+| `docker/entrypoint.sh`         | Container entrypoint                                     |
+| `docker/workspace-setup.sh`    | Repo clone, `.env` files, project config, shown in terminal |
+| `docker/init-firewall.sh`      | Network firewall rules applied at startup                |
+| `docker/update-firewall.sh`    | Adds/removes allowlist domains on a running container    |
+| `docker/runtime-env.sh`        | PATH/env snapshot so `docker exec` sees setup-time tools |
+| `docker/git-branch-helpers.sh` | Makes a bare `git push` publish and track the branch     |
+| `docker/verify-playwright.cjs` | Launches Chromium; run at build time and on demand        |
 
 ## Docker Base Image
 
-The container includes:
-- Node.js 24 LTS
-- Claude Code CLI
-- Codex CLI
-- OpenCode CLI
-- Git and GitHub CLI (gh)
-- Network firewall (iptables/ipset) for security isolation
-- zsh with powerlevel10k theme
-- Non-root user (node) with sudo for firewall
+The image is built from `oven/bun:1.3.14-debian` and every version below is
+pinned by an `ARG` in `docker/Dockerfile`, which is the source of truth.
+
+Runtimes:
+- Bun, from the base image. It builds and runs the bridge servers.
+- Node.js 24 LTS, installed over the base image and verified against the
+  published checksum. The agent CLIs need genuine Node, not bun's node shim.
+
+Agent CLIs, one per supported platform:
+- Claude Code (`claude`), Codex (`codex`), and OpenCode (`opencode`), whose
+  runtime paths the backend reads from `CLAUDE_CLI_PATH`, `CODEX_CLI_PATH`, and
+  `OPENCODE_CLI_PATH`.
+- Cursor Agent (`cursor`/`cursor-agent`) and Grok Build (`grok`), both
+  downloaded as hash-verified pinned artifacts.
+- The image build fails immediately if any of the five is not runnable, and if
+  Codex did not vendor `codex-code-mode-host` beside its binary.
+
+Prebuilt bridge servers, so a container never builds them at runtime:
+- `/opt/claude-bridge`, `/opt/codex-bridge`, and `/opt/acp-bridge` (the shared
+  ACP HTTP bridge used by Cursor Agent and Grok Build).
+
+Developer tooling:
+- Git, GitHub CLI (`gh`), git-delta, and SSH with GitHub/GitLab/Bitbucket host
+  keys already known.
+- Playwright CLI plus its pinned Chromium build (see below).
+- ripgrep, fzf, jq, tmux, nano, vim, less, curl, wget, and `en_US.UTF-8`.
+
+Users and isolation:
+- Non-root `node` user (uid/gid 1000, matching the workspace bind mount), with
+  zsh + powerlevel10k as its shell.
+- `orkroot`, a uid-0 user for root terminal sessions, which `node` may become
+  through a scoped sudoers rule.
+- Network firewall (iptables/ipset) for security isolation. `node` has
+  passwordless sudo for exactly two things: the firewall scripts, and becoming
+  `orkroot` — which is root-equivalent, so the container boundary, not the user,
+  is what isolates an agent.
+
+### Playwright
+
+The image installs `playwright` globally and pre-downloads its Chromium build to
+the shared `PLAYWRIGHT_BROWSERS_PATH=/ms-playwright`, because the restricted
+network firewall does not reach Playwright's CDN by default — a container that
+had to run `playwright install` itself would fail.
+
+A default `chromium.launch()` works as-is for both the `node` user and the uid-0
+root terminal user. The image build proves it by running
+`docker/verify-playwright.cjs` once as each of those identities — Chromium
+refuses to start as uid 0 without `--no-sandbox`, so the root path is a separate
+claim and is not inferred from the `node` one. The same script stays in the image
+at `/usr/local/share/verify-playwright.cjs`, so a container can answer "does
+Playwright work here?" without reconstructing it:
+
+```bash
+NODE_PATH=/usr/local/share/npm-global/lib/node_modules \
+  node /usr/local/share/verify-playwright.cjs
+```
+
+Three constraints apply:
+
+- Do not set `chromiumSandbox: true`. Playwright defaults it to `false`, which is
+  what makes this work: containers get neither `CAP_SYS_ADMIN` nor unprivileged
+  user namespaces, so enabling Chromium's own sandbox fails with "Chromium
+  sandboxing failed!". The container is the isolation boundary.
+- Containers are created with `--shm-size=1g`
+  (`apps/backend/src/core/commands-containers.ts`), because Chromium keeps
+  renderer shared memory in `/dev/shm` and Docker's 64MB default is far below
+  what a real page needs. That failure surfaces as a renderer crash part-way
+  through a run ("Target page, context or browser has been closed"), not as a
+  launch error, so it is invisible to a trivial smoke page. `--ipc=host` is the
+  other documented fix and is deliberately not used: it shares the host IPC
+  namespace and weakens the container boundary.
+- A project that pins a different Playwright version resolves a different
+  Chromium revision and has to download it. `cdn.playwright.dev` is in the
+  default allowlist for that case, but keeping the project on the image's pinned
+  version avoids the download entirely. `tests/unit/version-drift.test.ts` pins
+  the image's `PLAYWRIGHT_VERSION` to the minor `bun.lock` actually resolves, so
+  the repo's own harness never drifts into that download.
+
+Branded Google Chrome (`channel: "chrome"`) is deliberately absent: Google
+publishes no linux/arm64 package, so installing it would break the image build
+on Apple Silicon.
 
 ### Network Isolation
 
-Containers have restricted network access via iptables firewall:
-- **Allowed**: GitHub, npm registry, Anthropic API, VS Code marketplace
-- **Blocked**: All other outbound traffic
+Containers in `restricted` mode (the default) reach only an allowlist; anything
+else is rejected outright. `full` mode skips the firewall entirely.
+
+- GitHub's own ranges are always resolved from `api.github.com/meta` at startup.
+- Everything else comes from the environment's `ALLOWED_DOMAINS`, which the
+  backend builds from the per-environment or global `allowedDomains` plus the
+  hosts the enabled agent platforms require (`requiredAgentNetworkDomains`
+  re-adds Cursor's and Grok's hosts only when those platforms are enabled).
+- A new install persists `DEFAULT_ALLOWED_DOMAINS`
+  (`apps/backend/src/core/storage-shared-core.ts`): GitHub, npm, Bun, the
+  Anthropic API, Sentry/Statsig, the VS Code marketplace, Context7, and
+  Playwright's CDN. `docker/init-firewall.sh` and `configStore.ts` carry their
+  own, broader default lists as fallbacks; the three are not identical, so read
+  the one that applies before assuming a host is reachable. They are not required
+  to match, but `tests/unit/version-drift.test.ts` does require the hosts the
+  image itself depends on to appear in all three, so a new one cannot be added to
+  only one list.
+- DNS, localhost, outbound SSH, and the host network are always allowed.
 
 ## Configuration Storage
 

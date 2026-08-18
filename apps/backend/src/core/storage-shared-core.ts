@@ -487,6 +487,9 @@ export const DEFAULT_ALLOWED_DOMAINS = [
   "vscode.blob.core.windows.net",
   "update.code.visualstudio.com",
   "mcp.context7.com",
+  // Playwright browser downloads. The image ships its own pinned Chromium, so
+  // this only matters when a project pins a different Playwright version.
+  "cdn.playwright.dev",
 ];
 
 export function nowIso(): string {

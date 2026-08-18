@@ -1189,6 +1189,90 @@ describe("evictIdleHydratedTranscripts", () => {
     expect(mockSdkGetSessionMessages).toHaveBeenCalledTimes(2);
   });
 
+  test("keeps timestamp-less task settlement positioned after eviction and re-hydration", async () => {
+    const transcript: SdkSessionMessage[] = [
+      {
+        type: "assistant",
+        uuid: "task-launch",
+        session_id: PERSISTED_SDK_ID,
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "task-without-timestamp",
+              name: "Task",
+              input: { description: "Review the bridge" },
+            },
+          ],
+        },
+        parent_tool_use_id: null,
+      },
+      {
+        type: "assistant",
+        uuid: "assistant-before-settle",
+        session_id: PERSISTED_SDK_ID,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Still working" }],
+        },
+        parent_tool_use_id: null,
+      },
+      {
+        type: "user",
+        uuid: "task-result",
+        session_id: PERSISTED_SDK_ID,
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "task-without-timestamp",
+              content: "done",
+              is_error: false,
+            },
+          ],
+        },
+        parent_tool_use_id: null,
+      },
+      {
+        type: "assistant",
+        uuid: "assistant-after-settle",
+        session_id: PERSISTED_SDK_ID,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Finished" }],
+        },
+        parent_tool_use_id: null,
+      },
+    ];
+    mockSdkGetSessionMessages.mockImplementation(async () => transcript);
+    const state = await materializePersistedSession();
+
+    const expectSettlementBetweenVisibleRows = () => {
+      const launch = state.messages.find((message) => message.id === "task-launch");
+      const before = state.messages.find((message) => message.id === "assistant-before-settle");
+      const after = state.messages.find((message) => message.id === "assistant-after-settle");
+      const settledAt = launch?.parts.find(
+        (part) => part.toolUseId === "task-without-timestamp",
+      )?.settledAt;
+
+      expect(settledAt).toBeDefined();
+      expect(Date.parse(settledAt!)).toBeGreaterThan(Date.parse(before!.createdAt));
+      expect(Date.parse(settledAt!)).toBeLessThan(Date.parse(after!.createdAt));
+    };
+
+    await hydratePersistedSessionMessages(state.id);
+    expectSettlementBetweenVisibleRows();
+
+    markStale(state);
+    expect(evictIdleHydratedTranscripts()).toContain(state.id);
+    await hydratePersistedSessionMessages(state.id);
+
+    expectSettlementBetweenVisibleRows();
+    expect(mockSdkGetSessionMessages).toHaveBeenCalledTimes(2);
+  });
+
   test("keeps a transcript that was read recently", async () => {
     const state = await hydratedIdleSession();
     expect(evictIdleHydratedTranscripts()).toEqual([]);

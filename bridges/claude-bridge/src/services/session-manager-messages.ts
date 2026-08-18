@@ -221,7 +221,7 @@ function buildClaudeToolDiff(
  * @param mcpServerNames - Set of known MCP server names for accurate tool parsing
  * @param activeTaskIds - Set of currently active (pending) Task IDs for parent tracking
  * @param taskRegistry - Session task list state, stamped onto Task tool results
- * @param receivedAt - Backend receive time when the live SDK record omitted its optional timestamp
+ * @param timestampFallback - Clock to use when the record omitted its optional timestamp
  */
 export function parseMessageContent(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -230,7 +230,7 @@ export function parseMessageContent(
   mcpServerNames?: Set<string>,
   activeTaskIds?: Set<string>,
   taskRegistry?: Pick<TaskRegistry, "apply">,
-  receivedAt?: string,
+  timestampFallback?: string,
 ): {
   content: string;
   thinkingParts: NormalizedPart[];
@@ -256,7 +256,9 @@ export function parseMessageContent(
       : undefined;
   const recordTimestamp =
     providerTimestamp ??
-    (receivedAt && Number.isFinite(Date.parse(receivedAt)) ? receivedAt : undefined);
+    (timestampFallback && Number.isFinite(Date.parse(timestampFallback))
+      ? timestampFallback
+      : undefined);
   const explicitParentTaskUseId =
     typeof message.parent_tool_use_id === "string" && message.parent_tool_use_id.length > 0
       ? message.parent_tool_use_id
@@ -391,8 +393,9 @@ export function parseMessageContent(
           }),
           state: block.is_error ? "failure" : "success",
           taskSnapshot,
-          // The record's own clock, not this process's: replaying the transcript
-          // after a restart has to reproduce the same settle position.
+          // Prefer the record's own clock. Older emitters have none, so the
+          // caller supplies one clock for this record and reuses it for the
+          // transcript row; that preserves the settle position on replay.
           settledAt: recordTimestamp,
         });
 
@@ -1014,9 +1017,23 @@ export function normalizePersistedSessionMessages(
     raw: (typeof persisted)[number];
     content: string;
     orderedParts: OrderedPartEntry[];
+    timestamp: string;
   }> = [];
 
-  for (const raw of persisted) {
+  // Older emitters omitted record timestamps. Give every such record one
+  // clock for this materialization and use that same value both while parsing
+  // tool results and while creating visible rows. The absolute fallback may
+  // change on a later hydration, but its transcript-relative position does
+  // not: raw record order is stable, including the hidden tool-result rows.
+  const materializedAt = Date.now();
+  for (let index = 0; index < persisted.length; index += 1) {
+    const raw = persisted[index]!;
+    const rawTimestamp = (raw as unknown as { timestamp?: unknown }).timestamp;
+    const providerTimestamp =
+      typeof rawTimestamp === "string" && Number.isFinite(Date.parse(rawTimestamp))
+        ? rawTimestamp
+        : undefined;
+    const timestamp = providerTimestamp ?? new Date(materializedAt + index).toISOString();
     if (raw.type === "system") {
       const taskMessage = persistedBackgroundTaskMessage(raw);
       if (taskMessage) {
@@ -1028,28 +1045,31 @@ export function normalizePersistedSessionMessages(
       }
       continue;
     }
-    const result = parseMessageContent(raw, toolTracker, undefined, activeTaskIds, taskRegistry);
+    const result = parseMessageContent(
+      raw,
+      toolTracker,
+      undefined,
+      activeTaskIds,
+      taskRegistry,
+      timestamp,
+    );
     for (const taskId of result.newTaskIds) activeTaskIds.add(taskId);
     for (const taskId of result.completedTaskIds) activeTaskIds.delete(taskId);
     parsed.push({
       raw,
       content: result.content,
       orderedParts: result.orderedParts,
+      timestamp,
     });
   }
 
-  const now = Date.now();
   const messages: NormalizedMessage[] = [];
-  for (let index = 0; index < parsed.length; index += 1) {
-    const entry = parsed[index]!;
+  for (const entry of parsed) {
     const parts = buildMessageParts(entry.orderedParts, toolTracker);
     if (entry.raw.type === "user" && !entry.content.trim()) continue;
     if (entry.raw.type === "assistant" && parts.length === 0 && !entry.content.trim()) {
       continue;
     }
-    const rawTimestamp = (entry.raw as unknown as { timestamp?: unknown }).timestamp;
-    const timestamp =
-      typeof rawTimestamp === "string" ? rawTimestamp : new Date(now + index).toISOString();
     const isRootAssistant =
       entry.raw.type === "assistant" &&
       isRootAssistantRecord(entry.raw.parent_tool_use_id, entry.raw.isSidechain);
@@ -1062,7 +1082,7 @@ export function normalizePersistedSessionMessages(
       role: entry.raw.type,
       content: entry.content,
       parts,
-      createdAt: timestamp,
+      createdAt: entry.timestamp,
       ...(modelId ? { modelId } : {}),
       // Recorded explicitly rather than inferred from `id`: a record with no
       // uuid falls back to a generated id, which must never be mistaken for a

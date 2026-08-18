@@ -204,7 +204,7 @@ export function buildSessionTitleCommandArgs(
     "--model",
     SESSION_TITLE_MODEL,
     "--config",
-    `model_reasoning_effort=\"${SESSION_TITLE_REASONING_EFFORT}\"`,
+    `model_reasoning_effort="${SESSION_TITLE_REASONING_EFFORT}"`,
     "--config",
     `model_catalog_json=${JSON.stringify(modelCatalogPath)}`,
     "--config",

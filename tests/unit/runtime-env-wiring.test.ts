@@ -1496,8 +1496,8 @@ eval "$codex_setup"
       const entrypoint = join(repoRoot, "docker", "entrypoint.sh");
       const result = runShell(
         agentCopyHelperHarness(`
-cursor_setup="$(sed -n '/^# Set up Cursor Agent configuration\./,/^log_progress "Cursor Agent configuration ready"$/p' ${shellQuote(entrypoint)} | sed "s#/cursor-config#\\$AGENT_TEST_CURSOR#g")"
-grok_setup="$(sed -n '/^# Set up Grok configuration\./,/^log_progress "Grok configuration ready"$/p' ${shellQuote(entrypoint)} | sed "s#/grok-home#\\$AGENT_TEST_GROK_HOME#g; s#/grok-config#\\$AGENT_TEST_GROK_CONFIG#g")"
+cursor_setup="$(sed -n '/^# Set up Cursor Agent configuration./,/^log_progress "Cursor Agent configuration ready"$/p' ${shellQuote(entrypoint)} | sed "s#/cursor-config#\\$AGENT_TEST_CURSOR#g")"
+grok_setup="$(sed -n '/^# Set up Grok configuration./,/^log_progress "Grok configuration ready"$/p' ${shellQuote(entrypoint)} | sed "s#/grok-home#\\$AGENT_TEST_GROK_HOME#g; s#/grok-config#\\$AGENT_TEST_GROK_CONFIG#g")"
 [ -n "$cursor_setup" ] || { echo "harness failed to extract the Cursor block"; exit 9; }
 [ -n "$grok_setup" ] || { echo "harness failed to extract the Grok block"; exit 9; }
 eval "$cursor_setup"
@@ -1573,8 +1573,8 @@ eval "$grok_setup"
       const entrypoint = join(repoRoot, "docker", "entrypoint.sh");
       const result = runShell(
         agentCopyHelperHarness(`
-cursor_setup="$(sed -n '/^# Set up Cursor Agent configuration\./,/^log_progress "Cursor Agent configuration ready"$/p' ${shellQuote(entrypoint)} | sed "s#/cursor-config#\\$AGENT_TEST_CURSOR#g")"
-grok_setup="$(sed -n '/^# Set up Grok configuration\./,/^log_progress "Grok configuration ready"$/p' ${shellQuote(entrypoint)} | sed "s#/grok-home#\\$AGENT_TEST_GROK_HOME#g; s#/grok-config#\\$AGENT_TEST_GROK_CONFIG#g")"
+cursor_setup="$(sed -n '/^# Set up Cursor Agent configuration./,/^log_progress "Cursor Agent configuration ready"$/p' ${shellQuote(entrypoint)} | sed "s#/cursor-config#\\$AGENT_TEST_CURSOR#g")"
+grok_setup="$(sed -n '/^# Set up Grok configuration./,/^log_progress "Grok configuration ready"$/p' ${shellQuote(entrypoint)} | sed "s#/grok-home#\\$AGENT_TEST_GROK_HOME#g; s#/grok-config#\\$AGENT_TEST_GROK_CONFIG#g")"
 eval "$cursor_setup"
 eval "$grok_setup"
 `),

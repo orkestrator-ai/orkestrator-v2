@@ -1572,7 +1572,7 @@ describe("interactive approvals", () => {
         startedAtMs: 1,
         command: "rm -rf build",
         cwd: "/tmp/ws",
-        ...(options.approvalParams ?? {}),
+        ...options.approvalParams,
       },
     });
     await h.drain();

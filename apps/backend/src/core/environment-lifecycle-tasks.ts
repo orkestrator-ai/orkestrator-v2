@@ -87,7 +87,7 @@ export class EnvironmentLifecycleTaskTracker {
 
   private async drain(): Promise<void> {
     while (this.tasks.size > 0) {
-      await Promise.allSettled([...this.tasks]);
+      await Promise.allSettled(this.tasks);
     }
   }
 }

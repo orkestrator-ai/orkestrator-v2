@@ -1176,7 +1176,7 @@ export async function waitForLocalServerEnvironmentOperations(
 ): Promise<boolean> {
   const drain = async () => {
     while (localServerEnvironmentOperations.size > 0) {
-      await Promise.allSettled([...new Set(localServerEnvironmentOperations.values())]);
+      await Promise.allSettled(new Set(localServerEnvironmentOperations.values()));
     }
   };
 

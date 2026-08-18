@@ -159,9 +159,9 @@ export function syncCursorChildTranscriptParts(
   // leave with it rather than sit alongside the real ones forever.
   const existing = owner.parts.filter((part) => isCursorJsonlChildPart(part, child.toolUseId));
   if (!cursorJsonlPartsEqual(existing, next)) {
-    owner.parts = [
-      ...owner.parts.filter((candidate) => !isCursorJsonlChildPart(candidate, child.toolUseId)),
-    ];
+    owner.parts = owner.parts.filter(
+      (candidate) => !isCursorJsonlChildPart(candidate, child.toolUseId),
+    );
     const parentIndex = owner.parts.indexOf(parent);
     const insertAt = parentIndex >= 0 ? parentIndex + 1 : owner.parts.length;
     owner.parts.splice(insertAt, 0, ...next);

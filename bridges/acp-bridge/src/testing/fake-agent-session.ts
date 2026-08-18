@@ -26,9 +26,7 @@ export function handleSessionMessage(message: JsonObject): boolean {
         // silently reattached to a session they have never heard of.
         agentCapabilities: {
           loadSession: process.env.FAKE_ACP_NO_LOAD_SESSION !== "1",
-          sessionCapabilities: {
-            ...(process.env.FAKE_ACP_NO_LIST_SESSION === "1" ? {} : { list: {} }),
-          },
+          sessionCapabilities: process.env.FAKE_ACP_NO_LIST_SESSION === "1" ? {} : { list: {} },
           ...(process.env.FAKE_ACP_IMAGE_CAPABILITY
             ? { promptCapabilities: { image: process.env.FAKE_ACP_IMAGE_CAPABILITY === "true" } }
             : {}),

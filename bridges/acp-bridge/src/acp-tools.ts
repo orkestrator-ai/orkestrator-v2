@@ -901,7 +901,7 @@ export function recordCursorTaskPrompt(part: BridgeToolPart, prompt: string): bo
   if (!bounded) return false;
   const source = ensureAcpToolSource(part);
   if (source.cursorTask?.prompt) return false;
-  source.cursorTask = { ...(source.cursorTask ?? {}), prompt: bounded };
+  source.cursorTask = { ...source.cursorTask, prompt: bounded };
   renderAcpToolSource(part, source);
   return true;
 }
@@ -1098,8 +1098,8 @@ export function stampSubagentRuntimeDuration(part: BridgeToolPart, now = Date.no
     );
   if (existing !== undefined && !spawnEcho) {
     if (projectedDuration === undefined) {
-      source.cursorTask = { ...(source.cursorTask ?? {}), durationMs: existing };
-      source.toolArgs = { ...(source.toolArgs ?? {}), durationMs: existing };
+      source.cursorTask = { ...source.cursorTask, durationMs: existing };
+      source.toolArgs = { ...source.toolArgs, durationMs: existing };
       renderAcpToolSource(part, source);
     }
     return;
@@ -1107,8 +1107,8 @@ export function stampSubagentRuntimeDuration(part: BridgeToolPart, now = Date.no
   const startedAt = part.createdAt ? Date.parse(part.createdAt) : Number.NaN;
   if (!Number.isFinite(startedAt) || startedAt < 0) return;
   const elapsed = Math.max(0, Math.floor(now - startedAt));
-  source.cursorTask = { ...(source.cursorTask ?? {}), durationMs: elapsed };
-  source.toolArgs = { ...(source.toolArgs ?? {}), durationMs: elapsed };
+  source.cursorTask = { ...source.cursorTask, durationMs: elapsed };
+  source.toolArgs = { ...source.toolArgs, durationMs: elapsed };
   renderAcpToolSource(part, source);
 }
 
@@ -1187,7 +1187,7 @@ export function mergeCursorTaskArgs(
   cursorTask: AcpToolSourceState["cursorTask"],
 ): JsonObject | undefined {
   if (!cursorTask) return toolArgs;
-  const merged: JsonObject = { ...(toolArgs ?? {}) };
+  const merged: JsonObject = { ...toolArgs };
   if (cursorTask.description) merged.description = cursorTask.description;
   if (cursorTask.prompt) merged.prompt = cursorTask.prompt;
   if (cursorTask.subagentType) merged.subagent_type = cursorTask.subagentType;
@@ -1372,7 +1372,7 @@ export function stampCursorTodos(
   merge: boolean,
 ): void {
   source.toolArgs = {
-    ...(source.toolArgs ?? {}),
+    ...source.toolArgs,
     todos: state.cursorTodos,
     merge,
   };
@@ -1678,7 +1678,7 @@ export function applyCursorTask(state: SessionState, params: JsonObject): void {
   const { part } = found;
   const source = ensureAcpToolSource(part);
   source.cursorTask = {
-    ...(source.cursorTask ?? {}),
+    ...source.cursorTask,
     ...(description ? { description } : {}),
     ...(prompt ? { prompt } : {}),
     ...(subagentType ? { subagentType } : {}),

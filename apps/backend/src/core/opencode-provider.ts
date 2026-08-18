@@ -1388,7 +1388,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     this.monitorController.abort();
     this.activeStreamController?.abort();
     await this.monitorPromise;
-    await Promise.allSettled([...this.requestTasks]);
+    await Promise.allSettled(this.requestTasks);
     this.lifecycle.clear();
     this.blockedSessions.clear();
     this.failedQuestionSessions.clear();

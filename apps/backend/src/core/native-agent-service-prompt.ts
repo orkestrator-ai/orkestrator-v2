@@ -360,7 +360,7 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
       ...[...this.modelCatalogRefreshes.values()].map((entry) => entry.operation),
       ...[...this.slashCommandRefreshes.values()].map((entry) => entry.operation),
     ]);
-    await Promise.allSettled([...this.scanTasks]);
+    await Promise.allSettled(this.scanTasks);
     while (
       this.launchTasks.size > 0 ||
       this.queueTasks.size > 0 ||

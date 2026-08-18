@@ -104,7 +104,7 @@ describe("MobileAppShellLayout", () => {
       const match = [...element.classList].find((name) => /^right-\d/.test(name));
       expect(match).toBeTruthy();
       // Right-anchored, not left-anchored: a `left-*` control is on the wrong side.
-      expect([...element.classList].some((name) => /^left-/.test(name))).toBe(false);
+      expect([...element.classList].some((name) => name.startsWith("left-"))).toBe(false);
       return Number.parseFloat(match!.slice("right-".length));
     };
     expect(rightOffset(slot)).toBeGreaterThan(rightOffset(tools));

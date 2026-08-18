@@ -1383,7 +1383,7 @@ export function PersistentTerminal({
     terminal.options.fontFamily = `"${terminalAppearance.fontFamily}", "Fira Code", "Menlo", "DejaVu Sans Mono", "Courier New", monospace`;
     terminal.options.fontSize = terminalAppearance.fontSize;
     terminal.options.theme = {
-      ...(terminal.options.theme || {}),
+      ...terminal.options.theme,
       background: terminalBackgroundColor,
       cursorAccent: terminalBackgroundColor,
     };

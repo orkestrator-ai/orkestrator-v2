@@ -315,7 +315,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       title: parent.title ? `${parent.title} (fork)` : "Forked session",
       titleSource: "explicit",
       titleGenerationAttempted: true,
-      confirmedModelsByTurn: { ...(parent.confirmedModelsByTurn ?? {}) },
+      confirmedModelsByTurn: { ...parent.confirmedModelsByTurn },
     });
     try {
       const context = this.registry.attach(child.id, fork.id, {

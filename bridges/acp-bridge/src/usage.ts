@@ -140,7 +140,7 @@ export function parseAcpTurnUsage(value: unknown): AcpTurnUsage | null {
   if (!isObject(value)) return null;
   const fromMeta = isObject(value._meta) ? parseAcpTurnUsageObject(value._meta) : null;
   const fromValue = parseAcpTurnUsageObject(value);
-  const merged = { ...(fromMeta ?? {}), ...(fromValue ?? {}) };
+  const merged = { ...fromMeta, ...fromValue };
   return Object.keys(merged).length > 0 ? merged : null;
 }
 

@@ -946,7 +946,7 @@ export function reducePersistedBackgroundTaskMessage(
             ? "completed"
             : "killed";
     return boundBackgroundTaskHistory({
-      ...(tasks ?? {}),
+      ...tasks,
       [message.task_id]: {
         id: message.task_id,
         toolUseId: message.tool_use_id ?? previous?.toolUseId,
@@ -973,7 +973,7 @@ export function reducePersistedBackgroundTaskMessage(
       ? message.patch.end_time
       : undefined;
   return boundBackgroundTaskHistory({
-    ...(tasks ?? {}),
+    ...tasks,
     [message.task_id]: {
       id: message.task_id,
       toolUseId: message.tool_use_id ?? previous?.toolUseId,

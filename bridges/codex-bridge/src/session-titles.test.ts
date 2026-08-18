@@ -232,7 +232,7 @@ describe("Codex session titles", () => {
     }
     expect(args).not.toContain('approval_policy="never"');
     expect(args).toContain('web_search="disabled"');
-    expect(args).toContain(`model_reasoning_effort=\"${SESSION_TITLE_REASONING_EFFORT}\"`);
+    expect(args).toContain(`model_reasoning_effort="${SESSION_TITLE_REASONING_EFFORT}"`);
     expect(args.slice(execIndex)).toContain("-");
   });
 

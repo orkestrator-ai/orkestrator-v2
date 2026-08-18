@@ -1266,7 +1266,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
             error: taskMessage.patch?.error ?? previous?.error,
           };
           session.backgroundTasks = boundBackgroundTaskHistory({
-            ...(session.backgroundTasks ?? {}),
+            ...session.backgroundTasks,
             [task.id]: task,
           });
           if (LIVE_BACKGROUND_TASK_STATUSES.has(task.status)) {
@@ -1315,7 +1315,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
                 : previous?.error,
           };
           session.backgroundTasks = boundBackgroundTaskHistory({
-            ...(session.backgroundTasks ?? {}),
+            ...session.backgroundTasks,
             [task.id]: task,
           });
           const owner =

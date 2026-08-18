@@ -349,7 +349,7 @@ export class AppServerEngine implements CodexEngine {
       clientInfo: options.clientInfo,
       configOverrides: options.configOverrides,
       now: options.now,
-      ...(options.supervisorOverrides ?? {}),
+      ...options.supervisorOverrides,
       // Listed after the overrides so they can never be replaced: losing these
       // would mean silently dropping every event and hanging every turn.
       onNotification: (notification, threadId, generation) => {

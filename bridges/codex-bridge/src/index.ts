@@ -488,7 +488,7 @@ function serializeSseEventData(
   try {
     return JSON.stringify({
       sessionId: event.sessionId,
-      ...(event.data ?? {}),
+      ...event.data,
     });
   } catch (error) {
     // A payload that cannot be encoded (a cycle, a throwing getter, a BigInt)

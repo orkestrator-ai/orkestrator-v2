@@ -148,7 +148,7 @@ describe("Electron connection manager", () => {
     expect(saved.activeConnectionId).not.toBe("local");
     expect(saved.connections).toHaveLength(1);
     expect(saved.connections[0]?.encryptedToken).not.toContain(token);
-    expect(JSON.stringify(saved)).not.toContain(`\"token\":\"${token}\"`);
+    expect(JSON.stringify(saved)).not.toContain(`"token":"${token}"`);
     expect(manager.getList().connections).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ name: "Local", active: false }),

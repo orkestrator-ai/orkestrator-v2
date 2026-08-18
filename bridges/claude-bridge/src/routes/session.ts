@@ -303,9 +303,10 @@ session.put("/:id/preferences", async (c) => {
     if (Object.hasOwn(record, "planMode") && typeof record.planMode !== "boolean") {
       return c.json({ error: "planMode must be a boolean" }, 400);
     }
-    const updated = await setSessionPreferences(id, {
-      ...(typeof record.planMode === "boolean" ? { planMode: record.planMode } : {}),
-    });
+    const updated = await setSessionPreferences(
+      id,
+      typeof record.planMode === "boolean" ? { planMode: record.planMode } : {},
+    );
     return c.json({ planMode: updated.planMode ?? false });
   } catch (error) {
     return c.json(

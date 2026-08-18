@@ -613,7 +613,7 @@ describe("/event/subscribe", () => {
         "buffered-drain-3",
       ]);
       expect(drained.map((frame) => Number(frame.id))).toEqual(
-        [...drained.map((frame) => Number(frame.id))].sort((a, b) => a - b),
+        drained.map((frame) => Number(frame.id)).sort((a, b) => a - b),
       );
     } finally {
       __testing.setSseRouteTestHooksForTesting(null);

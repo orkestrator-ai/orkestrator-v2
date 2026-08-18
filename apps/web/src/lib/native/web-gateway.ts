@@ -1171,7 +1171,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   const drainTerminalSocketInput = async (key: string): Promise<void> => {
     const outstanding = terminalInputAcks.get(key);
     if (!outstanding || outstanding.size === 0) return;
-    await Promise.all([...outstanding]);
+    await Promise.all(outstanding);
   };
 
   /**

@@ -241,7 +241,7 @@ export abstract class BuildPipelineServiceBase {
       await this.tickPromise;
     }
     while (this.locks.size > 0) {
-      await Promise.allSettled([...this.locks.values()]);
+      await Promise.allSettled(this.locks.values());
     }
     await Promise.allSettled(
       [...this.providers.values()].map(async (provider) => {

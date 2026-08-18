@@ -209,7 +209,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
     // the render state that work still needs.
     await this.options.engine.stop();
     await this.drainPendingWork();
-    await Promise.allSettled([...this.pendingSessionWrites]);
+    await Promise.allSettled(this.pendingSessionWrites);
     for (const threadId of [...this.threadState.keys()]) this.releaseThreadRuntimeState(threadId);
   }
 
@@ -955,7 +955,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       context.confirmedModelsByTurn.set(turnId, model);
       for (const session of this.registry.boundSessionsForThread(context.threadId)) {
         session.confirmedModelsByTurn = {
-          ...(session.confirmedModelsByTurn ?? {}),
+          ...session.confirmedModelsByTurn,
           [turnId]: model,
         };
         void this.persistSession(session);

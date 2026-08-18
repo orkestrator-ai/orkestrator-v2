@@ -146,7 +146,7 @@ export function takeProvisionalBackgroundTask(
   const task = session.backgroundTasks?.[provisionalId];
   const owner = session.backgroundTaskControls?.get(provisionalId) ?? candidateOwner;
   if (task) {
-    const nextTasks = { ...(session.backgroundTasks ?? {}) };
+    const nextTasks = { ...session.backgroundTasks };
     delete nextTasks[provisionalId];
     session.backgroundTasks = Object.keys(nextTasks).length > 0 ? nextTasks : undefined;
   }
@@ -178,7 +178,7 @@ export function recordBackgroundTaskLaunch(
       : undefined;
   const previous = session.backgroundTasks?.[launch.id] ?? provisional;
   const status = previous?.status ?? "running";
-  const nextTasks = { ...(session.backgroundTasks ?? {}) };
+  const nextTasks = { ...session.backgroundTasks };
   if (provisionalId && provisionalId !== launch.id) {
     delete nextTasks[provisionalId];
     session.backgroundTaskControls?.delete(provisionalId);
@@ -326,7 +326,7 @@ export function settleBackgroundTask(
   const previous = session.backgroundTasks?.[taskId];
   if (!previous || !LIVE_BACKGROUND_TASK_STATUSES.has(previous.status)) return false;
   session.backgroundTasks = boundBackgroundTaskHistory({
-    ...(session.backgroundTasks ?? {}),
+    ...session.backgroundTasks,
     [taskId]: {
       ...previous,
       status,

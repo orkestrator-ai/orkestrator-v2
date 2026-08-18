@@ -311,7 +311,7 @@ describe("HierarchicalSidebar", () => {
   test("renders the active server switcher in the sidebar header", async () => {
     const originalApi = window.orkestrator;
     window.orkestrator = {
-      ...(originalApi ?? {}),
+      ...originalApi,
       connections: {
         list: mock(async () => ({
           activeConnectionId: "local",

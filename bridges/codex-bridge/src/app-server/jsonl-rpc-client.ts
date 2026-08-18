@@ -550,7 +550,7 @@ export class SerialQueue {
   }
 
   async drainAll(): Promise<void> {
-    await Promise.all([...this.chains.values()]);
+    await Promise.all(this.chains.values());
   }
 
   clear(): void {

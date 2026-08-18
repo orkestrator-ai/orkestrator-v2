@@ -918,8 +918,8 @@ export function recordTurnUsage(state: SessionState, payload: unknown): void {
   if (!turn) return;
   const accumulatedTurn =
     state.turnStartedAt === undefined
-      ? { ...(state.usage?.turn ?? {}), ...turn }
-      : { ...(state.currentTurnUsage ?? {}), ...turn };
+      ? { ...state.usage?.turn, ...turn }
+      : { ...state.currentTurnUsage, ...turn };
   if (state.turnStartedAt !== undefined) state.currentTurnUsage = accumulatedTurn;
   const durationMs =
     state.turnStartedAt === undefined

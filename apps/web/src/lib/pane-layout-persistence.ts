@@ -176,8 +176,8 @@ function mergeSelectionIntents(
   return {
     activePaneId: later.activePaneId ?? earlier.activePaneId,
     activeTabIds: {
-      ...(earlier.activeTabIds ?? {}),
-      ...(later.activeTabIds ?? {}),
+      ...earlier.activeTabIds,
+      ...later.activeTabIds,
     },
   };
 }

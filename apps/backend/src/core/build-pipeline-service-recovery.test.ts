@@ -355,6 +355,28 @@ async function startBuilding(
 }
 
 describe("BuildPipelineService reconnect", () => {
+  test("configures the selected agent through the nested settings contract", async () => {
+    await withService(async ({ service, storage, invocations }) => {
+      await startAtSetup(service, storage, { agentType: "grok" });
+
+      expect(
+        invocations.find(
+          (invocation) => invocation.command === "update_environment_agent_settings",
+        ),
+      ).toEqual({
+        command: "update_environment_agent_settings",
+        args: {
+          environmentId: "env-1",
+          agentSettings: {
+            defaultAgent: "grok",
+            platforms: { grok: { mode: "native" } },
+          },
+          pendingAgentLaunch: false,
+        },
+      });
+    });
+  });
+
   test("records a reconnect attempt instead of failing on an unavailable bridge", async () => {
     await withService(async ({ service, storage, provider }) => {
       const built = await startBuilding(service, storage);

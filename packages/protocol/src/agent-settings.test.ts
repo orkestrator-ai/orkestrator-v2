@@ -160,10 +160,15 @@ describe("a model never leaves its own platform's column", () => {
 });
 
 describe("resolveActionDefaults", () => {
-  test("takes the narrowest tier that sets any", () => {
-    const global: AgentSettingsTier = { actionDefaults: { review: { platform: "claude" } } };
+  test("resolves each action independently from the narrowest tier that sets it", () => {
+    const global: AgentSettingsTier = {
+      actionDefaults: { review: { platform: "claude" }, pr: { platform: "grok" } },
+    };
     const repository: AgentSettingsTier = { actionDefaults: { review: { platform: "codex" } } };
-    expect(resolveActionDefaults({ repository, global }).review?.platform).toBe("codex");
+    expect(resolveActionDefaults({ repository, global })).toEqual({
+      review: { platform: "codex" },
+      pr: { platform: "grok" },
+    });
     expect(resolveActionDefaults({ global }).review?.platform).toBe("claude");
   });
 

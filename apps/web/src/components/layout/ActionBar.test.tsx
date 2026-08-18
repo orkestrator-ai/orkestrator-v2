@@ -200,7 +200,10 @@ let currentEnabledAgentPlatforms:
   | undefined;
 let currentActionDefaults: ActionDefaults | undefined;
 let currentPreferredEditor: "vscode" | "cursor" | undefined = "vscode";
-let currentRepositoryConfig: Record<string, { prBaseBranch?: string }> = {
+let currentRepositoryConfig: Record<
+  string,
+  { prBaseBranch?: string; agentSettings?: AgentSettingsTier }
+> = {
   "project-1": { prBaseBranch: "main" },
 };
 let currentWorkspaceReady = false;
@@ -486,7 +489,7 @@ mock.module("@/stores", () => ({
           enabledAgentPlatforms?: Array<"claude" | "codex" | "cursor" | "grok" | "opencode">;
           agentSettings?: AgentSettingsTier;
         };
-        repositories: Record<string, { prBaseBranch?: string }>;
+        repositories: Record<string, { prBaseBranch?: string; agentSettings?: AgentSettingsTier }>;
       };
     }) => T,
   ) =>
@@ -4097,6 +4100,40 @@ describe("ActionBar workflow tabs", () => {
 });
 
 describe("ActionBar configured action defaults", () => {
+  test("launches with a repository action default", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    currentActionDefaults = {
+      review: { platform: "opencode", model: "global-review" },
+    };
+    currentRepositoryConfig = {
+      "project-1": {
+        prBaseBranch: "main",
+        agentSettings: {
+          actionDefaults: {
+            review: { platform: "claude", model: "repo-review", reasoningEffort: "high" },
+          },
+        },
+      },
+    };
+
+    render(<ActionBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Code review" }));
+
+    expect(createTabMock).toHaveBeenLastCalledWith(
+      "claude",
+      expect.objectContaining({
+        displayTitle: "Review",
+        initialAgentModel: "repo-review",
+        initialReasoningEffort: "high",
+      }),
+    );
+  });
+
   test("launches a one-click review with the configured Review default", async () => {
     currentEnvironment = {
       ...selectedEnvironment,

@@ -113,6 +113,7 @@ export function AgentPlatformPane({
           name: model.name,
           description: model.description,
           reasoningEfforts: model.supportedEffortLevels ?? [],
+          resolvedModel: model.resolvedModel,
         }))
       : catalogModels;
   const pickerModels = useMemo<AgentModel[]>(
@@ -130,12 +131,16 @@ export function AgentPlatformPane({
     [models, platform],
   );
   const selectedModel = stored?.model
-    ? models.find((model) => model.id === stored.model)
+    ? models.find((model) => model.id === stored.model || model.resolvedModel === stored.model)
     : undefined;
   const modelMissingFromCatalog = Boolean(stored?.model && !selectedModel);
+  const effectiveModel = stored?.model ?? inherited.model;
+  const reasoningModel = models.find(
+    (model) => model.id === effectiveModel || model.resolvedModel === effectiveModel,
+  );
 
   const reasoningOptions = useMemo<AgentReasoningOption[]>(() => {
-    const efforts = selectedModel?.reasoningEfforts ?? [];
+    const efforts = reasoningModel?.reasoningEfforts ?? [];
     // A stored level the catalog no longer lists stays selectable, so opening
     // this pane cannot quietly rewrite a saved choice to "inherit".
     const current = stored?.reasoningEffort;
@@ -145,7 +150,7 @@ export function AgentPlatformPane({
       { id: INHERIT, label: canInherit ? "Inherit" : "Provider default" },
       ...ids.map((effort) => ({ id: effort, label: effortLabel(effort) })),
     ];
-  }, [selectedModel, stored?.reasoningEffort, canInherit]);
+  }, [reasoningModel, stored?.reasoningEffort, canInherit]);
 
   const set = <K extends keyof AgentPlatformSettings>(
     field: K,

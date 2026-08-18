@@ -1,4 +1,4 @@
-import { agentSettingsTiers, resolvedDefaultAgent } from "@/lib/agent-settings";
+import { agentSettingsTiers, resolvedActionDefault } from "@/lib/agent-settings";
 import {
   resolveAgentPlatformSettings,
   resolveDefaultAgent,
@@ -56,6 +56,7 @@ import { createUuid } from "@/lib/uuid";
 import { getPastedImageBlob } from "@/lib/clipboard-event";
 import { toast } from "sonner";
 import type {
+  AgentStyle,
   ClaudeMode,
   CodexMode,
   EnvironmentType,
@@ -78,7 +79,6 @@ import {
   firstEnabledAgentPlatform,
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
-import { resolveActionDefault } from "@orkestrator/protocol/action-defaults";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import {
   normalizeOpenCodeModelProviders,
@@ -113,8 +113,8 @@ function normalizeCachedOpenCodeModels(value: unknown): CachedOpenCodeModel[] | 
  * The effective agent defaults for a new environment in this repository.
  *
  * Every mode comes from that platform's own column now. The previous version
- * read the repository's single `agentStyle` for all three platforms, which meant
- * choosing "Native" for Claude silently moved Codex and OpenCode too.
+ * read the repository's single `agentStyle` for every platform, which meant
+ * choosing "Native" for Claude silently moved the other agents too.
  */
 export function resolveAgentDefaults(
   tiers: AgentSettingsTiers,
@@ -125,6 +125,8 @@ export function resolveAgentDefaults(
     claudeMode: resolveAgentPlatformSettings(tiers, "claude").mode,
     opencodeMode: resolveAgentPlatformSettings(tiers, "opencode").mode,
     codexMode: resolveAgentPlatformSettings(tiers, "codex").mode,
+    cursorMode: resolveAgentPlatformSettings(tiers, "cursor").mode,
+    grokMode: resolveAgentPlatformSettings(tiers, "grok").mode,
   } as const;
 }
 
@@ -161,6 +163,8 @@ export interface ClaudeOptions {
   claudeMode: ClaudeMode;
   opencodeMode: OpenCodeMode;
   codexMode: CodexMode;
+  cursorMode?: AgentStyle;
+  grokMode?: AgentStyle;
   /**
    * One-shot model for the launched agent tab. `undefined` means "no explicit
    * choice" — the agent surface falls back to the user's configured defaults.
@@ -214,22 +218,13 @@ export function CreateEnvironmentDialog({
       (config.global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]) as AgentPlatform[],
     [config.global.enabledAgentPlatforms],
   );
-  /**
-   * The app-level "New projects" default. It sits between the app default agent
-   * and this repository's own settings: a project that has been configured, or
-   * that already remembers a selection, keeps what it has.
-   */
-  const newProjectDefault = useMemo(
-    () =>
-      resolveActionDefault(config.global.agentSettings?.actionDefaults, "newProject", {
-        fallbackAgent: resolvedDefaultAgent(config, projectId ?? undefined),
-        enabledAgents: enabledAgentPlatforms,
-      }),
-    [config, projectId, enabledAgentPlatforms],
-  );
   const agentTiers = useMemo(
     () => agentSettingsTiers(config, projectId ?? undefined),
     [config, projectId],
+  );
+  const newProjectDefault = useMemo(
+    () => resolvedActionDefault(agentTiers, "newProject", enabledAgentPlatforms),
+    [agentTiers, enabledAgentPlatforms],
   );
   // Resolve effective defaults: project-level overrides > app-level
   const resolved = resolveAgentDefaults(agentTiers, newProjectDefault.agent);
@@ -240,6 +235,8 @@ export function CreateEnvironmentDialog({
   const configClaudeMode = resolved.claudeMode as ClaudeMode;
   const configOpencodeMode = resolved.opencodeMode as OpenCodeMode;
   const configCodexMode = resolved.codexMode as CodexMode;
+  const configCursorMode = resolved.cursorMode;
+  const configGrokMode = resolved.grokMode;
   const configEnvironmentType: EnvironmentType = repoConfig?.lastEnvironmentType ?? "containerized";
   const effectiveDefaultEnvironmentType: EnvironmentType =
     !dockerAvailable && localEnvironmentAvailable && configEnvironmentType === "containerized"
@@ -379,6 +376,8 @@ export function CreateEnvironmentDialog({
       claudeMode: configClaudeMode,
       opencodeMode: configOpencodeMode,
       codexMode: configCodexMode,
+      cursorMode: configCursorMode,
+      grokMode: configGrokMode,
       // Each platform's own resolved column, so a model is only ever offered to
       // the platform whose catalogue it came from.
       models: {
@@ -398,6 +397,8 @@ export function CreateEnvironmentDialog({
       configClaudeMode,
       configCodexMode,
       configDefaultAgent,
+      configCursorMode,
+      configGrokMode,
       configOpencodeMode,
       newProjectDefault,
     ],
@@ -442,6 +443,8 @@ export function CreateEnvironmentDialog({
   const [claudeMode, setClaudeMode] = useState<ClaudeMode>(initialAgentDefaults.claudeMode);
   const [opencodeMode, setOpencodeMode] = useState<OpenCodeMode>(initialAgentDefaults.opencodeMode);
   const [codexMode, setCodexMode] = useState<CodexMode>(initialAgentDefaults.codexMode);
+  const [cursorMode, setCursorMode] = useState<AgentStyle>(initialAgentDefaults.cursorMode);
+  const [grokMode, setGrokMode] = useState<AgentStyle>(initialAgentDefaults.grokMode);
   const [model, setModel] = useState(initialAgentDefaults.model);
   const [reasoningEffort, setReasoningEffort] = useState(initialAgentDefaults.reasoningEffort);
   const [initialPrompt, setInitialPrompt] = useState("");
@@ -536,6 +539,8 @@ export function CreateEnvironmentDialog({
     setClaudeMode(initialAgentDefaults.claudeMode);
     setOpencodeMode(initialAgentDefaults.opencodeMode);
     setCodexMode(initialAgentDefaults.codexMode);
+    setCursorMode(initialAgentDefaults.cursorMode);
+    setGrokMode(initialAgentDefaults.grokMode);
     setModel(initialAgentDefaults.model);
     setReasoningEffort(initialAgentDefaults.reasoningEffort);
     agentSelectionTouchedRef.current = false;
@@ -657,6 +662,8 @@ export function CreateEnvironmentDialog({
     setClaudeMode(initialAgentDefaults.claudeMode);
     setOpencodeMode(initialAgentDefaults.opencodeMode);
     setCodexMode(initialAgentDefaults.codexMode);
+    setCursorMode(initialAgentDefaults.cursorMode);
+    setGrokMode(initialAgentDefaults.grokMode);
     setModel(initialAgentDefaults.model);
     setReasoningEffort(initialAgentDefaults.reasoningEffort);
   }, [initialAgentDefaults, open]);
@@ -668,7 +675,9 @@ export function CreateEnvironmentDialog({
         ? opencodeMode
         : agentType === "codex"
           ? codexMode
-          : "native";
+          : agentType === "cursor"
+            ? cursorMode
+            : grokMode;
   const availableModels = modelsForAgent(modelCatalog, agentType);
   const pickerModels = enabledAgentPlatforms.flatMap((platform) =>
     modelsForAgent(modelCatalog, platform).map((option) => ({
@@ -731,8 +740,12 @@ export function CreateEnvironmentDialog({
         setClaudeMode(nextMode);
       } else if (agentType === "opencode") {
         setOpencodeMode(nextMode);
-      } else {
+      } else if (agentType === "codex") {
         setCodexMode(nextMode);
+      } else if (agentType === "cursor") {
+        setCursorMode(nextMode);
+      } else {
+        setGrokMode(nextMode);
       }
     },
     [agentType],
@@ -867,6 +880,8 @@ export function CreateEnvironmentDialog({
           claudeMode,
           opencodeMode,
           codexMode,
+          cursorMode,
+          grokMode,
           model:
             agentType === "opencode" && model === "default" && !hasAvailableOpenCodeModels
               ? undefined
@@ -898,6 +913,8 @@ export function CreateEnvironmentDialog({
       claudeMode,
       opencodeMode,
       codexMode,
+      cursorMode,
+      grokMode,
       model,
       hasAvailableOpenCodeModels,
       reasoningEffort,
@@ -1167,9 +1184,7 @@ export function CreateEnvironmentDialog({
                       id="use-tui"
                       checked={selectedMode === "terminal"}
                       onCheckedChange={setUseTui}
-                      disabled={
-                        isLoading || !launchAgent || agentType === "cursor" || agentType === "grok"
-                      }
+                      disabled={isLoading || !launchAgent}
                     />
                     <Label htmlFor="use-tui" className="cursor-pointer text-sm font-normal">
                       Use TUI

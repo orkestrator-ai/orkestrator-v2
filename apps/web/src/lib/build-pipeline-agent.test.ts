@@ -170,6 +170,32 @@ describe("resolveAgentModeSettings", () => {
       // inheriting rather than being frozen against later changes.
       platforms: { codex: { mode: "terminal" } },
     });
+
+    expect(
+      resolveAgentModeSettings("cursor", {
+        claudeMode: "native",
+        opencodeMode: "native",
+        codexMode: "native",
+        cursorMode: "terminal",
+        grokMode: "native",
+      }),
+    ).toEqual({
+      defaultAgent: "cursor",
+      platforms: { cursor: { mode: "terminal" } },
+    });
+
+    expect(
+      resolveAgentModeSettings("grok", {
+        claudeMode: "native",
+        opencodeMode: "native",
+        codexMode: "native",
+        cursorMode: "native",
+        grokMode: "terminal",
+      }),
+    ).toEqual({
+      defaultAgent: "grok",
+      platforms: { grok: { mode: "terminal" } },
+    });
   });
 });
 

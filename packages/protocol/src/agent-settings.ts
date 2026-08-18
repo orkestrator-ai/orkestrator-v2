@@ -19,7 +19,11 @@
  * below is that second reading, promoted here so both sides share it.
  */
 import { AGENT_PLATFORMS, isAgentPlatform, type AgentPlatform } from "./agent-platforms.js";
-import { normalizeActionDefaults, type ActionDefaults } from "./action-defaults.js";
+import {
+  ACTION_DEFAULT_KEYS,
+  normalizeActionDefaults,
+  type ActionDefaults,
+} from "./action-defaults.js";
 
 export type AgentLaunchMode = "terminal" | "native";
 export type ClaudeNativeBackend = "sdk" | "tmux";
@@ -149,13 +153,17 @@ export function resolveAgentPlatformSettings(
   };
 }
 
-/** Action defaults from the narrowest tier that sets any. */
+/** Action defaults resolved independently, so an unset action keeps inheriting. */
 export function resolveActionDefaults(tiers: AgentSettingsTiers): ActionDefaults {
-  for (const tier of [tiers.environment, tiers.repository, tiers.global]) {
-    const defaults = tier?.actionDefaults;
-    if (defaults && Object.keys(defaults).length > 0) return defaults;
+  const resolved: ActionDefaults = {};
+  for (const key of ACTION_DEFAULT_KEYS) {
+    const entry =
+      tiers.environment?.actionDefaults?.[key] ??
+      tiers.repository?.actionDefaults?.[key] ??
+      tiers.global?.actionDefaults?.[key];
+    if (entry) resolved[key] = entry;
   }
-  return {};
+  return resolved;
 }
 
 function normalizePlatformSettings(value: unknown): AgentPlatformSettings | undefined {

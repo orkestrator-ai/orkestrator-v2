@@ -11,6 +11,7 @@
  * renderer.
  */
 import {
+  resolveActionDefaults,
   resolveAgentPlatformSettings,
   resolveDefaultAgent,
   type AgentPlatformSettings,
@@ -19,6 +20,7 @@ import {
   type ResolvedAgentPlatformSettings,
 } from "@orkestrator/protocol/agent-settings";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { resolveActionDefault, type ActionDefaultKey } from "@orkestrator/protocol/action-defaults";
 import type { AppConfig, Environment } from "@/types";
 
 /** Which tier an inherited value actually came from, for the "Inherit (…)" label. */
@@ -59,6 +61,28 @@ export function resolvedDefaultAgent(
   environment?: Pick<Environment, "agentSettings"> | null,
 ): AgentPlatform {
   return resolveDefaultAgent(agentSettingsTiers(config, projectId, environment));
+}
+
+/** Resolve one action while preserving the generic default-agent precedence. */
+export function resolvedActionDefault(
+  tiers: AgentSettingsTiers,
+  key: ActionDefaultKey,
+  enabledAgents: readonly AgentPlatform[],
+): { agent: AgentPlatform; model?: string; reasoningEffort?: string } {
+  const environmentEntry = tiers.environment?.actionDefaults?.[key];
+  const repositoryEntry = tiers.repository?.actionDefaults?.[key];
+  const overrideAgent =
+    !environmentEntry && tiers.environment?.defaultAgent
+      ? tiers.environment.defaultAgent
+      : !environmentEntry && !repositoryEntry && tiers.repository?.defaultAgent
+        ? tiers.repository.defaultAgent
+        : undefined;
+
+  return resolveActionDefault(resolveActionDefaults(tiers), key, {
+    fallbackAgent: resolveDefaultAgent(tiers),
+    enabledAgents,
+    overrideAgent,
+  });
 }
 
 /**

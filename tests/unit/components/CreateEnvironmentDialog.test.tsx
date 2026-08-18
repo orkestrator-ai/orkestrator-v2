@@ -911,6 +911,49 @@ describe("resolveAgentDefaults", () => {
     );
   });
 
+  test("uses a repository New projects action default before the app default", async () => {
+    useCodexStore.setState({
+      models: [{ id: "repo-codex", name: "Repo Codex", reasoningEfforts: ["high"] }],
+    });
+    const config = structuredClone(defaultConfig);
+    config.global.enabledAgentPlatforms = ["claude", "codex"];
+    config.global.agentSettings = {
+      defaultAgent: "claude",
+      actionDefaults: { newProject: { platform: "claude" } },
+    };
+    config.repositories["project-1"] = {
+      agentSettings: {
+        actionDefaults: {
+          newProject: { platform: "codex", model: "repo-codex", reasoningEffort: "high" },
+        },
+      },
+    };
+    useConfigStore.setState({ config });
+    const onCreate = mock(async () => {});
+
+    render(
+      <CreateEnvironmentDialog
+        open
+        projectId="project-1"
+        onOpenChange={() => {}}
+        onCreate={onCreate}
+      />,
+    );
+
+    await waitFor(() => expect(getAgentModelPicker().textContent).toContain("Repo Codex"));
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentType: "codex",
+          model: "repo-codex",
+          reasoningEffort: "high",
+        }),
+      ),
+    );
+  });
+
   test("ignores a New projects default whose platform is no longer enabled", async () => {
     const config = structuredClone(defaultConfig);
     config.global.agentSettings = { ...config.global.agentSettings, defaultAgent: "claude" };
@@ -949,7 +992,14 @@ describe("resolveAgentDefaults", () => {
 
   test("offers the durable Cursor catalogue when creating a new environment", async () => {
     const config = structuredClone(defaultConfig);
-    config.global.agentSettings = { ...config.global.agentSettings, defaultAgent: "cursor" };
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      defaultAgent: "cursor",
+      platforms: {
+        ...config.global.agentSettings?.platforms,
+        cursor: { mode: "terminal" },
+      },
+    };
     config.global.enabledAgentPlatforms = ["cursor"];
     useConfigStore.setState({ config });
     useAgentModelCatalogStore.getState().setAcpModels([
@@ -975,6 +1025,10 @@ describe("resolveAgentDefaults", () => {
     render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
 
     await waitFor(() => expect(getAgentModelPicker().textContent).toContain("Cursor Grok 4.6"));
+    expect(screen.getByRole("checkbox", { name: "Use TUI" }).getAttribute("aria-checked")).toBe(
+      "true",
+    );
+    fireEvent.click(screen.getByRole("checkbox", { name: "Use TUI" }));
     openAgentModelPicker();
     expect(screen.getByRole("menuitemradio", { name: /Cursor Grok 4\.6/ })).toBeTruthy();
     expect(screen.getByRole("menuitemradio", { name: /Composer 2\.5/ })).toBeTruthy();
@@ -985,6 +1039,7 @@ describe("resolveAgentDefaults", () => {
       expect(onCreate).toHaveBeenCalledWith(
         expect.objectContaining({
           agentType: "cursor",
+          cursorMode: "native",
           model: "grok-4.6",
           reasoningEffort: "high",
         }),

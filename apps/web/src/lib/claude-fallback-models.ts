@@ -9,7 +9,7 @@
  */
 import type { ClaudeModel } from "@/lib/claude-client";
 
-export const FALLBACK_CLAUDE_MODELS: ClaudeModel[] = [
+export const FALLBACK_CLAUDE_MODELS: Array<ClaudeModel & { resolvedModel?: string }> = [
   {
     id: "default",
     name: "Default (recommended)",
@@ -17,6 +17,7 @@ export const FALLBACK_CLAUDE_MODELS: ClaudeModel[] = [
     supportsFastMode: true,
     supportsEffort: true,
     supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+    resolvedModel: "claude-opus-5[1m]",
   },
   {
     id: "opus[1m]",
@@ -25,6 +26,7 @@ export const FALLBACK_CLAUDE_MODELS: ClaudeModel[] = [
     supportsFastMode: true,
     supportsEffort: true,
     supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+    resolvedModel: "claude-opus-5[1m]",
   },
   {
     id: "claude-fable-5[1m]",
@@ -32,6 +34,7 @@ export const FALLBACK_CLAUDE_MODELS: ClaudeModel[] = [
     description: "Fable 5 · Most capable for your hardest and longest-running tasks",
     supportsEffort: true,
     supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+    resolvedModel: "claude-fable-5",
   },
   {
     id: "sonnet",
@@ -39,6 +42,12 @@ export const FALLBACK_CLAUDE_MODELS: ClaudeModel[] = [
     description: "Sonnet 5 · Efficient for routine tasks",
     supportsEffort: true,
     supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+    resolvedModel: "claude-sonnet-5",
   },
-  { id: "haiku", name: "Haiku", description: "Haiku 4.5 · Fastest for quick answers" },
+  {
+    id: "haiku",
+    name: "Haiku",
+    description: "Haiku 4.5 · Fastest for quick answers",
+    resolvedModel: "claude-haiku-4-5-20251001",
+  },
 ];

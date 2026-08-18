@@ -352,6 +352,60 @@ describe("RepositorySettings", () => {
       });
     });
 
+    test("allows a reasoning override while the model remains inherited", async () => {
+      renderSettings({
+        section: "claude",
+        config: {
+          global: {
+            ...makeConfig().global,
+            agentSettings: {
+              defaultAgent: "claude",
+              // Configuration uses Claude's concrete id while the catalog uses
+              // the `sonnet` alias. Inheritance must match through resolvedModel.
+              platforms: { claude: { model: "claude-sonnet-5" } },
+            },
+          },
+        },
+      });
+
+      fireEvent.pointerDown(screen.getByRole("combobox", { name: "Claude Code default model" }));
+      fireEvent.click(await screen.findByRole("menuitemradio", { name: "High" }));
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+      await waitFor(() => {
+        const saved = mockUpdateRepositoryConfig.mock.calls.at(-1)?.[1] as {
+          agentSettings?: { platforms?: Record<string, unknown> };
+        };
+        expect(saved.agentSettings?.platforms).toEqual({ claude: { reasoningEffort: "high" } });
+      });
+    });
+
+    test("allows the Defaults pane to override reasoning for its inherited model", async () => {
+      renderSettings({
+        section: "defaults",
+        config: {
+          global: {
+            ...makeConfig().global,
+            agentSettings: {
+              defaultAgent: "codex",
+              platforms: { codex: { model: "gpt-5.4" } },
+            },
+          },
+        },
+      });
+
+      fireEvent.pointerDown(screen.getByRole("combobox", { name: "Default model and reasoning" }));
+      fireEvent.click(await screen.findByRole("menuitemradio", { name: "High" }));
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+      await waitFor(() => {
+        const saved = mockUpdateRepositoryConfig.mock.calls.at(-1)?.[1] as {
+          agentSettings?: { platforms?: Record<string, unknown> };
+        };
+        expect(saved.agentSettings?.platforms).toEqual({ codex: { reasoningEffort: "high" } });
+      });
+    });
+
     test("omits the block entirely when nothing is overridden", async () => {
       renderSettings({ section: "defaults" });
 

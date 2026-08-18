@@ -1,6 +1,16 @@
 import { resolvedDefaultAgent } from "@/lib/agent-settings";
-import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
-import type { AppConfig, ClaudeMode, CodexMode, DefaultAgent, OpenCodeMode } from "@/types";
+import {
+  SHIPPED_PLATFORM_MODES,
+  type AgentSettingsTier,
+} from "@orkestrator/protocol/agent-settings";
+import type {
+  AgentStyle,
+  AppConfig,
+  ClaudeMode,
+  CodexMode,
+  DefaultAgent,
+  OpenCodeMode,
+} from "@/types";
 import { firstEnabledAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 
 export function resolveBuildPipelineAgent(config: AppConfig, projectId: string): DefaultAgent {
@@ -32,20 +42,10 @@ export type AgentModeSettings = {
 };
 
 /**
- * Route the selected agent's mode into its own backend slot and null the two
- * that were not selected.
- *
- * The backend keeps one mode column per agent, so leaving a stale mode on an
- * agent the environment is no longer using would make a later agent switch
- * inherit a mode the user never chose for it. Every caller that writes agent
- * settings must null the other two, which is why this lives here rather than
- * being restated at each call site.
- */
-/**
  * The environment overrides a newly created environment should carry.
  *
  * Only the launching agent's own column is pinned. The other platforms are left
- * unset so they keep inheriting — writing all three would freeze this
+ * unset so they keep inheriting — writing every column would freeze this
  * environment against later repository or app changes it never opted out of.
  */
 export function resolveAgentModeSettings(
@@ -54,6 +54,8 @@ export function resolveAgentModeSettings(
     claudeMode: ClaudeMode;
     opencodeMode: OpenCodeMode;
     codexMode: CodexMode;
+    cursorMode?: AgentStyle;
+    grokMode?: AgentStyle;
   },
 ): AgentSettingsTier {
   const mode =
@@ -61,7 +63,11 @@ export function resolveAgentModeSettings(
       ? modes.claudeMode
       : agentType === "codex"
         ? modes.codexMode
-        : modes.opencodeMode;
+        : agentType === "opencode"
+          ? modes.opencodeMode
+          : agentType === "cursor"
+            ? (modes.cursorMode ?? SHIPPED_PLATFORM_MODES.cursor)
+            : (modes.grokMode ?? SHIPPED_PLATFORM_MODES.grok);
   return { defaultAgent: agentType, platforms: { [agentType]: { mode } } };
 }
 

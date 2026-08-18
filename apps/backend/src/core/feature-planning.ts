@@ -822,11 +822,10 @@ export class FeaturePlanningService {
     });
     return await this.invoke<Environment>("update_environment_agent_settings", {
       environmentId: created.id,
-      defaultAgent: "codex",
-      claudeMode: null,
-      claudeNativeBackend: null,
-      opencodeMode: null,
-      codexMode: "native",
+      agentSettings: {
+        defaultAgent: "codex",
+        platforms: { codex: { mode: "native" } },
+      },
     });
   }
 

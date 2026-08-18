@@ -19,6 +19,8 @@ const configured = {
   claudeMode: "terminal" as const,
   opencodeMode: "terminal" as const,
   codexMode: "native" as const,
+  cursorMode: "terminal" as const,
+  grokMode: "native" as const,
   models: { claude: "sonnet", codex: "gpt-default" },
   reasoningEfforts: { codex: "medium" },
 };
@@ -37,10 +39,32 @@ describe("resolveCreateEnvironmentAgentDefaults", () => {
       claudeMode: "terminal",
       opencodeMode: "terminal",
       codexMode: "terminal",
+      cursorMode: "terminal",
+      grokMode: "native",
       // From `configured`, not from whatever the last create happened to pick.
       model: "gpt-default",
       reasoningEffort: "medium",
     });
+  });
+
+  test("restores Cursor and Grok modes in their own platform columns", () => {
+    expect(
+      resolveCreateEnvironmentAgentDefaults({
+        catalog,
+        enabledAgents: ["cursor"],
+        configured: { ...configured, agent: "cursor" },
+        remembered: { platform: "cursor", mode: "native" },
+      }),
+    ).toMatchObject({ agent: "cursor", cursorMode: "native", grokMode: "native" });
+
+    expect(
+      resolveCreateEnvironmentAgentDefaults({
+        catalog,
+        enabledAgents: ["grok"],
+        configured: { ...configured, agent: "grok" },
+        remembered: { platform: "grok", mode: "terminal" },
+      }),
+    ).toMatchObject({ agent: "grok", cursorMode: "terminal", grokMode: "terminal" });
   });
 
   test("falls back to configured defaults when the remembered platform is disabled", () => {

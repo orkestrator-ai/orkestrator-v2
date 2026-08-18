@@ -1,4 +1,8 @@
-import { agentSettingsTiers, resolvedDefaultAgent } from "@/lib/agent-settings";
+import {
+  agentSettingsTiers,
+  resolvedActionDefault,
+  resolvedDefaultAgent,
+} from "@/lib/agent-settings";
 import { resolveAgentPlatformSettings } from "@orkestrator/protocol/agent-settings";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
@@ -13,7 +17,7 @@ import {
 import { useShallow } from "zustand/react/shallow";
 import { useTerminalContext, MAX_TABS, type AgentLaunchModeOverride } from "@/contexts";
 import type { DefaultAgent } from "@/types";
-import { resolveActionDefault, type ActionDefaultKey } from "@orkestrator/protocol/action-defaults";
+import type { ActionDefaultKey } from "@orkestrator/protocol/action-defaults";
 import { usePullRequest, useProjects, useEnvironments } from "@/hooks";
 import {
   createPRPrompt,
@@ -313,27 +317,24 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
    * specific environment is narrower than an application-level default and wins
    * over it too.
    */
-  const environmentAgent = selectedEnvironment?.agentSettings?.defaultAgent;
+  const settingsTiers = useMemo(
+    () => agentSettingsTiers(config, selectedEnvironment?.projectId, selectedEnvironment),
+    [config, selectedEnvironment],
+  );
   const actionDefaultFor = useCallback(
-    (key: ActionDefaultKey) =>
-      resolveActionDefault(config.global.agentSettings?.actionDefaults, key, {
-        fallbackAgent: defaultAgent,
-        overrideAgent: environmentAgent,
-        enabledAgents: enabledAgentList,
-      }),
-    [config.global.agentSettings, defaultAgent, enabledAgentList, environmentAgent],
+    (key: ActionDefaultKey) => resolvedActionDefault(settingsTiers, key, enabledAgentList),
+    [enabledAgentList, settingsTiers],
   );
   const { preferredModelsByPlatform, preferredEffortsByPlatform } = useMemo(() => {
-    const tiers = agentSettingsTiers(config, selectedEnvironment?.projectId, selectedEnvironment);
     const models: Partial<Record<DefaultAgent, string>> = {};
     const efforts: Partial<Record<DefaultAgent, string>> = {};
     for (const platform of enabledAgentList) {
-      const resolved = resolveAgentPlatformSettings(tiers, platform);
+      const resolved = resolveAgentPlatformSettings(settingsTiers, platform);
       if (resolved.model) models[platform] = resolved.model;
       if (resolved.reasoningEffort) efforts[platform] = resolved.reasoningEffort;
     }
     return { preferredModelsByPlatform: models, preferredEffortsByPlatform: efforts };
-  }, [config, enabledAgentList, selectedEnvironment]);
+  }, [enabledAgentList, settingsTiers]);
   /**
    * The same choice a plain click would make, expressed as launch-dialog
    * preferences. The configured action default must be what the dialog opens

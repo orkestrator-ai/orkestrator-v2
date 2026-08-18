@@ -32,6 +32,7 @@ import {
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
 import {
+  resolveActionDefaults,
   resolveAgentPlatformSettings,
   resolveDefaultAgent,
   type AgentSettingsTier,
@@ -124,8 +125,15 @@ export function AgentDefaultsPane({
   const resolvedForAgent = resolveAgentPlatformSettings(tiers, effectiveAgent);
   const models = modelsForAgent(catalog, effectiveAgent);
   const selectedModel = storedForAgent?.model
-    ? models.find((model) => model.id === storedForAgent.model)
+    ? models.find(
+        (model) =>
+          model.id === storedForAgent.model || model.resolvedModel === storedForAgent.model,
+      )
     : undefined;
+  const effectiveModel = storedForAgent?.model ?? resolvedForAgent.model;
+  const reasoningModel = models.find(
+    (model) => model.id === effectiveModel || model.resolvedModel === effectiveModel,
+  );
 
   const pickerModels = useMemo<AgentModel[]>(
     () =>
@@ -143,7 +151,7 @@ export function AgentDefaultsPane({
   );
 
   const reasoningOptions = useMemo<AgentReasoningOption[]>(() => {
-    const efforts = selectedModel?.reasoningEfforts ?? [];
+    const efforts = reasoningModel?.reasoningEfforts ?? [];
     const current = storedForAgent?.reasoningEffort;
     const ids = current && !efforts.includes(current) ? [...efforts, current] : efforts;
     if (ids.length === 0) return [];
@@ -151,14 +159,10 @@ export function AgentDefaultsPane({
       { id: INHERIT, label: canInherit ? "Inherit" : "Provider default" },
       ...ids.map((effort) => ({ id: effort, label: effortLabel(effort) })),
     ];
-  }, [selectedModel, storedForAgent?.reasoningEffort, canInherit]);
+  }, [reasoningModel, storedForAgent?.reasoningEffort, canInherit]);
 
   const actionDefaults: ActionDefaults = tier?.actionDefaults ?? {};
-  const inheritedActions: ActionDefaults =
-    parentTiers.environment?.actionDefaults ??
-    parentTiers.repository?.actionDefaults ??
-    parentTiers.global?.actionDefaults ??
-    {};
+  const inheritedActions: ActionDefaults = resolveActionDefaults(parentTiers);
 
   const setAction = (key: ActionDefaultKey, entry: AgentActionDefault | undefined) => {
     const next = { ...actionDefaults };

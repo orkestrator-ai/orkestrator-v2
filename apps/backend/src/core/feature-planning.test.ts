@@ -526,6 +526,69 @@ describe("FeaturePlanningService", () => {
     }
   });
 
+  test("creates planning environments with the current nested agent settings payload", async () => {
+    const invocations: Array<{ command: string; args: Record<string, unknown> }> = [];
+    const createdEnvironment = {
+      id: "env-created",
+      projectId: "project-1",
+      name: "planning",
+      branch: "main",
+      containerId: null,
+      status: "running",
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+      createdAt: new Date(0).toISOString(),
+      networkAccessMode: "full" as const,
+      order: 0,
+      environmentType: "local" as const,
+      worktreePath: "/tmp/planning-created",
+      setupScriptsComplete: true,
+    };
+    const context = await harness({
+      invoke:
+        () =>
+        async <T>(command: string, args: Record<string, unknown> = {}) => {
+          invocations.push({ command, args });
+          if (command === "create_environment") return createdEnvironment as T;
+          if (command === "update_environment_agent_settings") {
+            return { ...createdEnvironment, agentSettings: args.agentSettings } as T;
+          }
+          return undefined as T;
+        },
+    });
+    try {
+      await context.storage.updateFeaturePlan(context.featureId, {
+        codexEnvironmentId: undefined,
+        codexSessionId: undefined,
+      });
+      await context.storage.removeEnvironment("env-1");
+      await context.service.start({
+        featureId: context.featureId,
+        kind: "feature",
+        userMessage: "Let me export reports",
+      });
+      await context.service.advanceNow(context.featureId);
+
+      expect(
+        invocations.find(
+          (invocation) => invocation.command === "update_environment_agent_settings",
+        ),
+      ).toEqual({
+        command: "update_environment_agent_settings",
+        args: {
+          environmentId: "env-created",
+          agentSettings: {
+            defaultAgent: "codex",
+            platforms: { codex: { mode: "native" } },
+          },
+        },
+      });
+    } finally {
+      await context.dispose();
+    }
+  });
+
   test("cancelling aborts the turn and detaches the record without retracting the plan", async () => {
     const context = await harness();
     try {

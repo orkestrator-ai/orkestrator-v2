@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   Check,
@@ -74,6 +74,10 @@ export function NativeAgentQuestionCard({
     "answers",
     () => ({}),
   );
+  // Secret answers may only exist for the lifetime of this mounted card. They
+  // are merged into the live resolution below, but never enter the shared
+  // draft store that survives tab/environment switches.
+  const [secretAnswers, setSecretAnswers] = useState<Record<string, Answer>>({});
   /**
    * Which questions have the free-text field revealed. Kept beside the answers
    * rather than derived from them: a user who picks "Something else" and has
@@ -99,21 +103,22 @@ export function NativeAgentQuestionCard({
     freeTextRef.current?.focus();
   });
 
-  const answerFor = (questionId: string): Answer =>
-    answers[questionId] ?? EMPTY_ANSWER;
+  const answerFor = (question: AgentInteractionQuestion): Answer =>
+    (question.secret ? secretAnswers : answers)[question.id] ?? EMPTY_ANSWER;
 
   const { submitting, error, resolve } = useInteractionResolver({
     interaction,
     draftKey,
     onResolve,
     blocked: expired,
-    buildAnswers: () => questions.map((question) => {
-      const answer = answerFor(question.id);
-      return {
+    buildAnswers: () => questions.flatMap((question) => {
+      const answer = answerFor(question);
+      if (!isAnswered(answer)) return [];
+      return [{
         questionId: question.id,
         ...(answer.optionIds.length ? { optionIds: answer.optionIds } : {}),
         ...(answer.freeText.trim() ? { freeText: answer.freeText.trim() } : {}),
-      };
+      }];
     }),
   });
 
@@ -126,22 +131,26 @@ export function NativeAgentQuestionCard({
   const question = questions[index];
   const disabled = submitting || expired;
   const answeredCount = questions.filter((entry) =>
-    isAnswered(answerFor(entry.id)),
+    isAnswered(answerFor(entry)),
   ).length;
   const canSubmit = questions.every((entry) =>
-    !entry.required || isAnswered(answerFor(entry.id)),
+    !entry.required || isAnswered(answerFor(entry)),
   );
 
-  const updateAnswer = (questionId: string, update: (answer: Answer) => Answer) => {
-    setAnswers((current) => ({
+  const updateAnswer = (
+    targetQuestion: AgentInteractionQuestion,
+    update: (answer: Answer) => Answer,
+  ) => {
+    const setter = targetQuestion.secret ? setSecretAnswers : setAnswers;
+    setter((current) => ({
       ...current,
-      [questionId]: update(current[questionId] ?? EMPTY_ANSWER),
+      [targetQuestion.id]: update(current[targetQuestion.id] ?? EMPTY_ANSWER),
     }));
   };
 
   if (!question) return null;
 
-  const answer = answerFor(question.id);
+  const answer = answerFor(question);
   // A question with no options has nothing to choose between, so its field is
   // the answer and is shown unconditionally.
   const hasOptions = question.options.length > 0;
@@ -151,7 +160,7 @@ export function NativeAgentQuestionCard({
 
   const selectOption = (optionId: string) => {
     const selected = answer.optionIds.includes(optionId);
-    updateAnswer(question.id, (current) => question.multiple
+    updateAnswer(question, (current) => question.multiple
       ? {
           ...current,
           optionIds: selected
@@ -171,12 +180,12 @@ export function NativeAgentQuestionCard({
     setCustomOpen((current) => ({ ...current, [question.id]: !open }));
     if (open) {
       // Closing discards the draft text, or an invisible answer would be sent.
-      updateAnswer(question.id, (current) => ({ ...current, freeText: "" }));
+      updateAnswer(question, (current) => ({ ...current, freeText: "" }));
       return;
     }
     wantsFreeTextFocus.current = true;
     if (!question.multiple) {
-      updateAnswer(question.id, (current) => ({ ...current, optionIds: [] }));
+      updateAnswer(question, (current) => ({ ...current, optionIds: [] }));
     }
   };
 
@@ -244,7 +253,7 @@ export function NativeAgentQuestionCard({
                       : "text-muted-foreground hover:bg-white/[0.04] hover:text-foreground",
                   )}
                 >
-                  {isAnswered(answerFor(entry.id)) ? (
+                  {isAnswered(answerFor(entry)) ? (
                     <Check className="size-3 text-emerald-400" aria-label="Answered" />
                   ) : null}
                   {tabLabel(entry, entryIndex)}
@@ -368,7 +377,7 @@ export function NativeAgentQuestionCard({
                 aria-label={responseLabel}
                 value={answer.freeText}
                 disabled={disabled}
-                onChange={(event) => updateAnswer(question.id, (current) => ({
+                onChange={(event) => updateAnswer(question, (current) => ({
                   ...current,
                   freeText: event.target.value,
                   ...(question.multiple ? {} : { optionIds: [] }),
@@ -383,7 +392,7 @@ export function NativeAgentQuestionCard({
                 disabled={disabled}
                 placeholder="Type your answer"
                 className="w-full resize-y rounded-md border border-border/60 bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-                onChange={(event) => updateAnswer(question.id, (current) => ({
+                onChange={(event) => updateAnswer(question, (current) => ({
                   ...current,
                   freeText: event.target.value,
                   ...(question.multiple ? {} : { optionIds: [] }),

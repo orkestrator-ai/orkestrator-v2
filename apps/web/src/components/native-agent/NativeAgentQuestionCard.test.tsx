@@ -2,6 +2,7 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
   AGENT_INTERACTION_CONTRACT_VERSION,
+  isAgentInteractionResolution,
   type AgentInteractionApplyOutcome,
   type AgentInteractionQuestion,
   type AgentInteractionRequest,
@@ -224,13 +225,15 @@ describe("NativeAgentQuestionCard", () => {
       .toBe(false);
   });
 
-  test("masks a secret answer and reports that it is not persisted", () => {
-    render(
+  test("keeps a secret answer live-only and discards it across unmount", async () => {
+    const onResolve = mock(async (_resolution: AgentInteractionResolution) => applied());
+    const interaction = request([
+      question({ id: "q0", prompt: "Access token", secret: true }),
+    ]);
+    const view = render(
       <NativeAgentQuestionCard
-        interaction={request([
-          question({ id: "q0", prompt: "Access token", secret: true }),
-        ])}
-        onResolve={async () => applied()}
+        interaction={interaction}
+        onResolve={onResolve}
       />,
     );
 
@@ -238,6 +241,45 @@ describe("NativeAgentQuestionCard", () => {
     expect(input.type).toBe("password");
     expect(input.autocomplete).toBe("off");
     expect(screen.getByText(/discarded when you leave this tab/)).toBeTruthy();
+    fireEvent.change(input, { target: { value: "discard-me" } });
+    expect(usePromptDraftStore.getState().drafts.size).toBe(0);
+
+    view.unmount();
+    render(<NativeAgentQuestionCard interaction={interaction} onResolve={onResolve} />);
+    expect((screen.getByLabelText("Access token response") as HTMLInputElement).value)
+      .toBe("");
+
+    fireEvent.change(screen.getByLabelText("Access token response"), {
+      target: { value: "send-live" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    await waitFor(() => expect(onResolve).toHaveBeenCalledTimes(1));
+    expect(onResolve.mock.calls[0]?.[0].answer?.answers).toEqual([
+      { questionId: "q0", freeText: "send-live" },
+    ]);
+    expect(usePromptDraftStore.getState().drafts.size).toBe(0);
+  });
+
+  test("omits an unanswered optional question from the resolution", async () => {
+    const interaction = request([
+      question({ id: "q0", prompt: "Which language?", options: TWO_OPTIONS }),
+      question({ id: "q1", prompt: "Any notes?", required: false }),
+    ]);
+    const onResolve = mock(async (_resolution: AgentInteractionResolution) => applied());
+    render(
+      <NativeAgentQuestionCard interaction={interaction} onResolve={onResolve} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "TypeScript" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next question" }));
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+
+    await waitFor(() => expect(onResolve).toHaveBeenCalledTimes(1));
+    const resolution = onResolve.mock.calls[0]?.[0];
+    expect(resolution?.answer?.answers).toEqual([
+      { questionId: "q0", optionIds: ["o0"] },
+    ]);
+    expect(isAgentInteractionResolution(resolution, interaction)).toBe(true);
   });
 
   test("keeps the card retryable when the provider is unavailable", async () => {

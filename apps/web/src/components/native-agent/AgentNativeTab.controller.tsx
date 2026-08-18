@@ -1228,6 +1228,9 @@ export function SharedNativeAgentController({
   const pinnedInteractions = allInteractions.filter(
     (interaction) => interaction.kind !== "question",
   );
+  const composerCentered = messages.length === 0
+    && !isTurnActive
+    && questionInteractions.length === 0;
 
   /**
    * The rendered list is also what decides whether anything is pinned at all, so
@@ -1349,7 +1352,7 @@ export function SharedNativeAgentController({
       statusLabel={phaseStatusLabel}
       elapsedSeconds={elapsedSeconds}
       finalElapsedSeconds={finalElapsedSeconds}
-      centerCompose={messages.length === 0 && !isTurnActive}
+      centerCompose={composerCentered}
       emptyStateMessage={`Ask ${label} to work on this repository.`}
       transcriptHeader={
         projection?.messageWindow?.truncated ? (
@@ -1480,7 +1483,7 @@ export function SharedNativeAgentController({
       composer={
         <NativeComposeBar
           testId="shared-native-compose-bar"
-          layout={messages.length === 0 && !isTurnActive ? "centered" : "bottom"}
+          layout={composerCentered ? "centered" : "bottom"}
           attachments={draft.attachments}
           onRemoveAttachment={(attachmentId) =>
             updateDraft(sessionKey, {

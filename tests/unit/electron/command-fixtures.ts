@@ -403,16 +403,6 @@ export async function createCommandFixtures() {
     const environments = Array.isArray(environmentOrEnvironments)
       ? environmentOrEnvironments
       : [environmentOrEnvironments];
-    const projects = [
-      {
-        id: "project-1",
-        name: "repo",
-        gitUrl: "https://github.com/acme/repo.git",
-        localPath: null,
-        addedAt: new Date(0).toISOString(),
-        order: 0,
-      },
-    ];
     const repositoryConfig = options.repositoryConfig ?? {
       defaultBranch: "main",
       prBaseBranch: "main",
@@ -441,16 +431,6 @@ export async function createCommandFixtures() {
         getDataDir: () => options.dataDir ?? path.join(os.tmpdir(), "orkestrator-command-tests"),
         withGitHubCompletionCommentLock: mock(
           async (_pipelineId: string, operation: () => Promise<unknown>) => operation(),
-        ),
-        getProject: mock(
-          async (projectId: string) => projects.find((project) => project.id === projectId) ?? null,
-        ),
-        getRepositoryConfig: mock(
-          async (projectId: string) =>
-            config.repositories[projectId as "project-1"] ?? {
-              defaultBranch: "main",
-              prBaseBranch: "main",
-            },
         ),
         loadConfig: mock(async () => config),
         saveConfig: mock(async (nextConfig: typeof config) => {

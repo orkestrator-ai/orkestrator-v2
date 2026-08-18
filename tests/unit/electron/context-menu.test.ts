@@ -45,16 +45,6 @@ function createParams(overrides: Partial<ContextMenuParams> = {}): ContextMenuPa
       isShowingPictureInPicture: false,
       canRotate: false,
     },
-    editFlags: {
-      canUndo: false,
-      canRedo: false,
-      canCut: false,
-      canCopy: false,
-      canPaste: false,
-      canDelete: false,
-      canSelectAll: false,
-      canEditRichly: false,
-    },
     ...overrides,
     editFlags: {
       canUndo: false,

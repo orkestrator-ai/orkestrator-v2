@@ -1566,7 +1566,6 @@ describe("useEnvironments", () => {
       projectId: "project-1",
       status: "running",
       setupScriptsComplete: false,
-      setupPhase: "pending",
       setupPhase: "running",
       pendingAgentLaunch: true,
     });

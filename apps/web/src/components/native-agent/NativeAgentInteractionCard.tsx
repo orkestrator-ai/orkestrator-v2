@@ -1,11 +1,9 @@
 import { useMemo, useState } from "react";
 import { ExternalLink } from "lucide-react";
-import {
-  AGENT_INTERACTION_CONTRACT_VERSION,
-  type AgentInteractionApplyOutcome,
-  type AgentInteractionRequest,
-  type AgentInteractionResolution,
-  type AgentInteractionResolutionAction,
+import type {
+  AgentInteractionApplyOutcome,
+  AgentInteractionRequest,
+  AgentInteractionResolution,
 } from "@orkestrator/protocol/agent-interactions";
 import { BlockingPromptCard } from "@/components/chat/BlockingPromptCard";
 import { Button } from "@/components/ui/button";
@@ -16,8 +14,8 @@ import { openInBrowser } from "@/lib/backend";
 import {
   nativeAgentInteractionDraftKey,
   usePromptDraftField,
-  usePromptDraftStore,
 } from "@/stores/promptDraftStore";
+import { useInteractionResolver } from "@/components/native-agent/use-interaction-resolver";
 
 type Answer = { optionIds: string[]; freeText: string };
 
@@ -67,8 +65,6 @@ export function NativeAgentInteractionCard({
   const [feedback, setFeedback] = usePromptDraftField<string>(draftKey, "feedback", () => "");
   const [secretAnswers, setSecretAnswers] = useState<Record<string, Answer>>({});
   const [secretForm, setSecretForm] = useState<Record<string, unknown>>({});
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const { remaining, expired } = usePromptDeadline(interaction.expiresAt);
   const questions = interaction.presentation.questions;
   const externalUrl = safeExternalUrl(interaction.presentation.url);
@@ -106,59 +102,23 @@ export function NativeAgentInteractionCard({
           return Boolean(answer.optionIds.length || answer.freeText.trim());
         });
 
-  const resolve = async (action: AgentInteractionResolutionAction, resolutionFeedback?: string) => {
-    if (submitting || expired) return;
-    setSubmitting(true);
-    setError(null);
-    try {
-      const resolution: AgentInteractionResolution = {
-        version: AGENT_INTERACTION_CONTRACT_VERSION,
-        interactionId: interaction.id,
-        sessionId: interaction.sessionId,
-        action,
-        ...(action === "answer"
-          ? {
-              answer: {
-                version: AGENT_INTERACTION_CONTRACT_VERSION,
-                interactionId: interaction.id,
-                sessionId: interaction.sessionId,
-                answers:
-                  interaction.kind === "mcp-form" && mcpQuestion
-                    ? [{ questionId: mcpQuestion.id, freeText: JSON.stringify(resolvedForm) }]
-                    : questions.map((question) => {
-                        const answer = answerFor(question.id, question.secret);
-                        return {
-                          questionId: question.id,
-                          ...(answer.optionIds.length ? { optionIds: answer.optionIds } : {}),
-                          ...(answer.freeText.trim() ? { freeText: answer.freeText.trim() } : {}),
-                        };
-                      }),
-              },
-            }
-          : {}),
-        ...(resolutionFeedback?.trim() ? { feedback: resolutionFeedback.trim() } : {}),
-        resolvedAt: Date.now(),
-      };
-      const outcome = await onResolve(resolution);
-      if (
-        outcome.result === "applied" ||
-        outcome.result === "stale" ||
-        outcome.result === "already-resolved"
-      ) {
-        usePromptDraftStore.getState().clearDraft(draftKey);
-      } else {
-        setError(
-          outcome.result === "rejected"
-            ? "The agent rejected that response."
-            : "The agent is temporarily unavailable. It is safe to retry.",
-        );
-      }
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
-    } finally {
-      setSubmitting(false);
-    }
-  };
+  const { submitting, error, setError, resolve } = useInteractionResolver({
+    interaction,
+    draftKey,
+    onResolve,
+    blocked: expired,
+    buildAnswers: () =>
+      interaction.kind === "mcp-form" && mcpQuestion
+        ? [{ questionId: mcpQuestion.id, freeText: JSON.stringify(resolvedForm) }]
+        : questions.map((question) => {
+            const answer = answerFor(question.id, question.secret);
+            return {
+              questionId: question.id,
+              ...(answer.optionIds.length ? { optionIds: answer.optionIds } : {}),
+              ...(answer.freeText.trim() ? { freeText: answer.freeText.trim() } : {}),
+            };
+          }),
+  });
 
   const setQuestionAnswer = (
     questionId: string,

@@ -202,7 +202,7 @@ export function createNativeAgentSettleAnchors(
     clocks.push(createdAt);
   }
 
-  const floors = new Array<number>(clocks.length);
+  const floors = Array.from<number>({ length: clocks.length });
   let floor = Number.POSITIVE_INFINITY;
   for (let index = clocks.length - 1; index >= 0; index -= 1) {
     floor = Math.min(floor, clocks[index]!);

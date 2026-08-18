@@ -225,7 +225,7 @@ export function registerDockerCommands(
       imagesTotal: images,
     };
   });
-  register("get_orkestrator_containers", async ({}, context) => {
+  register("get_orkestrator_containers", async (_args, context) => {
     const { storage } = context;
     const environments = await storage.loadEnvironments();
     const dockerOwner = dockerOwnerNamespace(storage.getDataDir());

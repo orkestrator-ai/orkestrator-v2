@@ -530,7 +530,7 @@ export async function listPendingBlocking(
       id,
       kind,
       payload,
-      ...((await readBlockingHookTiming(backend, paths, name, id)) ?? {}),
+      ...(await readBlockingHookTiming(backend, paths, name, id)),
     });
   }
   return events;

@@ -228,7 +228,7 @@ function stableSequenceIds(left: string[], right: string[]): Set<string> {
     return index === undefined ? [] : [{ id, index }];
   });
   const tails: number[] = [];
-  const previous = new Array<number>(sequence.length).fill(-1);
+  const previous = Array.from({ length: sequence.length }, () => -1);
   for (let index = 0; index < sequence.length; index += 1) {
     let low = 0;
     let high = tails.length;

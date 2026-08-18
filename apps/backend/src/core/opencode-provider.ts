@@ -494,27 +494,24 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         // request pending so a restart cannot silently advance the workflow.
         this.blockedSessions.add(sessionId);
         await observe("detected");
-        try {
-          const response = await this.client.question.reject(
-            {
-              requestID: requestId,
-              directory: this.connection.directory,
-            },
-            this.requestOptions(),
-          );
-          assertSdkResponse(response, "OpenCode question rejection");
-          this.blockedSessions.delete(sessionId);
-          setBoundedSetEntry(
-            this.failedQuestionSessions,
-            sessionId,
-            MAX_TRACKED_INTERACTION_SESSIONS,
-          );
-          await observe("withdrawn", "error").catch(() => undefined);
-        } catch (error) {
-          // The request may still be live and user-resolvable. Keep it blocked;
-          // the reconnect/reconciliation loop will retry the fail-closed reject.
-          throw error;
-        }
+        // No cleanup on failure: the request may still be live and
+        // user-resolvable, so the session stays blocked and the
+        // reconnect/reconciliation loop retries the fail-closed reject.
+        const response = await this.client.question.reject(
+          {
+            requestID: requestId,
+            directory: this.connection.directory,
+          },
+          this.requestOptions(),
+        );
+        assertSdkResponse(response, "OpenCode question rejection");
+        this.blockedSessions.delete(sessionId);
+        setBoundedSetEntry(
+          this.failedQuestionSessions,
+          sessionId,
+          MAX_TRACKED_INTERACTION_SESSIONS,
+        );
+        await observe("withdrawn", "error").catch(() => undefined);
       }
     } finally {
       this.answeringRequestIds.delete(requestId);

@@ -457,30 +457,30 @@ export class PrMonitorService {
             entry.recheckRequested = false;
             this.scheduleNext(entry, 0);
           }
-          return;
-        }
-        const silentProbe =
-          entry.provisional &&
-          !entry.lastEmitted &&
-          !transition &&
-          !entry.target.prUrl &&
-          entry.mode === "normal";
-        if (silentProbe) {
-          // A probe that found nothing vanishes without clients ever hearing
-          // about it; announcing it would flash a monitor entry per idle agent.
-          this.remove(entry);
         } else {
-          // One emission per completed check, after `checkInProgress` has been
-          // lowered: emitting mid-check would strand clients on a "detecting"
-          // state that nothing follows up on.
-          this.emitState(entry, transition);
-          if (this.dropIfUnmonitorable(entry)) {
-            // retired: no reschedule
-          } else if (entry.recheckRequested) {
-            entry.recheckRequested = false;
-            this.scheduleNext(entry, 0);
+          const silentProbe =
+            entry.provisional &&
+            !entry.lastEmitted &&
+            !transition &&
+            !entry.target.prUrl &&
+            entry.mode === "normal";
+          if (silentProbe) {
+            // A probe that found nothing vanishes without clients ever hearing
+            // about it; announcing it would flash a monitor entry per idle agent.
+            this.remove(entry);
           } else {
-            this.scheduleNext(entry);
+            // One emission per completed check, after `checkInProgress` has been
+            // lowered: emitting mid-check would strand clients on a "detecting"
+            // state that nothing follows up on.
+            this.emitState(entry, transition);
+            if (this.dropIfUnmonitorable(entry)) {
+              // retired: no reschedule
+            } else if (entry.recheckRequested) {
+              entry.recheckRequested = false;
+              this.scheduleNext(entry, 0);
+            } else {
+              this.scheduleNext(entry);
+            }
           }
         }
       }

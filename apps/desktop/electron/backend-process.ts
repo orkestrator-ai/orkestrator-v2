@@ -368,7 +368,7 @@ export class BackendHttpClient {
         authorization: `Bearer ${this.token}`,
         ...(body ? { "content-type": "application/json" } : {}),
       },
-      body: body ? JSON.stringify(body) : undefined,
+      ...(body ? { body: JSON.stringify(body) } : {}),
     });
     const payload = (await response.json()) as GatewayTokenSettings & { error?: string };
     if (!response.ok)
@@ -388,7 +388,7 @@ export class BackendHttpClient {
         authorization: `Bearer ${this.token}`,
         ...(body ? { "content-type": "application/json" } : {}),
       },
-      body: body ? JSON.stringify(body) : undefined,
+      ...(body ? { body: JSON.stringify(body) } : {}),
     });
     const payload = (await response.json()) as WebClientStatus & { error?: string };
     if (!response.ok)

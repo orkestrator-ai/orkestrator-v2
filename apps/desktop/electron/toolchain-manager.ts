@@ -1369,16 +1369,12 @@ async function installArtifact(
       artifact.platform === "darwin" &&
       !artifact.executable.skipMacSignatureVerification
     ) {
-      try {
-        await verifyMacCodeSignature(
-          executablePath,
-          artifact.name,
-          timings.processTimeoutMs,
-          spawnProcess,
-        );
-      } catch (error) {
-        throw error;
-      }
+      await verifyMacCodeSignature(
+        executablePath,
+        artifact.name,
+        timings.processTimeoutMs,
+        spawnProcess,
+      );
     }
 
     if (!artifact.executable.repairInvalidMacSignature) {

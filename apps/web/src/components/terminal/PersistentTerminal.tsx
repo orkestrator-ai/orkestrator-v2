@@ -1042,18 +1042,16 @@ export function PersistentTerminal({
             // This is critical: if fonts weren't fully loaded when terminal.open() was called,
             // xterm measured fallback fonts and cached those cell dimensions.
             // Re-setting fontSize triggers xterm to recalculate character metrics.
-            if (terminal.options.fontSize) {
-              terminal.options.fontSize = terminal.options.fontSize;
-            }
+            const { fontSize } = terminal.options;
+            if (fontSize) terminal.options.fontSize = fontSize;
             scheduleFit();
           })
           .catch(() => {});
       }
       setTimeout(() => {
         // Also force font re-measurement in timeout as a fallback
-        if (terminal.options.fontSize) {
-          terminal.options.fontSize = terminal.options.fontSize;
-        }
+        const { fontSize } = terminal.options;
+        if (fontSize) terminal.options.fontSize = fontSize;
         scheduleFit();
       }, 50);
 

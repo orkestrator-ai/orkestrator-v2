@@ -21,14 +21,7 @@
     "binaries/**"
   ],
   "rules": {
-    "no-unused-vars": "warn"
-  },
-  "overrides": [
-    {
-      "files": ["**/*.test.ts", "**/*.test.tsx", "tests/**", "e2e/**"],
-      "rules": {
-        "no-control-regex": "off"
-      }
-    }
-  ]
+    "no-unused-vars": "warn",
+    "no-control-regex": "off"
+  }
 }

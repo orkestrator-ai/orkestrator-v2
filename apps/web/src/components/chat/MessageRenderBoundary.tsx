@@ -112,6 +112,9 @@ export class MessageRenderBoundary extends Component<
   // before the catch lifecycle has recorded which key failed.
   componentDidUpdate(previousProps: MessageRenderBoundaryProps): void {
     if (this.state.failed && !Object.is(previousProps.resetKey, this.props.resetKey)) {
+      // Guarded by the resetKey comparison, so it settles in a single pass; the
+      // comment above records why getDerivedStateFromProps cannot be used here.
+      // oxlint-disable-next-line react/no-did-update-set-state
       this.setState({ failed: false });
     }
   }

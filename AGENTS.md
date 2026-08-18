@@ -156,8 +156,18 @@ Clean them up opportunistically in files you are already touching. Do not
 silence the rule, and do not raise it to `error` until the backlog is actually
 gone.
 
+`no-control-regex` is off. Orkestrator strips ANSI escapes and control
+characters as a matter of course — terminal output, tmux capture, transcript
+sanitising — so a control character in a regex here is the intent rather than
+the typo the rule is looking for.
+
 Warnings never fail the build, so `bun run lint` exiting `0` means zero errors,
 not zero findings. Read the output.
+
+Reach for `// oxlint-disable-next-line <rule>` only when the rule is wrong about
+this specific site, and always with the reason on the line above. The directive
+must sit immediately above the **reported** line, which for something like
+`react/no-did-update-set-state` is the `setState` call, not the method.
 
 ### Iterating a collection you are about to mutate
 

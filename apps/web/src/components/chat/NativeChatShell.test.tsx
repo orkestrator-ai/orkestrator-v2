@@ -78,6 +78,8 @@ describe("NativeChatShell", () => {
     globalThis.ResizeObserver = class ResizeObserver {
       constructor(callback: ResizeObserverCallback) {
         resizeCallback = callback;
+        // Publishes the instance to the test; not an alias to dodge binding.
+        // oxlint-disable-next-line typescript/no-this-alias
         resizeObserver = this;
       }
 

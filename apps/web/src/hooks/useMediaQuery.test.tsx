@@ -11,6 +11,10 @@ class MatchMediaController {
   }
 
   asMediaQueryList(query: string): MediaQueryList {
+    // The getter below sits on the returned object literal, where `this` is
+    // that literal rather than the controller, so the alias is the only way to
+    // read the live value.
+    // oxlint-disable-next-line typescript/no-this-alias
     const controller = this;
     return {
       get matches() {

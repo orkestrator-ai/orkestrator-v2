@@ -781,7 +781,10 @@ async function extractTarGzipEntry(
       stream.resume();
       return;
     }
+    // `next` is tar-stream's per-entry callback; signalling it once the write
+    // settles is how the callback stream and the promise pipeline are bridged.
     void pipeline(stream, createWriteStream(destinationPath, { flags: "wx", mode: 0o500 })).then(
+      // oxlint-disable-next-line promise/no-callback-in-promise
       next,
       (error: unknown) =>
         extract.destroy(error instanceof Error ? error : new Error(String(error))),
@@ -869,6 +872,8 @@ async function extractTarGzipBundle(
           }),
         ),
       )
+      // As above: `next` is tar-stream's per-entry callback.
+      // oxlint-disable-next-line promise/no-callback-in-promise
       .then(next, (error: unknown) =>
         extract.destroy(error instanceof Error ? error : new Error(String(error))),
       );

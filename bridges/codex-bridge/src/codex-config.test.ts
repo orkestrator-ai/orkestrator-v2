@@ -43,9 +43,11 @@ describe("Codex app-server configuration", () => {
   });
 
   test("makes the child limit authoritative in legacy and root-inclusive V2 config", () => {
-    expect(codexAppServerConfigOverrides({
-      [CODEX_MAX_CONCURRENT_THREADS_ENV]: "8",
-    })).toEqual({
+    expect(
+      codexAppServerConfigOverrides({
+        [CODEX_MAX_CONCURRENT_THREADS_ENV]: "8",
+      }),
+    ).toEqual({
       "features.goals": "true",
       "features.mcp_2026_07_28": "true",
       "agents.max_concurrent_threads_per_session": "8",
@@ -69,10 +71,8 @@ describe("Codex app-server configuration", () => {
     });
 
     expect(overrides).toMatchObject({
-      "mcp_servers.orkestrator.url":
-        "\"http://host.docker.internal:4567/mcp\"",
-      "mcp_servers.orkestrator.bearer_token_env_var":
-        `"${ORKESTRATOR_AGENT_MCP_TOKEN_ENV}"`,
+      "mcp_servers.orkestrator.url": '"http://host.docker.internal:4567/mcp"',
+      "mcp_servers.orkestrator.bearer_token_env_var": `"${ORKESTRATOR_AGENT_MCP_TOKEN_ENV}"`,
       "mcp_servers.orkestrator.required": "false",
       "mcp_servers.orkestrator.startup_timeout_sec": "3",
     });
@@ -85,9 +85,7 @@ describe("Codex app-server configuration", () => {
         [ORKESTRATOR_AGENT_MCP_URL_ENV]: `http://${hostname}:4567/mcp`,
         [ORKESTRATOR_AGENT_MCP_TOKEN_ENV]: "project-secret",
       });
-      expect(overrides["mcp_servers.orkestrator.url"]).toBe(
-        `"http://${hostname}:4567/mcp"`,
-      );
+      expect(overrides["mcp_servers.orkestrator.url"]).toBe(`"http://${hostname}:4567/mcp"`);
       expect(overrides["mcp_servers.orkestrator.bearer_token_env_var"]).toBe(
         `"${ORKESTRATOR_AGENT_MCP_TOKEN_ENV}"`,
       );
@@ -120,28 +118,23 @@ describe("Codex app-server configuration", () => {
         [ORKESTRATOR_AGENT_MCP_TOKEN_ENV]: "project-secret",
       },
       {
-        [ORKESTRATOR_AGENT_MCP_URL_ENV]:
-          "http://user:password@127.0.0.1:4567/mcp",
+        [ORKESTRATOR_AGENT_MCP_URL_ENV]: "http://user:password@127.0.0.1:4567/mcp",
         [ORKESTRATOR_AGENT_MCP_TOKEN_ENV]: "project-secret",
       },
     ]) {
       const overrides = codexAppServerConfigOverrides(env);
       expect(overrides["mcp_servers.orkestrator.url"]).toBeUndefined();
-      expect(overrides["mcp_servers.orkestrator.bearer_token_env_var"])
-        .toBeUndefined();
+      expect(overrides["mcp_servers.orkestrator.bearer_token_env_var"]).toBeUndefined();
     }
   });
 
   test("uses process.env when agent credentials are already installed", () => {
-    process.env[ORKESTRATOR_AGENT_MCP_URL_ENV] =
-      "http://127.0.0.1:4567/mcp";
+    process.env[ORKESTRATOR_AGENT_MCP_URL_ENV] = "http://127.0.0.1:4567/mcp";
     process.env[ORKESTRATOR_AGENT_MCP_TOKEN_ENV] = "project-secret";
 
     const overrides = codexAppServerConfigOverrides();
 
-    expect(overrides["mcp_servers.orkestrator.url"]).toBe(
-      "\"http://127.0.0.1:4567/mcp\"",
-    );
+    expect(overrides["mcp_servers.orkestrator.url"]).toBe('"http://127.0.0.1:4567/mcp"');
     expect(overrides["mcp_servers.orkestrator.bearer_token_env_var"]).toBe(
       `"${ORKESTRATOR_AGENT_MCP_TOKEN_ENV}"`,
     );
@@ -157,28 +150,26 @@ describe("Codex app-server configuration", () => {
     // CLI `-c` values take precedence over config.toml, so always targeting
     // this reserved key prevents a user-configured collision from redirecting
     // the backend-provided ticket connection.
-    expect(Object.keys(overrides).filter((key) => key.startsWith("mcp_servers.")))
-      .toEqual([
-        "mcp_servers.orkestrator.url",
-        "mcp_servers.orkestrator.bearer_token_env_var",
-        "mcp_servers.orkestrator.required",
-        "mcp_servers.orkestrator.startup_timeout_sec",
-      ]);
+    expect(Object.keys(overrides).filter((key) => key.startsWith("mcp_servers."))).toEqual([
+      "mcp_servers.orkestrator.url",
+      "mcp_servers.orkestrator.bearer_token_env_var",
+      "mcp_servers.orkestrator.required",
+      "mcp_servers.orkestrator.startup_timeout_sec",
+    ]);
   });
 
   test("accepts whitespace and the largest safely convertible child limit", () => {
     expect(resolveCodexMaxConcurrentThreads(" \t7\n")).toBe(7);
-    expect(resolveCodexMaxConcurrentThreads(String(MAX_CODEX_CONCURRENT_THREADS)))
-      .toBe(MAX_CODEX_CONCURRENT_THREADS);
-    expect(codexAppServerConfigOverrides({
-      [CODEX_MAX_CONCURRENT_THREADS_ENV]: String(MAX_CODEX_CONCURRENT_THREADS),
-    })).toMatchObject({
-      "agents.max_concurrent_threads_per_session": String(
-        MAX_CODEX_CONCURRENT_THREADS,
-      ),
-      "features.multi_agent_v2.max_concurrent_threads_per_session": String(
-        Number.MAX_SAFE_INTEGER,
-      ),
+    expect(resolveCodexMaxConcurrentThreads(String(MAX_CODEX_CONCURRENT_THREADS))).toBe(
+      MAX_CODEX_CONCURRENT_THREADS,
+    );
+    expect(
+      codexAppServerConfigOverrides({
+        [CODEX_MAX_CONCURRENT_THREADS_ENV]: String(MAX_CODEX_CONCURRENT_THREADS),
+      }),
+    ).toMatchObject({
+      "agents.max_concurrent_threads_per_session": String(MAX_CODEX_CONCURRENT_THREADS),
+      "features.multi_agent_v2.max_concurrent_threads_per_session": String(Number.MAX_SAFE_INTEGER),
     });
   });
 
@@ -194,9 +185,7 @@ describe("Codex app-server configuration", () => {
       String(Number.MAX_SAFE_INTEGER),
       String(Number.MAX_SAFE_INTEGER + 1),
     ]) {
-      expect(resolveCodexMaxConcurrentThreads(value)).toBe(
-        DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
-      );
+      expect(resolveCodexMaxConcurrentThreads(value)).toBe(DEFAULT_CODEX_MAX_CONCURRENT_THREADS);
     }
   });
 });

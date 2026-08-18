@@ -4,57 +4,55 @@ import * as realBackend from "@/lib/backend";
 const realBackendSnapshot = { ...realBackend };
 
 // Mock backend before importing the store
-const mockUpdateKanbanTask = mock((..._args: unknown[]) => Promise.resolve({
-  id: "task-1",
-  projectId: "proj-1",
-  title: "Test",
-  description: "desc",
-  acceptanceCriteria: "",
-  status: "backlog" as const,
-  comments: [],
-  images: [],
-  createdAt: new Date().toISOString(),
-  order: 0,
-}));
+const mockUpdateKanbanTask = mock((..._args: unknown[]) =>
+  Promise.resolve({
+    id: "task-1",
+    projectId: "proj-1",
+    title: "Test",
+    description: "desc",
+    acceptanceCriteria: "",
+    status: "backlog" as const,
+    comments: [],
+    images: [],
+    createdAt: new Date().toISOString(),
+    order: 0,
+  }),
+);
 
 const mockGetKanbanTasks = mock(() => Promise.resolve([]));
 const mockClearTaskBuildStatus = mock(async (taskId: string) => ({
-  task: await mockUpdateKanbanTask(
-    taskId,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    "",
-    "",
-  ),
+  task: await mockUpdateKanbanTask(taskId, undefined, undefined, undefined, undefined, "", ""),
   removedPipelineIds: [] as string[],
   failedPipelineIds: [] as string[],
 }));
-const mockAddKanbanTask = mock(() => Promise.resolve({
-  id: "new-task",
-  projectId: "proj-1",
-  title: "New",
-  description: "",
-  acceptanceCriteria: "",
-  status: "backlog" as const,
-  comments: [],
-  images: [],
-  createdAt: new Date().toISOString(),
-  order: 0,
-}));
-const mockAddKanbanComment = mock(() => Promise.resolve({
-  id: "task-1",
-  projectId: "proj-1",
-  title: "Test",
-  description: "desc",
-  acceptanceCriteria: "",
-  status: "backlog" as const,
-  comments: [{ id: "c1", text: "comment", createdAt: new Date().toISOString() }],
-  images: [],
-  createdAt: new Date().toISOString(),
-  order: 0,
-}));
+const mockAddKanbanTask = mock(() =>
+  Promise.resolve({
+    id: "new-task",
+    projectId: "proj-1",
+    title: "New",
+    description: "",
+    acceptanceCriteria: "",
+    status: "backlog" as const,
+    comments: [],
+    images: [],
+    createdAt: new Date().toISOString(),
+    order: 0,
+  }),
+);
+const mockAddKanbanComment = mock(() =>
+  Promise.resolve({
+    id: "task-1",
+    projectId: "proj-1",
+    title: "Test",
+    description: "desc",
+    acceptanceCriteria: "",
+    status: "backlog" as const,
+    comments: [{ id: "c1", text: "comment", createdAt: new Date().toISOString() }],
+    images: [],
+    createdAt: new Date().toISOString(),
+    order: 0,
+  }),
+);
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
@@ -72,7 +70,7 @@ mock.module("@/lib/backend", () => ({
 }));
 
 const { useKanbanStore, findTaskForEnvironment } =
-  await import("../../../apps/web/src/stores/kanbanStore.ts?kanban-store-test") as typeof import("../../../apps/web/src/stores/kanbanStore");
+  (await import("../../../apps/web/src/stores/kanbanStore.ts?kanban-store-test")) as typeof import("../../../apps/web/src/stores/kanbanStore");
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import type { KanbanTask } from "@/lib/backend";
 
@@ -120,7 +118,11 @@ describe("kanbanStore", () => {
       const task = createTask();
       useKanbanStore.setState({ tasks: [task] });
 
-      const returnedTask = { ...task, prUrl: "https://github.com/org/repo/pull/1", prState: "open" as const };
+      const returnedTask = {
+        ...task,
+        prUrl: "https://github.com/org/repo/pull/1",
+        prState: "open" as const,
+      };
       mockUpdateKanbanTask.mockResolvedValueOnce(returnedTask);
 
       await useKanbanStore.getState().updateTask("task-1", {
@@ -130,7 +132,12 @@ describe("kanbanStore", () => {
 
       expect(mockUpdateKanbanTask).toHaveBeenCalledWith(
         "task-1",
-        undefined, undefined, undefined, undefined, undefined, undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
         "https://github.com/org/repo/pull/1",
         "open",
         undefined,
@@ -155,7 +162,12 @@ describe("kanbanStore", () => {
 
       expect(mockUpdateKanbanTask).toHaveBeenCalledWith(
         "task-1",
-        undefined, undefined, undefined, undefined, undefined, undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
         undefined,
         "merged",
         true,
@@ -171,8 +183,15 @@ describe("kanbanStore", () => {
 
       expect(mockUpdateKanbanTask).toHaveBeenCalledWith(
         "task-1",
-        "Updated", undefined, undefined, undefined, undefined, undefined,
-        undefined, undefined, undefined,
+        "Updated",
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
       );
     });
   });
@@ -193,50 +212,56 @@ describe("kanbanStore", () => {
 
       useBuildPipelineStore.setState({
         pipelines: new Map([
-          ["pipeline-1", {
-            id: "pipeline-1",
-            taskId: "task-1",
-            projectId: "proj-1",
-            environmentId: "env-1",
-            environmentType: "local" as const,
-            agentType: "claude" as const,
-            phase: "building" as any,
-            sessions: [],
-            currentSessionIndex: -1,
-            iteration: 0,
-            maxIterations: 3,
-            createdAt: new Date().toISOString(),
-            taskTitle: "Task",
-            taskSnapshot: {
-              title: "Task",
-              description: "",
-              acceptanceCriteria: "",
-              comments: [],
-              images: [],
+          [
+            "pipeline-1",
+            {
+              id: "pipeline-1",
+              taskId: "task-1",
+              projectId: "proj-1",
+              environmentId: "env-1",
+              environmentType: "local" as const,
+              agentType: "claude" as const,
+              phase: "building" as any,
+              sessions: [],
+              currentSessionIndex: -1,
+              iteration: 0,
+              maxIterations: 3,
+              createdAt: new Date().toISOString(),
+              taskTitle: "Task",
+              taskSnapshot: {
+                title: "Task",
+                description: "",
+                acceptanceCriteria: "",
+                comments: [],
+                images: [],
+              },
             },
-          }],
-          ["pipeline-2", {
-            id: "pipeline-2",
-            taskId: "task-2",
-            projectId: "proj-1",
-            environmentId: "env-2",
-            environmentType: "local" as const,
-            agentType: "claude" as const,
-            phase: "building" as any,
-            sessions: [],
-            currentSessionIndex: -1,
-            iteration: 0,
-            maxIterations: 3,
-            createdAt: new Date().toISOString(),
-            taskTitle: "Other task",
-            taskSnapshot: {
-              title: "Other task",
-              description: "",
-              acceptanceCriteria: "",
-              comments: [],
-              images: [],
+          ],
+          [
+            "pipeline-2",
+            {
+              id: "pipeline-2",
+              taskId: "task-2",
+              projectId: "proj-1",
+              environmentId: "env-2",
+              environmentType: "local" as const,
+              agentType: "claude" as const,
+              phase: "building" as any,
+              sessions: [],
+              currentSessionIndex: -1,
+              iteration: 0,
+              maxIterations: 3,
+              createdAt: new Date().toISOString(),
+              taskTitle: "Other task",
+              taskSnapshot: {
+                title: "Other task",
+                description: "",
+                acceptanceCriteria: "",
+                comments: [],
+                images: [],
+              },
             },
-          }],
+          ],
         ]),
         buildEnvironmentIds: new Set(["env-1", "env-2"]),
       });
@@ -293,28 +318,31 @@ describe("kanbanStore", () => {
       useKanbanStore.setState({ tasks: [task] });
       useBuildPipelineStore.setState({
         pipelines: new Map([
-          ["pipeline-1", {
-            id: "pipeline-1",
-            taskId: "task-1",
-            projectId: "proj-1",
-            environmentId: "env-1",
-            environmentType: "local" as const,
-            agentType: "claude" as const,
-            phase: "building" as never,
-            sessions: [],
-            currentSessionIndex: -1,
-            iteration: 0,
-            maxIterations: 3,
-            createdAt: new Date().toISOString(),
-            taskTitle: "Task",
-            taskSnapshot: {
-              title: "Task",
-              description: "",
-              acceptanceCriteria: "",
-              comments: [],
-              images: [],
+          [
+            "pipeline-1",
+            {
+              id: "pipeline-1",
+              taskId: "task-1",
+              projectId: "proj-1",
+              environmentId: "env-1",
+              environmentType: "local" as const,
+              agentType: "claude" as const,
+              phase: "building" as never,
+              sessions: [],
+              currentSessionIndex: -1,
+              iteration: 0,
+              maxIterations: 3,
+              createdAt: new Date().toISOString(),
+              taskTitle: "Task",
+              taskSnapshot: {
+                title: "Task",
+                description: "",
+                acceptanceCriteria: "",
+                comments: [],
+                images: [],
+              },
             },
-          }],
+          ],
         ]),
         buildEnvironmentIds: new Set(["env-1"]),
       });
@@ -382,28 +410,31 @@ describe("findTaskForEnvironment", () => {
   test("falls back to build pipeline store when not in kanban store", () => {
     useBuildPipelineStore.setState({
       pipelines: new Map([
-        ["pipeline-1", {
-          id: "pipeline-1",
-          taskId: "task-99",
-          projectId: "proj-1",
-          environmentId: "env-2",
-          environmentType: "local" as const,
-          agentType: "claude" as const,
-          phase: "building" as any,
-          sessions: [],
-          currentSessionIndex: -1,
-          iteration: 0,
-          maxIterations: 3,
-          createdAt: new Date().toISOString(),
-          taskTitle: "Task from pipeline",
-          taskSnapshot: {
-            title: "Task from pipeline",
-            description: "",
-            acceptanceCriteria: "",
-            comments: [],
-            images: [],
+        [
+          "pipeline-1",
+          {
+            id: "pipeline-1",
+            taskId: "task-99",
+            projectId: "proj-1",
+            environmentId: "env-2",
+            environmentType: "local" as const,
+            agentType: "claude" as const,
+            phase: "building" as any,
+            sessions: [],
+            currentSessionIndex: -1,
+            iteration: 0,
+            maxIterations: 3,
+            createdAt: new Date().toISOString(),
+            taskTitle: "Task from pipeline",
+            taskSnapshot: {
+              title: "Task from pipeline",
+              description: "",
+              acceptanceCriteria: "",
+              comments: [],
+              images: [],
+            },
           },
-        }],
+        ],
       ]),
     });
 
@@ -415,33 +446,36 @@ describe("findTaskForEnvironment", () => {
   test("does not treat Linear-backed pipelines as kanban tasks", () => {
     useBuildPipelineStore.setState({
       pipelines: new Map([
-        ["pipeline-1", {
-          id: "pipeline-1",
-          taskId: "linear-issue-id",
-          source: {
-            type: "linear",
-            issueId: "linear-issue-id",
-            issueIdentifier: "ENG-123",
+        [
+          "pipeline-1",
+          {
+            id: "pipeline-1",
+            taskId: "linear-issue-id",
+            source: {
+              type: "linear",
+              issueId: "linear-issue-id",
+              issueIdentifier: "ENG-123",
+            },
+            projectId: "proj-1",
+            environmentId: "env-linear",
+            environmentType: "local" as const,
+            agentType: "claude" as const,
+            phase: "building" as any,
+            sessions: [],
+            currentSessionIndex: -1,
+            iteration: 0,
+            maxIterations: 3,
+            createdAt: new Date().toISOString(),
+            taskTitle: "Linear issue",
+            taskSnapshot: {
+              title: "Linear issue",
+              description: "",
+              acceptanceCriteria: "",
+              comments: [],
+              images: [],
+            },
           },
-          projectId: "proj-1",
-          environmentId: "env-linear",
-          environmentType: "local" as const,
-          agentType: "claude" as const,
-          phase: "building" as any,
-          sessions: [],
-          currentSessionIndex: -1,
-          iteration: 0,
-          maxIterations: 3,
-          createdAt: new Date().toISOString(),
-          taskTitle: "Linear issue",
-          taskSnapshot: {
-            title: "Linear issue",
-            description: "",
-            acceptanceCriteria: "",
-            comments: [],
-            images: [],
-          },
-        }],
+        ],
       ]),
     });
 
@@ -453,36 +487,39 @@ describe("findTaskForEnvironment", () => {
   test("does not treat GitHub-backed pipelines as kanban tasks", () => {
     useBuildPipelineStore.setState({
       pipelines: new Map([
-        ["pipeline-github", {
-          id: "pipeline-github",
-          taskId: "github:acme/widget#42",
-          source: {
-            type: "github",
-            repositoryOwner: "acme",
-            repositoryName: "widget",
-            issueNumber: 42,
-            issueUrl: "https://github.com/acme/widget/issues/42",
-            status: "review",
+        [
+          "pipeline-github",
+          {
+            id: "pipeline-github",
+            taskId: "github:acme/widget#42",
+            source: {
+              type: "github",
+              repositoryOwner: "acme",
+              repositoryName: "widget",
+              issueNumber: 42,
+              issueUrl: "https://github.com/acme/widget/issues/42",
+              status: "review",
+            },
+            projectId: "proj-1",
+            environmentId: "env-github",
+            environmentType: "local" as const,
+            agentType: "claude" as const,
+            phase: "building" as any,
+            sessions: [],
+            currentSessionIndex: -1,
+            iteration: 0,
+            maxIterations: 3,
+            createdAt: new Date().toISOString(),
+            taskTitle: "GitHub issue",
+            taskSnapshot: {
+              title: "GitHub issue",
+              description: "",
+              acceptanceCriteria: "",
+              comments: [],
+              images: [],
+            },
           },
-          projectId: "proj-1",
-          environmentId: "env-github",
-          environmentType: "local" as const,
-          agentType: "claude" as const,
-          phase: "building" as any,
-          sessions: [],
-          currentSessionIndex: -1,
-          iteration: 0,
-          maxIterations: 3,
-          createdAt: new Date().toISOString(),
-          taskTitle: "GitHub issue",
-          taskSnapshot: {
-            title: "GitHub issue",
-            description: "",
-            acceptanceCriteria: "",
-            comments: [],
-            images: [],
-          },
-        }],
+        ],
       ]),
     });
 
@@ -504,28 +541,31 @@ describe("findTaskForEnvironment", () => {
 
     useBuildPipelineStore.setState({
       pipelines: new Map([
-        ["pipeline-1", {
-          id: "pipeline-1",
-          taskId: "pipeline-task",
-          projectId: "proj-1",
-          environmentId: "env-1",
-          environmentType: "local" as const,
-          agentType: "claude" as const,
-          phase: "building" as any,
-          sessions: [],
-          currentSessionIndex: -1,
-          iteration: 0,
-          maxIterations: 3,
-          createdAt: new Date().toISOString(),
-          taskTitle: "Task",
-          taskSnapshot: {
-            title: "Task",
-            description: "",
-            acceptanceCriteria: "",
-            comments: [],
-            images: [],
+        [
+          "pipeline-1",
+          {
+            id: "pipeline-1",
+            taskId: "pipeline-task",
+            projectId: "proj-1",
+            environmentId: "env-1",
+            environmentType: "local" as const,
+            agentType: "claude" as const,
+            phase: "building" as any,
+            sessions: [],
+            currentSessionIndex: -1,
+            iteration: 0,
+            maxIterations: 3,
+            createdAt: new Date().toISOString(),
+            taskTitle: "Task",
+            taskSnapshot: {
+              title: "Task",
+              description: "",
+              acceptanceCriteria: "",
+              comments: [],
+              images: [],
+            },
           },
-        }],
+        ],
       ]),
     });
 

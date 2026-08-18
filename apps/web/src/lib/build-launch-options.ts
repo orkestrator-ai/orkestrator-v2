@@ -29,8 +29,7 @@ export function buildLaunchDefaults(
   return {
     defaultAgent,
     defaultEnvironmentType:
-      repository?.lastEnvironmentType
-      ?? (projectHasLocalPath ? "local" : "containerized"),
+      repository?.lastEnvironmentType ?? (projectHasLocalPath ? "local" : "containerized"),
     preferredModels: {
       claude: config.global.claudeModel,
       codex: config.global.codexModel,

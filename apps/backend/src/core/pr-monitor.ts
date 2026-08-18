@@ -146,7 +146,10 @@ export class PrMonitorService {
   private readonly entries = new Map<string, PrMonitorEntry>();
   private readonly reconciliationOperations = new Map<string, Promise<void>>();
   private readonly options: Required<
-    Pick<PrMonitorServiceOptions, "effects" | "emit" | "now" | "monotonicNow" | "schedule" | "cancel">
+    Pick<
+      PrMonitorServiceOptions,
+      "effects" | "emit" | "now" | "monotonicNow" | "schedule" | "cancel"
+    >
   > & { onWarning?: PrMonitorServiceOptions["onWarning"] };
 
   constructor(options: PrMonitorServiceOptions) {
@@ -155,11 +158,13 @@ export class PrMonitorService {
       emit: options.emit,
       now: options.now ?? (() => new Date().toISOString()),
       monotonicNow: options.monotonicNow ?? (() => Date.now()),
-      schedule: options.schedule ?? ((callback, delayMs) => {
-        const timer = setTimeout(callback, delayMs);
-        timer.unref?.();
-        return timer;
-      }),
+      schedule:
+        options.schedule ??
+        ((callback, delayMs) => {
+          const timer = setTimeout(callback, delayMs);
+          timer.unref?.();
+          return timer;
+        }),
       cancel: options.cancel ?? ((timer) => clearTimeout(timer as ReturnType<typeof setTimeout>)),
       onWarning: options.onWarning,
     };
@@ -200,7 +205,7 @@ export class PrMonitorService {
         this.track(target, "normal", { immediate: false, paused: true });
       }
     }
-    for (const [environmentId, entry] of [...this.entries]) {
+    for (const [environmentId, entry] of Array.from(this.entries)) {
       if (!live.has(environmentId)) this.remove(entry);
     }
   }
@@ -243,10 +248,7 @@ export class PrMonitorService {
    * untracks the environment. Detection and PR persistence remain the caller's
    * responsibility.
    */
-  async reconcileTerminal(
-    target: PrMonitorTarget,
-    detection: PrDetection,
-  ): Promise<void> {
+  async reconcileTerminal(target: PrMonitorTarget, detection: PrDetection): Promise<void> {
     if (detection.state !== "merged" && detection.state !== "closed") {
       throw new Error(`Expected terminal PR state, received: ${detection.state}`);
     }
@@ -276,11 +278,7 @@ export class PrMonitorService {
     try {
       await this.reconcileTask(entry, detection, generation);
     } finally {
-      if (
-        restorePaused
-        && this.entries.get(target.environmentId) === entry
-        && entry.active
-      ) {
+      if (restorePaused && this.entries.get(target.environmentId) === entry && entry.active) {
         this.pause(target.environmentId);
       }
     }
@@ -363,9 +361,8 @@ export class PrMonitorService {
       persistencePending: false,
       generation: 0,
       reconciliation: new Map(),
-      observedPr: target.prUrl && target.prState
-        ? { url: target.prUrl, state: target.prState }
-        : null,
+      observedPr:
+        target.prUrl && target.prState ? { url: target.prUrl, state: target.prState } : null,
     };
     this.entries.set(target.environmentId, entry);
     // Probes stay unannounced until they find something, so a probe that finds
@@ -460,29 +457,30 @@ export class PrMonitorService {
             entry.recheckRequested = false;
             this.scheduleNext(entry, 0);
           }
-          return;
-        }
-        const silentProbe = entry.provisional
-          && !entry.lastEmitted
-          && !transition
-          && !entry.target.prUrl
-          && entry.mode === "normal";
-        if (silentProbe) {
-          // A probe that found nothing vanishes without clients ever hearing
-          // about it; announcing it would flash a monitor entry per idle agent.
-          this.remove(entry);
         } else {
-          // One emission per completed check, after `checkInProgress` has been
-          // lowered: emitting mid-check would strand clients on a "detecting"
-          // state that nothing follows up on.
-          this.emitState(entry, transition);
-          if (this.dropIfUnmonitorable(entry)) {
-            // retired: no reschedule
-          } else if (entry.recheckRequested) {
-            entry.recheckRequested = false;
-            this.scheduleNext(entry, 0);
+          const silentProbe =
+            entry.provisional &&
+            !entry.lastEmitted &&
+            !transition &&
+            !entry.target.prUrl &&
+            entry.mode === "normal";
+          if (silentProbe) {
+            // A probe that found nothing vanishes without clients ever hearing
+            // about it; announcing it would flash a monitor entry per idle agent.
+            this.remove(entry);
           } else {
-            this.scheduleNext(entry);
+            // One emission per completed check, after `checkInProgress` has been
+            // lowered: emitting mid-check would strand clients on a "detecting"
+            // state that nothing follows up on.
+            this.emitState(entry, transition);
+            if (this.dropIfUnmonitorable(entry)) {
+              // retired: no reschedule
+            } else if (entry.recheckRequested) {
+              entry.recheckRequested = false;
+              this.scheduleNext(entry, 0);
+            } else {
+              this.scheduleNext(entry);
+            }
           }
         }
       }
@@ -510,23 +508,22 @@ export class PrMonitorService {
   ): Promise<PrMonitorTransition | undefined> {
     const previous = entry.target;
     const previousState = previous.prState;
-    const changed = detection.url !== previous.prUrl
-      || detection.state !== previous.prState
-      || detection.hasMergeConflicts !== previous.hasMergeConflicts;
+    const changed =
+      detection.url !== previous.prUrl ||
+      detection.state !== previous.prState ||
+      detection.hasMergeConflicts !== previous.hasMergeConflicts;
 
-    const observedChanged = (
-      detection.url !== entry.observedPr?.url
-      || detection.state !== entry.observedPr?.state
-    );
+    const observedChanged =
+      detection.url !== entry.observedPr?.url || detection.state !== entry.observedPr?.state;
     const transition: PrMonitorTransition | undefined = observedChanged
       ? {
-        // A confirmed transition is announced even if persisting it fails: the
-        // stale stored state would otherwise make every retry look like the same
-        // new transition and re-notify on each one.
-        url: detection.url,
-        state: detection.state,
-        previousState: entry.observedPr?.state ?? previousState,
-      }
+          // A confirmed transition is announced even if persisting it fails: the
+          // stale stored state would otherwise make every retry look like the same
+          // new transition and re-notify on each one.
+          url: detection.url,
+          state: detection.state,
+          previousState: entry.observedPr?.state ?? previousState,
+        }
       : undefined;
 
     let persisted = !changed;
@@ -583,9 +580,9 @@ export class PrMonitorService {
         entry.modeStartedAt = this.options.monotonicNow();
       }
     } else if (
-      persisted
-      && entry.mode === "merge-pending"
-      && (detection.state === "merged" || detection.state === "closed")
+      persisted &&
+      entry.mode === "merge-pending" &&
+      (detection.state === "merged" || detection.state === "closed")
     ) {
       entry.mode = "normal";
       entry.modeStartedAt = this.options.monotonicNow();
@@ -648,8 +645,8 @@ export class PrMonitorService {
     const previous = this.reconciliationOperations.get(environmentId);
     const operation = previous
       ? previous
-        .catch(() => undefined)
-        .then(() => this.reconcileTaskUnlocked(entry, detection, generation))
+          .catch(() => undefined)
+          .then(() => this.reconcileTaskUnlocked(entry, detection, generation))
       : this.reconcileTaskUnlocked(entry, detection, generation);
     this.reconciliationOperations.set(environmentId, operation);
     try {
@@ -682,8 +679,8 @@ export class PrMonitorService {
       // process dies after pre-linking the replacement but before appending.
       const commentText = `${commentPrefix}: ${detection.url}`;
 
-      const taskMetadataMatchesDetection = task.prUrl === detection.url
-        && task.prState === terminalState;
+      const taskMetadataMatchesDetection =
+        task.prUrl === detection.url && task.prState === terminalState;
       if (task.prMergeCommented && taskMetadataMatchesDetection) {
         progress.add("link");
         progress.add("comment");
@@ -744,7 +741,10 @@ export class PrMonitorService {
         progress.add("metadata");
       }
     } catch (error) {
-      this.warn(`Failed to reconcile kanban task after PR ${terminalState} for ${environmentId}`, error);
+      this.warn(
+        `Failed to reconcile kanban task after PR ${terminalState} for ${environmentId}`,
+        error,
+      );
     }
   }
 
@@ -759,9 +759,9 @@ export class PrMonitorService {
       if (!this.isCurrent(entry, generation)) return false;
       if (!task) return true;
       if (
-        task.prUrl === detection.url
-        && task.prState === detection.state
-        && !task.prMergeCommented
+        task.prUrl === detection.url &&
+        task.prState === detection.state &&
+        !task.prMergeCommented
       ) {
         return true;
       }
@@ -800,9 +800,11 @@ export class PrMonitorService {
   }
 
   private isCurrent(entry: PrMonitorEntry, generation: number): boolean {
-    return this.entries.get(entry.target.environmentId) === entry
-      && entry.generation === generation
-      && entry.active;
+    return (
+      this.entries.get(entry.target.environmentId) === entry &&
+      entry.generation === generation &&
+      entry.active
+    );
   }
 
   private emitState(entry: PrMonitorEntry, transition?: PrMonitorTransition): void {
@@ -835,24 +837,28 @@ export class PrMonitorService {
 }
 
 function isSameTarget(a: PrMonitorTarget, b: PrMonitorTarget): boolean {
-  return a.environmentId === b.environmentId
-    && a.branch === b.branch
-    && a.kind === b.kind
-    && a.worktreePath === b.worktreePath
-    && a.containerId === b.containerId
-    && a.ready === b.ready
-    && a.prUrl === b.prUrl
-    && a.prState === b.prState
-    && a.hasMergeConflicts === b.hasMergeConflicts;
+  return (
+    a.environmentId === b.environmentId &&
+    a.branch === b.branch &&
+    a.kind === b.kind &&
+    a.worktreePath === b.worktreePath &&
+    a.containerId === b.containerId &&
+    a.ready === b.ready &&
+    a.prUrl === b.prUrl &&
+    a.prState === b.prState &&
+    a.hasMergeConflicts === b.hasMergeConflicts
+  );
 }
 
 function isSameObservableState(
   a: PrMonitorEnvironmentState,
   b: PrMonitorEnvironmentState,
 ): boolean {
-  return a.mode === b.mode
-    && a.consecutiveErrors === b.consecutiveErrors
-    && a.prUrl === b.prUrl
-    && a.prState === b.prState
-    && a.hasMergeConflicts === b.hasMergeConflicts;
+  return (
+    a.mode === b.mode &&
+    a.consecutiveErrors === b.consecutiveErrors &&
+    a.prUrl === b.prUrl &&
+    a.prState === b.prState &&
+    a.hasMergeConflicts === b.hasMergeConflicts
+  );
 }

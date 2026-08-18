@@ -1,18 +1,8 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createRef } from "react";
 import type { Editor } from "@tiptap/react";
-import {
-  TiptapMarkdownEditor,
-  type TiptapMarkdownEditorHandle,
-} from "./TiptapMarkdownEditor";
+import { TiptapMarkdownEditor, type TiptapMarkdownEditorHandle } from "./TiptapMarkdownEditor";
 
 type TiptapEditorElement = HTMLElement & { editor: Editor };
 
@@ -22,11 +12,7 @@ function interceptStoreSyncTimeout() {
   const interceptedHandle = {} as ReturnType<typeof setTimeout>;
   let scheduledCallback: (() => void) | undefined;
 
-  globalThis.setTimeout = ((
-    handler: TimerHandler,
-    timeout?: number,
-    ...args: unknown[]
-  ) => {
+  globalThis.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
     if (timeout === 300 && typeof handler === "function") {
       scheduledCallback = () => handler(...args);
       return interceptedHandle;
@@ -151,9 +137,7 @@ describe("TiptapMarkdownEditor", () => {
       />,
     );
 
-    const editor = await screen.findByTestId(
-      "tiptap-markdown-editor",
-    ) as TiptapEditorElement;
+    const editor = (await screen.findByTestId("tiptap-markdown-editor")) as TiptapEditorElement;
     const timeout = interceptStoreSyncTimeout();
     try {
       act(() => {
@@ -193,18 +177,14 @@ describe("TiptapMarkdownEditor", () => {
       />,
     );
 
-    const editor = await screen.findByTestId(
-      "tiptap-markdown-editor",
-    ) as TiptapEditorElement;
+    const editor = (await screen.findByTestId("tiptap-markdown-editor")) as TiptapEditorElement;
     expect(screen.getByRole("heading", { name: "Original" })).toBeTruthy();
     expect(editor.textContent).not.toContain("angela-search-scrape");
 
     act(() => {
       editor.editor.commands.setContent("<h1>Updated</h1><p>Body</p>");
     });
-    expect(ref.current?.flushPendingChanges()).toBe(
-      `${frontmatter}# Updated\n\nBody`,
-    );
+    expect(ref.current?.flushPendingChanges()).toBe(`${frontmatter}# Updated\n\nBody`);
     expect(onChange).toHaveBeenCalledWith(`${frontmatter}# Updated\n\nBody`);
   });
 
@@ -222,18 +202,12 @@ describe("TiptapMarkdownEditor", () => {
       />,
     );
 
-    let editor = await screen.findByTestId(
-      "tiptap-markdown-editor",
-    ) as TiptapEditorElement;
+    let editor = (await screen.findByTestId("tiptap-markdown-editor")) as TiptapEditorElement;
     act(() => {
       editor.editor.commands.setContent("<p>First body</p>");
     });
-    expect(ref.current?.flushPendingChanges()).toBe(
-      "---\ntitle: Empty page\n---\nFirst body",
-    );
-    expect(onChange).toHaveBeenCalledWith(
-      "---\ntitle: Empty page\n---\nFirst body",
-    );
+    expect(ref.current?.flushPendingChanges()).toBe("---\ntitle: Empty page\n---\nFirst body");
+    expect(onChange).toHaveBeenCalledWith("---\ntitle: Empty page\n---\nFirst body");
 
     const firstSerialization = onChange.mock.calls.at(-1)?.[0];
     view.unmount();
@@ -250,18 +224,14 @@ describe("TiptapMarkdownEditor", () => {
       />,
     );
 
-    editor = await screen.findByTestId(
-      "tiptap-markdown-editor",
-    ) as TiptapEditorElement;
+    editor = (await screen.findByTestId("tiptap-markdown-editor")) as TiptapEditorElement;
     act(() => {
       editor.editor.commands.setContent("<p>Second body</p>");
     });
     expect(reopenedRef.current?.flushPendingChanges()).toBe(
       "---\ntitle: Empty page\n---\nSecond body",
     );
-    expect(onChange).toHaveBeenCalledWith(
-      "---\ntitle: Empty page\n---\nSecond body",
-    );
+    expect(onChange).toHaveBeenCalledWith("---\ntitle: Empty page\n---\nSecond body");
   });
 
   test("debounces multiple updates into the latest Markdown once", async () => {
@@ -276,8 +246,7 @@ describe("TiptapMarkdownEditor", () => {
       />,
     );
 
-    const editor = await screen.findByTestId("tiptap-markdown-editor") as
-      TiptapEditorElement;
+    const editor = (await screen.findByTestId("tiptap-markdown-editor")) as TiptapEditorElement;
     const timeout = interceptStoreSyncTimeout();
     try {
       act(() => {
@@ -321,9 +290,7 @@ describe("TiptapMarkdownEditor", () => {
       />,
     );
 
-    const editor = await screen.findByTestId(
-      "tiptap-markdown-editor",
-    ) as TiptapEditorElement;
+    const editor = (await screen.findByTestId("tiptap-markdown-editor")) as TiptapEditorElement;
     act(() => {
       editor.editor.commands.setContent("<p>Latest callbacks</p>");
     });
@@ -359,8 +326,7 @@ describe("TiptapMarkdownEditor", () => {
       />,
     );
 
-    const element = await screen.findByTestId("tiptap-markdown-editor") as
-      TiptapEditorElement;
+    const element = (await screen.findByTestId("tiptap-markdown-editor")) as TiptapEditorElement;
     const error = new Error("Invalid content after initialization");
     act(() => {
       element.editor.emit("contentError", {
@@ -387,9 +353,7 @@ describe("TiptapMarkdownEditor", () => {
       />,
     );
 
-    const editor = await screen.findByTestId(
-      "tiptap-markdown-editor",
-    ) as TiptapEditorElement;
+    const editor = (await screen.findByTestId("tiptap-markdown-editor")) as TiptapEditorElement;
     act(() => {
       editor.editor.commands.setContent("<p>Save immediately</p>");
     });
@@ -412,9 +376,7 @@ describe("TiptapMarkdownEditor", () => {
       />,
     );
 
-    const editor = await screen.findByTestId(
-      "tiptap-markdown-editor",
-    ) as TiptapEditorElement;
+    const editor = (await screen.findByTestId("tiptap-markdown-editor")) as TiptapEditorElement;
     act(() => {
       editor.editor.commands.setContent("<p>First body</p>");
     });
@@ -437,9 +399,7 @@ describe("TiptapMarkdownEditor", () => {
       />,
     );
 
-    const editor = await screen.findByTestId(
-      "tiptap-markdown-editor",
-    ) as TiptapEditorElement;
+    const editor = (await screen.findByTestId("tiptap-markdown-editor")) as TiptapEditorElement;
     act(() => {
       editor.editor.commands.setContent("<p>Flush on unmount</p>");
     });
@@ -460,8 +420,7 @@ describe("TiptapMarkdownEditor", () => {
       />,
     );
 
-    const editor = await screen.findByTestId("tiptap-markdown-editor") as
-      TiptapEditorElement;
+    const editor = (await screen.findByTestId("tiptap-markdown-editor")) as TiptapEditorElement;
     act(() => {
       editor.editor.commands.setContent("<p>Unmounted body</p>");
     });
@@ -469,8 +428,6 @@ describe("TiptapMarkdownEditor", () => {
       editor.editor.destroy();
     });
 
-    expect(onChange).toHaveBeenCalledWith(
-      "---\ntitle: Example\n---\nUnmounted body",
-    );
+    expect(onChange).toHaveBeenCalledWith("---\ntitle: Example\n---\nUnmounted body");
   });
 });

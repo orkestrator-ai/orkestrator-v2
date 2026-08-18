@@ -108,9 +108,6 @@ import type {
 } from "./command-fixtures";
 
 describe("Electron backend command registry", () => {
-
-
-
   // The `security` stub only takes effect on darwin, where `getHostClaudeCredentials`
   // consults the Keychain; elsewhere resolution starts at the on-disk credential.
   // Seeding both with the same payload keeps these tests asserting the same thing
@@ -126,8 +123,6 @@ if [ "$1" = "exec" ]; then
 fi
 exit 1
 `;
-
-
 
   function claudeCredentialSyncContext(
     globalConfig: Record<string, unknown> = {},
@@ -147,8 +142,6 @@ exit 1
     return created;
   }
 
-
-
   test("only treats an exact hexadecimal object id as an immutable baseline", () => {
     expect(isImmutableCommitRef("a".repeat(40))).toBe(true);
     expect(isImmutableCommitRef(`  ${"A1".repeat(20)}  `)).toBe(true);
@@ -163,19 +156,14 @@ exit 1
     }
   });
 
-
-
   test("does not block local untracked scanning on a named pipe", async () => {
     const { worktree } = await createGitWorktreeWithOrigin();
     const fifoPath = path.join(worktree, "waiting.pipe");
     const created = spawnSync("mkfifo", [fifoPath], { encoding: "utf8" });
     expect(created.status).toBe(0);
 
-    await expect(commandTesting.countLocalFileLines(worktree, "waiting.pipe"))
-      .resolves.toBe(0);
+    await expect(commandTesting.countLocalFileLines(worktree, "waiting.pipe")).resolves.toBe(0);
   });
-
-
 
   test("abandons line counting when an untracked file grows beyond the read cap", async () => {
     const read = mock(async (buffer: Buffer, offset: number, length: number) => {
@@ -189,31 +177,34 @@ exit 1
     } as never);
 
     try {
-      await expect(commandTesting.countLocalFileLines("/unused", "growing.log"))
-        .resolves.toBe(0);
+      await expect(commandTesting.countLocalFileLines("/unused", "growing.log")).resolves.toBe(0);
       expect(read).toHaveBeenCalledTimes(161);
     } finally {
       openSpy.mockRestore();
     }
   });
 
-
-
   test("parses copy tuples and rejects truncated or malformed Git tuples", () => {
-    expect(commandTesting.parseGitFileChanges(
-      "C100\0old{name}.txt\0new => \t雪.txt\0",
-      "2\t1\t\0old{name}.txt\0new => \t雪.txt\0",
-    )).toEqual([expect.objectContaining({
-      status: "C100",
-      originalPath: "old{name}.txt",
-      path: "new => \t雪.txt",
-      additions: 2,
-      deletions: 1,
-    })]);
-    expect(commandTesting.parseGitFileChanges(
-      "M\0binary.bin\0M\0without-stats.txt\0",
-      "-\t-\tbinary.bin\0",
-    )).toEqual([
+    expect(
+      commandTesting.parseGitFileChanges(
+        "C100\0old{name}.txt\0new => \t雪.txt\0",
+        "2\t1\t\0old{name}.txt\0new => \t雪.txt\0",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        status: "C100",
+        originalPath: "old{name}.txt",
+        path: "new => \t雪.txt",
+        additions: 2,
+        deletions: 1,
+      }),
+    ]);
+    expect(
+      commandTesting.parseGitFileChanges(
+        "M\0binary.bin\0M\0without-stats.txt\0",
+        "-\t-\tbinary.bin\0",
+      ),
+    ).toEqual([
       expect.objectContaining({ path: "binary.bin", additions: 0, deletions: 0 }),
       expect.objectContaining({ path: "without-stats.txt", additions: 0, deletions: 0 }),
     ]);
@@ -231,8 +222,6 @@ exit 1
     }
   });
 
-
-
   test("counts container untracked lines with bounded binary and symlink handling", async () => {
     const workspace = await createTempDir("ork-container-untracked-scanner-");
     const files = new Map<string, string | Buffer>([
@@ -249,29 +238,33 @@ exit 1
       await fs.writeFile(path.join(workspace, filePath), content);
     }
     await fs.symlink("no-trailing.txt", path.join(workspace, "link.txt"));
-    const status = [...files.keys(), "link.txt"]
-      .map((filePath) => `?? ${filePath}\0`)
-      .join("");
-    const result = spawnSync(
-      "node",
-      ["-e", CONTAINER_UNTRACKED_STATS_SCANNER, "--", "16"],
-      { cwd: workspace, input: Buffer.from(status), encoding: "utf8" },
-    );
+    const status = [...files.keys(), "link.txt"].map((filePath) => `?? ${filePath}\0`).join("");
+    const result = spawnSync("node", ["-e", CONTAINER_UNTRACKED_STATS_SCANNER, "--", "16"], {
+      cwd: workspace,
+      input: Buffer.from(status),
+      encoding: "utf8",
+    });
     expect(result.status).toBe(0);
 
     const changes = commandTesting.parseContainerUntrackedStats(result.stdout);
-    expect(changes).toContainEqual(expect.objectContaining({ path: "no-trailing.txt", additions: 2 }));
+    expect(changes).toContainEqual(
+      expect.objectContaining({ path: "no-trailing.txt", additions: 2 }),
+    );
     expect(changes).toContainEqual(expect.objectContaining({ path: "crlf.txt", additions: 2 }));
     expect(changes).toContainEqual(expect.objectContaining({ path: "lone-cr.txt", additions: 2 }));
-    expect(changes).toContainEqual(expect.objectContaining({ path: "tab\tline\n雪.txt", additions: 1 }));
+    expect(changes).toContainEqual(
+      expect.objectContaining({ path: "tab\tline\n雪.txt", additions: 1 }),
+    );
     expect(changes).toContainEqual(expect.objectContaining({ path: "empty.txt", additions: 0 }));
     expect(changes).toContainEqual(expect.objectContaining({ path: "binary.bin", additions: 0 }));
-    expect(changes).toContainEqual(expect.objectContaining({ path: "exact-limit.txt", additions: 1 }));
-    expect(changes).toContainEqual(expect.objectContaining({ path: "over-limit.txt", additions: 0 }));
+    expect(changes).toContainEqual(
+      expect.objectContaining({ path: "exact-limit.txt", additions: 1 }),
+    );
+    expect(changes).toContainEqual(
+      expect.objectContaining({ path: "over-limit.txt", additions: 0 }),
+    );
     expect(changes).toContainEqual(expect.objectContaining({ path: "link.txt", additions: 0 }));
   });
-
-
 
   test("does not block container untracked scanning on a named pipe", async () => {
     const workspace = await createTempDir("ork-container-untracked-fifo-");
@@ -297,22 +290,18 @@ exit 1
     ]);
   });
 
-
-
   test("stops line-counting container files after the configured scan cap", async () => {
     const workspace = await createTempDir("ork-container-untracked-cap-");
-    await Promise.all(["one.txt", "two.txt", "three.txt"].map((filePath) =>
-      fs.writeFile(path.join(workspace, filePath), "one\ntwo\n")
-    ));
-    const result = spawnSync(
-      "node",
-      ["-e", CONTAINER_UNTRACKED_STATS_SCANNER, "--", "1024", "2"],
-      {
-        cwd: workspace,
-        input: Buffer.from("?? one.txt\0?? two.txt\0?? three.txt\0"),
-        encoding: "utf8",
-      },
+    await Promise.all(
+      ["one.txt", "two.txt", "three.txt"].map((filePath) =>
+        fs.writeFile(path.join(workspace, filePath), "one\ntwo\n"),
+      ),
     );
+    const result = spawnSync("node", ["-e", CONTAINER_UNTRACKED_STATS_SCANNER, "--", "1024", "2"], {
+      cwd: workspace,
+      input: Buffer.from("?? one.txt\0?? two.txt\0?? three.txt\0"),
+      encoding: "utf8",
+    });
 
     expect(result.status).toBe(0);
     expect(commandTesting.parseContainerUntrackedStats(result.stdout)).toEqual([
@@ -322,35 +311,29 @@ exit 1
     ]);
   });
 
-
-
   test("rejects every malformed Git tuple shape the framing can produce", () => {
     for (const [nameStatus, numstat] of [
-      ["\0file.txt\0", ""],                          // name-status: empty status
-      ["M\0\0", ""],                                 // name-status: empty path
-      ["R100\0\0new.txt\0", ""],                     // name-status: empty rename source
-      ["M\0file.txt\0", "10\0"],                     // numstat: header with no tab
-      ["M\0file.txt\0", "10\t0\0"],                  // numstat: header with one tab
-      ["M\0file.txt\0", "\t0\tfile.txt\0"],          // numstat: leading tab, no additions
-      ["M\0file.txt\0", "1\t0\t\0\0\0"],             // numstat: rename record, empty result path
+      ["\0file.txt\0", ""], // name-status: empty status
+      ["M\0\0", ""], // name-status: empty path
+      ["R100\0\0new.txt\0", ""], // name-status: empty rename source
+      ["M\0file.txt\0", "10\0"], // numstat: header with no tab
+      ["M\0file.txt\0", "10\t0\0"], // numstat: header with one tab
+      ["M\0file.txt\0", "\t0\tfile.txt\0"], // numstat: leading tab, no additions
+      ["M\0file.txt\0", "1\t0\t\0\0\0"], // numstat: rename record, empty result path
     ]) {
       expect(() => commandTesting.parseGitFileChanges(nameStatus, numstat)).toThrow("Malformed");
     }
   });
 
-
-
   test("rejects untracked scanner input that is not NUL-terminated", async () => {
     const workspace = await createTempDir("ork-container-untracked-truncated-");
-    const result = spawnSync(
-      "node",
-      ["-e", CONTAINER_UNTRACKED_STATS_SCANNER, "--", "1024"],
-      { cwd: workspace, input: Buffer.from("?? truncated.txt"), encoding: "utf8" },
-    );
+    const result = spawnSync("node", ["-e", CONTAINER_UNTRACKED_STATS_SCANNER, "--", "1024"], {
+      cwd: workspace,
+      input: Buffer.from("?? truncated.txt"),
+      encoding: "utf8",
+    });
     expect(result.status).toBe(2);
   });
-
-
 
   test("counts only untracked porcelain records, skipping tracked and rename fields", async () => {
     const workspace = await createTempDir("ork-container-untracked-skip-");
@@ -366,77 +349,88 @@ exit 1
       "?? untracked.txt\0",
       "?? a-directory\0",
     ].join("");
-    const result = spawnSync(
-      "node",
-      ["-e", CONTAINER_UNTRACKED_STATS_SCANNER, "--", "1024"],
-      { cwd: workspace, input: Buffer.from(status), encoding: "utf8" },
-    );
+    const result = spawnSync("node", ["-e", CONTAINER_UNTRACKED_STATS_SCANNER, "--", "1024"], {
+      cwd: workspace,
+      input: Buffer.from(status),
+      encoding: "utf8",
+    });
     expect(result.status).toBe(0);
 
     const changes = commandTesting.parseContainerUntrackedStats(result.stdout);
     expect(changes.map((change) => change.path)).toEqual(["untracked.txt", "a-directory"]);
-    expect(changes).toContainEqual(expect.objectContaining({ path: "untracked.txt", additions: 1 }));
+    expect(changes).toContainEqual(
+      expect.objectContaining({ path: "untracked.txt", additions: 1 }),
+    );
     // A directory is opened successfully on both Linux and macOS, so the guard that
     // rejects it is the fstat check rather than the open itself.
     expect(changes).toContainEqual(expect.objectContaining({ path: "a-directory", additions: 0 }));
   });
 
+  test(
+    "refuses to establish a baseline without a usable target",
+    async () => {
+      const local = createEnvironment({
+        id: "env-baseline-no-worktree",
+        environmentType: "local",
+        worktreePath: undefined,
+      });
+      await expect(
+        commandTesting.establishCreatedFromCommit(local, createContext(local).context),
+      ).rejects.toThrow("Local environment worktree is not available");
 
+      const noContainer = createEnvironment({
+        id: "env-baseline-no-container",
+        environmentType: "containerized",
+        worktreePath: undefined,
+        containerId: null,
+      });
+      await expect(
+        commandTesting.establishCreatedFromCommit(noContainer, createContext(noContainer).context),
+      ).rejects.toThrow("Environment has no container");
 
-  test("refuses to establish a baseline without a usable target", async () => {
-    const local = createEnvironment({
-      id: "env-baseline-no-worktree",
-      environmentType: "local",
-      worktreePath: undefined,
-    });
-    await expect(commandTesting.establishCreatedFromCommit(local, createContext(local).context))
-      .rejects.toThrow("Local environment worktree is not available");
-
-    const noContainer = createEnvironment({
-      id: "env-baseline-no-container",
-      environmentType: "containerized",
-      worktreePath: undefined,
-      containerId: null,
-    });
-    await expect(commandTesting.establishCreatedFromCommit(noContainer, createContext(noContainer).context))
-      .rejects.toThrow("Environment has no container");
-
-    const stopped = createEnvironment({
-      id: "env-baseline-stopped-container",
-      environmentType: "containerized",
-      worktreePath: undefined,
-      containerId: "container-1",
-      status: "stopped",
-    });
-    await withFakeDocker(`#!/bin/sh
+      const stopped = createEnvironment({
+        id: "env-baseline-stopped-container",
+        environmentType: "containerized",
+        worktreePath: undefined,
+        containerId: "container-1",
+        status: "stopped",
+      });
+      await withFakeDocker(
+        `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "inspect" ]; then
   printf 'exited\\n'
   exit 0
 fi
 exit 0
-`, async (logs) => {
-      await expect(commandTesting.establishCreatedFromCommit(stopped, createContext(stopped).context))
-        .rejects.toThrow("Container is not running");
-      const dockerLog = await fs.readFile(logs.all, "utf8");
-      expect(dockerLog).not.toContain("--prepare-only");
-    });
-  }, ASYNC_TEST_BUDGET_MS);
+`,
+        async (logs) => {
+          await expect(
+            commandTesting.establishCreatedFromCommit(stopped, createContext(stopped).context),
+          ).rejects.toThrow("Container is not running");
+          const dockerLog = await fs.readFile(logs.all, "utf8");
+          expect(dockerLog).not.toContain("--prepare-only");
+        },
+      );
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
+  test(
+    "captures the baseline once for callers that race outside the setup path",
+    async () => {
+      const environment = createEnvironment({
+        id: "env-baseline-dedup",
+        environmentType: "containerized",
+        setupScriptsComplete: false,
+        worktreePath: undefined,
+        containerId: "container-1",
+        status: "running",
+      });
+      const { context } = createContext(environment);
 
-
-  test("captures the baseline once for callers that race outside the setup path", async () => {
-    const environment = createEnvironment({
-      id: "env-baseline-dedup",
-      environmentType: "containerized",
-      setupScriptsComplete: false,
-      worktreePath: undefined,
-      containerId: "container-1",
-      status: "running",
-    });
-    const { context } = createContext(environment);
-
-    await withFakeDocker(`#!/bin/sh
+      await withFakeDocker(
+        `#!/bin/sh
 if [ "$1" = "inspect" ]; then
   printf 'running\\n'
   exit 0
@@ -459,22 +453,26 @@ if [ "$1" = "exec" ]; then
   exit 0
 fi
 exit 0
-`, async (logs) => {
-      const [first, second] = await Promise.all([
-        commandTesting.establishCreatedFromCommit(environment, context),
-        commandTesting.establishCreatedFromCommit(environment, context),
-      ]);
+`,
+        async (logs) => {
+          const [first, second] = await Promise.all([
+            commandTesting.establishCreatedFromCommit(environment, context),
+            commandTesting.establishCreatedFromCommit(environment, context),
+          ]);
 
-      expect(first.createdFromCommit).toBe("5555555555555555555555555555555555555555");
-      // Both callers observe the identical resolution, which is only possible if
-      // the second joined the first task rather than starting its own.
-      expect(second).toBe(first);
-      const execLog = await fs.readFile(logs.exec, "utf8");
-      expect(execLog.split("\n").filter((line) => line.includes("--prepare-only"))).toHaveLength(1);
-    });
-  }, ASYNC_TEST_BUDGET_MS);
-
-
+          expect(first.createdFromCommit).toBe("5555555555555555555555555555555555555555");
+          // Both callers observe the identical resolution, which is only possible if
+          // the second joined the first task rather than starting its own.
+          expect(second).toBe(first);
+          const execLog = await fs.readFile(logs.exec, "utf8");
+          expect(
+            execLog.split("\n").filter((line) => line.includes("--prepare-only")),
+          ).toHaveLength(1);
+        },
+      );
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
   test("refuses to complete setup without a captured creation commit", async () => {
     const environment = createEnvironment({
@@ -483,13 +481,12 @@ exit 0
     });
     const { context, emitted } = createContext(environment);
 
-    await expect(commandTesting.completeEnvironmentSetup(environment, context))
-      .rejects.toThrow("Environment creation commit was not captured before setup completed");
+    await expect(commandTesting.completeEnvironmentSetup(environment, context)).rejects.toThrow(
+      "Environment creation commit was not captured before setup completed",
+    );
     expect(environment.setupScriptsComplete).toBe(false);
     expect(emitted).toEqual([]);
   });
-
-
 
   test("decodes sections whatever whitespace the container's base64 emits", () => {
     const nameStatus = "M\0keep.txt\0";
@@ -516,52 +513,58 @@ exit 0
       ]);
     }
     // Stripping whitespace must not make genuinely invalid payloads decodable.
-    expect(() => commandTesting.parseContainerGitStatusResponse(
-      framedContainerGitStatus().replace(
-        "ORKESTRATOR_NUMSTAT",
-        "%%%ORKESTRATOR_NUMSTAT",
+    expect(() =>
+      commandTesting.parseContainerGitStatusResponse(
+        framedContainerGitStatus().replace("ORKESTRATOR_NUMSTAT", "%%%ORKESTRATOR_NUMSTAT"),
+        true,
       ),
-      true,
-    )).toThrow("invalid base64");
+    ).toThrow("invalid base64");
   });
 
+  test(
+    "collects real git status through the composed container script",
+    async () => {
+      const repo = await createTempDir("ork-container-script-repo-");
+      await runGit(repo, ["init", "-b", "main", "."]);
+      await fs.writeFile(path.join(repo, "keep.txt"), "a\nb\nc\n");
+      await fs.writeFile(path.join(repo, "old name.txt"), "x\ny\n");
+      await runGit(repo, ["add", "-A"]);
+      await runGit(repo, ["commit", "-m", "base"]);
+      await runGit(repo, ["checkout", "-b", "work"]);
+      await runGit(repo, ["mv", "old name.txt", "new\tname.txt"]);
+      await fs.writeFile(path.join(repo, "keep.txt"), "a\nb\nc\nd\n");
+      await runGit(repo, ["add", "-A"]);
+      await runGit(repo, ["commit", "-m", "work"]);
+      await fs.writeFile(path.join(repo, "untracked.txt"), "1\n2\n3");
 
+      // Runs the composed program through a real shell, so `set -e -o pipefail`, the
+      // base64 framing and the piped node scanner are exercised rather than asserted
+      // as text against a fake `docker` that never interprets them.
+      const script = commandTesting.buildContainerGitStatusScript("main", true);
+      await withGnuBase64Shim(async (env) => {
+        const result = spawnSync("bash", ["-c", script], { cwd: repo, encoding: "utf8", env });
+        expect(result.stderr).toBe("");
+        expect(result.status).toBe(0);
 
-  test("collects real git status through the composed container script", async () => {
-    const repo = await createTempDir("ork-container-script-repo-");
-    await runGit(repo, ["init", "-b", "main", "."]);
-    await fs.writeFile(path.join(repo, "keep.txt"), "a\nb\nc\n");
-    await fs.writeFile(path.join(repo, "old name.txt"), "x\ny\n");
-    await runGit(repo, ["add", "-A"]);
-    await runGit(repo, ["commit", "-m", "base"]);
-    await runGit(repo, ["checkout", "-b", "work"]);
-    await runGit(repo, ["mv", "old name.txt", "new\tname.txt"]);
-    await fs.writeFile(path.join(repo, "keep.txt"), "a\nb\nc\nd\n");
-    await runGit(repo, ["add", "-A"]);
-    await runGit(repo, ["commit", "-m", "work"]);
-    await fs.writeFile(path.join(repo, "untracked.txt"), "1\n2\n3");
-
-    // Runs the composed program through a real shell, so `set -e -o pipefail`, the
-    // base64 framing and the piped node scanner are exercised rather than asserted
-    // as text against a fake `docker` that never interprets them.
-    const script = commandTesting.buildContainerGitStatusScript("main", true);
-    await withGnuBase64Shim(async (env) => {
-      const result = spawnSync("bash", ["-c", script], { cwd: repo, encoding: "utf8", env });
-      expect(result.stderr).toBe("");
-      expect(result.status).toBe(0);
-
-      const changes = commandTesting.parseContainerGitStatusResponse(result.stdout, true);
-      expect(changes).toContainEqual(expect.objectContaining({ path: "keep.txt", status: "M", additions: 1 }));
-      expect(changes).toContainEqual(expect.objectContaining({
-        path: "new\tname.txt",
-        originalPath: "old name.txt",
-      }));
-      expect(changes).toContainEqual(expect.objectContaining({
-        path: "untracked.txt",
-        status: "?",
-        additions: 3,
-      }));
-    });
-  }, ASYNC_TEST_BUDGET_MS);
-
+        const changes = commandTesting.parseContainerGitStatusResponse(result.stdout, true);
+        expect(changes).toContainEqual(
+          expect.objectContaining({ path: "keep.txt", status: "M", additions: 1 }),
+        );
+        expect(changes).toContainEqual(
+          expect.objectContaining({
+            path: "new\tname.txt",
+            originalPath: "old name.txt",
+          }),
+        );
+        expect(changes).toContainEqual(
+          expect.objectContaining({
+            path: "untracked.txt",
+            status: "?",
+            additions: 3,
+          }),
+        );
+      });
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 });

@@ -3,10 +3,8 @@ import { invoke } from "@/lib/native/backend";
 
 const invokeMock = invoke as ReturnType<typeof mock>;
 
-const {
-  buildInitialPromptWithAttachmentReferences,
-  saveInitialPromptAttachments,
-} = await import("./initial-prompt-attachments");
+const { buildInitialPromptWithAttachmentReferences, saveInitialPromptAttachments } =
+  await import("./initial-prompt-attachments");
 
 describe("saveInitialPromptAttachments", () => {
   beforeEach(() => {
@@ -31,11 +29,13 @@ describe("saveInitialPromptAttachments", () => {
 
     expect(invokeMock).toHaveBeenCalledWith("write_initial_prompt_attachments", {
       environmentId: "env-1",
-      attachments: [{
-        id: "img-1",
-        name: "screen shot.png",
-        base64Data: "QUJD",
-      }],
+      attachments: [
+        {
+          id: "img-1",
+          name: "screen shot.png",
+          base64Data: "QUJD",
+        },
+      ],
     });
     expect(saved).toEqual([
       {
@@ -46,8 +46,9 @@ describe("saveInitialPromptAttachments", () => {
   });
 
   test("does not call the backend for an empty batch", async () => {
-    await expect(saveInitialPromptAttachments({ environmentId: "env-1", attachments: [] }))
-      .resolves.toEqual([]);
+    await expect(
+      saveInitialPromptAttachments({ environmentId: "env-1", attachments: [] }),
+    ).resolves.toEqual([]);
     expect(invokeMock).not.toHaveBeenCalled();
   });
 });
@@ -60,7 +61,9 @@ describe("buildInitialPromptWithAttachmentReferences", () => {
 
     expect(prompt).toContain("Fix the UI");
     expect(prompt).toContain("Attached images have been saved in the workspace");
-    expect(prompt).toContain("- screenshot.png: /workspace/.orkestrator/initial-prompt/screenshot.png");
+    expect(prompt).toContain(
+      "- screenshot.png: /workspace/.orkestrator/initial-prompt/screenshot.png",
+    );
   });
 
   test("uses attachment references as the whole prompt when text is blank", () => {

@@ -1,25 +1,40 @@
-import { path, createHash, resolveComparisonRef, DiffStatsService, GitFetchScheduler, runCommand, spawnCommand, terminateProcessTree } from "./commands-dependencies.js";
-import type { ChildProcessWithoutNullStreams, ClientEnvironment, Environment, PtyProcess } from "./commands-dependencies.js";
+import {
+  path,
+  createHash,
+  resolveComparisonRef,
+  DiffStatsService,
+  GitFetchScheduler,
+  runCommand,
+  spawnCommand,
+  terminateProcessTree,
+} from "./commands-dependencies.js";
+import type {
+  ChildProcessWithoutNullStreams,
+  ClientEnvironment,
+  Environment,
+  PtyProcess,
+} from "./commands-dependencies.js";
 import type { CommandContext, BackendEmit } from "./commands-context.js";
 
-export type TerminalSessionConfig =
-  ({
-    kind: "container";
-    containerId: string;
-    cols: number;
-    rows: number;
-    user?: string;
-    environmentId?: string;
-    activityEnvironmentId?: string;
-    trackEnvironmentActivity?: boolean;
-  }
+export type TerminalSessionConfig = (
   | {
-    kind: "local";
-    environmentId: string;
-    cols: number;
-    rows: number;
-    trackEnvironmentActivity?: boolean;
-  }) & { bootstrapped?: boolean };
+      kind: "container";
+      containerId: string;
+      cols: number;
+      rows: number;
+      user?: string;
+      environmentId?: string;
+      activityEnvironmentId?: string;
+      trackEnvironmentActivity?: boolean;
+    }
+  | {
+      kind: "local";
+      environmentId: string;
+      cols: number;
+      rows: number;
+      trackEnvironmentActivity?: boolean;
+    }
+) & { bootstrapped?: boolean };
 
 export const terminalProcesses = new Map<string, PtyProcess>();
 export const terminalSessionConfigs = new Map<string, TerminalSessionConfig>();
@@ -37,10 +52,7 @@ export type TerminalOutputDelta = { revision: number; text: string };
 export const terminalOutputDeltas = new Map<string, TerminalOutputDelta[]>();
 export const terminalOutputDeltaBytes = new Map<string, number>();
 export const terminalOutputTruncated = new Set<string>();
-export const terminalOutputRetentionTimers = new Map<
-  string,
-  ReturnType<typeof setTimeout>
->();
+export const terminalOutputRetentionTimers = new Map<string, ReturnType<typeof setTimeout>>();
 export const terminalSessionIdsByStableKey = new Map<string, string>();
 export const terminalStableKeysBySessionId = new Map<string, string>();
 export const orphanedTerminalMissingSince = new Map<string, number>();
@@ -78,10 +90,7 @@ export type OpenCodeAgentToolsConfiguration = {
   task: Promise<void>;
 };
 /** Backend-owned reconciliation; native tabs must not be its lifecycle owner. */
-export const openCodeAgentToolsConfigurations = new Map<
-  string,
-  OpenCodeAgentToolsConfiguration
->();
+export const openCodeAgentToolsConfigurations = new Map<string, OpenCodeAgentToolsConfiguration>();
 /**
  * What reconciliation last established about a server generation, and when.
  *
@@ -96,10 +105,7 @@ export type OpenCodeAgentToolsOutcome = {
   /** `Date.now()` when this outcome was recorded. */
   at: number;
 };
-export const configuredOpenCodeAgentTools = new Map<
-  string,
-  OpenCodeAgentToolsOutcome
->();
+export const configuredOpenCodeAgentTools = new Map<string, OpenCodeAgentToolsOutcome>();
 /** Shape of a base64url-encoded 32-byte bridge token persisted in the container. */
 export const BRIDGE_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 export const localServerEnvironmentOperations = new Map<string, Promise<void>>();
@@ -117,7 +123,13 @@ export function retryableBridgeStartupError(
 ): Error & { retryable: true; retryAfterMs: number } {
   return Object.assign(new Error(message), { retryable: true as const, retryAfterMs });
 }
-export const LOCAL_SERVER_KINDS: readonly LocalServerKind[] = ["opencode", "claude", "codex", "cursor", "grok"];
+export const LOCAL_SERVER_KINDS: readonly LocalServerKind[] = [
+  "opencode",
+  "claude",
+  "codex",
+  "cursor",
+  "grok",
+];
 // Codex bridge shutdown can spend five seconds draining app-server before its
 // one-second hard-kill fallback. Give that path time to reap the MCP process
 // group before escalating the bridge itself.
@@ -162,8 +174,10 @@ export function setSpawnLocalServerCommandImplementation(
 }
 export const CLAUDE_MODEL_CATALOG_TTL_MS = 5 * 60_000;
 export const CLAUDE_MODEL_CATALOG_REQUEST_TIMEOUT_MS = 30_000;
-export const CONTAINER_WORKSPACE_SETUP_COMMAND = "if command -v flock >/dev/null 2>&1; then flock /tmp/orkestrator-workspace-setup.lock -c '/usr/local/bin/workspace-setup.sh'; else /usr/local/bin/workspace-setup.sh; fi";
-export const CONTAINER_WORKSPACE_PREPARE_COMMAND = "if command -v flock >/dev/null 2>&1; then flock /tmp/orkestrator-workspace-setup.lock -c '/usr/local/bin/workspace-setup.sh --prepare-only'; else /usr/local/bin/workspace-setup.sh --prepare-only; fi";
+export const CONTAINER_WORKSPACE_SETUP_COMMAND =
+  "if command -v flock >/dev/null 2>&1; then flock /tmp/orkestrator-workspace-setup.lock -c '/usr/local/bin/workspace-setup.sh'; else /usr/local/bin/workspace-setup.sh; fi";
+export const CONTAINER_WORKSPACE_PREPARE_COMMAND =
+  "if command -v flock >/dev/null 2>&1; then flock /tmp/orkestrator-workspace-setup.lock -c '/usr/local/bin/workspace-setup.sh --prepare-only'; else /usr/local/bin/workspace-setup.sh --prepare-only; fi";
 // The preparation phase is a contract with the script baked into the container
 // image (docker/Dockerfile COPYs it to /usr/local/bin), and the image tag is
 // unversioned, so an upgraded backend routinely meets an older script. That
@@ -172,7 +186,8 @@ export const CONTAINER_WORKSPACE_PREPARE_COMMAND = "if command -v flock >/dev/nu
 // and exits 0, so the commit we would then record is not a pre-setup baseline at
 // all. Probe for the capability by *reading* the script before executing it: any
 // probe that runs it has already done the damage it was meant to prevent.
-export const CONTAINER_WORKSPACE_SETUP_CAPABILITY_MARKER = "ORKESTRATOR_SETUP_CAPABILITIES=prepare-only";
+export const CONTAINER_WORKSPACE_SETUP_CAPABILITY_MARKER =
+  "ORKESTRATOR_SETUP_CAPABILITIES=prepare-only";
 export const CONTAINER_WORKSPACE_PREPARE_SUPPORTED_SENTINEL = `${String.fromCharCode(0x1e)}ORKESTRATOR_PREPARE_SUPPORTED${String.fromCharCode(0x1f)}`;
 export const CONTAINER_WORKSPACE_PREPARE_OK_SENTINEL = `${String.fromCharCode(0x1e)}ORKESTRATOR_PREPARE_OK${String.fromCharCode(0x1f)}`;
 export const CONTAINER_INTERACTIVE_SHELL_COMMAND = [
@@ -190,9 +205,7 @@ export const CONTAINER_CURSOR_API_KEY_FINGERPRINT_FILE =
  * exists: `workspace-setup.sh` only creates it past the `--prepare-only` exit
  * and only when it runs as `node`, so every writer has to create it itself.
  */
-export const CONTAINER_CURSOR_CREDENTIAL_DIR = path.posix.dirname(
-  CONTAINER_CURSOR_API_KEY_FILE,
-);
+export const CONTAINER_CURSOR_CREDENTIAL_DIR = path.posix.dirname(CONTAINER_CURSOR_API_KEY_FILE);
 export const HOST_CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials";
 export const AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV =
   "ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR";
@@ -203,7 +216,8 @@ export const CLAUDE_GITHUB_ENV_FINGERPRINT_FILE =
 export const CLAUDE_GITHUB_ENV_FINGERPRINT = createHash("sha256")
   .update("managed-github-query-environment-v1")
   .digest("hex");
-export const OPENCODE_GITHUB_ENV_PLUGIN_PATH = "/home/node/.config/opencode/plugins/orkestrator-github-env.js";
+export const OPENCODE_GITHUB_ENV_PLUGIN_PATH =
+  "/home/node/.config/opencode/plugins/orkestrator-github-env.js";
 export const OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT_FILE =
   "/tmp/orkestrator-ai/opencode-github-env-plugin-fingerprint";
 
@@ -231,8 +245,7 @@ export const OrkestratorGitHubEnvironmentPlugin = async () => ({
 `;
 }
 
-export const OPENCODE_GITHUB_ENV_PLUGIN_SOURCE =
-  buildOpenCodeGitHubEnvironmentPluginSource();
+export const OPENCODE_GITHUB_ENV_PLUGIN_SOURCE = buildOpenCodeGitHubEnvironmentPluginSource();
 export const OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT = createHash("sha256")
   .update(OPENCODE_GITHUB_ENV_PLUGIN_SOURCE)
   .digest("hex");
@@ -274,14 +287,13 @@ export function setTerminalOutputRetentionMs(retentionMs: number): void {
 /** Bound worst-case retained output to 32 × 500 KB. */
 export const MAX_RETAINED_TERMINAL_OUTPUT_BUFFERS = 32;
 export const TERMINAL_ACTIVITY_SETTLE_MS = 750;
-export function buildContainerSafeBase64Reader(
-  testMutation?: "append" | "replace",
-): string {
-  const afterInitialValidationForTest = testMutation === "append"
-    ? 'fs.appendFileSync(target, "x");'
-    : testMutation === "replace"
-      ? 'fs.renameSync(target, target + ".old"); fs.writeFileSync(target, "replacement");'
-      : "";
+export function buildContainerSafeBase64Reader(testMutation?: "append" | "replace"): string {
+  const afterInitialValidationForTest =
+    testMutation === "append"
+      ? 'fs.appendFileSync(target, "x");'
+      : testMutation === "replace"
+        ? 'fs.renameSync(target, target + ".old"); fs.writeFileSync(target, "replacement");'
+        : "";
   return `
 const fs = require("node:fs");
 const path = require("node:path");
@@ -452,10 +464,7 @@ export type EnvironmentSetupStartResult = {
   environment: Environment;
 };
 
-export type ClientEnvironmentSetupStartResult = Omit<
-  EnvironmentSetupStartResult,
-  "environment"
-> & {
+export type ClientEnvironmentSetupStartResult = Omit<EnvironmentSetupStartResult, "environment"> & {
   environment: ClientEnvironment;
 };
 
@@ -465,7 +474,10 @@ export const environmentSetupStartTasks = new Map<string, Promise<EnvironmentSet
 export const environmentStartTasks = new Map<string, Promise<EnvironmentSetupStartResult>>();
 export const environmentLifecycleOperations = new Map<string, Promise<void>>();
 export const environmentBaselineTasks = new Map<string, Promise<Environment>>();
-export const WORKSPACE_ARTIFACT_GIT_EXCLUDE_PATTERNS = [".orkestrator", ".claude/settings.local.json"] as const;
+export const WORKSPACE_ARTIFACT_GIT_EXCLUDE_PATTERNS = [
+  ".orkestrator",
+  ".claude/settings.local.json",
+] as const;
 
 /**
  * Shared by every worktree of every repository, so N environments of one project
@@ -500,13 +512,12 @@ export const diffStatsService = new DiffStatsService({
     // Load the scanners only when a scan runs. `commands-files` consumes shared
     // runtime constants from this module, so a static import here creates an
     // initialization cycle before those constants have been assigned.
-    const {
-      getContainerGitStatusDetailed,
-      getLocalGitStatusDetailed,
-    } = await import("./commands-files.js");
-    const detailed = target.kind === "local"
-      ? await getLocalGitStatusDetailed(target.worktreePath!, target.comparisonRef, true)
-      : await getContainerGitStatusDetailed(target.containerId!, target.comparisonRef, true);
+    const { getContainerGitStatusDetailed, getLocalGitStatusDetailed } =
+      await import("./commands-files.js");
+    const detailed =
+      target.kind === "local"
+        ? await getLocalGitStatusDetailed(target.worktreePath!, target.comparisonRef, true)
+        : await getContainerGitStatusDetailed(target.containerId!, target.comparisonRef, true);
     return {
       stats: {
         additions: detailed.changes.reduce((sum, change) => sum + change.additions, 0),
@@ -558,13 +569,24 @@ export async function syncDiffStatsTracking(context: CommandContext): Promise<vo
           environment.createdFromCommit,
           config.repositories?.[environment.projectId],
         );
-        const target = environment.environmentType === "local"
-          ? (environment.worktreePath
-            ? { environmentId: environment.id, kind: "local" as const, worktreePath: environment.worktreePath, comparisonRef }
-            : undefined)
-          : (environment.status === "running" && environment.containerId
-            ? { environmentId: environment.id, kind: "container" as const, containerId: environment.containerId, comparisonRef }
-            : undefined);
+        const target =
+          environment.environmentType === "local"
+            ? environment.worktreePath
+              ? {
+                  environmentId: environment.id,
+                  kind: "local" as const,
+                  worktreePath: environment.worktreePath,
+                  comparisonRef,
+                }
+              : undefined
+            : environment.status === "running" && environment.containerId
+              ? {
+                  environmentId: environment.id,
+                  kind: "container" as const,
+                  containerId: environment.containerId,
+                  comparisonRef,
+                }
+              : undefined;
 
         // Readable now: scan it. Not readable but still an environment: hold the
         // last counts and stop scanning, rather than discarding a reading that

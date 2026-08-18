@@ -1,10 +1,7 @@
 import { useState } from "react";
 import { AlertTriangle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  forceResolveSetupRuntime,
-  retrySetupRuntime,
-} from "@/lib/setup-commands";
+import { forceResolveSetupRuntime, retrySetupRuntime } from "@/lib/setup-commands";
 import type { Environment } from "@/types";
 
 interface SetupPendingOverlayProps {
@@ -63,9 +60,7 @@ export function SetupPendingOverlay({
         <Loader2 className="h-8 w-8 animate-spin text-yellow-400" />
       )}
       <p className="text-sm">
-        {failed
-          ? "Environment setup failed."
-          : "Waiting for setup scripts to complete..."}
+        {failed ? "Environment setup failed." : "Waiting for setup scripts to complete..."}
       </p>
       <p className="text-xs">{subtext}</p>
       {failed && !confirming && (
@@ -76,17 +71,15 @@ export function SetupPendingOverlay({
           disabled={operation !== null}
           onClick={() => void runOperation("retry")}
         >
-          {operation === "retry" ? (
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-          ) : null}
+          {operation === "retry" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
           {operation === "retry" ? "Retrying setup..." : "Retry setup"}
         </Button>
       )}
       {confirming ? (
         <div className="mt-2 flex flex-col items-center gap-2">
           <p className="text-xs max-w-xs text-center">
-            Skipping may connect the agent before setup finishes. Only use this
-            if setup detection appears to be stuck.
+            Skipping may connect the agent before setup finishes. Only use this if setup detection
+            appears to be stuck.
           </p>
           <div className="flex gap-2">
             <Button
@@ -105,9 +98,7 @@ export function SetupPendingOverlay({
               disabled={operation !== null}
               onClick={() => void runOperation("override")}
             >
-              {operation === "override" ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : null}
+              {operation === "override" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
               {operation === "override" ? "Skipping setup..." : "Skip anyway"}
             </Button>
           </div>

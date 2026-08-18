@@ -64,10 +64,9 @@ export function createClient(
  */
 export async function checkHealth(baseUrl: string, authToken?: string): Promise<boolean> {
   try {
-    const response = await fetch(
-      `${resolveGatewayLoopbackBaseUrl(baseUrl)}/global/health`,
-      { headers: openCodeAuthHeaders(authToken) },
-    );
+    const response = await fetch(`${resolveGatewayLoopbackBaseUrl(baseUrl)}/global/health`, {
+      headers: openCodeAuthHeaders(authToken),
+    });
     return response.ok;
   } catch {
     return false;
@@ -166,7 +165,9 @@ export async function getModels(client: OpencodeClient): Promise<OpenCodeModel[]
 /**
  * Get available models/providers plus server defaults from model.json
  */
-export async function getModelsWithDefaults(client: OpencodeClient): Promise<OpenCodeModelsResponse> {
+export async function getModelsWithDefaults(
+  client: OpencodeClient,
+): Promise<OpenCodeModelsResponse> {
   try {
     // Prefer provider.list() because it exposes the full provider/model catalog
     // used by the OpenCode TUI. Fall back to config.providers() for older servers.
@@ -176,7 +177,10 @@ export async function getModelsWithDefaults(client: OpencodeClient): Promise<Ope
       const providerResponse = await client.provider.list();
       responseData = providerResponse.data;
     } catch (err) {
-      console.debug("[opencode-client] provider.list() unavailable, falling back to config.providers()", err);
+      console.debug(
+        "[opencode-client] provider.list() unavailable, falling back to config.providers()",
+        err,
+      );
       const configResponse = await client.config.providers();
       responseData = configResponse.data;
     }
@@ -220,9 +224,10 @@ export async function getModelsWithDefaults(client: OpencodeClient): Promise<Ope
 
           // Variants are provider/model specific (e.g. low/high/xhigh)
           // Response shape: variants: { [variantName]: { disabled?: boolean, ... } }
-          const variantEntries = m.variants && typeof m.variants === "object"
-            ? Object.entries(m.variants as Record<string, { disabled?: boolean }>)
-            : [];
+          const variantEntries =
+            m.variants && typeof m.variants === "object"
+              ? Object.entries(m.variants as Record<string, { disabled?: boolean }>)
+              : [];
 
           const variants = variantEntries
             .filter(([, variantConfig]) => {
@@ -243,10 +248,7 @@ export async function getModelsWithDefaults(client: OpencodeClient): Promise<Ope
 
           models.push({
             id: `${provider.id}/${modelId}`,
-            name: openCodeModelDisplayLabel(
-              `${provider.id}/${modelId}`,
-              modelName || modelId,
-            ),
+            name: openCodeModelDisplayLabel(`${provider.id}/${modelId}`, modelName || modelId),
             provider: provider.id,
             variants: variants.length > 0 ? variants : undefined,
             inputCost: typeof inputCost === "number" ? inputCost : undefined,
@@ -254,9 +256,9 @@ export async function getModelsWithDefaults(client: OpencodeClient): Promise<Ope
             // A non-positive window is not a window. Keeping a `0` here would
             // reach `summarizeOpenCodeUsage` and produce `0/0` -> `NaN%`.
             contextWindow:
-              typeof contextWindow === "number"
-              && Number.isFinite(contextWindow)
-              && contextWindow > 0
+              typeof contextWindow === "number" &&
+              Number.isFinite(contextWindow) &&
+              contextWindow > 0
                 ? contextWindow
                 : undefined,
             supportsImageInput,
@@ -266,12 +268,13 @@ export async function getModelsWithDefaults(client: OpencodeClient): Promise<Ope
     }
 
     const catalog = responseData as ProviderCatalogLike;
-    const defaults = catalog.default && typeof catalog.default === "object"
-      ? {
-          modelId: resolveDefaultModelId(catalog.default),
-          variant: resolveDefaultVariant(catalog.default),
-        }
-      : {};
+    const defaults =
+      catalog.default && typeof catalog.default === "object"
+        ? {
+            modelId: resolveDefaultModelId(catalog.default),
+            variant: resolveDefaultVariant(catalog.default),
+          }
+        : {};
 
     return { models, defaults };
   } catch (error) {
@@ -316,9 +319,7 @@ export async function getAvailableSlashCommands(
       });
     }
 
-    const settled = await Promise.allSettled(
-      requests.map((request) => request.promise),
-    );
+    const settled = await Promise.allSettled(requests.map((request) => request.promise));
 
     const responsesBySource = new Map<"global" | "directory", CommandListResponse>();
 
@@ -358,8 +359,7 @@ export async function getAvailableSlashCommands(
 
         const hints = Array.isArray(command.hints)
           ? command.hints.filter(
-              (hint): hint is string =>
-                typeof hint === "string" && hint.trim().length > 0,
+              (hint): hint is string => typeof hint === "string" && hint.trim().length > 0,
             )
           : [];
 
@@ -400,7 +400,7 @@ export async function getAvailableSlashCommands(
  */
 export async function createSession(
   client: OpencodeClient,
-  title?: string
+  title?: string,
 ): Promise<OpenCodeSession> {
   const response = await client.session.create({
     title,
@@ -410,8 +410,7 @@ export async function createSession(
     throw new Error("OpenCode returned an empty session response");
   }
 
-  const createdAt = toIsoTimestamp(response.data.time?.created)
-    ?? new Date().toISOString();
+  const createdAt = toIsoTimestamp(response.data.time?.created) ?? new Date().toISOString();
 
   return {
     id: response.data.id,
@@ -431,18 +430,18 @@ export async function getSessionMessages(
   options: { throwOnError?: boolean; includeSubagents?: boolean } = {},
 ): Promise<OpenCodeMessage[]> {
   try {
-    const response = await client.session.messages({
-      sessionID: sessionId,
-    }, {
-      throwOnError: options.throwOnError,
-    });
+    const response = await client.session.messages(
+      {
+        sessionID: sessionId,
+      },
+      {
+        throwOnError: options.throwOnError,
+      },
+    );
 
     if (!response.data) {
       if (options.throwOnError) {
-        throw openCodeResponseError(
-          "Failed to get OpenCode session messages",
-          response.error,
-        );
+        throw openCodeResponseError("Failed to get OpenCode session messages", response.error);
       }
       return [];
     }
@@ -466,9 +465,7 @@ export async function getSessionMessages(
   } catch (error) {
     console.error("[opencode-client] Failed to get messages:", error);
     if (options.throwOnError) {
-      throw error instanceof Error
-        ? error
-        : new Error("Failed to get OpenCode session messages");
+      throw error instanceof Error ? error : new Error("Failed to get OpenCode session messages");
     }
     return [];
   }
@@ -480,10 +477,7 @@ type OpenCodeChildSession = {
   agent?: string;
 };
 
-type OpenCodeSessionStatusMap = Record<
-  string,
-  { type?: "idle" | "busy" | "retry" }
->;
+type OpenCodeSessionStatusMap = Record<string, { type?: "idle" | "busy" | "retry" }>;
 
 function findUnidentifiedTaskParts(messages: OpenCodeMessage[]): OpenCodeMessagePart[] {
   const result: OpenCodeMessagePart[] = [];
@@ -507,10 +501,7 @@ async function getOpenCodeChildSessions(
       { throwOnError },
     );
     if (!response.data && throwOnError) {
-      throw openCodeResponseError(
-        "Failed to get OpenCode child sessions",
-        response.error,
-      );
+      throw openCodeResponseError("Failed to get OpenCode child sessions", response.error);
     }
     return Array.isArray(response.data) ? response.data : [];
   } catch (error) {
@@ -561,12 +552,14 @@ async function getOpenCodeSessionStatusMap(
   client: OpencodeClient,
   throwOnError = false,
 ): Promise<OpenCodeSessionStatusMap | undefined> {
-  const status = (client.session as unknown as {
-    status?: (
-      parameters?: unknown,
-      options?: { throwOnError?: boolean },
-    ) => Promise<{ data?: OpenCodeSessionStatusMap; error?: unknown }>;
-  }).status;
+  const status = (
+    client.session as unknown as {
+      status?: (
+        parameters?: unknown,
+        options?: { throwOnError?: boolean },
+      ) => Promise<{ data?: OpenCodeSessionStatusMap; error?: unknown }>;
+    }
+  ).status;
   if (typeof status !== "function") return undefined;
   try {
     const response = await status.call(client.session, undefined, { throwOnError });
@@ -580,7 +573,7 @@ async function getOpenCodeSessionStatusMap(
       return undefined;
     }
     return isRecord(response.data) && !Array.isArray(response.data)
-      ? response.data as OpenCodeSessionStatusMap
+      ? (response.data as OpenCodeSessionStatusMap)
       : undefined;
   } catch (error) {
     console.warn("[opencode-client] Failed to get subagent session statuses:", error);
@@ -600,9 +593,9 @@ async function getOpenCodeSessionStatusMap(
 function hasOpenCodeAssistantError(messages: OpenCodeMessage[]): boolean {
   return messages.some(
     (message) =>
-      message.role === "assistant"
-      && message.hasError === true
-      && message.errorName !== OPENCODE_MESSAGE_ABORTED_ERROR,
+      message.role === "assistant" &&
+      message.hasError === true &&
+      message.errorName !== OPENCODE_MESSAGE_ABORTED_ERROR,
   );
 }
 
@@ -632,9 +625,7 @@ async function hydrateOpenCodeSubagentTranscripts(
 
   const resolvedStatusMap =
     statusMap ??
-    (childIds.size > 0
-      ? await getOpenCodeSessionStatusMap(client, throwOnError)
-      : undefined);
+    (childIds.size > 0 ? await getOpenCodeSessionStatusMap(client, throwOnError) : undefined);
 
   const transcripts = await Promise.all(
     Array.from(childIds, async (childSessionId) => {
@@ -656,10 +647,9 @@ async function hydrateOpenCodeSubagentTranscripts(
 
   for (const transcript of transcripts) {
     const childStatus = resolvedStatusMap?.[transcript.childSessionId]?.type;
-    const state =
-      hasOpenCodeAssistantError(transcript.messages)
-        ? "failure"
-        : childStatus === "busy" || childStatus === "retry"
+    const state = hasOpenCodeAssistantError(transcript.messages)
+      ? "failure"
+      : childStatus === "busy" || childStatus === "retry"
         ? "pending"
         : childStatus === "idle"
           ? "success"
@@ -695,10 +685,7 @@ export async function lookupSessionStatus(
     if (!response.data) {
       return {
         kind: "unavailable",
-        error: openCodeResponseError(
-          "Failed to get OpenCode session status",
-          response.error,
-        ),
+        error: openCodeResponseError("Failed to get OpenCode session status", response.error),
       };
     }
 
@@ -706,11 +693,7 @@ export async function lookupSessionStatus(
     if (status === undefined) {
       return { kind: "missing" };
     }
-    if (
-      status?.type !== "idle" &&
-      status?.type !== "busy" &&
-      status?.type !== "retry"
-    ) {
+    if (status?.type !== "idle" && status?.type !== "busy" && status?.type !== "retry") {
       return {
         kind: "unavailable",
         error: new Error("OpenCode session status response was malformed"),
@@ -720,9 +703,7 @@ export async function lookupSessionStatus(
   } catch (error) {
     return {
       kind: "unavailable",
-      error: error instanceof Error
-        ? error
-        : new Error("Failed to get OpenCode session status"),
+      error: error instanceof Error ? error : new Error("Failed to get OpenCode session status"),
     };
   }
 }
@@ -746,4 +727,3 @@ export async function getSessionStatus(
 }
 
 /** Attachment input for sendPrompt */
-

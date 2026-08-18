@@ -7,9 +7,7 @@ import {
   type ClaudeOptions,
 } from "../../apps/web/src/components/environments/CreateEnvironmentDialog";
 import { BrowserTab } from "../../apps/web/src/components/browser/BrowserTab";
-import {
-  NativeComposeBar,
-} from "../../apps/web/src/components/chat/NativeComposeBar";
+import { NativeComposeBar } from "../../apps/web/src/components/chat/NativeComposeBar";
 import { QueuedPromptsDialog } from "../../apps/web/src/components/chat/QueuedPromptsDialog";
 import { AgentThinkingIndicator } from "../../apps/web/src/components/chat/AgentThinkingIndicator";
 import { NativeChatShell } from "../../apps/web/src/components/chat/NativeChatShell";
@@ -68,9 +66,7 @@ function CreateEnvironmentFixture() {
         onCreate={async (options) => {
           window.lastCreateEnvironmentOptions = options;
         }}
-        defaultPortMappings={[
-          { containerPort: 3000, hostPort: 3000, protocol: "tcp" },
-        ]}
+        defaultPortMappings={[{ containerPort: 3000, hostPort: 3000, protocol: "tcp" }]}
       />
     </main>
   );
@@ -134,13 +130,15 @@ function NativeComposeFixture() {
           onAddressAll={async () => setSentCount((count) => count + 1)}
           onSend={async () => setSentCount((count) => count + 1)}
           onStop={async () => {}}
-          primaryControls={(
+          primaryControls={
             <AgentModelPicker
-              models={[{
-                platform: "codex",
-                id: "long-model",
-                label: "A deliberately long Codex model name for narrow viewport coverage",
-              }]}
+              models={[
+                {
+                  platform: "codex",
+                  id: "long-model",
+                  label: "A deliberately long Codex model name for narrow viewport coverage",
+                },
+              ]}
               enabledPlatforms={["codex"]}
               selectedPlatform="codex"
               selectedModelId="long-model"
@@ -157,7 +155,7 @@ function NativeComposeFixture() {
               fastModeAvailable
               onFastModeChange={setFastModeEnabled}
             />
-          )}
+          }
         />
         <output data-testid="native-send-count">{sentCount}</output>
       </section>
@@ -270,10 +268,7 @@ function ReviewLaunchDialogFixture() {
 }
 
 function GlobalStylesFixture() {
-  const twelveLineDraft = Array.from(
-    { length: 12 },
-    (_, index) => `Line ${index + 1}`,
-  ).join("\n");
+  const twelveLineDraft = Array.from({ length: 12 }, (_, index) => `Line ${index + 1}`).join("\n");
   const thirteenLineDraft = `${twelveLineDraft}\nLine 13`;
 
   return (
@@ -312,7 +307,11 @@ function GlobalStylesFixture() {
           isUser={false}
           authorLabel="Assistant"
           timestampLabel="1:00 PM"
-          actions={<button data-testid="assistant-message-action" type="button">Copy</button>}
+          actions={
+            <button data-testid="assistant-message-action" type="button">
+              Copy
+            </button>
+          }
         >
           <p>Assistant message</p>
         </MessageShell>
@@ -322,15 +321,27 @@ function GlobalStylesFixture() {
           isUser={true}
           authorLabel="You"
           timestampLabel="1:01 PM"
-          actions={<button data-testid="user-message-action" type="button">Fork</button>}
+          actions={
+            <button data-testid="user-message-action" type="button">
+              Fork
+            </button>
+          }
         >
           <p>User message</p>
         </MessageShell>
       </section>
-      <div data-testid="sidebar-glass" className="sidebar-glass">Sidebar</div>
-      <div data-testid="panel-surface" className="panel-surface">Panel</div>
-      <div data-testid="drag-region" data-backend-drag-region>Drag region</div>
-      <div data-testid="no-select" className="no-select">No selection</div>
+      <div data-testid="sidebar-glass" className="sidebar-glass">
+        Sidebar
+      </div>
+      <div data-testid="panel-surface" className="panel-surface">
+        Panel
+      </div>
+      <div data-testid="drag-region" data-backend-drag-region>
+        Drag region
+      </div>
+      <div data-testid="no-select" className="no-select">
+        No selection
+      </div>
       <div data-testid="terminal-container" className="terminal-container">
         <div data-testid="xterm" className="xterm" style={{ height: "120px", width: "220px" }}>
           <div
@@ -346,17 +357,18 @@ function GlobalStylesFixture() {
           <div data-testid="xterm-scrollable" className="xterm-scrollable-element" />
         </div>
       </div>
-      <div
-        data-testid="scroll-host"
-        className="h-20 w-20 overflow-scroll"
-      >
+      <div data-testid="scroll-host" className="h-20 w-20 overflow-scroll">
         <div className="h-40 w-40" />
       </div>
       <div data-mobile-toolbar>
-        <button data-testid="mobile-toolbar-button" type="button">Tool</button>
+        <button data-testid="mobile-toolbar-button" type="button">
+          Tool
+        </button>
       </div>
       <div className="mobile-sidebar">
-        <div data-testid="mobile-sidebar-header" data-sidebar-header>Mobile sidebar</div>
+        <div data-testid="mobile-sidebar-header" data-sidebar-header>
+          Mobile sidebar
+        </div>
       </div>
       <input data-testid="mobile-input" aria-label="Mobile input" />
       <textarea data-testid="mobile-textarea" aria-label="Mobile textarea" />
@@ -383,10 +395,18 @@ function GlobalStylesFixture() {
           />
         </div>
       </div>
-      <div data-testid="dropdown-content" data-slot="dropdown-menu-content">Dropdown</div>
-      <div data-testid="context-content" data-slot="context-menu-content">Context</div>
-      <div data-testid="dropdown-item" data-slot="dropdown-menu-item">Dropdown item</div>
-      <div data-testid="context-item" data-slot="context-menu-item">Context item</div>
+      <div data-testid="dropdown-content" data-slot="dropdown-menu-content">
+        Dropdown
+      </div>
+      <div data-testid="context-content" data-slot="context-menu-content">
+        Context
+      </div>
+      <div data-testid="dropdown-item" data-slot="dropdown-menu-item">
+        Dropdown item
+      </div>
+      <div data-testid="context-item" data-slot="context-menu-item">
+        Context item
+      </div>
     </main>
   );
 }
@@ -555,8 +575,7 @@ function DiffViewerFixture() {
   const gitStatus = status === "new" ? "A" : status === "deleted" ? "D" : "M";
   const filePath = "docs/audits/frontend-state-audit.md";
   const containerId = "fixture-container";
-  const baseBranch =
-    params.get("branch") ?? "63d12576e9198f24bc2271a6a8c3702dfb391eae";
+  const baseBranch = params.get("branch") ?? "63d12576e9198f24bc2271a6a8c3702dfb391eae";
   const [viewFileCount, setViewFileCount] = useState(0);
 
   window.orkestrator = {
@@ -613,8 +632,4 @@ function fixtureForPath() {
   return <CreateEnvironmentFixture />;
 }
 
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    {fixtureForPath()}
-  </StrictMode>,
-);
+createRoot(document.getElementById("root")!).render(<StrictMode>{fixtureForPath()}</StrictMode>);

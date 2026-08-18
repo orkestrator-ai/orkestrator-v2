@@ -73,9 +73,7 @@ export function SlashCommandMenu<TCommand extends SlashCommandOption>({
       style={{ bottom: "100%", left: 0, marginBottom: "4px" }}
     >
       <div className="p-1">
-        <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
-          Slash Commands
-        </div>
+        <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">Slash Commands</div>
         {commands.map((command, index) => {
           const isSelected = index === selectedIndex;
           return (
@@ -92,9 +90,7 @@ export function SlashCommandMenu<TCommand extends SlashCommandOption>({
               )}
             >
               <Command className="h-4 w-4 shrink-0 text-muted-foreground" />
-              <span className="shrink-0 font-medium whitespace-nowrap">
-                {command.name}
-              </span>
+              <span className="shrink-0 font-medium whitespace-nowrap">{command.name}</span>
               {command.description && (
                 <span className="min-w-0 flex-1 truncate text-right text-xs text-muted-foreground">
                   {command.description}

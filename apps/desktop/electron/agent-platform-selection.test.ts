@@ -11,7 +11,9 @@ import { pinnedArtifactsForPlatforms } from "./toolchain-manifest";
 
 const directories: string[] = [];
 afterEach(async () => {
-  await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+  await Promise.all(
+    directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })),
+  );
 });
 
 async function temporaryDirectory(): Promise<string> {
@@ -44,7 +46,9 @@ describe("first-run agent platform selection", () => {
       enabled: ["cursor", "grok"],
       needsFirstRunChoice: false,
     });
-    expect(JSON.parse(await readFile(path.join(directory, "agent-platforms.json"), "utf8"))).toEqual({
+    expect(
+      JSON.parse(await readFile(path.join(directory, "agent-platforms.json"), "utf8")),
+    ).toEqual({
       version: 1,
       enabled: ["cursor", "grok"],
     });
@@ -69,10 +73,13 @@ describe("agent-test platform selection", () => {
     const directory = await temporaryDirectory();
     // An existing config.json wins over the sidecar, so a profile that has saved
     // settings once would otherwise silently keep the legacy three.
-    await writeFile(path.join(directory, "config.json"), JSON.stringify({
-      global: { defaultAgent: "claude", theme: "dark" },
-      repositories: { "/repo": { branchPrefix: "qa" } },
-    }));
+    await writeFile(
+      path.join(directory, "config.json"),
+      JSON.stringify({
+        global: { defaultAgent: "claude", theme: "dark" },
+        repositories: { "/repo": { branchPrefix: "qa" } },
+      }),
+    );
 
     await applyAgentTestPlatformSelection(directory, ["cursor", "grok"]);
 
@@ -94,9 +101,12 @@ describe("agent-test platform selection", () => {
 
   test("keeps a default agent the selection still contains", async () => {
     const directory = await temporaryDirectory();
-    await writeFile(path.join(directory, "config.json"), JSON.stringify({
-      global: { defaultAgent: "codex" },
-    }));
+    await writeFile(
+      path.join(directory, "config.json"),
+      JSON.stringify({
+        global: { defaultAgent: "codex" },
+      }),
+    );
 
     await applyAgentTestPlatformSelection(directory, ["codex", "cursor"]);
 
@@ -118,10 +128,12 @@ describe("agent-test platform selection", () => {
 
 describe("pinned artifacts for a platform selection", () => {
   test("downloads only what the selection enables", () => {
-    expect(pinnedArtifactsForPlatforms(["cursor", "grok"], "darwin", "arm64").map((a) => a.name))
-      .toEqual(["cursor", "grok"]);
-    expect(pinnedArtifactsForPlatforms(["claude"], "linux", "x64").map((a) => a.name))
-      .toEqual(["claude"]);
+    expect(
+      pinnedArtifactsForPlatforms(["cursor", "grok"], "darwin", "arm64").map((a) => a.name),
+    ).toEqual(["cursor", "grok"]);
+    expect(pinnedArtifactsForPlatforms(["claude"], "linux", "x64").map((a) => a.name)).toEqual([
+      "claude",
+    ]);
   });
 
   test("selects nothing when no platform is enabled", () => {

@@ -32,11 +32,16 @@ mock.module("@/stores", () => ({
   ...realStoresSnapshot,
   useUIStore: <T,>(selector: (state: { selectedEnvironmentId: string | null }) => T) =>
     selector({ selectedEnvironmentId: selectedEnvironment?.id ?? null }),
-  useEnvironmentStore: <T,>(selector: (state: {
-    environments: typeof selectedEnvironment extends null ? never[] : Array<NonNullable<typeof selectedEnvironment>>;
-  }) => T) => selector({
-    environments: selectedEnvironment ? [selectedEnvironment] : [],
-  }),
+  useEnvironmentStore: <T,>(
+    selector: (state: {
+      environments: typeof selectedEnvironment extends null
+        ? never[]
+        : Array<NonNullable<typeof selectedEnvironment>>;
+    }) => T,
+  ) =>
+    selector({
+      environments: selectedEnvironment ? [selectedEnvironment] : [],
+    }),
 }));
 
 mock.module("@/contexts", () => ({
@@ -115,8 +120,9 @@ describe("OpenFileDialog", () => {
     searchAvailable = false;
     render(<OpenFileDialog />);
     fireEvent.keyDown(window, { key: "p", metaKey: true, shiftKey: true });
-    expect(await screen.findByText("Start the selected environment to search its files."))
-      .toBeTruthy();
+    expect(
+      await screen.findByText("Start the selected environment to search its files."),
+    ).toBeTruthy();
     expect(createFileTabMock).not.toHaveBeenCalled();
   });
 

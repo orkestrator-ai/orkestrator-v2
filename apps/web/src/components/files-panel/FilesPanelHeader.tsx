@@ -1,10 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { X, RefreshCw } from "lucide-react";
 import { useFilesPanelStore } from "@/stores";
 import type { FilesPanelTab } from "@/stores";
@@ -26,10 +22,7 @@ export function FilesPanelHeader({ onRefresh }: FilesPanelHeaderProps) {
   return (
     <div className="flex h-12 items-center justify-between border-b border-border/80 bg-[#212124] px-3">
       {/* Tab switcher */}
-      <Tabs
-        value={activeTab}
-        onValueChange={(v) => setActiveTab(v as FilesPanelTab)}
-      >
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as FilesPanelTab)}>
         <TabsList className="h-8 bg-zinc-900/80">
           <TabsTrigger value="changes" className="px-2 text-xs data-[state=active]:!bg-zinc-800">
             Changes
@@ -56,9 +49,7 @@ export function FilesPanelHeader({ onRefresh }: FilesPanelHeaderProps) {
               onClick={onRefresh}
               disabled={isLoading}
             >
-              <RefreshCw
-                className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`}
-              />
+              <RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
             </Button>
           </TooltipTrigger>
           <TooltipContent>Refresh</TooltipContent>
@@ -66,12 +57,7 @@ export function FilesPanelHeader({ onRefresh }: FilesPanelHeaderProps) {
 
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7"
-              onClick={closePanel}
-            >
+            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={closePanel}>
               <X className="h-4 w-4" />
             </Button>
           </TooltipTrigger>

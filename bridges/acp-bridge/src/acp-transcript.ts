@@ -49,14 +49,23 @@ export function isTranscriptUpdateKind(kind: string): boolean {
   return TRANSCRIPT_UPDATE_KINDS.has(kind);
 }
 
-export function findHistoryMessage(state: SessionState, providerMessageId: string): BridgeMessage | undefined {
+export function findHistoryMessage(
+  state: SessionState,
+  providerMessageId: string,
+): BridgeMessage | undefined {
   const messageId = state.historyMessageIds.get(providerMessageId);
   return messageId ? state.messages.find((message) => message.id === messageId) : undefined;
 }
 
-export function rememberHistoryMessage(state: SessionState, providerMessageId: string, messageId: string): void {
-  if (!state.historyMessageIds.has(providerMessageId)
-    && state.historyMessageIds.size >= MAX_HISTORY_MESSAGE_IDS) {
+export function rememberHistoryMessage(
+  state: SessionState,
+  providerMessageId: string,
+  messageId: string,
+): void {
+  if (
+    !state.historyMessageIds.has(providerMessageId) &&
+    state.historyMessageIds.size >= MAX_HISTORY_MESSAGE_IDS
+  ) {
     const oldest = state.historyMessageIds.keys().next().value;
     if (typeof oldest === "string") state.historyMessageIds.delete(oldest);
   }
@@ -82,10 +91,7 @@ export function trimNoticePartId(message: BridgeMessage): string {
   return `${message.id}:transcript-trimmed`;
 }
 
-export function isTrimNotice(
-  message: BridgeMessage,
-  part: BridgeMessagePart | undefined,
-): boolean {
+export function isTrimNotice(message: BridgeMessage, part: BridgeMessagePart | undefined): boolean {
   return part !== undefined && part.sourcePartId === trimNoticePartId(message);
 }
 
@@ -120,7 +126,10 @@ export function trimPartsTo(message: BridgeMessage, targetLength: number): numbe
  * the first place, oldest evicted first: a turn can trim an unlimited number of
  * calls, and this must not become the unbounded thing that replaces them.
  */
-export function rememberTrimmedToolCalls(message: BridgeMessage, dropped: BridgeMessagePart[]): void {
+export function rememberTrimmedToolCalls(
+  message: BridgeMessage,
+  dropped: BridgeMessagePart[],
+): void {
   const ids = trimmedToolCalls.get(message) ?? new Set<string>();
   for (const part of dropped) {
     if (part.type === "tool-invocation") ids.add(part.toolUseId);
@@ -201,28 +210,32 @@ export function normalizeAcpContentDiff(value: JsonObject): BridgeToolDiff | und
   const filePath = boundedString(value.path, MAX_TOOL_PATH_BYTES);
   const rawBefore = typeof value.oldText === "string" ? value.oldText : undefined;
   const rawAfter = typeof value.newText === "string" ? value.newText : undefined;
-  const keepInline = Buffer.byteLength(rawBefore ?? "") <= MAX_TOOL_INLINE_FILE_BYTES
-    && Buffer.byteLength(rawAfter ?? "") <= MAX_TOOL_INLINE_FILE_BYTES;
+  const keepInline =
+    Buffer.byteLength(rawBefore ?? "") <= MAX_TOOL_INLINE_FILE_BYTES &&
+    Buffer.byteLength(rawAfter ?? "") <= MAX_TOOL_INLINE_FILE_BYTES;
   // An empty `diff` string carries no information, so it must not suppress the
   // oldText/newText rendering the way a real one does — hence the truthy check
   // rather than a `typeof` guard alone. Truncation is announced, like every
   // other bounded display field; a silent cut reads as a complete diff.
   const rawSuppliedDiff = typeof value.diff === "string" && value.diff ? value.diff : undefined;
-  const suppliedDiff = rawSuppliedDiff === undefined
-    ? undefined
-    : truncateDisplayText(rawSuppliedDiff, MAX_TOOL_DIFF_BYTES, "\n… file diff truncated");
+  const suppliedDiff =
+    rawSuppliedDiff === undefined
+      ? undefined
+      : truncateDisplayText(rawSuppliedDiff, MAX_TOOL_DIFF_BYTES, "\n… file diff truncated");
   // Only generated when it will actually be used: `createDisplayDiff` is
   // whole-file work, and computing it just to drop it in favour of a supplied
   // diff was the most expensive no-op on the read loop.
-  const generated = suppliedDiff === undefined && keepInline && rawAfter !== undefined
-    ? createDisplayDiff(filePath, rawBefore, rawAfter)
-    : undefined;
-  const diff = suppliedDiff ?? generated?.diff ?? (filePath
-    ? `--- ${safeDiffPath(filePath)}\n+++ ${safeDiffPath(filePath)}\n@@ diff omitted: file state exceeded display limit @@`
-    : undefined);
-  const stats = rawSuppliedDiff !== undefined
-    ? countUnifiedDiffLines(rawSuppliedDiff)
-    : generated;
+  const generated =
+    suppliedDiff === undefined && keepInline && rawAfter !== undefined
+      ? createDisplayDiff(filePath, rawBefore, rawAfter)
+      : undefined;
+  const diff =
+    suppliedDiff ??
+    generated?.diff ??
+    (filePath
+      ? `--- ${safeDiffPath(filePath)}\n+++ ${safeDiffPath(filePath)}\n@@ diff omitted: file state exceeded display limit @@`
+      : undefined);
+  const stats = rawSuppliedDiff !== undefined ? countUnifiedDiffLines(rawSuppliedDiff) : generated;
   if (!filePath && rawBefore === undefined && rawAfter === undefined && diff === undefined) {
     return undefined;
   }
@@ -249,22 +262,26 @@ export function aggregateAcpToolDiffs(
     const [diff] = diffs;
     return diff?.filePath || !fallbackPath ? diff : { ...diff, filePath: fallbackPath };
   }
-  const rendered = diffs.flatMap((diff) => diff.diff ? [diff.diff] : []);
+  const rendered = diffs.flatMap((diff) => (diff.diff ? [diff.diff] : []));
   const hasCompleteStats = diffs.every(
     (diff) => diff.additions !== undefined && diff.deletions !== undefined,
   );
   return {
-    ...(hasCompleteStats ? {
-      additions: diffs.reduce((total, diff) => total + (diff.additions ?? 0), 0),
-      deletions: diffs.reduce((total, diff) => total + (diff.deletions ?? 0), 0),
-    } : {}),
-    ...(rendered.length > 0 ? {
-      diff: truncateDisplayText(
-        rendered.join("\n"),
-        MAX_TOOL_DIFF_BYTES,
-        "\n… additional file diffs truncated",
-      ),
-    } : {}),
+    ...(hasCompleteStats
+      ? {
+          additions: diffs.reduce((total, diff) => total + (diff.additions ?? 0), 0),
+          deletions: diffs.reduce((total, diff) => total + (diff.deletions ?? 0), 0),
+        }
+      : {}),
+    ...(rendered.length > 0
+      ? {
+          diff: truncateDisplayText(
+            rendered.join("\n"),
+            MAX_TOOL_DIFF_BYTES,
+            "\n… additional file diffs truncated",
+          ),
+        }
+      : {}),
   };
 }
 
@@ -275,9 +292,11 @@ export function toolCallLocationPath(value: unknown): string | undefined {
 }
 
 export function toolArgumentPath(toolArgs: JsonObject | undefined): string | undefined {
-  return boundedString(toolArgs?.path, MAX_TOOL_PATH_BYTES)
-    ?? boundedString(toolArgs?.filePath, MAX_TOOL_PATH_BYTES)
-    ?? boundedString(toolArgs?.file_path, MAX_TOOL_PATH_BYTES);
+  return (
+    boundedString(toolArgs?.path, MAX_TOOL_PATH_BYTES) ??
+    boundedString(toolArgs?.filePath, MAX_TOOL_PATH_BYTES) ??
+    boundedString(toolArgs?.file_path, MAX_TOOL_PATH_BYTES)
+  );
 }
 
 export interface DisplayDiffLine {
@@ -340,8 +359,8 @@ export function renderDiffHunks(lines: DisplayDiffLine[]): string[] {
     // between them is cheaper to print than a second header.
     let end = Math.min(lines.length - 1, changed[nextChange]! + DIFF_CONTEXT_LINES);
     while (
-      nextChange + 1 < changed.length
-      && changed[nextChange + 1]! - DIFF_CONTEXT_LINES <= end + 1
+      nextChange + 1 < changed.length &&
+      changed[nextChange + 1]! - DIFF_CONTEXT_LINES <= end + 1
     ) {
       nextChange += 1;
       end = Math.min(lines.length - 1, changed[nextChange]! + DIFF_CONTEXT_LINES);
@@ -362,14 +381,9 @@ export function renderDiffHunks(lines: DisplayDiffLine[]): string[] {
       const line = lines[index]!;
       if (line.type !== "add") beforeCount += 1;
       if (line.type !== "remove") afterCount += 1;
-      body.push(
-        `${line.type === "add" ? "+" : line.type === "remove" ? "-" : " "}${line.content}`,
-      );
+      body.push(`${line.type === "add" ? "+" : line.type === "remove" ? "-" : " "}${line.content}`);
     }
-    rendered.push(
-      `@@ -${beforeLine},${beforeCount} +${afterLine},${afterCount} @@`,
-      ...body,
-    );
+    rendered.push(`@@ -${beforeLine},${beforeCount} +${afterLine},${afterCount} @@`, ...body);
     beforeLine += beforeCount;
     afterLine += afterCount;
     cursor = end + 1;
@@ -401,9 +415,10 @@ export function diffFileLines(before: string[], after: string[]): DisplayDiffLin
     for (let diagonal = -distance; diagonal <= distance; diagonal += 2) {
       const down = frontier.get(diagonal + 1) ?? Number.NEGATIVE_INFINITY;
       const right = frontier.get(diagonal - 1) ?? Number.NEGATIVE_INFINITY;
-      let x = diagonal === -distance || (diagonal !== distance && right < down)
-        ? Math.max(0, down)
-        : Math.max(0, right + 1);
+      let x =
+        diagonal === -distance || (diagonal !== distance && right < down)
+          ? Math.max(0, down)
+          : Math.max(0, right + 1);
       let y = x - diagonal;
       while (x < before.length && y < after.length && before[x] === after[y]) {
         x += 1;
@@ -435,9 +450,10 @@ export function backtrackFileDiff(
     const diagonal = x - y;
     const down = frontier.get(diagonal + 1) ?? Number.NEGATIVE_INFINITY;
     const right = frontier.get(diagonal - 1) ?? Number.NEGATIVE_INFINITY;
-    const previousDiagonal = diagonal === -distance || (diagonal !== distance && right < down)
-      ? diagonal + 1
-      : diagonal - 1;
+    const previousDiagonal =
+      diagonal === -distance || (diagonal !== distance && right < down)
+        ? diagonal + 1
+        : diagonal - 1;
     const previousX = Math.max(0, frontier.get(previousDiagonal) ?? 0);
     const previousY = previousX - previousDiagonal;
     while (x > previousX && y > previousY) {
@@ -463,16 +479,24 @@ export function boundedFallbackDiff(before: string[], after: string[]): DisplayD
     prefix += 1;
   }
   let suffix = 0;
-  while (suffix < before.length - prefix
-    && suffix < after.length - prefix
-    && before[before.length - suffix - 1] === after[after.length - suffix - 1]) {
+  while (
+    suffix < before.length - prefix &&
+    suffix < after.length - prefix &&
+    before[before.length - suffix - 1] === after[after.length - suffix - 1]
+  ) {
     suffix += 1;
   }
   return [
     ...before.slice(0, prefix).map((content) => ({ type: "context" as const, content })),
-    ...before.slice(prefix, before.length - suffix).map((content) => ({ type: "remove" as const, content })),
-    ...after.slice(prefix, after.length - suffix).map((content) => ({ type: "add" as const, content })),
-    ...before.slice(before.length - suffix).map((content) => ({ type: "context" as const, content })),
+    ...before
+      .slice(prefix, before.length - suffix)
+      .map((content) => ({ type: "remove" as const, content })),
+    ...after
+      .slice(prefix, after.length - suffix)
+      .map((content) => ({ type: "add" as const, content })),
+    ...before
+      .slice(before.length - suffix)
+      .map((content) => ({ type: "context" as const, content })),
   ];
 }
 
@@ -531,13 +555,18 @@ export function appendSaturating(
   return next;
 }
 
-export function appendBounded(current: string, addition: string, maximumBytes: number): {
+export function appendBounded(
+  current: string,
+  addition: string,
+  maximumBytes: number,
+): {
   value: string;
   truncated: boolean;
 } {
   const currentBytes = Buffer.byteLength(current);
   const remaining = Math.max(0, maximumBytes - currentBytes);
-  if (Buffer.byteLength(addition) <= remaining) return { value: current + addition, truncated: false };
+  if (Buffer.byteLength(addition) <= remaining)
+    return { value: current + addition, truncated: false };
   const marker = "\n[output truncated by Orkestrator]";
   const markerBytes = Buffer.byteLength(marker);
   // Truncation is no longer fatal for an interactive turn, so the marker is
@@ -604,5 +633,3 @@ export function boundTranscript(state: SessionState): boolean {
   // in the separately bounded registry until a terminal event or process death.
   return truncatedCurrentMessage;
 }
-
-

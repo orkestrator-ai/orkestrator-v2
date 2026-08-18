@@ -122,9 +122,7 @@ interface ArtifactIntegrityValues {
   values: Array<readonly [field: string, value: string]>;
 }
 
-function findCrossArtifactIntegrityCollisions(
-  artifacts: ArtifactIntegrityValues[],
-): Array<{
+function findCrossArtifactIntegrityCollisions(artifacts: ArtifactIntegrityValues[]): Array<{
   field: string;
   target: string;
   collidesWith: string;
@@ -170,9 +168,7 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
   test("Bun: host download script pins an exact version, not `latest`", () => {
     const script = read("scripts/download-bun.sh");
     expect(script).not.toContain("releases/latest");
-    expect(getShellVar("scripts/download-bun.sh", "BUN_VERSION")).toMatch(
-      /^\d+\.\d+\.\d+$/,
-    );
+    expect(getShellVar("scripts/download-bun.sh", "BUN_VERSION")).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
   test("Claude bridge: musl variant is stripped from the vendored runtime tree, not top-level node_modules", () => {
@@ -190,12 +186,8 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     );
   });
 
-
   test("Claude: managed binary, download script, and Docker CLI match", () => {
-    const downloadScriptPin = getShellVar(
-      "scripts/download-claude.sh",
-      "CLAUDE_VERSION",
-    );
+    const downloadScriptPin = getShellVar("scripts/download-claude.sh", "CLAUDE_VERSION");
     const dockerfilePin = getDockerfileArg("CLAUDE_CLI_VERSION");
 
     expect(dockerfilePin).toBe(downloadScriptPin);
@@ -203,19 +195,15 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
   });
 
   test("Claude: agent SDK dependency is exact-pinned", () => {
-    expectExactVersion(
-      "bridges/claude-bridge/package.json",
-      "@anthropic-ai/claude-agent-sdk",
-    );
+    expectExactVersion("bridges/claude-bridge/package.json", "@anthropic-ai/claude-agent-sdk");
   });
 
   test("Codex: managed binary, download script, and Docker CLI all match", () => {
     // The bridge no longer depends on @openai/codex-sdk — it talks to
     // `codex app-server` over JSON-RPC — so config/codex-version.json is the only
     // pin, and the CLI version still matters for the binary and the image.
-    const configPin = (
-      JSON.parse(read("config/codex-version.json")) as { version: string }
-    ).version;
+    const configPin = (JSON.parse(read("config/codex-version.json")) as { version: string })
+      .version;
 
     expect(getShellVar("scripts/download-codex.sh", "CODEX_VERSION")).toBe(configPin);
     expect(getDockerfileArg("CODEX_CLI_VERSION")).toBe(configPin);
@@ -378,10 +366,7 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     // speak the previous contract — the exact split docs/upgrade-agents.md warns
     // about, which was documented as enforced here long before it actually was.
     const backendPin = expectExactVersion("apps/backend/package.json", "@opencode-ai/sdk");
-    const downloadScriptPin = getShellVar(
-      "scripts/download-opencode.sh",
-      "OPENCODE_VERSION",
-    );
+    const downloadScriptPin = getShellVar("scripts/download-opencode.sh", "OPENCODE_VERSION");
     const dockerfilePin = getDockerfileArg("OPENCODE_CLI_VERSION");
 
     expect(backendPin).toBe(sdkPin);
@@ -403,7 +388,9 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     expect(OPENCODE_RELEASE_BASE).toBe(
       `https://github.com/anomalyco/opencode/releases/download/v${PINNED_TOOLCHAIN_VERSIONS.opencode}`,
     );
-    for (const artifact of PINNED_TOOLCHAIN_ARTIFACTS.filter((entry) => entry.name === "opencode")) {
+    for (const artifact of PINNED_TOOLCHAIN_ARTIFACTS.filter(
+      (entry) => entry.name === "opencode",
+    )) {
       expect(artifact.archive.url.startsWith(`${OPENCODE_RELEASE_BASE}/`)).toBe(true);
     }
   });
@@ -415,11 +402,15 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     expect(script).toContain('OPENCODE_ARCHIVE="$OPENCODE_FILENAME.tar.gz"');
     expect(script).toContain('OPENCODE_ARCHIVE="$OPENCODE_FILENAME.zip"');
 
-    for (const artifact of PINNED_TOOLCHAIN_ARTIFACTS.filter((entry) => entry.name === "opencode")) {
+    for (const artifact of PINNED_TOOLCHAIN_ARTIFACTS.filter(
+      (entry) => entry.name === "opencode",
+    )) {
       const expectedExtension = artifact.platform === "linux" ? ".tar.gz" : ".zip";
-      expect(artifact.archive.url.endsWith(
-        `opencode-${artifact.platform}-${artifact.architecture}${expectedExtension}`,
-      )).toBe(true);
+      expect(
+        artifact.archive.url.endsWith(
+          `opencode-${artifact.platform}-${artifact.architecture}${expectedExtension}`,
+        ),
+      ).toBe(true);
       expect(artifact.archive.format).toBe(artifact.platform === "linux" ? "tar.gz" : "zip");
     }
   });
@@ -445,10 +436,13 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     const codexArtifacts = PINNED_TOOLCHAIN_ARTIFACTS.filter((entry) => entry.name === "codex");
     expect(codexArtifacts.length).toBe(4);
     for (const artifact of codexArtifacts) {
-      const host = artifact.companions
-        ?.find((companion) => companion.fileName === "codex-code-mode-host");
-      expect(host, `${artifact.platform}-${artifact.architecture} has no code-mode host`)
-        .toBeDefined();
+      const host = artifact.companions?.find(
+        (companion) => companion.fileName === "codex-code-mode-host",
+      );
+      expect(
+        host,
+        `${artifact.platform}-${artifact.architecture} has no code-mode host`,
+      ).toBeDefined();
       // The companion is a separate release asset, so nothing else guarantees
       // it was refreshed from the same release as the executable beside it.
       expect(host!.archive.url.startsWith(`${CODEX_RELEASE_BASE}/`)).toBe(true);
@@ -464,8 +458,10 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
       const target = `${artifact.name}:${artifact.platform}:${artifact.architecture}`;
       const claim = (label: string, sha256: string) => {
         const existing = digests.get(sha256);
-        expect(existing, `${label} reuses the SHA-256 already pinned by ${existing}`)
-          .toBeUndefined();
+        expect(
+          existing,
+          `${label} reuses the SHA-256 already pinned by ${existing}`,
+        ).toBeUndefined();
         digests.set(sha256, label);
       };
       claim(`${target} archive`, artifact.archive.sha256);
@@ -546,8 +542,9 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
 
     // OpenCode ships unsigned macOS binaries on both architectures, so both must
     // opt into repair or installation fails on that architecture.
-    const darwinOpenCode = PINNED_TOOLCHAIN_ARTIFACTS
-      .filter((artifact) => artifact.name === "opencode" && artifact.platform === "darwin");
+    const darwinOpenCode = PINNED_TOOLCHAIN_ARTIFACTS.filter(
+      (artifact) => artifact.name === "opencode" && artifact.platform === "darwin",
+    );
     expect(darwinOpenCode).toHaveLength(2);
     for (const artifact of darwinOpenCode) {
       expect(artifact.executable.repairInvalidMacSignature).toBe(true);
@@ -560,7 +557,9 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
 
     expect(nodeVersion).toBeDefined();
     expect(Number(nodeVersion!.split(".")[0])).toBeGreaterThanOrEqual(22);
-    expect(dockerfile).toContain('npm install -g "@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}"');
+    expect(dockerfile).toContain(
+      'npm install -g "@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}"',
+    );
     expect(dockerfile).toContain('npm install -g "@openai/codex@${CODEX_CLI_VERSION}"');
     expect(dockerfile).toContain('--version "$OPENCODE_CLI_VERSION"');
     // The three CLI paths the backend resolves at runtime.
@@ -618,9 +617,9 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     // root-terminal path a separate claim from the `node` path, and the image
     // build is the only place either is proven — so both must be exercised.
     const instructions = dockerfileInstructions();
-    const verifyRuns = [...instructions.matchAll(
-      /node\s+\/usr\/local\/share\/verify-playwright\.cjs/g,
-    )].map((match) => match.index);
+    const verifyRuns = [
+      ...instructions.matchAll(/node\s+\/usr\/local\/share\/verify-playwright\.cjs/g),
+    ].map((match) => match.index);
     expect(verifyRuns).toHaveLength(2);
 
     // The two runs must straddle the USER switch; two checks as the same user
@@ -657,9 +656,7 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     expect(shmIndex).toBeGreaterThan(-1);
     const size = containers.slice(shmIndex).match(/"--shm-size",\s*"(\d+)([mg])"/i);
     expect(size).not.toBeNull();
-    const megabytes = size![2].toLowerCase() === "g"
-      ? Number(size![1]) * 1024
-      : Number(size![1]);
+    const megabytes = size![2].toLowerCase() === "g" ? Number(size![1]) * 1024 : Number(size![1]);
     expect(megabytes).toBeGreaterThanOrEqual(512);
   });
 
@@ -710,24 +707,26 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
       }
     }
 
-    const actual = new Set(PINNED_TOOLCHAIN_ARTIFACTS.map((artifact) => {
-      expect(artifact.archive.url).toMatch(/^https:\/\//);
-      expect(artifact.archive.sha256).toMatch(/^[a-f0-9]{64}$/);
-      expect(artifact.executable.sha256).toMatch(/^[a-f0-9]{64}$/);
-      if (artifact.executable.installedSha256) {
-        expect(artifact.executable.installedSha256).toMatch(/^[a-f0-9]{64}$/);
-        expect(artifact.executable.installedSize).toBeGreaterThan(0);
-      }
-      if (artifact.archive.bundleIntegrity) {
-        expect(artifact.archive.bundleIntegrity.sha256).toMatch(/^[a-f0-9]{64}$/);
-        expect(artifact.archive.bundleIntegrity.fileCount).toBeGreaterThan(0);
-        expect(artifact.archive.bundleIntegrity.totalSize).toBeGreaterThan(0);
-      }
-      expect(artifact.archive.size).toBeGreaterThan(0);
-      expect(artifact.executable.size).toBeGreaterThan(0);
-      expect(artifact.version).toBe(PINNED_TOOLCHAIN_VERSIONS[artifact.name]);
-      return `${artifact.name}:${artifact.platform}:${artifact.architecture}`;
-    }));
+    const actual = new Set(
+      PINNED_TOOLCHAIN_ARTIFACTS.map((artifact) => {
+        expect(artifact.archive.url).toMatch(/^https:\/\//);
+        expect(artifact.archive.sha256).toMatch(/^[a-f0-9]{64}$/);
+        expect(artifact.executable.sha256).toMatch(/^[a-f0-9]{64}$/);
+        if (artifact.executable.installedSha256) {
+          expect(artifact.executable.installedSha256).toMatch(/^[a-f0-9]{64}$/);
+          expect(artifact.executable.installedSize).toBeGreaterThan(0);
+        }
+        if (artifact.archive.bundleIntegrity) {
+          expect(artifact.archive.bundleIntegrity.sha256).toMatch(/^[a-f0-9]{64}$/);
+          expect(artifact.archive.bundleIntegrity.fileCount).toBeGreaterThan(0);
+          expect(artifact.archive.bundleIntegrity.totalSize).toBeGreaterThan(0);
+        }
+        expect(artifact.archive.size).toBeGreaterThan(0);
+        expect(artifact.executable.size).toBeGreaterThan(0);
+        expect(artifact.version).toBe(PINNED_TOOLCHAIN_VERSIONS[artifact.name]);
+        return `${artifact.name}:${artifact.platform}:${artifact.architecture}`;
+      }),
+    );
 
     expect(actual).toEqual(expected);
     expect(PINNED_TOOLCHAIN_ARTIFACTS).toHaveLength(expected.size);
@@ -771,15 +770,19 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
 
     // Regression: include the field independently from the lookup key. A copied
     // archive digest must collide with another artifact's executable digest.
-    expect(findCrossArtifactIntegrityCollisions([
-      { target: "first", values: [["archive.sha256", "same-digest"]] },
-      { target: "second", values: [["executable.sha256", "same-digest"]] },
-    ])).toEqual([{
-      field: "executable.sha256",
-      target: "second",
-      collidesWith: "first",
-      collidingField: "archive.sha256",
-    }]);
+    expect(
+      findCrossArtifactIntegrityCollisions([
+        { target: "first", values: [["archive.sha256", "same-digest"]] },
+        { target: "second", values: [["executable.sha256", "same-digest"]] },
+      ]),
+    ).toEqual([
+      {
+        field: "executable.sha256",
+        target: "second",
+        collidesWith: "first",
+        collidingField: "archive.sha256",
+      },
+    ]);
 
     // Sizes may legitimately repeat across fields of the same artifact, but two
     // different downloads having byte-identical archives would mean one URL
@@ -795,16 +798,22 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
         expect(selected.map((artifact) => artifact.name).sort()).toEqual(
           Object.keys(PINNED_TOOLCHAIN_VERSIONS).sort(),
         );
-        expect(selected.every((artifact) => (
-          artifact.platform === platform && artifact.architecture === architecture
-        ))).toBe(true);
+        expect(
+          selected.every(
+            (artifact) => artifact.platform === platform && artifact.architecture === architecture,
+          ),
+        ).toBe(true);
       }
     }
   });
 
   test("rejects unsupported toolchain platforms and architectures", () => {
-    expect(() => pinnedToolchainArtifacts("win32", "x64")).toThrow("Unsupported toolchain platform");
-    expect(() => pinnedToolchainArtifacts("darwin", "ia32")).toThrow("Unsupported toolchain architecture");
+    expect(() => pinnedToolchainArtifacts("win32", "x64")).toThrow(
+      "Unsupported toolchain platform",
+    );
+    expect(() => pinnedToolchainArtifacts("darwin", "ia32")).toThrow(
+      "Unsupported toolchain architecture",
+    );
   });
 
   test("rejects incomplete or duplicate target manifests", () => {
@@ -816,7 +825,7 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
         darwinArm64.filter((artifact) => artifact.name !== "claude"),
         "darwin",
         "arm64",
-      )
+      ),
     ).toThrow("Pinned toolchain manifest is incomplete for darwin-arm64");
 
     expect(() =>
@@ -824,7 +833,7 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
         [darwinArm64[0], darwinArm64[0], darwinArm64[1]],
         "darwin",
         "arm64",
-      )
+      ),
     ).toThrow("Pinned toolchain manifest is incomplete for darwin-arm64");
   });
 });

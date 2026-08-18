@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { BridgeConnection } from "./native-agent-provider.js";
-import { ACP_BRIDGE_MAX_BODY_BYTES, httpProvider, declineResolution } from "./agent-provider-test-support.js";
+import {
+  ACP_BRIDGE_MAX_BODY_BYTES,
+  httpProvider,
+  declineResolution,
+} from "./agent-provider-test-support.js";
 
 describe("HTTP bridge provider (ACP)", () => {
   const cursorConnection: BridgeConnection = {
@@ -24,14 +28,18 @@ describe("HTTP bridge provider (ACP)", () => {
       }
       if (url.endsWith("/approvals")) {
         return Response.json({
-          approvals: pending ? [{
-            approvalId: "approval-1",
-            kind: "permissions",
-            permissions: { fileSystem: true },
-            actionable: true,
-            requestedAt,
-            expiresAt,
-          }] : [],
+          approvals: pending
+            ? [
+                {
+                  approvalId: "approval-1",
+                  kind: "permissions",
+                  permissions: { fileSystem: true },
+                  actionable: true,
+                  requestedAt,
+                  expiresAt,
+                },
+              ]
+            : [],
         });
       }
       if (url.endsWith("/interactions")) return Response.json({ interactions: [] });
@@ -52,32 +60,36 @@ describe("HTTP bridge provider (ACP)", () => {
   });
 
   test("passes the ACP bridge's usage and runtime through to the projection", async () => {
-    const { provider } = httpProvider(() => Response.json({
-      status: "idle",
-      messages: [],
-      revision: 4,
-      composer: { models: [], modes: [], fastModeEnabled: null, fastModeAvailable: false },
-      contextUsage: {
-        usedTokens: 15_675,
-        inputTokens: 15_639,
-        outputTokens: 36,
-        cacheReadTokens: 5_888,
-        reasoningTokens: 31,
-        apiDurationMs: 1_448,
-        durationMs: 3_925,
-        modelId: "grok-4.6",
-        source: "provider",
-        updatedAt: "2026-08-14T18:25:46.435Z",
-      },
-      runtime: {
-        mcpServers: 1,
-        commands: 41,
-        version: "1.0.3",
-        state: "idle",
-        // Not part of the summary contract, and must not reach the renderer.
-        secretPath: "/Users/someone/.grok/auth.json",
-      },
-    }), cursorConnection);
+    const { provider } = httpProvider(
+      () =>
+        Response.json({
+          status: "idle",
+          messages: [],
+          revision: 4,
+          composer: { models: [], modes: [], fastModeEnabled: null, fastModeAvailable: false },
+          contextUsage: {
+            usedTokens: 15_675,
+            inputTokens: 15_639,
+            outputTokens: 36,
+            cacheReadTokens: 5_888,
+            reasoningTokens: 31,
+            apiDurationMs: 1_448,
+            durationMs: 3_925,
+            modelId: "grok-4.6",
+            source: "provider",
+            updatedAt: "2026-08-14T18:25:46.435Z",
+          },
+          runtime: {
+            mcpServers: 1,
+            commands: 41,
+            version: "1.0.3",
+            state: "idle",
+            // Not part of the summary contract, and must not reach the renderer.
+            secretPath: "/Users/someone/.grok/auth.json",
+          },
+        }),
+      cursorConnection,
+    );
 
     const snapshot = await provider.interactiveSnapshot!("cursor-1");
 
@@ -99,13 +111,17 @@ describe("HTTP bridge provider (ACP)", () => {
   test("omits ACP usage and runtime the bridge did not report", async () => {
     // Cursor reports no token counts at all. The panel must be told nothing
     // rather than be handed a zeroed meter to render.
-    const { provider } = httpProvider(() => Response.json({
-      status: "idle",
-      messages: [],
-      revision: 1,
-      composer: { models: [], modes: [], fastModeEnabled: null, fastModeAvailable: false },
-      runtime: {},
-    }), cursorConnection);
+    const { provider } = httpProvider(
+      () =>
+        Response.json({
+          status: "idle",
+          messages: [],
+          revision: 1,
+          composer: { models: [], modes: [], fastModeEnabled: null, fastModeAvailable: false },
+          runtime: {},
+        }),
+      cursorConnection,
+    );
 
     const snapshot = await provider.interactiveSnapshot!("cursor-1");
 
@@ -114,10 +130,13 @@ describe("HTTP bridge provider (ACP)", () => {
   });
 
   test("forwards ACP composer options on session creation and prompt dispatch", async () => {
-    const { provider, requests } = httpProvider((url) =>
-      url.endsWith("/session/create")
-        ? Response.json({ sessionId: "cursor-1" })
-        : Response.json({ accepted: true }, { status: 202 }), cursorConnection);
+    const { provider, requests } = httpProvider(
+      (url) =>
+        url.endsWith("/session/create")
+          ? Response.json({ sessionId: "cursor-1" })
+          : Response.json({ accepted: true }, { status: 202 }),
+      cursorConnection,
+    );
 
     await provider.createSession("build", "Configured Cursor", {
       clientSessionKey: "env-1:tab-1",
@@ -154,10 +173,13 @@ describe("HTTP bridge provider (ACP)", () => {
   });
 
   test("stages and forwards image attachments to the ACP prompt route", async () => {
-    const { provider, requests } = httpProvider((url) =>
-      url.endsWith("/session/create")
-        ? Response.json({ sessionId: "cursor-1" })
-        : Response.json({ accepted: true }, { status: 202 }), cursorConnection);
+    const { provider, requests } = httpProvider(
+      (url) =>
+        url.endsWith("/session/create")
+          ? Response.json({ sessionId: "cursor-1" })
+          : Response.json({ accepted: true }, { status: 202 }),
+      cursorConnection,
+    );
 
     await provider.createSession("build", "Cursor");
     // Both ACP agents read inline image content blocks, so an attachment is
@@ -182,10 +204,13 @@ describe("HTTP bridge provider (ACP)", () => {
   });
 
   test("keeps a staged image out of the ACP prompt body", async () => {
-    const { provider, requests } = httpProvider((url) =>
-      url.endsWith("/session/create")
-        ? Response.json({ sessionId: "cursor-1" })
-        : Response.json({ accepted: true }, { status: 202 }), cursorConnection);
+    const { provider, requests } = httpProvider(
+      (url) =>
+        url.endsWith("/session/create")
+          ? Response.json({ sessionId: "cursor-1" })
+          : Response.json({ accepted: true }, { status: 202 }),
+      cursorConnection,
+    );
 
     await provider.createSession("build", "Cursor");
     // 3MB of image data: inside the ACP bridge's 8MB per-image ceiling, and far
@@ -198,11 +223,13 @@ describe("HTTP bridge provider (ACP)", () => {
 
     const body = String(requests[1]?.init.body);
     expect(Buffer.byteLength(body)).toBeLessThan(ACP_BRIDGE_MAX_BODY_BYTES);
-    expect(JSON.parse(body).attachments).toEqual([{
-      type: "image",
-      path: "/workspace/.orkestrator/initial-prompt/pasted.png",
-      filename: "pasted.png",
-    }]);
+    expect(JSON.parse(body).attachments).toEqual([
+      {
+        type: "image",
+        path: "/workspace/.orkestrator/initial-prompt/pasted.png",
+        filename: "pasted.png",
+      },
+    ]);
   });
 
   test("gives Cursor and Grok session creation enough time for initialize plus session/new", async () => {
@@ -237,16 +264,12 @@ describe("HTTP bridge provider (ACP)", () => {
 
   test("surfaces the bounded ACP session-creation error detail", async () => {
     const { provider } = httpProvider(
-      () => Response.json(
-        { error: "Authentication required" },
-        { status: 500 },
-      ),
+      () => Response.json({ error: "Authentication required" }, { status: 500 }),
       cursorConnection,
     );
 
-    await expect(provider.createSession("build", "Cursor"))
-      .rejects.toThrow(
-        "cursor session creation is temporarily unavailable (HTTP 500): Authentication required",
-      );
+    await expect(provider.createSession("build", "Cursor")).rejects.toThrow(
+      "cursor session creation is temporarily unavailable (HTTP 500): Authentication required",
+    );
   });
 });

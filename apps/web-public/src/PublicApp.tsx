@@ -16,7 +16,9 @@ import {
   type SavedConnection,
 } from "./connection";
 
-interface ActiveConnection extends SavedConnection { address: string }
+interface ActiveConnection extends SavedConnection {
+  address: string;
+}
 
 const browserConnections: NonNullable<Window["orkestrator"]>["connections"] = {
   list: async () => listBrowserConnections(),
@@ -113,7 +115,13 @@ export function PublicApp() {
 
   if (activeConnection) {
     return (
-      <Suspense fallback={<div className="public-app-loading"><Loader2 className="spin" /> Loading Orkestrator…</div>}>
+      <Suspense
+        fallback={
+          <div className="public-app-loading">
+            <Loader2 className="spin" /> Loading Orkestrator…
+          </div>
+        }
+      >
         <OrkestratorApp />
       </Suspense>
     );
@@ -142,32 +150,47 @@ export function PublicApp() {
           <p className="connect-kicker">Your network stays in the loop</p>
           <h1 id="connect-title">The app arrives from Vercel. The work doesn’t go back.</h1>
           <p>
-            Choose an Orkestrator backend this browser can reach. Commands, events, terminals,
-            and agent sessions travel directly from this device to that node.
+            Choose an Orkestrator backend this browser can reach. Commands, events, terminals, and
+            agent sessions travel directly from this device to that node.
           </p>
         </div>
 
         <div className="route-map" aria-label="Direct connection route">
           <div className="route-node route-node--browser">
-            <span className="route-node__icon"><Network aria-hidden="true" /></span>
-            <span><b>This browser</b><small>client loaded</small></span>
+            <span className="route-node__icon">
+              <Network aria-hidden="true" />
+            </span>
+            <span>
+              <b>This browser</b>
+              <small>client loaded</small>
+            </span>
           </div>
-          <div className="route-wire" aria-hidden="true"><i /></div>
+          <div className="route-wire" aria-hidden="true">
+            <i />
+          </div>
           <div className="route-node route-node--backend">
-            <span className="route-node__icon"><RadioTower aria-hidden="true" /></span>
-            <span><b>{routeAddress}</b><small>direct over your network</small></span>
+            <span className="route-node__icon">
+              <RadioTower aria-hidden="true" />
+            </span>
+            <span>
+              <b>{routeAddress}</b>
+              <small>direct over your network</small>
+            </span>
           </div>
         </div>
 
         <p className="static-note">
-          <span>Vercel</span> serves static HTML, CSS, and JavaScript only. It is not a traffic proxy.
+          <span>Vercel</span> serves static HTML, CSS, and JavaScript only. It is not a traffic
+          proxy.
         </p>
       </section>
 
       <section className="connect-panel" aria-label="Backend connection">
         <div className="connect-form-wrap">
           <div className="connect-form-heading">
-            <span className="connect-form-icon"><LockKeyhole aria-hidden="true" /></span>
+            <span className="connect-form-icon">
+              <LockKeyhole aria-hidden="true" />
+            </span>
             <div>
               <h2>Connect to a backend</h2>
               <p>The address is remembered. The token lasts for this tab.</p>
@@ -199,9 +222,13 @@ export function PublicApp() {
               required
             />
             {warning ? (
-              <p id="backend-warning" className="field-warning">{warning}</p>
+              <p id="backend-warning" className="field-warning">
+                {warning}
+              </p>
             ) : (
-              <p id="backend-hint" className="field-hint">Use the HTTPS origin exposed inside your tailnet.</p>
+              <p id="backend-hint" className="field-hint">
+                Use the HTTPS origin exposed inside your tailnet.
+              </p>
             )}
 
             <label htmlFor="gateway-token">Gateway token</label>
@@ -226,17 +253,30 @@ export function PublicApp() {
               </button>
             </div>
 
-            {error && <div className="connect-error" role="alert">{error}</div>}
+            {error && (
+              <div className="connect-error" role="alert">
+                {error}
+              </div>
+            )}
 
             <button className="connect-button" type="submit" disabled={connecting}>
-              {connecting ? <Loader2 className="spin" aria-hidden="true" /> : <RadioTower aria-hidden="true" />}
+              {connecting ? (
+                <Loader2 className="spin" aria-hidden="true" />
+              ) : (
+                <RadioTower aria-hidden="true" />
+              )}
               {connecting ? "Checking private route…" : "Connect directly"}
               {!connecting && <ArrowRight className="connect-button__arrow" aria-hidden="true" />}
             </button>
           </form>
 
           {hasSavedConnection && (
-            <button className="forget-button" type="button" onClick={handleForget} disabled={connecting}>
+            <button
+              className="forget-button"
+              type="button"
+              onClick={handleForget}
+              disabled={connecting}
+            >
               Forget saved connection
             </button>
           )}

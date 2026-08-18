@@ -17,13 +17,16 @@ let terminalStoreHasTerminal = true;
 let terminalStorePaneHosts = new Map<string, HTMLDivElement>();
 let terminalStoreVersion = 0;
 const terminalStoreListeners = new Set<() => void>();
-let terminalStoreTerminals: Map<string, {
-  environmentId: string;
-  tabId: string;
-  portalElement: HTMLDivElement;
-  containerElement: HTMLDivElement;
-  isOpened: boolean;
-}> = new Map();
+let terminalStoreTerminals: Map<
+  string,
+  {
+    environmentId: string;
+    tabId: string;
+    portalElement: HTMLDivElement;
+    containerElement: HTMLDivElement;
+    isOpened: boolean;
+  }
+> = new Map();
 
 let lastPersistentTerminalProps:
   | {
@@ -63,38 +66,42 @@ const terminalPortalStoreState = () => ({
     terminalStorePaneHosts.get(`${environmentId}::${paneId}`),
 });
 
-const useTerminalPortalStoreMock = (<T,>(selector?: (state: {
+const useTerminalPortalStoreMock = (<T,>(
+  selector?: (state: {
     paneHosts: Map<string, HTMLDivElement>;
-    terminals: Map<string, {
-      environmentId: string;
-      tabId: string;
-      portalElement: HTMLDivElement;
-      containerElement: HTMLDivElement;
-      isOpened: boolean;
-    }>;
+    terminals: Map<
+      string,
+      {
+        environmentId: string;
+        tabId: string;
+        portalElement: HTMLDivElement;
+        containerElement: HTMLDivElement;
+        isOpened: boolean;
+      }
+    >;
     createTerminal: typeof createTerminalMock;
     disposeTerminal: typeof disposeTerminalMock;
     clearTerminalsForEnvironment: typeof clearTerminalsForEnvironmentMock;
     hasTerminal: (environmentId: string, tabId: string) => boolean;
     getPaneHost: (environmentId: string, paneId: string) => HTMLDivElement | undefined;
-  }) => T) => {
-    useSyncExternalStore(
-      (listener) => {
-        terminalStoreListeners.add(listener);
-        return () => terminalStoreListeners.delete(listener);
-      },
-      () => terminalStoreVersion,
-    );
-    const state = terminalPortalStoreState();
+  }) => T,
+) => {
+  useSyncExternalStore(
+    (listener) => {
+      terminalStoreListeners.add(listener);
+      return () => terminalStoreListeners.delete(listener);
+    },
+    () => terminalStoreVersion,
+  );
+  const state = terminalPortalStoreState();
 
-    return selector ? selector(state) : state;
-  }) as any;
+  return selector ? selector(state) : state;
+}) as any;
 
 useTerminalPortalStoreMock.getState = terminalPortalStoreState;
 
 mock.module("@/stores/terminalPortalStore", () => ({
-  createPortalTargetKey: (environmentId: string, paneId: string) =>
-    `${environmentId}::${paneId}`,
+  createPortalTargetKey: (environmentId: string, paneId: string) => `${environmentId}::${paneId}`,
   useTerminalPortalStore: useTerminalPortalStoreMock,
 }));
 

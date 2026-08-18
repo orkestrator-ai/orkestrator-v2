@@ -120,7 +120,7 @@ const iconMap: Record<string, IconConfig> = {
   // Env files - Yellow
   ".env": { icon: FileCog, color: "text-yellow-600" },
   // Docker - Blue
-  "Dockerfile": { icon: Cog, color: "text-blue-400" },
+  Dockerfile: { icon: Cog, color: "text-blue-400" },
   ".dockerfile": { icon: Cog, color: "text-blue-400" },
   // Git
   ".gitignore": { icon: FileCog, color: "text-orange-400" },
@@ -135,8 +135,8 @@ const iconMap: Record<string, IconConfig> = {
 
 // Special filename matches (without extension)
 const specialFiles: Record<string, IconConfig> = {
-  "Dockerfile": { icon: Cog, color: "text-blue-400" },
-  "Makefile": { icon: Cog, color: "text-orange-400" },
+  Dockerfile: { icon: Cog, color: "text-blue-400" },
+  Makefile: { icon: Cog, color: "text-orange-400" },
   "Cargo.toml": { icon: FileCog, color: "text-orange-500" },
   "Cargo.lock": { icon: FileCog, color: "text-gray-500" },
   "package.json": { icon: FileJson, color: "text-green-400" },
@@ -152,7 +152,7 @@ const specialFiles: Record<string, IconConfig> = {
   ".env.development": { icon: FileCog, color: "text-yellow-600" },
   ".env.production": { icon: FileCog, color: "text-yellow-600" },
   "README.md": { icon: FileText, color: "text-blue-400" },
-  "LICENSE": { icon: FileText, color: "text-yellow-400" },
+  LICENSE: { icon: FileText, color: "text-yellow-400" },
   "LICENSE.md": { icon: FileText, color: "text-yellow-400" },
   ".prettierrc": { icon: FileCog, color: "text-pink-400" },
   ".eslintrc.js": { icon: FileCog, color: "text-purple-400" },

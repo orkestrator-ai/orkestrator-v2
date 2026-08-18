@@ -18,7 +18,11 @@ describe("redactSecrets", () => {
   test.each([
     ["OpenAI style", "key sk-live-0123456789abcdefgh here", "sk-live-0123456789abcdefgh"],
     ["GitHub PAT", "token ghp_0123456789abcdefghij", "ghp_0123456789abcdefghij"],
-    ["GitHub fine-grained", "github_pat_11ABCDEFG0abcdefghijklmnop", "github_pat_11ABCDEFG0abcdefghijklmnop"],
+    [
+      "GitHub fine-grained",
+      "github_pat_11ABCDEFG0abcdefghijklmnop",
+      "github_pat_11ABCDEFG0abcdefghijklmnop",
+    ],
     ["Slack", "xoxb-1234567890-abcdefghij", "xoxb-1234567890-abcdefghij"],
     ["AWS", "AKIAIOSFODNN7EXAMPLE", "AKIAIOSFODNN7EXAMPLE"],
     ["Google", "AIzaSyA0123456789abcdefghijklmnopqrs", "AIzaSyA0123456789abcdefghijklmnopqrs"],
@@ -39,9 +43,7 @@ describe("redactSecrets", () => {
   });
 
   test("removes query-string credentials without eating the rest of the URL", () => {
-    const redacted = redactSecrets(
-      "GET https://api.test/v1?region=eu&api_key=abcdef123456&page=2",
-    );
+    const redacted = redactSecrets("GET https://api.test/v1?region=eu&api_key=abcdef123456&page=2");
     expect(redacted).not.toContain("abcdef123456");
     expect(redacted).toContain("region=eu");
     expect(redacted).toContain("page=2");

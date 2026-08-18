@@ -1,9 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import Editor, {
-  type BeforeMount,
-  type OnChange,
-  type OnMount,
-} from "@monaco-editor/react";
+import Editor, { type BeforeMount, type OnChange, type OnMount } from "@monaco-editor/react";
 import { AlertCircle, Loader2 } from "lucide-react";
 import { useConfigStore } from "@/stores";
 import { DEFAULT_TERMINAL_APPEARANCE } from "@/constants/terminal";
@@ -52,12 +48,7 @@ export function forwardMonacoFileChange(
   if (nextValue !== undefined) onChange(nextValue);
 }
 
-export function MonacoFileEditor({
-  language,
-  value,
-  onChange,
-  onSave,
-}: MonacoFileEditorProps) {
+export function MonacoFileEditor({ language, value, onChange, onSave }: MonacoFileEditorProps) {
   const terminalAppearance =
     useConfigStore((state) => state.config.global.terminalAppearance) ||
     DEFAULT_TERMINAL_APPEARANCE;
@@ -87,18 +78,18 @@ export function MonacoFileEditor({
     };
   }, [monacoAttempt, monacoReady]);
 
-  const handleEditorWillMount: BeforeMount = useCallback(
-    disableMonacoFileDiagnostics,
-    [],
-  );
+  const handleEditorWillMount: BeforeMount = useCallback(disableMonacoFileDiagnostics, []);
 
   const handleEditorMount: OnMount = useCallback((editor, monaco) => {
     registerMonacoFileSaveCommand(editor, monaco, () => onSaveRef.current);
   }, []);
 
-  const handleEditorChange: OnChange = useCallback((nextValue) => {
-    forwardMonacoFileChange(nextValue, onChange);
-  }, [onChange]);
+  const handleEditorChange: OnChange = useCallback(
+    (nextValue) => {
+      forwardMonacoFileChange(nextValue, onChange);
+    },
+    [onChange],
+  );
 
   const loading = (
     <div className="flex h-full items-center justify-center">

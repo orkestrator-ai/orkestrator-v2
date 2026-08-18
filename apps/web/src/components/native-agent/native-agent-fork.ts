@@ -27,8 +27,7 @@ export function resolveNativeAgentPromptBoundary(
     const previousTurn = findPreviousForkMessage(
       allMessages,
       message.id,
-      (candidate) => Boolean(candidate.turnId)
-        && candidate.turnId !== message.turnId,
+      (candidate) => Boolean(candidate.turnId) && candidate.turnId !== message.turnId,
     );
     if (previousTurn) {
       return {
@@ -36,16 +35,15 @@ export function resolveNativeAgentPromptBoundary(
         messageId: getNativeSourceMessageId(previousTurn.id),
       };
     }
-    return findPreviousForkMessage(allMessages, message.id)
-      ? null
-      : { type: "session-start" };
+    return findPreviousForkMessage(allMessages, message.id) ? null : { type: "session-start" };
   }
   const previous = findPreviousForkMessage(allMessages, message.id);
   if (!previous) return { type: "session-start" };
   return {
     type: "message",
-    messageId: previous.parts.find((part) => part.sourceMessageId)?.sourceMessageId
-      ?? getNativeSourceMessageId(previous.id),
+    messageId:
+      previous.parts.find((part) => part.sourceMessageId)?.sourceMessageId ??
+      getNativeSourceMessageId(previous.id),
   };
 }
 
@@ -79,7 +77,8 @@ export function resolveNativeAgentResponseBoundary(
   }
   return {
     type: "message",
-    messageId: message.parts.find((part) => part.sourceMessageId)?.sourceMessageId
-      ?? getNativeSourceMessageId(message.id),
+    messageId:
+      message.parts.find((part) => part.sourceMessageId)?.sourceMessageId ??
+      getNativeSourceMessageId(message.id),
   };
 }

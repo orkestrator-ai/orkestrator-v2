@@ -29,9 +29,7 @@ describe("public backend address", () => {
     expect(normalizeBackendAddress("workstation.tailnet.ts.net")).toBe(
       "https://workstation.tailnet.ts.net",
     );
-    expect(normalizeBackendAddress(" http://127.0.0.1:34121/ ")).toBe(
-      "http://127.0.0.1:34121",
-    );
+    expect(normalizeBackendAddress(" http://127.0.0.1:34121/ ")).toBe("http://127.0.0.1:34121");
   });
 
   test("rejects empty, malformed, credentialed, non-HTTP, and non-origin addresses", () => {
@@ -80,7 +78,10 @@ describe("saved public connection", () => {
 
   test("removes legacy persistent tokens and migrates only the old tab token", () => {
     localStorage.setItem("orkestrator.public.backend-address", "https://one.example");
-    localStorage.setItem("orkestrator.public.remembered-gateway-token", "persistent-token-must-not-survive");
+    localStorage.setItem(
+      "orkestrator.public.remembered-gateway-token",
+      "persistent-token-must-not-survive",
+    );
     sessionStorage.setItem("orkestrator.public.gateway-token", token);
 
     expect(loadSavedConnection()).toEqual({ address: "https://one.example", token });
@@ -100,7 +101,9 @@ describe("saved public connection", () => {
   test("switches between recent servers using their tab-scoped tokens", () => {
     saveConnection({ address: "https://one.example", token: "gateway-token-one-123456" });
     saveConnection({ address: "https://two.example", token: "gateway-token-two-123456" });
-    const one = listBrowserConnections().connections.find((connection) => connection.address === "https://one.example");
+    const one = listBrowserConnections().connections.find(
+      (connection) => connection.address === "https://one.example",
+    );
     const oneId = one?.id ?? "";
     expect(oneId).not.toBe("");
 
@@ -117,12 +120,19 @@ describe("saved public connection", () => {
     saveConnection({ address: "https://one.example", token: "gateway-token-one-123456" });
     saveConnection({ address: "https://two.example", token: "gateway-token-two-123456" });
     const connections = listBrowserConnections().connections;
-    const oneId = connections.find((connection) => connection.address === "https://one.example")?.id ?? "";
-    const twoId = connections.find((connection) => connection.address === "https://two.example")?.id ?? "";
+    const oneId =
+      connections.find((connection) => connection.address === "https://one.example")?.id ?? "";
+    const twoId =
+      connections.find((connection) => connection.address === "https://two.example")?.id ?? "";
 
-    expect(forgetBrowserConnection(oneId).connections.map((connection) => connection.id)).toEqual([twoId]);
+    expect(forgetBrowserConnection(oneId).connections.map((connection) => connection.id)).toEqual([
+      twoId,
+    ]);
     expect(loadSavedConnection().address).toBe("https://two.example");
-    expect(forgetBrowserConnection(twoId)).toMatchObject({ activeConnectionId: "", connections: [] });
+    expect(forgetBrowserConnection(twoId)).toMatchObject({
+      activeConnectionId: "",
+      connections: [],
+    });
     expect(loadSavedConnection()).toEqual({ address: "", token: "" });
   });
 
@@ -135,19 +145,38 @@ describe("saved public connection", () => {
   });
 
   test("filters malformed storage records and non-string tokens", () => {
-    localStorage.setItem("orkestrator.public.connections", JSON.stringify([
-      null,
-      { id: "wrong-id", name: "Wrong", address: "https://wrong.example", lastConnectedAt: "now" },
-      { id: "remote:javascript:alert(1)", name: "Unsafe", address: "javascript:alert(1)", lastConnectedAt: "now" },
-      { id: "remote:https://valid.example", name: "Valid", address: "https://valid.example", lastConnectedAt: "now" },
-    ]));
+    localStorage.setItem(
+      "orkestrator.public.connections",
+      JSON.stringify([
+        null,
+        { id: "wrong-id", name: "Wrong", address: "https://wrong.example", lastConnectedAt: "now" },
+        {
+          id: "remote:javascript:alert(1)",
+          name: "Unsafe",
+          address: "javascript:alert(1)",
+          lastConnectedAt: "now",
+        },
+        {
+          id: "remote:https://valid.example",
+          name: "Valid",
+          address: "https://valid.example",
+          lastConnectedAt: "now",
+        },
+      ]),
+    );
     localStorage.setItem("orkestrator.public.backend-address", "https://valid.example");
-    sessionStorage.setItem("orkestrator.public.gateway-tokens", JSON.stringify({
-      "remote:https://valid.example": { nested: "not-a-token" },
-    }));
+    sessionStorage.setItem(
+      "orkestrator.public.gateway-tokens",
+      JSON.stringify({
+        "remote:https://valid.example": { nested: "not-a-token" },
+      }),
+    );
 
     expect(listBrowserConnections().connections).toHaveLength(1);
-    expect(listBrowserConnections().connections[0]).toMatchObject({ name: "Valid", requiresToken: true });
+    expect(listBrowserConnections().connections[0]).toMatchObject({
+      name: "Valid",
+      requiresToken: true,
+    });
     expect(loadSavedConnection().token).toBe("");
   });
 
@@ -159,7 +188,9 @@ describe("saved public connection", () => {
     const recent = listBrowserConnections().connections;
     expect(recent).toHaveLength(20);
     expect(recent[0]?.address).toBe("https://server-10.example");
-    expect(recent.filter((connection) => connection.address === "https://server-10.example")).toHaveLength(1);
+    expect(
+      recent.filter((connection) => connection.address === "https://server-10.example"),
+    ).toHaveLength(1);
   });
 
   test("does not create an orphan token entry without an active address", () => {
@@ -187,15 +218,29 @@ describe("public backend connection check", () => {
   test("reports authentication, origin, backend, and malformed success responses", async () => {
     globalThis.fetch = mock()
       .mockResolvedValueOnce(new Response("{}", { status: 401 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ error: "Origin not allowed" }), { status: 403 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ error: "policy denied" }), { status: 403 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ error: "backend unavailable" }), { status: 503 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: "Origin not allowed" }), { status: 403 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: "policy denied" }), { status: 403 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: "backend unavailable" }), { status: 503 }),
+      )
       .mockResolvedValueOnce(new Response("not json", { status: 200 })) as unknown as typeof fetch;
 
-    await expect(checkBackendConnection("https://one.example", token)).rejects.toThrow("token was rejected");
-    await expect(checkBackendConnection("https://one.example", token)).rejects.toThrow("allowed origins");
-    await expect(checkBackendConnection("https://one.example", token)).rejects.toThrow("policy denied");
-    await expect(checkBackendConnection("https://one.example", token)).rejects.toThrow("backend unavailable");
+    await expect(checkBackendConnection("https://one.example", token)).rejects.toThrow(
+      "token was rejected",
+    );
+    await expect(checkBackendConnection("https://one.example", token)).rejects.toThrow(
+      "allowed origins",
+    );
+    await expect(checkBackendConnection("https://one.example", token)).rejects.toThrow(
+      "policy denied",
+    );
+    await expect(checkBackendConnection("https://one.example", token)).rejects.toThrow(
+      "backend unavailable",
+    );
     await expect(checkBackendConnection("https://one.example", token)).rejects.toThrow("HTTP 200");
   });
 
@@ -203,13 +248,15 @@ describe("public backend connection check", () => {
     const request = mock(async () => new Response("{}"));
     globalThis.fetch = request as unknown as typeof fetch;
 
-    await expect(checkBackendConnection("https://one.example", "short")).rejects.toThrow("at least 16");
-    await expect(checkBackendConnection("https://one.example", token, { timeoutMs: 0 })).rejects.toThrow(
-      "positive number",
+    await expect(checkBackendConnection("https://one.example", "short")).rejects.toThrow(
+      "at least 16",
     );
-    await expect(checkBackendConnection("https://one.example", token, { timeoutMs: Number.NaN })).rejects.toThrow(
-      "positive number",
-    );
+    await expect(
+      checkBackendConnection("https://one.example", token, { timeoutMs: 0 }),
+    ).rejects.toThrow("positive number");
+    await expect(
+      checkBackendConnection("https://one.example", token, { timeoutMs: Number.NaN }),
+    ).rejects.toThrow("positive number");
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -217,32 +264,47 @@ describe("public backend connection check", () => {
     globalThis.fetch = mock(async () => {
       throw new TypeError("network down");
     }) as unknown as typeof fetch;
-    await expect(checkBackendConnection("https://one.example", token)).rejects.toThrow("Could not reach");
-
-    globalThis.fetch = mock((_input, init) => new Promise<Response>((_resolve, reject) => {
-      init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
-    })) as unknown as typeof fetch;
-    await expect(checkBackendConnection("https://one.example", token, { timeoutMs: 1 })).rejects.toThrow(
-      "0.001 seconds",
+    await expect(checkBackendConnection("https://one.example", token)).rejects.toThrow(
+      "Could not reach",
     );
 
+    globalThis.fetch = mock(
+      (_input, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
+            once: true,
+          });
+        }),
+    ) as unknown as typeof fetch;
+    await expect(
+      checkBackendConnection("https://one.example", token, { timeoutMs: 1 }),
+    ).rejects.toThrow("0.001 seconds");
+
     const controller = new AbortController();
-    const pending = checkBackendConnection("https://one.example", token, { signal: controller.signal });
+    const pending = checkBackendConnection("https://one.example", token, {
+      signal: controller.signal,
+    });
     controller.abort();
     await expect(pending).rejects.toThrow("cancelled");
   });
 
   test("keeps the timeout active while reading the status response body", async () => {
-    globalThis.fetch = mock(async (_input, init) => ({
-      status: 200,
-      ok: true,
-      json: () => new Promise((_resolve, reject) => {
-        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
-      }),
-    }) as Response) as unknown as typeof fetch;
+    globalThis.fetch = mock(
+      async (_input, init) =>
+        ({
+          status: 200,
+          ok: true,
+          json: () =>
+            new Promise((_resolve, reject) => {
+              init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
+                once: true,
+              });
+            }),
+        }) as Response,
+    ) as unknown as typeof fetch;
 
-    await expect(checkBackendConnection("https://one.example", token, { timeoutMs: 1 })).rejects.toThrow(
-      "0.001 seconds",
-    );
+    await expect(
+      checkBackendConnection("https://one.example", token, { timeoutMs: 1 }),
+    ).rejects.toThrow("0.001 seconds");
   });
 });

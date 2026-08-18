@@ -32,14 +32,7 @@ export function installMonacoModules(
   modules: MonacoModuleBundle,
   configureLoader: (monaco: MonacoModuleBundle["monaco"]) => void,
 ): void {
-  const {
-    monaco,
-    EditorWorker,
-    JsonWorker,
-    CssWorker,
-    HtmlWorker,
-    TypeScriptWorker,
-  } = modules;
+  const { monaco, EditorWorker, JsonWorker, CssWorker, HtmlWorker, TypeScriptWorker } = modules;
   const workerFactories: Record<string, MonacoWorkerFactory> = {
     css: CssWorker,
     handlebars: HtmlWorker,

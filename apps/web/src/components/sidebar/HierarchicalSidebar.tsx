@@ -1,4 +1,13 @@
-import { lazy, useState, useEffect, useCallback, useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
+import {
+  lazy,
+  useState,
+  useEffect,
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  type ReactNode,
+} from "react";
 import {
   DndContext,
   closestCenter,
@@ -16,7 +25,17 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { Button } from "@/components/ui/button";
-import { ArrowUpDown, Bell, Boxes, Plus, FolderGit2, Square, Trash2, RotateCw, RefreshCw } from "lucide-react";
+import {
+  ArrowUpDown,
+  Bell,
+  Boxes,
+  Plus,
+  FolderGit2,
+  Square,
+  Trash2,
+  RotateCw,
+  RefreshCw,
+} from "lucide-react";
 import { SortableProjectGroup } from "./SortableProjectGroup";
 import { AddProjectDialog } from "@/components/projects/AddProjectDialog";
 import { CreateEnvironmentFlowDialog } from "@/components/environments/CreateEnvironmentFlowDialog";
@@ -50,10 +69,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { EnvironmentItem } from "@/components/environments/EnvironmentItem";
 import { cn } from "@/lib/utils";
-import {
-  LazyDialogLoadingFallback,
-  LazyLoadBoundary,
-} from "@/components/LazyLoadBoundary";
+import { LazyDialogLoadingFallback, LazyLoadBoundary } from "@/components/LazyLoadBoundary";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 
 const NO_ENVIRONMENTS: Environment[] = [];
@@ -117,16 +133,9 @@ export function animateActivityRowMovement(
   const nextTop = measureActivityRowLayoutTop(element);
   const offset = previousTop === null ? 0 : previousTop - nextTop;
   let animation: Animation | null = null;
-  if (
-    offset !== 0 &&
-    !reduceMotion &&
-    typeof element.animate === "function"
-  ) {
+  if (offset !== 0 && !reduceMotion && typeof element.animate === "function") {
     animation = element.animate(
-      [
-        { transform: `translateY(${offset}px)` },
-        { transform: "translateY(0)" },
-      ],
+      [{ transform: `translateY(${offset}px)` }, { transform: "translateY(0)" }],
       {
         duration: 280,
         easing: "cubic-bezier(0.22, 1, 0.36, 1)",
@@ -169,10 +178,7 @@ function AnimatedActivityRow({
 
     let previousTop = previousTopRef.current;
     const activeAnimation = animationRef.current;
-    if (
-      activeAnimation &&
-      activeAnimation.playState === "running"
-    ) {
+    if (activeAnimation && activeAnimation.playState === "running") {
       // Preserve the row's current visual position when activity changes again
       // before the prior movement finishes. Cancelling first would otherwise
       // make the row jump to its new layout position.
@@ -183,24 +189,17 @@ function AnimatedActivityRow({
       previousTop = (previousTopRef.current ?? layoutTop) + (transformedTop - layoutTop);
     }
 
-    const reduceMotion = typeof window.matchMedia === "function" &&
+    const reduceMotion =
+      typeof window.matchMedia === "function" &&
       window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const result = animateActivityRowMovement(
-      row,
-      previousTop,
-      reduceMotion,
-    );
+    const result = animateActivityRowMovement(row, previousTop, reduceMotion);
     previousTopRef.current = result.top;
     previousPositionRef.current = position;
     animationRef.current = result.animation;
   });
 
   return (
-    <div
-      ref={rowRef}
-      data-environment-id={environmentId}
-      className={className}
-    >
+    <div ref={rowRef} data-environment-id={environmentId} className={className}>
       {children}
     </div>
   );
@@ -262,7 +261,11 @@ export function resolveSidebarReorder(
   if (activeType === "environment") {
     const activeEnvironment = environments.find((environment) => environment.id === activeId);
     const overEnvironment = environments.find((environment) => environment.id === overId);
-    if (!activeEnvironment || !overEnvironment || activeEnvironment.projectId !== overEnvironment.projectId) {
+    if (
+      !activeEnvironment ||
+      !overEnvironment ||
+      activeEnvironment.projectId !== overEnvironment.projectId
+    ) {
       return null;
     }
     const projectEnvironments = environments
@@ -452,7 +455,7 @@ export function HierarchicalSidebar() {
     const projectsWithEnvs = new Set(allEnvironments.map((e) => e.projectId));
     collapseEmptyProjects(
       projects.map((p) => p.id),
-      projectsWithEnvs
+      projectsWithEnvs,
     );
     initialCollapseAppliedRef.current = true;
   }, [projects, allEnvironments, collapseEmptyProjects]);
@@ -474,9 +477,8 @@ export function HierarchicalSidebar() {
 
   // Get environments for a specific project
   const getProjectEnvironments = useCallback(
-    (projectId: string): Environment[] =>
-      environmentsByProject.get(projectId) ?? NO_ENVIRONMENTS,
-    [environmentsByProject]
+    (projectId: string): Environment[] => environmentsByProject.get(projectId) ?? NO_ENVIRONMENTS,
+    [environmentsByProject],
   );
 
   // DnD sensors
@@ -488,7 +490,7 @@ export function HierarchicalSidebar() {
     }),
     useSensor(KeyboardSensor, {
       coordinateGetter: sortableKeyboardCoordinates,
-    })
+    }),
   );
 
   const handleDragStart = (event: DragStartEvent) => {
@@ -515,7 +517,8 @@ export function HierarchicalSidebar() {
     );
     try {
       if (reorder?.type === "project") await reorderProjects(reorder.ids);
-      if (reorder?.type === "environment") await reorderEnvironments(reorder.projectId, reorder.ids);
+      if (reorder?.type === "environment")
+        await reorderEnvironments(reorder.projectId, reorder.ids);
     } catch (err) {
       console.error("Failed to persist sidebar reorder:", err);
     }
@@ -575,83 +578,85 @@ export function HierarchicalSidebar() {
       }
     }
     return orderedIds;
-  }, [activityEnvironments, environmentSortMode, projects, getProjectEnvironments, collapsedProjects]);
+  }, [
+    activityEnvironments,
+    environmentSortMode,
+    projects,
+    getProjectEnvironments,
+    collapsedProjects,
+  ]);
 
   // useCallback so memo(EnvironmentItem) rows are not invalidated every render.
-  const handleSelectEnvironment = useCallback((
-    environmentId: string,
-    modifiers: { shiftKey?: boolean; metaKey?: boolean } = {}
-  ) => {
-    const selection = resolveSidebarSelection(
-      environmentId,
-      modifiers,
-      getOrderedEnvironmentIds(),
-      selectedEnvironmentId,
-      selectedEnvironmentIds,
-    );
-    if (selection.type === "toggle") {
-      toggleEnvironmentSelection(selection.environmentId);
-      return;
-    }
-    if (selection.type === "range") {
-      setMultiSelection(selection.ids);
-      return;
-    }
+  const handleSelectEnvironment = useCallback(
+    (environmentId: string, modifiers: { shiftKey?: boolean; metaKey?: boolean } = {}) => {
+      const selection = resolveSidebarSelection(
+        environmentId,
+        modifiers,
+        getOrderedEnvironmentIds(),
+        selectedEnvironmentId,
+        selectedEnvironmentIds,
+      );
+      if (selection.type === "toggle") {
+        toggleEnvironmentSelection(selection.environmentId);
+        return;
+      }
+      if (selection.type === "range") {
+        setMultiSelection(selection.ids);
+        return;
+      }
 
-    // Normal click: clear multi-selection and select single environment
-    if (isMobile && document.activeElement instanceof HTMLElement) {
-      document.activeElement.blur();
-    }
-    clearMultiSelection();
-    const environment = allEnvironments.find((e) => e.id === selection.environmentId);
-    if (environment) {
-      selectProjectAndEnvironment(environment.projectId, environmentId);
-      // Auto-start local environments on selection so a terminal can open
-      if (
-        environment.environmentType === "local" &&
-        !environment.worktreePath &&
-        environment.status !== "creating"
-      ) {
-        console.info("[HierarchicalSidebar] Auto-starting local environment:", {
-          environmentId: environment.id,
-          branch: environment.branch,
-          status: environment.status,
-          worktreePath: environment.worktreePath,
-        });
-        // Setup command handling (blocking, placeholder, resolve) is centralized
-        // in useEnvironments.startEnvironment() for all code paths.
-        startEnvironment(environment.id)
-          .catch((err) => {
+      // Normal click: clear multi-selection and select single environment
+      if (isMobile && document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur();
+      }
+      clearMultiSelection();
+      const environment = allEnvironments.find((e) => e.id === selection.environmentId);
+      if (environment) {
+        selectProjectAndEnvironment(environment.projectId, environmentId);
+        // Auto-start local environments on selection so a terminal can open
+        if (
+          environment.environmentType === "local" &&
+          !environment.worktreePath &&
+          environment.status !== "creating"
+        ) {
+          console.info("[HierarchicalSidebar] Auto-starting local environment:", {
+            environmentId: environment.id,
+            branch: environment.branch,
+            status: environment.status,
+            worktreePath: environment.worktreePath,
+          });
+          // Setup command handling (blocking, placeholder, resolve) is centralized
+          // in useEnvironments.startEnvironment() for all code paths.
+          startEnvironment(environment.id).catch((err) => {
             console.error("[HierarchicalSidebar] Failed to auto-start local environment:", err);
           });
+        }
+        // Already-started local environments resume their backend-owned setup
+        // phase from the persisted environment snapshot.
       }
-      // Already-started local environments resume their backend-owned setup
-      // phase from the persisted environment snapshot.
-    }
-  }, [
-    getOrderedEnvironmentIds,
-    selectedEnvironmentId,
-    selectedEnvironmentIds,
-    toggleEnvironmentSelection,
-    setMultiSelection,
-    isMobile,
-    clearMultiSelection,
-    allEnvironments,
-    selectProjectAndEnvironment,
-    startEnvironment,
-  ]);
+    },
+    [
+      getOrderedEnvironmentIds,
+      selectedEnvironmentId,
+      selectedEnvironmentIds,
+      toggleEnvironmentSelection,
+      setMultiSelection,
+      isMobile,
+      clearMultiSelection,
+      allEnvironments,
+      selectProjectAndEnvironment,
+      startEnvironment,
+    ],
+  );
 
   // Bulk action handlers
   const handleStopSelected = async () => {
     const runningIds = selectedEnvironmentIds.filter((id) => {
       const env = allEnvironments.find((e) => e.id === id);
-      return env?.status === "running"
-        && (env.environmentType === "local" || dockerAvailable);
+      return env?.status === "running" && (env.environmentType === "local" || dockerAvailable);
     });
 
-    const results = await Promise.allSettled(
-      runningIds.map((id) => stopEnvironment(id))
-    );
+    const results = await Promise.allSettled(runningIds.map((id) => stopEnvironment(id)));
 
     results.forEach((result, index) => {
       if (result.status === "rejected") {
@@ -663,13 +668,10 @@ export function HierarchicalSidebar() {
   const handleRestartSelected = async () => {
     const runningIds = selectedEnvironmentIds.filter((id) => {
       const env = allEnvironments.find((e) => e.id === id);
-      return env?.status === "running"
-        && (env.environmentType === "local" || dockerAvailable);
+      return env?.status === "running" && (env.environmentType === "local" || dockerAvailable);
     });
 
-    const results = await Promise.allSettled(
-      runningIds.map((id) => restartEnvironment(id))
-    );
+    const results = await Promise.allSettled(runningIds.map((id) => restartEnvironment(id)));
 
     results.forEach((result, index) => {
       if (result.status === "rejected") {
@@ -681,9 +683,7 @@ export function HierarchicalSidebar() {
   const handleDeleteSelected = async () => {
     const idsToDelete = [...selectedEnvironmentIds];
 
-    const results = await Promise.allSettled(
-      idsToDelete.map((id) => deleteEnvironment(id))
-    );
+    const results = await Promise.allSettled(idsToDelete.map((id) => deleteEnvironment(id)));
 
     results.forEach((result, index) => {
       if (result.status === "rejected") {
@@ -705,13 +705,15 @@ export function HierarchicalSidebar() {
     .filter(Boolean) as { id: string; name: string }[];
   const hasActionableRunningSelection = selectedEnvironmentIds.some((id) => {
     const environment = allEnvironments.find((candidate) => candidate.id === id);
-    return environment?.status === "running"
-      && (environment.environmentType === "local" || dockerAvailable);
+    return (
+      environment?.status === "running" &&
+      (environment.environmentType === "local" || dockerAvailable)
+    );
   });
 
   const handleUpdateEnvironment = useMemo(
     () => createEnvironmentUpdateHandler(updateEnvironment),
-    [updateEnvironment]
+    [updateEnvironment],
   );
 
   const handleOpenSettings = (projectId: string) => {
@@ -728,12 +730,16 @@ export function HierarchicalSidebar() {
 
   // Get the active item for drag overlay
   const activeProject = activeType === "project" ? projects.find((p) => p.id === activeId) : null;
-  const activeEnvironment = activeType === "environment" ? allEnvironments.find((e) => e.id === activeId) : null;
+  const activeEnvironment =
+    activeType === "environment" ? allEnvironments.find((e) => e.id === activeId) : null;
 
   return (
     <div className="flex h-full flex-col">
       {/* Header - switches between normal and multi-select mode */}
-      <div data-sidebar-header className="flex h-12 items-center justify-between border-b border-border/80 bg-[#212124] pl-3 pr-2">
+      <div
+        data-sidebar-header
+        className="flex h-12 items-center justify-between border-b border-border/80 bg-[#212124] pl-3 pr-2"
+      >
         {isMultiSelectMode ? (
           <>
             <span className="text-sm font-medium text-foreground">
@@ -835,11 +841,7 @@ export function HierarchicalSidebar() {
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div
           data-testid="sidebar-list-content"
-          className={
-            environmentSortMode === "activity" && projects.length > 0
-              ? "pb-2"
-              : "py-2"
-          }
+          className={environmentSortMode === "activity" && projects.length > 0 ? "pb-2" : "py-2"}
         >
           {projectsLoading && projects.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
@@ -850,11 +852,7 @@ export function HierarchicalSidebar() {
             <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
               <FolderGit2 className="h-8 w-8 mb-2 opacity-50" />
               <p className="text-sm">No projects yet</p>
-              <Button
-                variant="link"
-                size="sm"
-                onClick={() => setShowAddProjectDialog(true)}
-              >
+              <Button variant="link" size="sm" onClick={() => setShowAddProjectDialog(true)}>
                 Add your first project
               </Button>
             </div>
@@ -943,10 +941,7 @@ export function HierarchicalSidebar() {
                   No environments yet
                 </div>
               ) : (
-                <div
-                  data-testid="activity-environment-rows"
-                  className="px-1 pt-2"
-                >
+                <div data-testid="activity-environment-rows" className="px-1 pt-2">
                   {activityEnvironments.map((environment, position) => (
                     <AnimatedActivityRow
                       key={environment.id}
@@ -962,7 +957,9 @@ export function HierarchicalSidebar() {
                       <div className="min-w-0 flex-1 pl-2">
                         <EnvironmentItem
                           environment={environment}
-                          subtitle={projectsById.get(environment.projectId)?.name ?? "Unknown project"}
+                          subtitle={
+                            projectsById.get(environment.projectId)?.name ?? "Unknown project"
+                          }
                           isSelected={selectedEnvironmentId === environment.id}
                           onSelect={handleSelectEnvironment}
                           onDelete={deleteEnvironment}
@@ -1053,9 +1050,7 @@ export function HierarchicalSidebar() {
           if (!open) setCreateEnvProjectId(null);
         }}
         projectId={createEnvProjectId}
-        projectName={
-          projects.find((project) => project.id === createEnvProjectId)?.name
-        }
+        projectName={projects.find((project) => project.id === createEnvProjectId)?.name}
         createEnvironment={createEnvironment}
         updateEnvironment={updateEnvironment}
         startEnvironment={startEnvironment}
@@ -1095,9 +1090,7 @@ export function HierarchicalSidebar() {
       {/* Repository Settings Dialog */}
       {settingsProject && showSettingsDialog && (
         <LazyLoadBoundary
-          loadingFallback={
-            <LazyDialogLoadingFallback label="Loading repository settings…" />
-          }
+          loadingFallback={<LazyDialogLoadingFallback label="Loading repository settings…" />}
         >
           <LazyRepositorySettings
             project={settingsProject}

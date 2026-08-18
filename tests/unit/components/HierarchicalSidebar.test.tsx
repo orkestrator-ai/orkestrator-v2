@@ -146,15 +146,16 @@ mock.module("@/components/environments/EnvironmentSettingsDialog", () => ({
     open: boolean;
     environment: Environment;
     onUpdate: (environment: Environment) => void;
-  }) => open
-    ? createElement(
-        "button",
-        {
-          onClick: () => onUpdate({ ...environment, name: "Updated from settings" }),
-        },
-        "Apply settings update",
-      )
-    : null,
+  }) =>
+    open
+      ? createElement(
+          "button",
+          {
+            onClick: () => onUpdate({ ...environment, name: "Updated from settings" }),
+          },
+          "Apply settings update",
+        )
+      : null,
 }));
 
 const {
@@ -200,8 +201,8 @@ const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
 const originalReload = window.location.reload;
 
 function mockActivityRowOffsetTop(
-  getTop: (row: HTMLElement, index: number, rows: HTMLElement[]) => number =
-    (_row, index) => index * 40,
+  getTop: (row: HTMLElement, index: number, rows: HTMLElement[]) => number = (_row, index) =>
+    index * 40,
 ): () => void {
   const originalDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetTop");
   Object.defineProperty(HTMLElement.prototype, "offsetTop", {
@@ -310,11 +311,20 @@ describe("HierarchicalSidebar", () => {
   test("renders the active server switcher in the sidebar header", async () => {
     const originalApi = window.orkestrator;
     window.orkestrator = {
-      ...(originalApi ?? {}),
+      ...originalApi,
       connections: {
         list: mock(async () => ({
           activeConnectionId: "local",
-          connections: [{ id: "local", name: "Local", address: null, kind: "local" as const, active: true, requiresToken: false }],
+          connections: [
+            {
+              id: "local",
+              name: "Local",
+              address: null,
+              kind: "local" as const,
+              active: true,
+              requiresToken: false,
+            },
+          ],
         })),
         connect: mock(async () => ({ activeConnectionId: "local", connections: [] })),
         use: mock(async () => ({ activeConnectionId: "local", connections: [] })),
@@ -444,10 +454,7 @@ describe("HierarchicalSidebar", () => {
 
     fireEvent.pointerDown(screen.getByRole("button", { name: "Create environment" }));
     const projectItems = await screen.findAllByRole("menuitem");
-    expect(projectItems.map((item) => item.textContent)).toEqual([
-      "Project One",
-      "Project Two",
-    ]);
+    expect(projectItems.map((item) => item.textContent)).toEqual(["Project One", "Project Two"]);
 
     fireEvent.click(projectItems[1]!);
     expect(
@@ -458,20 +465,23 @@ describe("HierarchicalSidebar", () => {
   });
 
   test("shows completed activity from the environment record and selects the row", () => {
-    environmentsValue = [{
-      ...createdEnvironment,
-      id: "env-waiting",
-      name: "Waiting environment",
-      hasUnreadWork: true,
-      lastActivityAt: "2026-07-22T10:00:00.000Z",
-    }];
+    environmentsValue = [
+      {
+        ...createdEnvironment,
+        id: "env-waiting",
+        name: "Waiting environment",
+        hasUnreadWork: true,
+        lastActivityAt: "2026-07-22T10:00:00.000Z",
+      },
+    ];
     useUIStore.setState({ environmentSortMode: "activity" });
 
     render(<HierarchicalSidebar />);
 
     expect(screen.getByLabelText("New completed activity")).toBeTruthy();
     expect(screen.getByLabelText("1 waiting environment")).toBeTruthy();
-    const row = screen.getByTestId("activity-environment-list")
+    const row = screen
+      .getByTestId("activity-environment-list")
       .querySelector('[data-environment-id="env-waiting"] [role="button"]');
     expect(row).toBeTruthy();
     fireEvent.click(row!);
@@ -482,12 +492,14 @@ describe("HierarchicalSidebar", () => {
   });
 
   test("persists environment updates initiated from an activity row", async () => {
-    environmentsValue = [{
-      ...createdEnvironment,
-      id: "env-settings",
-      name: "Settings environment",
-      lastActivityAt: "2026-07-22T10:00:00.000Z",
-    }];
+    environmentsValue = [
+      {
+        ...createdEnvironment,
+        id: "env-settings",
+        name: "Settings environment",
+        lastActivityAt: "2026-07-22T10:00:00.000Z",
+      },
+    ];
     useUIStore.getState().setEnvironmentSortMode("activity");
     render(<HierarchicalSidebar />);
 
@@ -507,7 +519,7 @@ describe("HierarchicalSidebar", () => {
   test("animates activity row movement and skips first, stationary, unsupported, and reduced-motion cases", () => {
     const parent = document.createElement("div");
     const row = document.createElement("div");
-    const animate = mock(() => ({} as Animation));
+    const animate = mock(() => ({}) as Animation);
     parent.append(row);
     Object.defineProperty(parent, "offsetTop", { configurable: true, value: 100 });
     Object.defineProperty(row, "offsetTop", { configurable: true, value: 120 });
@@ -540,10 +552,7 @@ describe("HierarchicalSidebar", () => {
       animation: expect.anything(),
     });
     expect(animate).toHaveBeenCalledWith(
-      [
-        { transform: "translateY(80px)" },
-        { transform: "translateY(0)" },
-      ],
+      [{ transform: "translateY(80px)" }, { transform: "translateY(0)" }],
       {
         duration: 280,
         easing: "cubic-bezier(0.22, 1, 0.36, 1)",
@@ -577,7 +586,10 @@ describe("HierarchicalSidebar", () => {
     const originalAnimate = HTMLElement.prototype.animate;
     const transforms = new Map<string, number>();
     const animationCalls = new Map<string, Array<Keyframe[]>>();
-    const animations = new Map<string, { playState: AnimationPlayState; cancel: ReturnType<typeof mock> }>();
+    const animations = new Map<
+      string,
+      { playState: AnimationPlayState; cancel: ReturnType<typeof mock> }
+    >();
     const restoreOffsetTop = mockActivityRowOffsetTop();
     let viewportTop = 100;
 
@@ -586,8 +598,8 @@ describe("HierarchicalSidebar", () => {
         const rows = Array.from(
           this.parentElement.querySelectorAll<HTMLElement>("[data-environment-id]"),
         );
-        const top = viewportTop + rows.indexOf(this) * 40 +
-          (transforms.get(this.dataset.environmentId) ?? 0);
+        const top =
+          viewportTop + rows.indexOf(this) * 40 + (transforms.get(this.dataset.environmentId) ?? 0);
         return {
           bottom: top + 40,
           height: 40,
@@ -600,9 +612,11 @@ describe("HierarchicalSidebar", () => {
           toJSON: () => ({}),
         };
       }
-      if (Array.from(this.children).some(
-        (child) => child instanceof HTMLElement && Boolean(child.dataset.environmentId),
-      )) {
+      if (
+        Array.from(this.children).some(
+          (child) => child instanceof HTMLElement && Boolean(child.dataset.environmentId),
+        )
+      ) {
         return {
           bottom: viewportTop + 400,
           height: 400,
@@ -660,11 +674,11 @@ describe("HierarchicalSidebar", () => {
       expect(animationCalls.size).toBe(0);
 
       // Moving the second row to the top shifts only the first and second rows.
-      environmentsValue = environmentsValue.map((environment) => (
+      environmentsValue = environmentsValue.map((environment) =>
         environment.id === "env-second"
           ? { ...environment, lastActivityAt: "2026-07-23T13:00:00.000Z" }
-          : environment
-      ));
+          : environment,
+      );
       view.rerender(<HierarchicalSidebar />);
 
       const orderedIds = Array.from(
@@ -677,11 +691,11 @@ describe("HierarchicalSidebar", () => {
       expect(animationCalls.has("env-unchanged")).toBe(false);
 
       // A content-only update while transforms are active must not restart them.
-      environmentsValue = environmentsValue.map((environment) => (
+      environmentsValue = environmentsValue.map((environment) =>
         environment.id === "env-unchanged"
           ? { ...environment, status: "stopped" as const }
-          : environment
-      ));
+          : environment,
+      );
       view.rerender(<HierarchicalSidebar />);
       expect(animationCalls.get("env-first")).toHaveLength(1);
       expect(animationCalls.get("env-second")).toHaveLength(1);
@@ -692,17 +706,19 @@ describe("HierarchicalSidebar", () => {
       const firstAnimation = animations.get("env-first");
       const secondAnimation = animations.get("env-second");
       viewportTop = -250; // Scrolling and an outer layout shift cancel in list-relative geometry.
-      environmentsValue = environmentsValue.map((environment) => (
+      environmentsValue = environmentsValue.map((environment) =>
         environment.id === "env-first"
           ? { ...environment, lastActivityAt: "2026-07-23T14:00:00.000Z" }
-          : environment
-      ));
+          : environment,
+      );
       view.rerender(<HierarchicalSidebar />);
 
       expect(firstAnimation?.cancel).toHaveBeenCalledTimes(1);
       expect(secondAnimation?.cancel).toHaveBeenCalledTimes(1);
       expect(animationCalls.get("env-first")?.[1]?.[0]).toEqual({ transform: "translateY(20px)" });
-      expect(animationCalls.get("env-second")?.[1]?.[0]).toEqual({ transform: "translateY(-20px)" });
+      expect(animationCalls.get("env-second")?.[1]?.[0]).toEqual({
+        transform: "translateY(-20px)",
+      });
       expect(animationCalls.has("env-unchanged")).toBe(false);
     } finally {
       HTMLElement.prototype.getBoundingClientRect = originalGetBoundingClientRect;
@@ -719,10 +735,9 @@ describe("HierarchicalSidebar", () => {
       ["env-c", 40],
     ]);
     const restoreOffsetTop = mockActivityRowOffsetTop((_row, index, rows) =>
-      rows.slice(0, index).reduce(
-        (top, row) => top + (rowHeights.get(row.dataset.environmentId!) ?? 40),
-        0,
-      )
+      rows
+        .slice(0, index)
+        .reduce((top, row) => top + (rowHeights.get(row.dataset.environmentId!) ?? 40), 0),
     );
     const animationCalls = new Map<string, Keyframe[]>();
     HTMLElement.prototype.animate = function (keyframes) {
@@ -741,19 +756,19 @@ describe("HierarchicalSidebar", () => {
 
       // The first row grows, moving later rows without changing their indices.
       rowHeights.set("env-a", 80);
-      environmentsValue = environmentsValue.map((environment) => (
+      environmentsValue = environmentsValue.map((environment) =>
         environment.id === "env-a"
           ? { ...environment, initialPrompt: "A prompt that expands the row" }
-          : environment
-      ));
+          : environment,
+      );
       view.rerender(<HierarchicalSidebar />);
       expect(animationCalls.size).toBe(0);
 
-      environmentsValue = environmentsValue.map((environment) => (
+      environmentsValue = environmentsValue.map((environment) =>
         environment.id === "env-b"
           ? { ...environment, lastActivityAt: "2026-07-23T13:00:00.000Z" }
-          : environment
-      ));
+          : environment,
+      );
       view.rerender(<HierarchicalSidebar />);
 
       expect(animationCalls.get("env-b")?.[0]).toEqual({ transform: "translateY(80px)" });
@@ -769,7 +784,7 @@ describe("HierarchicalSidebar", () => {
     const originalGetBoundingClientRect = HTMLElement.prototype.getBoundingClientRect;
     const originalAnimate = HTMLElement.prototype.animate;
     const originalMatchMedia = window.matchMedia;
-    const animate = mock(() => ({ playState: "running" } as Animation));
+    const animate = mock(() => ({ playState: "running" }) as Animation);
     const restoreOffsetTop = mockActivityRowOffsetTop();
 
     HTMLElement.prototype.getBoundingClientRect = function () {
@@ -812,11 +827,11 @@ describe("HierarchicalSidebar", () => {
       useUIStore.getState().setEnvironmentSortMode("activity");
       const view = render(<HierarchicalSidebar />);
 
-      environmentsValue = environmentsValue.map((environment) => (
+      environmentsValue = environmentsValue.map((environment) =>
         environment.id === "env-b"
           ? { ...environment, lastActivityAt: "2026-07-23T13:00:00.000Z" }
-          : environment
-      ));
+          : environment,
+      );
       view.rerender(<HierarchicalSidebar />);
 
       expect(animate).not.toHaveBeenCalled();
@@ -902,16 +917,17 @@ describe("HierarchicalSidebar", () => {
       { ...createdEnvironment, id: "env-tie-a", order: 2 },
     ];
 
-    expect(sortEnvironmentsByActivity(environments, [project, secondProject]).map((env) => env.id))
-      .toEqual([
-        "env-1",
-        "env-2",
-        "env-tie-a",
-        "env-tie-z",
-        "env-3",
-        "env-unknown-a",
-        "env-unknown-b",
-      ]);
+    expect(
+      sortEnvironmentsByActivity(environments, [project, secondProject]).map((env) => env.id),
+    ).toEqual([
+      "env-1",
+      "env-2",
+      "env-tie-a",
+      "env-tie-z",
+      "env-3",
+      "env-unknown-a",
+      "env-unknown-b",
+    ]);
     expect(environments.map((env) => env.id)).toEqual([
       "env-2",
       "env-3",
@@ -933,8 +949,10 @@ describe("HierarchicalSidebar", () => {
     expect(sortEnvironmentsByActivity([createdEnvironment], [project])).toEqual([
       createdEnvironment,
     ]);
-    expect(sortEnvironmentsByActivity(tiedEnvironments, [project]).map((env) => env.id))
-      .toEqual(["env-a", "env-b"]);
+    expect(sortEnvironmentsByActivity(tiedEnvironments, [project]).map((env) => env.id)).toEqual([
+      "env-a",
+      "env-b",
+    ]);
     expect(tiedEnvironments.map((env) => env.id)).toEqual(["env-b", "env-a"]);
   });
 
@@ -965,10 +983,7 @@ describe("HierarchicalSidebar", () => {
     });
 
     render(<HierarchicalSidebar />);
-    fireEvent.click(
-      screen.getByRole("button", { name: /Oldest environment/ }),
-      { shiftKey: true },
-    );
+    fireEvent.click(screen.getByRole("button", { name: /Oldest environment/ }), { shiftKey: true });
 
     expect(useUIStore.getState().selectedEnvironmentIds).toEqual([
       "env-newest",
@@ -987,7 +1002,9 @@ describe("HierarchicalSidebar", () => {
       name: "Refresh projects, environments, tabs, and layout",
     });
     const addProjectButton = screen.getByTitle("Add project");
-    expect(refreshButton.compareDocumentPosition(addProjectButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(
+      refreshButton.compareDocumentPosition(addProjectButton) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
 
     fireEvent.click(refreshButton);
     expect(reload).toHaveBeenCalledTimes(1);
@@ -1050,11 +1067,10 @@ describe("HierarchicalSidebar", () => {
       );
       expect(updateEnvironmentAgentSettingsMock).toHaveBeenCalled();
       expect(renameEnvironmentFromPromptMock).not.toHaveBeenCalled();
-      expect(startEnvironmentMock).toHaveBeenCalledWith(
-        "env-created",
-        "Use this screenshot",
-        { background: true, silent: true },
-      );
+      expect(startEnvironmentMock).toHaveBeenCalledWith("env-created", "Use this screenshot", {
+        background: true,
+        silent: true,
+      });
       expect(useClaudeOptionsStore.getState().getOptions("env-created")).toEqual(
         expect.objectContaining({
           launchAgent: true,
@@ -1080,9 +1096,7 @@ describe("HierarchicalSidebar", () => {
     render(<HierarchicalSidebar />);
 
     fireEvent.click(screen.getByTitle("Create environment"));
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Create Environment" }),
-    );
+    fireEvent.click(await screen.findByRole("button", { name: "Create Environment" }));
 
     expect(await screen.findByText("No GitHub CLI credentials found")).toBeTruthy();
     expect(createEnvironmentMock).not.toHaveBeenCalled();
@@ -1121,11 +1135,10 @@ describe("HierarchicalSidebar", () => {
         [],
       );
       expect(renameEnvironmentFromPromptMock).not.toHaveBeenCalled();
-      expect(startEnvironmentMock).toHaveBeenCalledWith(
-        "env-created",
-        "",
-        { background: true, silent: true },
-      );
+      expect(startEnvironmentMock).toHaveBeenCalledWith("env-created", "", {
+        background: true,
+        silent: true,
+      });
       expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
     });
 
@@ -1135,7 +1148,10 @@ describe("HierarchicalSidebar", () => {
   test("disables create controls while environment creation is pending", async () => {
     let resolveCreate: ((environment: Environment) => void) | undefined;
     createEnvironmentMock.mockImplementationOnce(
-      () => new Promise<Environment>((resolve) => { resolveCreate = resolve; }),
+      () =>
+        new Promise<Environment>((resolve) => {
+          resolveCreate = resolve;
+        }),
     );
     render(<HierarchicalSidebar />);
 
@@ -1198,9 +1214,12 @@ describe("HierarchicalSidebar", () => {
       fireEvent.click(screen.getByTitle("Create environment"));
       fireEvent.click(await screen.findByRole("button", { name: "Create Environment" }));
 
-      await waitFor(() => expect(consoleErrorMock).toHaveBeenCalledWith(
-        "Failed to create environment:", expect.any(Error),
-      ));
+      await waitFor(() =>
+        expect(consoleErrorMock).toHaveBeenCalledWith(
+          "Failed to create environment:",
+          expect.any(Error),
+        ),
+      );
       expect(screen.getByText(/^Create Ork \(Environment\)/)).toBeTruthy();
       expect(updateEnvironmentAgentSettingsMock).not.toHaveBeenCalled();
       expect(startEnvironmentMock).not.toHaveBeenCalled();
@@ -1223,9 +1242,17 @@ describe("HierarchicalSidebar", () => {
     await screen.findByText(/^Create Ork \(Environment\)/);
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
-    await waitFor(() => expect(createEnvironmentMock).toHaveBeenCalledWith(
-      "project-1", undefined, "full", undefined, undefined, "containerized", undefined,
-    ));
+    await waitFor(() =>
+      expect(createEnvironmentMock).toHaveBeenCalledWith(
+        "project-1",
+        undefined,
+        "full",
+        undefined,
+        undefined,
+        "containerized",
+        undefined,
+      ),
+    );
   });
 
   test("does not select or start a partially configured environment", async () => {
@@ -1241,9 +1268,12 @@ describe("HierarchicalSidebar", () => {
       fireEvent.click(screen.getByTitle("Create environment"));
       fireEvent.click(await screen.findByRole("button", { name: "Create Environment" }));
 
-      await waitFor(() => expect(consoleErrorMock).toHaveBeenCalledWith(
-        "Failed to create environment:", expect.any(Error),
-      ));
+      await waitFor(() =>
+        expect(consoleErrorMock).toHaveBeenCalledWith(
+          "Failed to create environment:",
+          expect.any(Error),
+        ),
+      );
       expect(createEnvironmentMock).toHaveBeenCalledTimes(1);
       expect(updateEnvironmentMock).not.toHaveBeenCalled();
       expect(startEnvironmentMock).not.toHaveBeenCalled();
@@ -1269,9 +1299,12 @@ describe("HierarchicalSidebar", () => {
       fireEvent.change(prompt, { target: { value: "Rename after startup" } });
       fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
-      await waitFor(() => expect(consoleErrorMock).toHaveBeenCalledWith(
-        "Failed to auto-start environment:", expect.any(Error),
-      ));
+      await waitFor(() =>
+        expect(consoleErrorMock).toHaveBeenCalledWith(
+          "Failed to auto-start environment:",
+          expect.any(Error),
+        ),
+      );
       expect(screen.queryByText(/^Create Ork \(Environment\)/) === null).toBe(true);
       expect(createEnvironmentMock).toHaveBeenCalledWith(
         "project-1",
@@ -1335,7 +1368,11 @@ describe("HierarchicalSidebar", () => {
       loadEnvironmentsMock.mockClear();
 
       await act(async () => {
-        dispatchResourceChange({ resource: "environment", id: "env-created-elsewhere", revision: 1 });
+        dispatchResourceChange({
+          resource: "environment",
+          id: "env-created-elsewhere",
+          revision: 1,
+        });
         // Past the dispatcher's coalescing window.
         await new Promise((resolve) => setTimeout(resolve, 80));
       });
@@ -1428,9 +1465,7 @@ describe("HierarchicalSidebar", () => {
 
   test("blurs the active input before activating an environment on mobile", () => {
     setMobileViewport(true);
-    environmentsValue = [
-      { ...createdEnvironment, id: "env-mobile", name: "Mobile Environment" },
-    ];
+    environmentsValue = [{ ...createdEnvironment, id: "env-mobile", name: "Mobile Environment" }];
     const input = document.createElement("input");
     document.body.appendChild(input);
     try {
@@ -1447,9 +1482,7 @@ describe("HierarchicalSidebar", () => {
   });
 
   test("keeps the focused input on desktop when activating an environment", () => {
-    environmentsValue = [
-      { ...createdEnvironment, id: "env-desktop", name: "Desktop Environment" },
-    ];
+    environmentsValue = [{ ...createdEnvironment, id: "env-desktop", name: "Desktop Environment" }];
     const input = document.createElement("input");
     document.body.appendChild(input);
     try {
@@ -1466,15 +1499,17 @@ describe("HierarchicalSidebar", () => {
   });
 
   test("reports an automatic local environment start failure", async () => {
-    environmentsValue = [{
-      ...createdEnvironment,
-      id: "env-local",
-      name: "Local Environment",
-      environmentType: "local",
-      containerId: null,
-      worktreePath: undefined,
-      status: "stopped",
-    }];
+    environmentsValue = [
+      {
+        ...createdEnvironment,
+        id: "env-local",
+        name: "Local Environment",
+        environmentType: "local",
+        containerId: null,
+        worktreePath: undefined,
+        status: "stopped",
+      },
+    ];
     startEnvironmentMock.mockImplementationOnce(async () => {
       throw new Error("start failed");
     });
@@ -1485,9 +1520,12 @@ describe("HierarchicalSidebar", () => {
     try {
       render(<HierarchicalSidebar />);
       fireEvent.click(screen.getByRole("button", { name: "Local Environment" }));
-      await waitFor(() => expect(consoleErrorMock).toHaveBeenCalledWith(
-        "[HierarchicalSidebar] Failed to auto-start local environment:", expect.any(Error),
-      ));
+      await waitFor(() =>
+        expect(consoleErrorMock).toHaveBeenCalledWith(
+          "[HierarchicalSidebar] Failed to auto-start local environment:",
+          expect.any(Error),
+        ),
+      );
       expect(useUIStore.getState().selectedEnvironmentId).toBe("env-local");
     } finally {
       console.error = originalConsoleError;
@@ -1596,9 +1634,15 @@ describe("HierarchicalSidebar", () => {
       { ...createdEnvironment, id: "env-running", name: "Running", order: 0, status: "running" },
     ];
     useUIStore.setState({ selectedEnvironmentIds: ["env-running"] });
-    stopEnvironmentMock.mockImplementationOnce(async () => { throw new Error("stop failed"); });
-    restartEnvironmentMock.mockImplementationOnce(async () => { throw new Error("restart failed"); });
-    deleteEnvironmentMock.mockImplementationOnce(async () => { throw new Error("delete failed"); });
+    stopEnvironmentMock.mockImplementationOnce(async () => {
+      throw new Error("stop failed");
+    });
+    restartEnvironmentMock.mockImplementationOnce(async () => {
+      throw new Error("restart failed");
+    });
+    deleteEnvironmentMock.mockImplementationOnce(async () => {
+      throw new Error("delete failed");
+    });
     const originalConsoleError = console.error;
     const consoleErrorMock = mock(() => undefined);
     console.error = consoleErrorMock as typeof console.error;
@@ -1606,20 +1650,29 @@ describe("HierarchicalSidebar", () => {
     try {
       render(<HierarchicalSidebar />);
       fireEvent.click(screen.getByTitle("Stop selected"));
-      await waitFor(() => expect(consoleErrorMock).toHaveBeenCalledWith(
-        "Failed to stop environment env-running:", expect.any(Error),
-      ));
+      await waitFor(() =>
+        expect(consoleErrorMock).toHaveBeenCalledWith(
+          "Failed to stop environment env-running:",
+          expect.any(Error),
+        ),
+      );
 
       fireEvent.click(screen.getByTitle("Restart selected"));
-      await waitFor(() => expect(consoleErrorMock).toHaveBeenCalledWith(
-        "Failed to restart environment env-running:", expect.any(Error),
-      ));
+      await waitFor(() =>
+        expect(consoleErrorMock).toHaveBeenCalledWith(
+          "Failed to restart environment env-running:",
+          expect.any(Error),
+        ),
+      );
 
       fireEvent.click(screen.getByTitle("Delete selected"));
       fireEvent.click(await screen.findByRole("button", { name: "Delete All" }));
-      await waitFor(() => expect(consoleErrorMock).toHaveBeenCalledWith(
-        "Failed to delete environment env-running:", expect.any(Error),
-      ));
+      await waitFor(() =>
+        expect(consoleErrorMock).toHaveBeenCalledWith(
+          "Failed to delete environment env-running:",
+          expect.any(Error),
+        ),
+      );
       expect(useUIStore.getState().selectedEnvironmentIds).toEqual([]);
     } finally {
       console.error = originalConsoleError;
@@ -1683,10 +1736,7 @@ describe("HierarchicalSidebar", () => {
       expect((await screen.findByRole("alert")).textContent).toContain("remote creation failed");
       expect(createProjectFromScratchMock).toHaveBeenCalledWith("/repos/new-project");
       expect(screen.getByRole("heading", { name: "Add project" })).toBeTruthy();
-      expect(consoleErrorMock).toHaveBeenCalledWith(
-        "Failed to create project:",
-        expect.any(Error),
-      );
+      expect(consoleErrorMock).toHaveBeenCalledWith("Failed to create project:", expect.any(Error));
     } finally {
       console.error = originalConsoleError;
     }
@@ -1699,15 +1749,18 @@ describe("HierarchicalSidebar", () => {
     fireEvent.contextMenu(projectButton);
     fireEvent.click(await screen.findByRole("menuitem", { name: "Repository Settings" }));
 
-    expect(
-      screen.getByRole("status", { name: "Loading repository settings…" }),
-    ).toBeTruthy();
+    expect(screen.getByRole("status", { name: "Loading repository settings…" })).toBeTruthy();
     // The dialog is a lazily imported chunk now, so resolving it is a real
     // async boundary rather than a render tick. The default 1s waitFor is not
     // enough headroom for that under a loaded parallel suite.
-    await waitFor(() => {
-      expect(screen.queryByLabelText("Name") || screen.queryByTestId("settings-layout")).toBeTruthy();
-    }, { timeout: 3_000 });
+    await waitFor(
+      () => {
+        expect(
+          screen.queryByLabelText("Name") || screen.queryByTestId("settings-layout"),
+        ).toBeTruthy();
+      },
+      { timeout: 3_000 },
+    );
   });
 
   test("forwards project changes through the project hook contract", async () => {
@@ -1724,10 +1777,7 @@ describe("HierarchicalSidebar", () => {
 
     handler(createdEnvironment);
 
-    expect(updateEnvironmentMock).toHaveBeenCalledWith(
-      createdEnvironment.id,
-      createdEnvironment,
-    );
+    expect(updateEnvironmentMock).toHaveBeenCalledWith(createdEnvironment.id, createdEnvironment);
   });
 
   test("deletes a project through its confirmation dialog", async () => {
@@ -1759,10 +1809,12 @@ describe("HierarchicalSidebar", () => {
       fireEvent.click(await screen.findByRole("menuitem", { name: "Delete Project" }));
       fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
 
-      await waitFor(() => expect(consoleErrorMock).toHaveBeenCalledWith(
-        "Failed to delete project:",
-        expect.any(Error),
-      ));
+      await waitFor(() =>
+        expect(consoleErrorMock).toHaveBeenCalledWith(
+          "Failed to delete project:",
+          expect.any(Error),
+        ),
+      );
       expect(removeProjectMock).not.toHaveBeenCalled();
       expect(screen.getByRole("alertdialog")).toBeTruthy();
     } finally {
@@ -1837,10 +1889,12 @@ describe("HierarchicalSidebar", () => {
         await Promise.resolve();
       });
 
-      await waitFor(() => expect(consoleErrorMock).toHaveBeenCalledWith(
-        "Failed to persist sidebar reorder:",
-        expect.any(Error),
-      ));
+      await waitFor(() =>
+        expect(consoleErrorMock).toHaveBeenCalledWith(
+          "Failed to persist sidebar reorder:",
+          expect.any(Error),
+        ),
+      );
     } finally {
       console.error = originalConsoleError;
     }
@@ -1848,24 +1902,31 @@ describe("HierarchicalSidebar", () => {
 
   test("resolves every selection modifier and fallback branch", () => {
     const orderedIds = ["env-1", "env-2", "env-3"];
-    expect(resolveSidebarSelection("missing", { shiftKey: true }, orderedIds, "env-1", [])).toEqual({
-      type: "toggle",
-      environmentId: "missing",
-    });
+    expect(resolveSidebarSelection("missing", { shiftKey: true }, orderedIds, "env-1", [])).toEqual(
+      {
+        type: "toggle",
+        environmentId: "missing",
+      },
+    );
     expect(resolveSidebarSelection("env-2", { shiftKey: true }, orderedIds, null, [])).toEqual({
       type: "range",
       ids: ["env-2"],
     });
-    expect(resolveSidebarSelection("env-3", { shiftKey: true }, orderedIds, null, ["env-1"]))
-      .toEqual({
-        type: "range",
-        ids: ["env-1", "env-2", "env-3"],
-      });
-    expect(resolveSidebarSelection("env-2", { shiftKey: true }, orderedIds, "missing", ["env-1"])).toEqual({
+    expect(
+      resolveSidebarSelection("env-3", { shiftKey: true }, orderedIds, null, ["env-1"]),
+    ).toEqual({
+      type: "range",
+      ids: ["env-1", "env-2", "env-3"],
+    });
+    expect(
+      resolveSidebarSelection("env-2", { shiftKey: true }, orderedIds, "missing", ["env-1"]),
+    ).toEqual({
       type: "range",
       ids: ["env-2"],
     });
-    expect(resolveSidebarSelection("env-1", { shiftKey: true, metaKey: true }, orderedIds, "env-3", [])).toEqual({
+    expect(
+      resolveSidebarSelection("env-1", { shiftKey: true, metaKey: true }, orderedIds, "env-3", []),
+    ).toEqual({
       type: "range",
       ids: ["env-1", "env-2", "env-3"],
     });
@@ -1881,7 +1942,9 @@ describe("HierarchicalSidebar", () => {
 
   test("resolves project and same-project environment reorder operations", () => {
     const secondProject = { ...project, id: "project-2", name: "Project Two", order: 1 };
-    expect(resolveSidebarReorder("project-1", "project-2", "project", [project, secondProject], [])).toEqual({
+    expect(
+      resolveSidebarReorder("project-1", "project-2", "project", [project, secondProject], []),
+    ).toEqual({
       type: "project",
       ids: ["project-2", "project-1"],
     });
@@ -1889,14 +1952,22 @@ describe("HierarchicalSidebar", () => {
     const first = { ...createdEnvironment, id: "env-1", order: 0 };
     const second = { ...createdEnvironment, id: "env-2", order: 1 };
     const other = { ...createdEnvironment, id: "env-3", projectId: "project-2", order: 0 };
-    expect(resolveSidebarReorder("env-1", "env-2", "environment", [project], [first, second, other])).toEqual({
+    expect(
+      resolveSidebarReorder("env-1", "env-2", "environment", [project], [first, second, other]),
+    ).toEqual({
       type: "environment",
       projectId: "project-1",
       ids: ["env-2", "env-1"],
     });
-    expect(resolveSidebarReorder("env-1", "env-3", "environment", [project], [first, second, other])).toBeNull();
-    expect(resolveSidebarReorder("missing", "env-2", "environment", [project], [first, second])).toBeNull();
-    expect(resolveSidebarReorder("env-1", "missing", "environment", [project], [first, second])).toBeNull();
+    expect(
+      resolveSidebarReorder("env-1", "env-3", "environment", [project], [first, second, other]),
+    ).toBeNull();
+    expect(
+      resolveSidebarReorder("missing", "env-2", "environment", [project], [first, second]),
+    ).toBeNull();
+    expect(
+      resolveSidebarReorder("env-1", "missing", "environment", [project], [first, second]),
+    ).toBeNull();
     expect(resolveSidebarReorder("missing", "project-1", "project", [project], [])).toBeNull();
     expect(resolveSidebarReorder("project-1", "missing", "project", [project], [])).toBeNull();
     expect(resolveSidebarReorder("project-1", "project-1", "project", [project], [])).toBeNull();
@@ -1908,7 +1979,12 @@ describe("HierarchicalSidebar", () => {
       { ...createdEnvironment, id: "env-1", name: "First" },
       { ...createdEnvironment, id: "env-2", name: "Second" },
     ];
-    await deleteProjectAndEnvironments("project-1", environments, deleteEnvironmentMock, removeProjectMock);
+    await deleteProjectAndEnvironments(
+      "project-1",
+      environments,
+      deleteEnvironmentMock,
+      removeProjectMock,
+    );
     expect(deleteEnvironmentMock.mock.calls.map(([id]) => id)).toEqual(["env-1", "env-2"]);
     expect(removeProjectMock).toHaveBeenCalledWith("project-1");
 
@@ -1918,7 +1994,12 @@ describe("HierarchicalSidebar", () => {
       throw new Error("delete failed");
     });
     await expect(
-      deleteProjectAndEnvironments("project-1", environments, deleteEnvironmentMock, removeProjectMock),
+      deleteProjectAndEnvironments(
+        "project-1",
+        environments,
+        deleteEnvironmentMock,
+        removeProjectMock,
+      ),
     ).rejects.toThrow("Failed to delete some environments: First");
     expect(deleteEnvironmentMock).toHaveBeenCalledTimes(2);
     expect(removeProjectMock).not.toHaveBeenCalled();
@@ -1954,7 +2035,12 @@ describe("HierarchicalSidebar", () => {
 
     try {
       await expect(
-        deleteProjectAndEnvironments("project-1", environments, deleteEnvironmentMock, removeProjectMock),
+        deleteProjectAndEnvironments(
+          "project-1",
+          environments,
+          deleteEnvironmentMock,
+          removeProjectMock,
+        ),
       ).rejects.toThrow("Failed to delete some environments: First, Second");
       expect(deleteEnvironmentMock).toHaveBeenCalledTimes(2);
       expect(removeProjectMock).not.toHaveBeenCalled();

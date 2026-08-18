@@ -6,7 +6,12 @@ import type {
   MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
-import { TerminalProvider, useTerminalContext, type CreatableTabType, type CreateTabOptions } from "@/contexts";
+import {
+  TerminalProvider,
+  useTerminalContext,
+  type CreatableTabType,
+  type CreateTabOptions,
+} from "@/contexts";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import {
@@ -23,45 +28,96 @@ import {
 
 const report: StructuredReviewReport = {
   reviewScope: {
-    targetBranch: "main", baseRef: "origin/main...HEAD", commit: null,
-    filesReviewed: ["src/review.ts"], filesSkipped: [], filesLeftUncommitted: [],
-    commandsRun: [], commandsNotRun: [], limitations: [],
+    targetBranch: "main",
+    baseRef: "origin/main...HEAD",
+    commit: null,
+    filesReviewed: ["src/review.ts"],
+    filesSkipped: [],
+    filesLeftUncommitted: [],
+    commandsRun: [],
+    commandsNotRun: [],
+    limitations: [],
   },
   whatChanged: {
-    overview: "Multi-model review", before: "One reviewer", after: "Review panel",
-    keyCodeChanges: [], userImpact: "Broader review coverage",
+    overview: "Multi-model review",
+    before: "One reviewer",
+    after: "Review panel",
+    keyCodeChanges: [],
+    userImpact: "Broader review coverage",
   },
-  riskProfile: { changeTypes: ["feature"], riskAreas: [], overallRisk: "medium", reasoning: "New workflow" },
+  riskProfile: {
+    changeTypes: ["feature"],
+    riskAreas: [],
+    overallRisk: "medium",
+    reasoning: "New workflow",
+  },
   testResults: { total: 0, passed: 0, failed: 0, notRun: 0, failures: [] },
   strengths: [],
-  issues: [{
-    severity: "P1", confidence: 95, category: "correctness", title: "Shared finding",
-    file: "src/review.ts", line: 12, symbol: "review", description: "A finding",
-    evidence: "Observed by both reviewers", suggestion: "Address it", verification: "Run the regression test",
-  }],
+  issues: [
+    {
+      severity: "P1",
+      confidence: 95,
+      category: "correctness",
+      title: "Shared finding",
+      file: "src/review.ts",
+      line: 12,
+      symbol: "review",
+      description: "A finding",
+      evidence: "Observed by both reviewers",
+      suggestion: "Address it",
+      verification: "Run the regression test",
+    },
+  ],
   testCoverageGaps: [{ file: "src/review.test.ts", untestedBehavior: "The failure branch" }],
   verdict: { ready: "with-fixes", reasoning: "One issue remains" },
-  summaryOfChange: "Adds Multi Review", reviewSummary: "Deduplicated reviewer findings",
+  summaryOfChange: "Adds Multi Review",
+  reviewSummary: "Deduplicated reviewer findings",
 };
 
 function readyWorkflow(): MultiReviewWorkflow {
   const timestamp = "2026-08-14T00:00:00.000Z";
   return {
-    version: 1, controller: "backend", id: "multi-1", environmentId: "env-1",
-    projectId: "project-1", targetBranch: "main", phase: "ready",
+    version: 1,
+    controller: "backend",
+    id: "multi-1",
+    environmentId: "env-1",
+    projectId: "project-1",
+    targetBranch: "main",
+    phase: "ready",
     reviewers: [
-      { id: "reviewer-1", agent: "claude", model: "opus", status: "completed",
-        providerSessionId: "provider-reviewer-1", report },
-      { id: "reviewer-2", agent: "codex", model: "gpt-5.6", status: "completed",
-        providerSessionId: "provider-reviewer-2", report },
+      {
+        id: "reviewer-1",
+        agent: "claude",
+        model: "opus",
+        status: "completed",
+        providerSessionId: "provider-reviewer-1",
+        report,
+      },
+      {
+        id: "reviewer-2",
+        agent: "codex",
+        model: "gpt-5.6",
+        status: "completed",
+        providerSessionId: "provider-reviewer-2",
+        report,
+      },
     ],
     fixModel: { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
     fixSession: {
-      agent: "codex", model: "gpt-5.6", reasoningEffort: "high",
-      sessionKey: "multi-review:multi-1:fix", providerSessionId: "provider-fix",
-      requestIds: ["consolidate-1"], status: "idle", startedAt: timestamp, completedAt: timestamp,
+      agent: "codex",
+      model: "gpt-5.6",
+      reasoningEffort: "high",
+      sessionKey: "multi-review:multi-1:fix",
+      providerSessionId: "provider-fix",
+      requestIds: ["consolidate-1"],
+      status: "idle",
+      startedAt: timestamp,
+      completedAt: timestamp,
     },
-    consolidatedReport: report, createdAt: timestamp, updatedAt: timestamp, backendRevision: 7,
+    consolidatedReport: report,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    backendRevision: 7,
   };
 }
 
@@ -104,12 +160,14 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     useMultiReviewStore.getState().replaceWorkflow(ready);
     const openReviewer = mock((_reviewerId: string, _index: number) => undefined);
 
-    render(<MultiReviewTab
-      data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
-      isActive
-      hydrateWorkflow={mock(async () => ready)}
-      openReviewer={openReviewer}
-    />);
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => ready)}
+        openReviewer={openReviewer}
+      />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Open Reviewer 1 transcript" }));
     expect(openReviewer).toHaveBeenCalledWith("reviewer-1", 0);
@@ -121,12 +179,14 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     useMultiReviewStore.getState().replaceWorkflow(ready);
     const openReviewer = mock((_reviewerId: string, _index: number) => undefined);
 
-    render(<MultiReviewTab
-      data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
-      isActive
-      hydrateWorkflow={mock(async () => ready)}
-      openReviewer={openReviewer}
-    />);
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => ready)}
+        openReviewer={openReviewer}
+      />,
+    );
 
     const withoutSession = screen.getByRole("button", { name: "Open Reviewer 1 transcript" });
     expect(withoutSession.hasAttribute("disabled")).toBe(true);
@@ -134,22 +194,26 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     expect(openReviewer).not.toHaveBeenCalled();
 
     // The sibling reviewer still has a session and stays reachable.
-    expect(screen.getByRole("button", { name: "Open Reviewer 2 transcript" })
-      .hasAttribute("disabled")).toBe(false);
+    expect(
+      screen.getByRole("button", { name: "Open Reviewer 2 transcript" }).hasAttribute("disabled"),
+    ).toBe(false);
   });
 
   test("cannot open any reviewer without an intent or a terminal context", () => {
     const ready = readyWorkflow();
     useMultiReviewStore.getState().replaceWorkflow(ready);
 
-    render(<MultiReviewTab
-      data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
-      isActive
-      hydrateWorkflow={mock(async () => ready)}
-    />);
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => ready)}
+      />,
+    );
 
-    expect(screen.getByRole("button", { name: "Open Reviewer 1 transcript" })
-      .hasAttribute("disabled")).toBe(true);
+    expect(
+      screen.getByRole("button", { name: "Open Reviewer 1 transcript" }).hasAttribute("disabled"),
+    ).toBe(true);
   });
 
   test("shows each reviewer's own failure beside the generalized workflow error", async () => {
@@ -157,18 +221,24 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     ready.phase = "failed";
     ready.error = "No reviewer produced a valid report: The reviewer session failed";
     ready.reviewers[0] = {
-      ...ready.reviewers[0]!, status: "failed", error: "The reviewer session failed",
+      ...ready.reviewers[0]!,
+      status: "failed",
+      error: "The reviewer session failed",
     };
     ready.reviewers[1] = {
-      ...ready.reviewers[1]!, status: "failed", error: "The reviewer session no longer exists",
+      ...ready.reviewers[1]!,
+      status: "failed",
+      error: "The reviewer session no longer exists",
     };
     useMultiReviewStore.getState().replaceWorkflow(ready);
 
-    render(<MultiReviewTab
-      data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
-      isActive
-      hydrateWorkflow={mock(async () => ready)}
-    />);
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => ready)}
+      />,
+    );
 
     expect(await screen.findByText("The reviewer session failed")).toBeTruthy();
     expect(screen.getByText("The reviewer session no longer exists")).toBeTruthy();
@@ -178,7 +248,9 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     const ready = readyWorkflow();
     useMultiReviewStore.getState().replaceWorkflow(ready);
     const interactive: MultiReviewWorkflow = {
-      ...ready, phase: "interactive", backendRevision: 8,
+      ...ready,
+      phase: "interactive",
+      backendRevision: 8,
     };
     let addressed = false;
     let addressedBeforeTab = false;
@@ -212,19 +284,23 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     const consolidated = screen.getByRole("article", { name: "Consolidated Multi Review" });
     expect(consolidated.textContent).toContain("Shared finding");
     expect(consolidated.textContent).toContain("The failure branch");
-    fireEvent.click(screen.getByRole("button", {
-      name: "Please address all the issues and coverage gaps",
-    }));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Please address all the issues and coverage gaps",
+      }),
+    );
 
-    await waitFor(() => expect(createTab).toHaveBeenCalledWith("codex", {
-      agentLaunchMode: "native",
-      resumeSessionId: "provider-fix",
-      displayTitle: "Multi Review · Fix",
-      isReviewTab: true,
-      initialAgentModel: "gpt-5.6",
-      initialReasoningEffort: "high",
-      initialConversationMode: "build",
-    }));
+    await waitFor(() =>
+      expect(createTab).toHaveBeenCalledWith("codex", {
+        agentLaunchMode: "native",
+        resumeSessionId: "provider-fix",
+        displayTitle: "Multi Review · Fix",
+        isReviewTab: true,
+        initialAgentModel: "gpt-5.6",
+        initialReasoningEffort: "high",
+        initialConversationMode: "build",
+      }),
+    );
     await waitFor(() => expect(address).toHaveBeenCalledWith(ready.id));
     expect(await screen.findByText("The fix model is working interactively")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Open fix session" })).toBeTruthy();
@@ -271,7 +347,9 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     const ready = readyWorkflow();
     useMultiReviewStore.getState().replaceWorkflow(ready);
     const interactive: MultiReviewWorkflow = {
-      ...ready, phase: "interactive", backendRevision: 8,
+      ...ready,
+      phase: "interactive",
+      backendRevision: 8,
     };
     const address = mock(async () => interactive);
     let tabsAvailable = false;
@@ -320,9 +398,14 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       </TerminalProvider>,
     );
     fireEvent.click(screen.getByRole("button", { name: "Open fix session" }));
-    await waitFor(() => expect(createTab).toHaveBeenLastCalledWith("codex", expect.objectContaining({
-      resumeSessionId: "provider-fix",
-    })));
+    await waitFor(() =>
+      expect(createTab).toHaveBeenLastCalledWith(
+        "codex",
+        expect.objectContaining({
+          resumeSessionId: "provider-fix",
+        }),
+      ),
+    );
     expect(createTab.mock.calls.at(-1)?.[1]).not.toHaveProperty("initialPrompt");
     expect(address).toHaveBeenCalledTimes(1);
   });
@@ -393,13 +476,17 @@ describe("MultiReviewTab backend snapshot viewer", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Open fix session" }));
     await waitFor(() => expect(address).toHaveBeenCalledWith(ready.id));
-    expect(createTab).toHaveBeenCalledWith("codex", expect.objectContaining({
-      resumeSessionId: "provider-fix",
-      initialConversationMode: "build",
-    }));
+    expect(createTab).toHaveBeenCalledWith(
+      "codex",
+      expect.objectContaining({
+        resumeSessionId: "provider-fix",
+        initialConversationMode: "build",
+      }),
+    );
     expect(createTab.mock.calls[0]?.[1]).not.toHaveProperty("initialPrompt");
-    expect(useMultiReviewStore.getState().workflows.get(ready.id)?.addressPromptPending)
-      .toBeUndefined();
+    expect(
+      useMultiReviewStore.getState().workflows.get(ready.id)?.addressPromptPending,
+    ).toBeUndefined();
   });
 
   test("reopens an interactive fix session without sending the address prompt again", async () => {
@@ -420,11 +507,16 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Open fix session" }));
-    await waitFor(() => expect(createTab).toHaveBeenCalledWith("codex", expect.objectContaining({
-      resumeSessionId: "provider-fix",
-      agentLaunchMode: "native",
-      initialConversationMode: "build",
-    })));
+    await waitFor(() =>
+      expect(createTab).toHaveBeenCalledWith(
+        "codex",
+        expect.objectContaining({
+          resumeSessionId: "provider-fix",
+          agentLaunchMode: "native",
+          initialConversationMode: "build",
+        }),
+      ),
+    );
     expect(createTab.mock.calls[0]?.[1]).not.toHaveProperty("initialPrompt");
   });
 
@@ -432,14 +524,17 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     const ready = readyWorkflow();
     useMultiReviewStore.getState().replaceWorkflow(ready);
 
-    render(<MultiReviewTab
-      data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
-      isActive
-      hydrateWorkflow={mock(async () => ready)}
-    />);
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => ready)}
+      />,
+    );
 
-    expect(screen.getByRole("button", { name: ADDRESS_ALL_REVIEW_PROMPT })
-      .hasAttribute("disabled")).toBe(true);
+    expect(
+      screen.getByRole("button", { name: ADDRESS_ALL_REVIEW_PROMPT }).hasAttribute("disabled"),
+    ).toBe(true);
   });
 
   test("builds native tab options that resume the consolidation session", () => {
@@ -468,17 +563,21 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       useMultiReviewStore.getState().replaceWorkflow(ready);
       return ready;
     });
-    const view = render(<MultiReviewTab
-      data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
-      isActive={false}
-      hydrateWorkflow={hydrate}
-    />);
+    const view = render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+        isActive={false}
+        hydrateWorkflow={hydrate}
+      />,
+    );
     await waitFor(() => expect(hydrate).toHaveBeenCalledTimes(1));
-    view.rerender(<MultiReviewTab
-      data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
-      isActive
-      hydrateWorkflow={hydrate}
-    />);
+    view.rerender(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={hydrate}
+      />,
+    );
     await waitFor(() => expect(hydrate).toHaveBeenCalledTimes(2));
   });
 
@@ -487,32 +586,45 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     useMultiReviewStore.getState().replaceWorkflow(ready);
     const cancelled = { ...ready, phase: "cancelled" as const, backendRevision: 8 };
     const cancel = mock(async () => cancelled);
-    const view = render(<MultiReviewTab
-      data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
-      isActive
-      hydrateWorkflow={mock(async () => ready)}
-      commands={{
-        address: mock(async () => ready),
-        retry: mock(async () => ready),
-        cancel,
-        stopReviewer: mock(async () => ready),
-      }}
-    />);
+    const view = render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => ready)}
+        commands={{
+          address: mock(async () => ready),
+          retry: mock(async () => ready),
+          cancel,
+          stopReviewer: mock(async () => ready),
+        }}
+      />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Abandon" }));
     await waitFor(() => expect(cancel).toHaveBeenCalledWith(ready.id));
 
     const failed = { ...ready, phase: "failed" as const, backendRevision: 9, error: "offline" };
-    const retry = mock(async () => ({ ...ready, phase: "reviewing" as const, backendRevision: 10 }));
+    const retry = mock(async () => ({
+      ...ready,
+      phase: "reviewing" as const,
+      backendRevision: 10,
+    }));
     act(() => {
       useMultiReviewStore.setState({ workflows: new Map([[ready.id, failed]]) });
     });
-    view.rerender(<MultiReviewTab
-      data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
-      isActive
-      hydrateWorkflow={mock(async () => failed)}
-      commands={{ address: mock(async () => failed), retry, cancel, stopReviewer: mock(async () => failed) }}
-    />);
+    view.rerender(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => failed)}
+        commands={{
+          address: mock(async () => failed),
+          retry,
+          cancel,
+          stopReviewer: mock(async () => failed),
+        }}
+      />,
+    );
     expect(screen.getByRole("button", { name: "Abandon" })).toBeTruthy();
     expect(screen.getByText("offline")).toBeTruthy();
 
@@ -521,7 +633,8 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry failed stage" }));
     await waitFor(() => expect(retry).toHaveBeenCalledWith(ready.id));
     await waitFor(() =>
-      expect(useMultiReviewStore.getState().workflows.get(ready.id)?.phase).toBe("reviewing"));
+      expect(useMultiReviewStore.getState().workflows.get(ready.id)?.phase).toBe("reviewing"),
+    );
     expect(screen.queryByRole("button", { name: "Retry failed stage" }) === null).toBe(true);
   });
 
@@ -531,24 +644,23 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     const withoutFirst: MultiReviewWorkflow = {
       ...reviewing,
       backendRevision: 8,
-      reviewers: [
-        { ...reviewing.reviewers[0]!, status: "cancelled" },
-        reviewing.reviewers[1]!,
-      ],
+      reviewers: [{ ...reviewing.reviewers[0]!, status: "cancelled" }, reviewing.reviewers[1]!],
     };
     const stopReviewer = mock(async () => withoutFirst);
 
-    render(<MultiReviewTab
-      data={{ environmentId: "env-1", workflowId: reviewing.id, isLocal: true }}
-      isActive
-      hydrateWorkflow={mock(async () => reviewing)}
-      commands={{
-        address: mock(async () => reviewing),
-        retry: mock(async () => reviewing),
-        cancel: mock(async () => reviewing),
-        stopReviewer,
-      }}
-    />);
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: reviewing.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => reviewing)}
+        commands={{
+          address: mock(async () => reviewing),
+          retry: mock(async () => reviewing),
+          cancel: mock(async () => reviewing),
+          stopReviewer,
+        }}
+      />,
+    );
 
     // Every running reviewer is independently stoppable; the workflow-wide
     // Cancel remains the control that stops all of them.
@@ -556,15 +668,16 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     fireEvent.click(screen.getByRole("button", { name: "Stop Reviewer 1" }));
     await waitFor(() => expect(stopReviewer).toHaveBeenCalledWith(reviewing.id, "reviewer-1"));
 
-    await waitFor(() => expect(
-      screen.queryByRole("button", { name: "Stop Reviewer 1" }) === null,
-    ).toBe(true));
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Stop Reviewer 1" }) === null).toBe(true),
+    );
     expect(screen.getByText(/Stopped · excluded from the consolidated report/)).toBeTruthy();
     expect(screen.getByText("0/1 complete · 1 stopped")).toBeTruthy();
     // The other reviewer keeps working: stopping one is not cancelling the run.
     expect(screen.getByRole("button", { name: "Stop Reviewer 2" })).toBeTruthy();
-    expect(useMultiReviewStore.getState().workflows.get(reviewing.id)?.reviewers[0]?.status)
-      .toBe("cancelled");
+    expect(useMultiReviewStore.getState().workflows.get(reviewing.id)?.reviewers[0]?.status).toBe(
+      "cancelled",
+    );
   });
 
   test("surfaces a stalled reviewer without claiming it failed", () => {
@@ -577,11 +690,13 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       ],
     });
 
-    render(<MultiReviewTab
-      data={{ environmentId: "env-1", workflowId: reviewing.id, isLocal: true }}
-      isActive
-      hydrateWorkflow={mock(async () => reviewing)}
-    />);
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: reviewing.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => reviewing)}
+      />,
+    );
 
     expect(screen.getByText(/No activity for a while/)).toBeTruthy();
     // A stall is a prompt to intervene, not a verdict: the reviewer is still
@@ -590,29 +705,54 @@ describe("MultiReviewTab backend snapshot viewer", () => {
   });
 
   test("reports a stopped reviewer as stopped rather than failed", () => {
-    expect(reviewerStatusNote({
-      id: "reviewer-1", agent: "claude", model: "opus", status: "cancelled",
-    })).toEqual({ text: "Stopped · excluded from the consolidated report", tone: "muted" });
-    expect(reviewerStatusNote({
-      id: "reviewer-1", agent: "claude", model: "opus", status: "failed", error: "offline",
-    })).toEqual({ text: "offline", tone: "destructive" });
+    expect(
+      reviewerStatusNote({
+        id: "reviewer-1",
+        agent: "claude",
+        model: "opus",
+        status: "cancelled",
+      }),
+    ).toEqual({ text: "Stopped · excluded from the consolidated report", tone: "muted" });
+    expect(
+      reviewerStatusNote({
+        id: "reviewer-1",
+        agent: "claude",
+        model: "opus",
+        status: "failed",
+        error: "offline",
+      }),
+    ).toEqual({ text: "offline", tone: "destructive" });
     // A stall flag left on a settled reviewer must not relabel its result.
-    expect(reviewerStatusNote({
-      id: "reviewer-1", agent: "claude", model: "opus", status: "completed",
-      report, stalledSince: "2026-08-14T00:20:00.000Z",
-    })).toBeNull();
+    expect(
+      reviewerStatusNote({
+        id: "reviewer-1",
+        agent: "claude",
+        model: "opus",
+        status: "completed",
+        report,
+        stalledSince: "2026-08-14T00:20:00.000Z",
+      }),
+    ).toBeNull();
   });
 
   test("summarises completed and stopped reviewers without an unfinished denominator", () => {
     const ready = readyWorkflow();
-    expect(reviewerProgressSummary([
-      ready.reviewers[0]!,
-      { ...ready.reviewers[1]!, status: "cancelled", report: undefined },
-    ])).toBe("1/1 complete · 1 stopped");
+    expect(
+      reviewerProgressSummary([
+        ready.reviewers[0]!,
+        { ...ready.reviewers[1]!, status: "cancelled", report: undefined },
+      ]),
+    ).toBe("1/1 complete · 1 stopped");
     expect(reviewerProgressSummary(ready.reviewers)).toBe("2/2 complete");
-    expect(reviewerProgressSummary(ready.reviewers.map((reviewer) => ({
-      ...reviewer, status: "cancelled" as const, report: undefined,
-    })))).toBe("0 complete · 2 stopped");
+    expect(
+      reviewerProgressSummary(
+        ready.reviewers.map((reviewer) => ({
+          ...reviewer,
+          status: "cancelled" as const,
+          report: undefined,
+        })),
+      ),
+    ).toBe("0 complete · 2 stopped");
   });
 
   test("surfaces a stalled consolidation or fix session with recovery guidance", () => {
@@ -626,21 +766,25 @@ describe("MultiReviewTab backend snapshot viewer", () => {
           status: "running",
           stalledSince: "2026-08-14T00:20:00.000Z",
         },
-        ...(phase === "fixing" ? {
-          activeRequest: {
-            kind: "fix" as const,
-            requestId: "fix-1",
-            state: "sent" as const,
-            createdAt: "2026-08-14T00:15:00.000Z",
-          },
-        } : {}),
+        ...(phase === "fixing"
+          ? {
+              activeRequest: {
+                kind: "fix" as const,
+                requestId: "fix-1",
+                state: "sent" as const,
+                createdAt: "2026-08-14T00:15:00.000Z",
+              },
+            }
+          : {}),
       };
       useMultiReviewStore.setState({ workflows: new Map([[stalled.id, stalled]]) });
-      const view = render(<MultiReviewTab
-        data={{ environmentId: "env-1", workflowId: stalled.id, isLocal: true }}
-        isActive
-        hydrateWorkflow={mock(async () => stalled)}
-      />);
+      const view = render(
+        <MultiReviewTab
+          data={{ environmentId: "env-1", workflowId: stalled.id, isLocal: true }}
+          isActive
+          hydrateWorkflow={mock(async () => stalled)}
+        />,
+      );
 
       expect(screen.getByRole("status").textContent).toContain("Fix model appears stalled");
       expect(screen.getByRole("status").textContent).toContain("Cancel now");
@@ -656,11 +800,13 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       fixSession: { ...ready.fixSession!, stalledSince: "2026-08-14T00:20:00.000Z" },
     };
     useMultiReviewStore.getState().replaceWorkflow(settled);
-    render(<MultiReviewTab
-      data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
-      isActive
-      hydrateWorkflow={mock(async () => settled)}
-    />);
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => settled)}
+      />,
+    );
 
     expect(screen.queryByRole("status") === null).toBe(true);
     expect(screen.getByText("Consolidated report ready")).toBeTruthy();
@@ -680,46 +826,60 @@ describe("MultiReviewReviewerTab", () => {
       startedAt: "2026-08-14T00:00:00.000Z",
       completedAt: "2026-08-14T00:01:00.000Z",
       report,
-      messages: [{
-        id: "generated-review-prompt",
-        role: "user",
-        content: "Generated reviewer workflow instructions",
-        createdAt: "2026-08-14T00:00:00.000Z",
-        parts: [{ type: "text", content: "Generated reviewer workflow instructions" }],
-      }, {
-        id: "progress",
-        role: "assistant",
-        content: "Inspecting the changed files",
-        createdAt: "2026-08-14T00:00:10.000Z",
-        parts: [
-          { type: "text", content: "Inspecting the changed files" },
-          {
-            type: "tool-invocation", content: "shell", toolName: "shell",
-            toolArgs: { command: "git diff" }, toolState: "success", toolOutput: "diff output",
-          },
-        ],
-      }, {
-        id: "generated-schema-repair",
-        role: "user",
-        content: "Expected schema and $.ready validation failure",
-        createdAt: "2026-08-14T00:00:30.000Z",
-        parts: [{ type: "text", content: "Expected schema and $.ready validation failure" }],
-      }, {
-        id: "final-json",
-        role: "assistant",
-        content: finalJson,
-        createdAt: "2026-08-14T00:01:00.000Z",
-        parts: [{ type: "text", content: finalJson }],
-      }],
+      messages: [
+        {
+          id: "generated-review-prompt",
+          role: "user",
+          content: "Generated reviewer workflow instructions",
+          createdAt: "2026-08-14T00:00:00.000Z",
+          parts: [{ type: "text", content: "Generated reviewer workflow instructions" }],
+        },
+        {
+          id: "progress",
+          role: "assistant",
+          content: "Inspecting the changed files",
+          createdAt: "2026-08-14T00:00:10.000Z",
+          parts: [
+            { type: "text", content: "Inspecting the changed files" },
+            {
+              type: "tool-invocation",
+              content: "shell",
+              toolName: "shell",
+              toolArgs: { command: "git diff" },
+              toolState: "success",
+              toolOutput: "diff output",
+            },
+          ],
+        },
+        {
+          id: "generated-schema-repair",
+          role: "user",
+          content: "Expected schema and $.ready validation failure",
+          createdAt: "2026-08-14T00:00:30.000Z",
+          parts: [{ type: "text", content: "Expected schema and $.ready validation failure" }],
+        },
+        {
+          id: "final-json",
+          role: "assistant",
+          content: finalJson,
+          createdAt: "2026-08-14T00:01:00.000Z",
+          parts: [{ type: "text", content: finalJson }],
+        },
+      ],
     }));
 
-    render(<MultiReviewReviewerTab
-      data={{
-        environmentId: "env-1", workflowId: "multi-1", reviewerId: "reviewer-1", isLocal: true,
-      }}
-      isActive
-      loadTranscript={loadTranscript}
-    />);
+    render(
+      <MultiReviewReviewerTab
+        data={{
+          environmentId: "env-1",
+          workflowId: "multi-1",
+          reviewerId: "reviewer-1",
+          isLocal: true,
+        }}
+        isActive
+        loadTranscript={loadTranscript}
+      />,
+    );
 
     await waitFor(() => expect(loadTranscript).toHaveBeenCalledWith("multi-1", "reviewer-1"));
     expect(await screen.findByRole("article", { name: "Reviewer report" })).toBeTruthy();
@@ -731,8 +891,7 @@ describe("MultiReviewReviewerTab", () => {
     // The reviewer transcript shares the chat adapter, so the progress turn is
     // split into its narration and its tool activity, and the schema-shaped
     // final answer is dropped in favour of the validated report above.
-    expect(normalized.map((message) => message.id))
-      .toEqual(["progress", "progress:text-block:1"]);
+    expect(normalized.map((message) => message.id)).toEqual(["progress", "progress:text-block:1"]);
     expect(normalized[0]?.parts).toEqual([
       expect.objectContaining({ type: "text", content: "Inspecting the changed files" }),
     ]);
@@ -786,13 +945,18 @@ describe("MultiReviewReviewerTab", () => {
     let unmount: (() => void) | undefined;
 
     try {
-      ({ unmount } = render(<MultiReviewReviewerTab
-        data={{
-          environmentId: "env-1", workflowId: "multi-1", reviewerId: "reviewer-1", isLocal: true,
-        }}
-        isActive
-        loadTranscript={loadTranscript}
-      />));
+      ({ unmount } = render(
+        <MultiReviewReviewerTab
+          data={{
+            environmentId: "env-1",
+            workflowId: "multi-1",
+            reviewerId: "reviewer-1",
+            isLocal: true,
+          }}
+          isActive
+          loadTranscript={loadTranscript}
+        />,
+      ));
 
       const body = screen.getByTestId("multi-review-reviewer-transcript-body");
       expect(body.classList.contains("flex")).toBe(true);
@@ -824,13 +988,18 @@ describe("MultiReviewReviewerTab", () => {
       throw new Error("Multi review workflow not found: multi-1");
     });
 
-    render(<MultiReviewReviewerTab
-      data={{
-        environmentId: "env-1", workflowId: "multi-1", reviewerId: "reviewer-1", isLocal: true,
-      }}
-      isActive
-      loadTranscript={loadTranscript}
-    />);
+    render(
+      <MultiReviewReviewerTab
+        data={{
+          environmentId: "env-1",
+          workflowId: "multi-1",
+          reviewerId: "reviewer-1",
+          isLocal: true,
+        }}
+        isActive
+        loadTranscript={loadTranscript}
+      />,
+    );
 
     expect(await screen.findByText(/Multi review workflow not found: multi-1/)).toBeTruthy();
   });
@@ -842,13 +1011,18 @@ describe("MultiReviewReviewerTab", () => {
       throw new Error("Multi review workflow not found: multi-1");
     });
 
-    render(<MultiReviewReviewerTab
-      data={{
-        environmentId: "env-1", workflowId: "multi-1", reviewerId: "reviewer-1", isLocal: true,
-      }}
-      isActive
-      loadTranscript={loadTranscript}
-    />);
+    render(
+      <MultiReviewReviewerTab
+        data={{
+          environmentId: "env-1",
+          workflowId: "multi-1",
+          reviewerId: "reviewer-1",
+          isLocal: true,
+        }}
+        isActive
+        loadTranscript={loadTranscript}
+      />,
+    );
 
     expect(await screen.findByText(/Multi review workflow not found: multi-1/)).toBeTruthy();
     await waitFor(() => expect(calls).toBeGreaterThanOrEqual(2));
@@ -880,23 +1054,28 @@ describe("MultiReviewReviewerTab stop control", () => {
       return {} as never;
     });
 
-    render(<MultiReviewReviewerTab
-      data={{
-        environmentId: "env-1", workflowId: "multi-1", reviewerId: "reviewer-1", isLocal: true,
-      }}
-      isActive
-      loadTranscript={loadTranscript}
-      stopReviewer={stopReviewer}
-    />);
+    render(
+      <MultiReviewReviewerTab
+        data={{
+          environmentId: "env-1",
+          workflowId: "multi-1",
+          reviewerId: "reviewer-1",
+          isLocal: true,
+        }}
+        isActive
+        loadTranscript={loadTranscript}
+        stopReviewer={stopReviewer}
+      />,
+    );
 
     fireEvent.click(await screen.findByRole("button", { name: "Stop this reviewer" }));
     await waitFor(() => expect(stopReviewer).toHaveBeenCalledWith("multi-1", "reviewer-1"));
     // The workflow owns the lifecycle, so the tab proves the new status by
     // re-reading rather than assuming it locally.
     expect(await screen.findByText(/Stopped · excluded from the consolidated report/)).toBeTruthy();
-    await waitFor(() => expect(
-      screen.queryByRole("button", { name: "Stop this reviewer" }) === null,
-    ).toBe(true));
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Stop this reviewer" }) === null).toBe(true),
+    );
   });
 
   test("surfaces a stall on a reviewer that is still running", async () => {
@@ -905,14 +1084,19 @@ describe("MultiReviewReviewerTab stop control", () => {
       stalledSince: "2026-08-14T00:20:00.000Z",
     }));
 
-    render(<MultiReviewReviewerTab
-      data={{
-        environmentId: "env-1", workflowId: "multi-1", reviewerId: "reviewer-1", isLocal: true,
-      }}
-      isActive
-      loadTranscript={loadTranscript}
-      stopReviewer={mock(async () => ({}) as never)}
-    />);
+    render(
+      <MultiReviewReviewerTab
+        data={{
+          environmentId: "env-1",
+          workflowId: "multi-1",
+          reviewerId: "reviewer-1",
+          isLocal: true,
+        }}
+        isActive
+        loadTranscript={loadTranscript}
+        stopReviewer={mock(async () => ({}) as never)}
+      />,
+    );
 
     expect(await screen.findByText(/No activity for a while/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Stop this reviewer" })).toBeTruthy();
@@ -924,14 +1108,19 @@ describe("MultiReviewReviewerTab stop control", () => {
       throw new Error("Multi review reviewer not found: reviewer-1");
     });
 
-    render(<MultiReviewReviewerTab
-      data={{
-        environmentId: "env-1", workflowId: "multi-1", reviewerId: "reviewer-1", isLocal: true,
-      }}
-      isActive
-      loadTranscript={loadTranscript}
-      stopReviewer={stopReviewer}
-    />);
+    render(
+      <MultiReviewReviewerTab
+        data={{
+          environmentId: "env-1",
+          workflowId: "multi-1",
+          reviewerId: "reviewer-1",
+          isLocal: true,
+        }}
+        isActive
+        loadTranscript={loadTranscript}
+        stopReviewer={stopReviewer}
+      />,
+    );
 
     fireEvent.click(await screen.findByRole("button", { name: "Stop this reviewer" }));
     expect(await screen.findByText(/Multi review reviewer not found/)).toBeTruthy();
@@ -951,14 +1140,19 @@ describe("MultiReviewReviewerTab stop control", () => {
       throw new Error("The Multi Review controller is busy");
     });
 
-    render(<MultiReviewReviewerTab
-      data={{
-        environmentId: "env-1", workflowId: "multi-1", reviewerId: "reviewer-1", isLocal: true,
-      }}
-      isActive
-      loadTranscript={loadTranscript}
-      stopReviewer={stopReviewer}
-    />);
+    render(
+      <MultiReviewReviewerTab
+        data={{
+          environmentId: "env-1",
+          workflowId: "multi-1",
+          reviewerId: "reviewer-1",
+          isLocal: true,
+        }}
+        isActive
+        loadTranscript={loadTranscript}
+        stopReviewer={stopReviewer}
+      />,
+    );
 
     fireEvent.click(await screen.findByRole("button", { name: "Stop this reviewer" }));
     expect(await screen.findByText(/controller is busy/)).toBeTruthy();
@@ -985,16 +1179,21 @@ describe("MultiReviewReviewerTab stop control", () => {
       if (calls === 2) return stalePoll;
       return cancelled;
     });
-    const stopReviewer = mock(async () => ({} as never));
+    const stopReviewer = mock(async () => ({}) as never);
 
-    render(<MultiReviewReviewerTab
-      data={{
-        environmentId: "env-1", workflowId: "multi-1", reviewerId: "reviewer-1", isLocal: true,
-      }}
-      isActive
-      loadTranscript={loadTranscript}
-      stopReviewer={stopReviewer}
-    />);
+    render(
+      <MultiReviewReviewerTab
+        data={{
+          environmentId: "env-1",
+          workflowId: "multi-1",
+          reviewerId: "reviewer-1",
+          isLocal: true,
+        }}
+        isActive
+        loadTranscript={loadTranscript}
+        stopReviewer={stopReviewer}
+      />,
+    );
 
     await screen.findByRole("button", { name: "Stop this reviewer" });
     fireEvent.click(screen.getByRole("button", { name: "Refresh reviewer transcript" }));

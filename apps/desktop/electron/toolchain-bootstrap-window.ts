@@ -2,10 +2,7 @@ import type { BrowserWindow as BrowserWindowType, BrowserWindowConstructorOption
 import path from "node:path";
 import { PRODUCT_NAME } from "./app-constants.js";
 import type { ToolchainProgress } from "./toolchain-manager.js";
-import {
-  AGENT_PLATFORMS,
-  type AgentPlatform,
-} from "@orkestrator/protocol/agent-platforms";
+import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 
 type BrowserWindowConstructor = new (options: BrowserWindowConstructorOptions) => BrowserWindowType;
 
@@ -130,14 +127,14 @@ export async function chooseAgentPlatforms(options: {
   void choice.catch(() => undefined);
   const preloadReady = new Promise<void>((_resolve, reject) => {
     window.webContents.once("preload-error", (_event, preloadPath, error) => {
-      reject(new Error(`Agent platform selection preload failed (${preloadPath}): ${error.message}`));
+      reject(
+        new Error(`Agent platform selection preload failed (${preloadPath}): ${error.message}`),
+      );
     });
   });
   try {
     await Promise.race([
-      window.loadURL(
-        `data:text/html;charset=utf-8,${encodeURIComponent(PLATFORM_SELECTION_HTML)}`,
-      ),
+      window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(PLATFORM_SELECTION_HTML)}`),
       preloadReady,
     ]);
   } catch (error) {
@@ -188,7 +185,10 @@ export async function createToolchainBootstrapWindow(options: {
   return window;
 }
 
-export function reportToolchainProgress(window: BrowserWindowType, progress: ToolchainProgress): void {
+export function reportToolchainProgress(
+  window: BrowserWindowType,
+  progress: ToolchainProgress,
+): void {
   if (window.isDestroyed()) return;
   window.webContents.send("orkestrator:toolchain-progress", progress);
 }

@@ -107,8 +107,6 @@ import type {
   RepositoryConfig,
 } from "./command-fixtures";
 
-
-
 describe("feature plan commands", () => {
   function featureContext() {
     const storage = {

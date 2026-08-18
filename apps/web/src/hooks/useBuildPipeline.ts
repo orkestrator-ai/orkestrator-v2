@@ -69,21 +69,16 @@ function linearIssueToTicketInput(
     ...(issue.url ? [{ text: `URL: ${issue.url}` }] : []),
     ...(issue.status ? [{ text: `Status: ${issue.status}` }] : []),
     ...(includeComments ? issue.comments : []).map((comment) => ({
-      text: comment.authorName
-        ? `${comment.authorName}: ${comment.body}`
-        : comment.body,
+      text: comment.authorName ? `${comment.authorName}: ${comment.body}` : comment.body,
     })),
   ];
   return {
     id: issue.id,
     projectId,
     title: `${issue.identifier}: ${issue.title}`,
-    namingPrompt: [
-      issue.identifier,
-      issue.title,
-      issue.description,
-      issue.status,
-    ].filter(Boolean).join("\n\n"),
+    namingPrompt: [issue.identifier, issue.title, issue.description, issue.status]
+      .filter(Boolean)
+      .join("\n\n"),
     source: {
       type: "linear",
       issueId: issue.id,
@@ -117,7 +112,9 @@ function githubIssueToTicketInput(
       issue.title,
       issue.body,
       issue.status,
-    ].filter(Boolean).join("\n\n"),
+    ]
+      .filter(Boolean)
+      .join("\n\n"),
     source: {
       type: "github",
       repositoryOwner: issue.repositoryOwner,
@@ -145,9 +142,7 @@ function findBuildTabInTree(
 ): { paneId: string; tabId: string } | null {
   if (node.kind === "leaf") {
     const tab = node.tabs.find(
-      (candidate) =>
-        candidate.type === "claude-build"
-        && candidate.buildTabData?.taskId === taskId,
+      (candidate) => candidate.type === "claude-build" && candidate.buildTabData?.taskId === taskId,
     );
     return tab ? { paneId: node.id, tabId: tab.id } : null;
   }
@@ -161,121 +156,123 @@ function findBuildTabInTree(
 export function useBuildPipeline() {
   const config = useConfigStore((state) => state.config);
   const replacePipeline = useBuildPipelineStore((state) => state.replacePipeline);
-  const selectProjectAndEnvironment = useUIStore(
-    (state) => state.selectProjectAndEnvironment,
-  );
+  const selectProjectAndEnvironment = useUIStore((state) => state.selectProjectAndEnvironment);
   const setProjectCollapsed = useUIStore((state) => state.setProjectCollapsed);
 
-  const startBuildFromTicket = useCallback(async (
-    ticket: BuildPipelineTicketInput,
-    environmentType: EnvironmentType,
-    agentOverride?: DefaultAgent,
-    options: StartBuildOptions = {},
-  ) => {
-    try {
-      const input: StartBuildPipelineInput = {
-        taskId: ticket.id,
-        projectId: ticket.projectId,
-        environmentType,
-        // The build step's harness is the pipeline agent when one was chosen;
-        // the backend resolves it the same way, so both agree on the snapshot.
-        agentType:
-          options.steps?.build?.agent
-          ?? agentOverride
-          ?? resolveBuildPipelineAgent(config, ticket.projectId),
-        steps: options.steps,
-        taskTitle: ticket.title,
-        taskSnapshot: ticket.taskSnapshot,
-        source: ticket.source,
-        namingPrompt: ticket.namingPrompt,
-        existingEnvironmentId: options.existingEnvironmentId ?? undefined,
-        featurePlanId: options.featurePlanId,
-      };
-      const authoritative = await backend.startBuildPipeline(input);
-      const pipeline = authoritative as BuildPipeline;
-      replacePipeline(pipeline);
-      setProjectCollapsed(ticket.projectId, false);
-      selectProjectAndEnvironment(ticket.projectId, pipeline.environmentId);
-      toast.success("Build pipeline started");
-      return pipeline.id;
-    } catch (error) {
-      console.error("[useBuildPipeline] Failed to start build:", error);
-      toast.error("Failed to start build pipeline", {
-        description: error instanceof Error ? error.message : "Unknown error",
-      });
-      return undefined;
-    }
-  }, [
-    config,
-    replacePipeline,
-    selectProjectAndEnvironment,
-    setProjectCollapsed,
-  ]);
-
-  const startBuild = useCallback(async (
-    task: KanbanTask,
-    environmentType: EnvironmentType,
-    agentOverride?: DefaultAgent,
-    options?: StartBuildOptions,
-  ) => {
-    const images = await Promise.all((task.images ?? []).map(async (image) => {
+  const startBuildFromTicket = useCallback(
+    async (
+      ticket: BuildPipelineTicketInput,
+      environmentType: EnvironmentType,
+      agentOverride?: DefaultAgent,
+      options: StartBuildOptions = {},
+    ) => {
       try {
-        return {
-          filename: image.filename,
-          data: await backend.getKanbanImageData(image.id),
+        const input: StartBuildPipelineInput = {
+          taskId: ticket.id,
+          projectId: ticket.projectId,
+          environmentType,
+          // The build step's harness is the pipeline agent when one was chosen;
+          // the backend resolves it the same way, so both agree on the snapshot.
+          agentType:
+            options.steps?.build?.agent ??
+            agentOverride ??
+            resolveBuildPipelineAgent(config, ticket.projectId),
+          steps: options.steps,
+          taskTitle: ticket.title,
+          taskSnapshot: ticket.taskSnapshot,
+          source: ticket.source,
+          namingPrompt: ticket.namingPrompt,
+          existingEnvironmentId: options.existingEnvironmentId ?? undefined,
+          featurePlanId: options.featurePlanId,
         };
-      } catch {
-        return null;
+        const authoritative = await backend.startBuildPipeline(input);
+        const pipeline = authoritative as BuildPipeline;
+        replacePipeline(pipeline);
+        setProjectCollapsed(ticket.projectId, false);
+        selectProjectAndEnvironment(ticket.projectId, pipeline.environmentId);
+        toast.success("Build pipeline started");
+        return pipeline.id;
+      } catch (error) {
+        console.error("[useBuildPipeline] Failed to start build:", error);
+        toast.error("Failed to start build pipeline", {
+          description: error instanceof Error ? error.message : "Unknown error",
+        });
+        return undefined;
       }
-    }));
-    return startBuildFromTicket({
-      id: task.id,
-      projectId: task.projectId,
-      title: task.title,
-      namingPrompt: [
-        task.title,
-        task.description,
-        task.acceptanceCriteria,
-      ].filter(Boolean).join("\n\n"),
-      source: { type: "kanban", taskId: task.id },
-      taskSnapshot: {
-        title: task.title,
-        description: task.description,
-        acceptanceCriteria: task.acceptanceCriteria,
-        comments: task.comments.map((comment) => ({ text: comment.text })),
-        images: images.filter(
-          (image): image is { filename: string; data: string } => image !== null,
-        ),
-      },
-    }, environmentType, agentOverride, options);
-  }, [startBuildFromTicket]);
+    },
+    [config, replacePipeline, selectProjectAndEnvironment, setProjectCollapsed],
+  );
 
-  const navigateToPipeline = useCallback(async (
-    pipeline: Pick<
-      BuildPipeline,
-      "environmentId" | "projectId" | "taskId"
-    > & Partial<Pick<BuildPipeline, "id" | "environmentType">>,
-  ) => {
-    if (!pipeline.environmentId) return;
-    setProjectCollapsed(pipeline.projectId, false);
-    selectProjectAndEnvironment(pipeline.projectId, pipeline.environmentId);
-    const state = usePaneLayoutStore.getState().environments.get(
-      pipeline.environmentId,
-    );
-    const tab = state && findBuildTabInTree(state.root, pipeline.taskId);
-    if (tab) {
-      usePaneLayoutStore.getState().setActiveTab(
-        tab.paneId,
-        tab.tabId,
-        pipeline.environmentId,
+  const startBuild = useCallback(
+    async (
+      task: KanbanTask,
+      environmentType: EnvironmentType,
+      agentOverride?: DefaultAgent,
+      options?: StartBuildOptions,
+    ) => {
+      const images = await Promise.all(
+        (task.images ?? []).map(async (image) => {
+          try {
+            return {
+              filename: image.filename,
+              data: await backend.getKanbanImageData(image.id),
+            };
+          } catch {
+            return null;
+          }
+        }),
       );
-    }
-  }, [selectProjectAndEnvironment, setProjectCollapsed]);
+      return startBuildFromTicket(
+        {
+          id: task.id,
+          projectId: task.projectId,
+          title: task.title,
+          namingPrompt: [task.title, task.description, task.acceptanceCriteria]
+            .filter(Boolean)
+            .join("\n\n"),
+          source: { type: "kanban", taskId: task.id },
+          taskSnapshot: {
+            title: task.title,
+            description: task.description,
+            acceptanceCriteria: task.acceptanceCriteria,
+            comments: task.comments.map((comment) => ({ text: comment.text })),
+            images: images.filter(
+              (image): image is { filename: string; data: string } => image !== null,
+            ),
+          },
+        },
+        environmentType,
+        agentOverride,
+        options,
+      );
+    },
+    [startBuildFromTicket],
+  );
 
-  const navigateToBuild = useCallback(async (task: KanbanTask) => {
-    const pipeline = useBuildPipelineStore.getState().getPipelineByTaskId(task.id);
-    if (pipeline) await navigateToPipeline(pipeline);
-  }, [navigateToPipeline]);
+  const navigateToPipeline = useCallback(
+    async (
+      pipeline: Pick<BuildPipeline, "environmentId" | "projectId" | "taskId"> &
+        Partial<Pick<BuildPipeline, "id" | "environmentType">>,
+    ) => {
+      if (!pipeline.environmentId) return;
+      setProjectCollapsed(pipeline.projectId, false);
+      selectProjectAndEnvironment(pipeline.projectId, pipeline.environmentId);
+      const state = usePaneLayoutStore.getState().environments.get(pipeline.environmentId);
+      const tab = state && findBuildTabInTree(state.root, pipeline.taskId);
+      if (tab) {
+        usePaneLayoutStore.getState().setActiveTab(tab.paneId, tab.tabId, pipeline.environmentId);
+      }
+    },
+    [selectProjectAndEnvironment, setProjectCollapsed],
+  );
+
+  const navigateToBuild = useCallback(
+    async (task: KanbanTask) => {
+      const pipeline = useBuildPipelineStore.getState().getPipelineByTaskId(task.id);
+      if (pipeline) await navigateToPipeline(pipeline);
+    },
+    [navigateToPipeline],
+  );
 
   return {
     startBuild,
@@ -284,24 +281,26 @@ export function useBuildPipeline() {
       projectId: string,
       environmentType: EnvironmentType,
       options: StartBuildOptions = {},
-    ) => startBuildFromTicket(
-      linearIssueToTicketInput(issue, projectId, options.includeComments ?? true),
-      environmentType,
-      undefined,
-      options,
-    ),
+    ) =>
+      startBuildFromTicket(
+        linearIssueToTicketInput(issue, projectId, options.includeComments ?? true),
+        environmentType,
+        undefined,
+        options,
+      ),
     startBuildFromGitHubIssue: (
       issue: GitHubIssueBuildInput,
       projectId: string,
       environmentType: EnvironmentType,
       agentOverride?: DefaultAgent,
       options?: StartBuildOptions,
-    ) => startBuildFromTicket(
-      githubIssueToTicketInput(issue, projectId),
-      environmentType,
-      agentOverride,
-      options,
-    ),
+    ) =>
+      startBuildFromTicket(
+        githubIssueToTicketInput(issue, projectId),
+        environmentType,
+        agentOverride,
+        options,
+      ),
     navigateToBuild,
     navigateToPipeline,
   };

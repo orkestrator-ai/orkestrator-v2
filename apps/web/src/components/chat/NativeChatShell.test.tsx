@@ -1,19 +1,8 @@
-import {
-  afterAll,
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  mock,
-  test,
-} from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { createRef } from "react";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { VirtuosoHandle } from "react-virtuoso";
-import type {
-  NativeMessage,
-  NativeMessagePart,
-} from "@/lib/chat/native-message-types";
+import type { NativeMessage, NativeMessagePart } from "@/lib/chat/native-message-types";
 import { pinNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
 import * as realVirtualizedMessageList from "./VirtualizedMessageList";
@@ -37,7 +26,9 @@ mock.module("./VirtualizedMessageList", () => ({
               // actually renders with rather than the raw neighbour.
               props.resolvePreviousMessage
                 ? props.resolvePreviousMessage(props.messages, index)
-                : index > 0 ? props.messages[index - 1] : null,
+                : index > 0
+                  ? props.messages[index - 1]
+                  : null,
             )}
           </div>
         ))}
@@ -87,6 +78,8 @@ describe("NativeChatShell", () => {
     globalThis.ResizeObserver = class ResizeObserver {
       constructor(callback: ResizeObserverCallback) {
         resizeCallback = callback;
+        // Publishes the instance to the test; not an alias to dodge binding.
+        // oxlint-disable-next-line typescript/no-this-alias
         resizeObserver = this;
       }
 
@@ -113,8 +106,7 @@ describe("NativeChatShell", () => {
 
     const dock = screen.getByTestId("compose-dock");
     const spacer = screen.getByTestId("transcript-bottom-spacer");
-    dock.getBoundingClientRect = () =>
-      ({ height: 640 } as DOMRect);
+    dock.getBoundingClientRect = () => ({ height: 640 }) as DOMRect;
 
     act(() => {
       resizeCallback?.([], resizeObserver!);
@@ -122,8 +114,7 @@ describe("NativeChatShell", () => {
     expect(spacer.style.height).toBe("640px");
     expect(spacer.className).not.toContain("h-80");
 
-    dock.getBoundingClientRect = () =>
-      ({ height: 735 } as DOMRect);
+    dock.getBoundingClientRect = () => ({ height: 735 }) as DOMRect;
     act(() => {
       resizeCallback?.([], resizeObserver!);
     });
@@ -190,10 +181,7 @@ describe("NativeChatShell", () => {
     expect(firstNode?.textContent).toBe("Sub-agent finished.");
 
     view.rerender(
-      <NativeChatShell
-        {...shellProps()}
-        agentActivityAnnouncement={{ ...announcement, seq: 5 }}
-      />,
+      <NativeChatShell {...shellProps()} agentActivityAnnouncement={{ ...announcement, seq: 5 }} />,
     );
 
     const repeated = screen.getByRole("status", { name: "Sub-agent finished." });
@@ -231,17 +219,12 @@ describe("NativeChatShell", () => {
   test("keeps the scroll affordance out of the centered layout while desynced", () => {
     // The banner is unconditional; the scroll-down button still belongs only to
     // a scrolled transcript, so the two must not have been merged into one row.
-    render(
-      <NativeChatShell
-        {...shellProps()}
-        centerCompose
-        desynced
-        isAtBottom={false}
-      />,
-    );
+    render(<NativeChatShell {...shellProps()} centerCompose desynced isAtBottom={false} />);
 
     expect(screen.getByText(/Live updates disconnected/)).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Scroll to bottom of conversation" }) === null).toBe(true);
+    expect(
+      screen.queryByRole("button", { name: "Scroll to bottom of conversation" }) === null,
+    ).toBe(true);
   });
 
   test("forwards the model-label resolver to each rendered message", () => {
@@ -296,10 +279,7 @@ describe("NativeChatShell", () => {
       pinNativeAgentParts([{ ...source, parts }]);
 
     const view = render(
-      <NativeChatShell
-        {...shellProps()}
-        messages={pinnedMessages([firstAgent])}
-      />,
+      <NativeChatShell {...shellProps()} messages={pinnedMessages([firstAgent])} />,
     );
 
     const initialCard = screen.getByRole("button", { name: /reviewer/i });
@@ -311,47 +291,35 @@ describe("NativeChatShell", () => {
     expect(screen.getAllByText("Inspect the original task details")).toHaveLength(2);
 
     view.rerender(
-      <NativeChatShell
-        {...shellProps()}
-        messages={pinnedMessages([firstAgent, secondAgent])}
-      />,
+      <NativeChatShell {...shellProps()} messages={pinnedMessages([firstAgent, secondAgent])} />,
     );
 
     expect(screen.getByRole("region", { name: "2 agents" })).toBeTruthy();
     expect(screen.getAllByText("Inspect the original task details")).toHaveLength(2);
-    expect(
-      screen.getByRole("button", { name: /reviewer/i }).getAttribute("aria-expanded"),
-    ).toBe("true");
+    expect(screen.getByRole("button", { name: /reviewer/i }).getAttribute("aria-expanded")).toBe(
+      "true",
+    );
 
     view.rerender(
       <NativeChatShell
         {...shellProps()}
-        messages={pinnedMessages([
-          firstAgent,
-          { ...secondAgent, toolState: "success" },
-        ])}
+        messages={pinnedMessages([firstAgent, { ...secondAgent, toolState: "success" }])}
       />,
     );
 
     expect(screen.queryByRole("region", { name: "2 agents" }) === null).toBe(true);
     expect(screen.getAllByText("Inspect the original task details")).toHaveLength(2);
-    expect(
-      screen.getByRole("button", { name: /reviewer/i }).getAttribute("aria-expanded"),
-    ).toBe("true");
+    expect(screen.getByRole("button", { name: /reviewer/i }).getAttribute("aria-expanded")).toBe(
+      "true",
+    );
   });
 
   test("remeasures pinned clearance when the viewport changes", () => {
-    render(
-      <NativeChatShell
-        {...shellProps()}
-        pinnedAccessory={<div>Plan details</div>}
-      />,
-    );
+    render(<NativeChatShell {...shellProps()} pinnedAccessory={<div>Plan details</div>} />);
 
     const dock = screen.getByTestId("compose-dock");
     const spacer = screen.getByTestId("transcript-bottom-spacer");
-    dock.getBoundingClientRect = () =>
-      ({ height: 420 } as DOMRect);
+    dock.getBoundingClientRect = () => ({ height: 420 }) as DOMRect;
 
     act(() => {
       window.dispatchEvent(new Event("resize"));
@@ -360,12 +328,7 @@ describe("NativeChatShell", () => {
   });
 
   test("uses the configured spacer before an unpinned dock can be measured", () => {
-    render(
-      <NativeChatShell
-        {...shellProps()}
-        bottomSpacerClassName="h-48"
-      />,
-    );
+    render(<NativeChatShell {...shellProps()} bottomSpacerClassName="h-48" />);
 
     const spacer = screen.getByTestId("transcript-bottom-spacer");
     expect(spacer.className).toContain("h-48");
@@ -397,12 +360,7 @@ describe("NativeChatShell", () => {
   test("reserves a conservative spacer for pinned content before the dock is measured", () => {
     // The dock has no laid-out height yet, so reserving its measurement would
     // clear nothing and the prompt would sit on top of the transcript.
-    render(
-      <NativeChatShell
-        {...shellProps()}
-        blockingCards={<div>Approve this command</div>}
-      />,
-    );
+    render(<NativeChatShell {...shellProps()} blockingCards={<div>Approve this command</div>} />);
 
     const spacer = screen.getByTestId("transcript-bottom-spacer");
     expect(spacer.className).toContain("h-80");
@@ -417,12 +375,7 @@ describe("NativeChatShell", () => {
     delete globalThis.ResizeObserver;
 
     try {
-      render(
-        <NativeChatShell
-          {...shellProps()}
-          blockingCards={<div>Approve this command</div>}
-        />,
-      );
+      render(<NativeChatShell {...shellProps()} blockingCards={<div>Approve this command</div>} />);
 
       const dock = screen.getByTestId("compose-dock");
       const spacer = screen.getByTestId("transcript-bottom-spacer");
@@ -449,10 +402,9 @@ describe("NativeChatShell", () => {
     const blockingCard = screen.getByText("Answer the blocking question");
     const accessory = screen.getByText("Review the current plan");
     expect(blockingCard.parentElement).toBe(accessory.parentElement);
-    expect(
-      blockingCard.compareDocumentPosition(accessory)
-        & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(blockingCard.compareDocumentPosition(accessory) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
   });
 
   test("forwards shortcut ownership and canonical searchable message text", () => {
@@ -487,16 +439,14 @@ describe("NativeChatShell", () => {
     );
 
     expect(lastVirtualizedMessageListProps?.find.isActive).toBe(false);
-    expect(lastVirtualizedMessageListProps?.find.getSearchText(message)).toBe(
-      "A visible answer",
-    );
+    expect(lastVirtualizedMessageListProps?.find.getSearchText(message)).toBe("A visible answer");
     expect(messageActions).toHaveBeenCalledWith(previousMessage);
     expect(messageActions).toHaveBeenCalledWith(message);
     expect(screen.getByText("Earlier prompt")).toBeTruthy();
     expect(
-      Array.from(
-        view.container.querySelectorAll("[data-agent-chat-search-content]"),
-      ).map((element) => element.textContent),
+      Array.from(view.container.querySelectorAll("[data-agent-chat-search-content]")).map(
+        (element) => element.textContent,
+      ),
     ).toEqual(["Earlier prompt", "A visible answer"]);
     expect(screen.getAllByRole("button", { name: "Fork" })).toHaveLength(2);
   });
@@ -533,8 +483,9 @@ describe("NativeChatShell", () => {
         />,
       );
 
-      expect(container.querySelector("svg.agent-connecting-logo")?.getAttribute("viewBox"))
-        .toBe("0 0 33 32");
+      expect(container.querySelector("svg.agent-connecting-logo")?.getAttribute("viewBox")).toBe(
+        "0 0 33 32",
+      );
 
       rerender(
         <NativeChatShell
@@ -544,8 +495,9 @@ describe("NativeChatShell", () => {
           connectionState="connecting"
         />,
       );
-      expect(container.querySelector("svg.agent-connecting-logo")?.getAttribute("viewBox"))
-        .toBe("0 0 49 56");
+      expect(container.querySelector("svg.agent-connecting-logo")?.getAttribute("viewBox")).toBe(
+        "0 0 49 56",
+      );
     });
 
     test("reports the failure reason and retries on demand", () => {
@@ -602,13 +554,7 @@ describe("NativeChatShell", () => {
     test("says so rather than opening an empty log box", () => {
       // A whitespace-only log is truthy, so the toggle is offered; showing a
       // blank pane would read as a broken UI rather than an empty log.
-      render(
-        <NativeChatShell
-          {...shellProps()}
-          connectionState="error"
-          serverLog={"   \n  "}
-        />,
-      );
+      render(<NativeChatShell {...shellProps()} connectionState="error" serverLog={"   \n  "} />);
 
       fireEvent.click(screen.getByRole("button", { name: "Show Log" }));
       expect(screen.getByText("(empty log)")).toBeTruthy();
@@ -618,17 +564,12 @@ describe("NativeChatShell", () => {
   describe("empty state", () => {
     test("uses the agent-specific default copy", () => {
       render(<NativeChatShell {...shellProps()} agentLabel="Claude" />);
-      expect(
-        screen.getByText("No messages yet. Start a conversation with Claude!"),
-      ).toBeTruthy();
+      expect(screen.getByText("No messages yet. Start a conversation with Claude!")).toBeTruthy();
     });
 
     test("prefers an explicit empty-state message", () => {
       render(
-        <NativeChatShell
-          {...shellProps()}
-          emptyStateMessage="Pick a session to get going."
-        />,
+        <NativeChatShell {...shellProps()} emptyStateMessage="Pick a session to get going." />,
       );
 
       expect(screen.getByText("Pick a session to get going.")).toBeTruthy();
@@ -644,9 +585,7 @@ describe("NativeChatShell", () => {
 
     test("offers Resume Session from the empty transcript", () => {
       const onResumeClick = mock(() => {});
-      render(
-        <NativeChatShell {...shellProps()} onResumeClick={onResumeClick} />,
-      );
+      render(<NativeChatShell {...shellProps()} onResumeClick={onResumeClick} />);
 
       // The dock's copy is aria-hidden while docked, so this is the empty
       // state's button.
@@ -664,11 +603,7 @@ describe("NativeChatShell", () => {
     test("exposes Resume Session only while the composer is centered", () => {
       const onResumeClick = mock(() => {});
       const { rerender } = render(
-        <NativeChatShell
-          {...shellProps()}
-          centerCompose
-          onResumeClick={onResumeClick}
-        />,
+        <NativeChatShell {...shellProps()} centerCompose onResumeClick={onResumeClick} />,
       );
 
       const dockButton = screen
@@ -681,11 +616,7 @@ describe("NativeChatShell", () => {
       expect(onResumeClick).toHaveBeenCalledTimes(1);
 
       rerender(
-        <NativeChatShell
-          {...shellProps()}
-          centerCompose={false}
-          onResumeClick={onResumeClick}
-        />,
+        <NativeChatShell {...shellProps()} centerCompose={false} onResumeClick={onResumeClick} />,
       );
 
       // Collapsed out of the docked layout, so it must leave the tab order too.
@@ -695,10 +626,7 @@ describe("NativeChatShell", () => {
 
     test("renders the resume dialog outside the dock so its portal is not clipped", () => {
       render(
-        <NativeChatShell
-          {...shellProps()}
-          resumeDialog={<div data-testid="resume-dialog" />}
-        />,
+        <NativeChatShell {...shellProps()} resumeDialog={<div data-testid="resume-dialog" />} />,
       );
 
       const dialog = screen.getByTestId("resume-dialog");
@@ -709,12 +637,7 @@ describe("NativeChatShell", () => {
   describe("transcript footer", () => {
     test("shows the thinking indicator and the running elapsed time", () => {
       render(
-        <NativeChatShell
-          {...shellProps()}
-          agentLabel="Codex"
-          isLoading
-          elapsedSeconds={95}
-        />,
+        <NativeChatShell {...shellProps()} agentLabel="Codex" isLoading elapsedSeconds={95} />,
       );
 
       expect(screen.getByRole("status").textContent).toBe("Codex is thinking...");
@@ -767,26 +690,16 @@ describe("NativeChatShell", () => {
     test("offers a scroll-down shortcut only when scrolled away from the bottom", () => {
       const scrollToBottom = mock(() => {});
       const { rerender } = render(
-        <NativeChatShell
-          {...shellProps()}
-          isAtBottom
-          scrollToBottom={scrollToBottom}
-        />,
+        <NativeChatShell {...shellProps()} isAtBottom scrollToBottom={scrollToBottom} />,
       );
 
       expect(screen.queryByText("Scroll down") === null).toBe(true);
 
       rerender(
-        <NativeChatShell
-          {...shellProps()}
-          isAtBottom={false}
-          scrollToBottom={scrollToBottom}
-        />,
+        <NativeChatShell {...shellProps()} isAtBottom={false} scrollToBottom={scrollToBottom} />,
       );
 
-      fireEvent.click(
-        screen.getByRole("button", { name: "Scroll to bottom of conversation" }),
-      );
+      fireEvent.click(screen.getByRole("button", { name: "Scroll to bottom of conversation" }));
       expect(scrollToBottom).toHaveBeenCalledTimes(1);
     });
   });
@@ -866,23 +779,13 @@ describe("NativeChatShell", () => {
       };
 
       const { rerender } = render(
-        <NativeChatShell
-          {...shellProps()}
-          platform="cursor"
-          messages={[message]}
-        />,
+        <NativeChatShell {...shellProps()} platform="cursor" messages={[message]} />,
       );
       expect(screen.getByText("Summarize two docs (explore)")).toBeTruthy();
       expect(screen.getByText("1.2s")).toBeTruthy();
       expect(screen.queryByText("8 tool uses") === null).toBe(true);
 
-      rerender(
-        <NativeChatShell
-          {...shellProps()}
-          platform="claude"
-          messages={[message]}
-        />,
-      );
+      rerender(<NativeChatShell {...shellProps()} platform="claude" messages={[message]} />);
       expect(screen.getByText("8 tool uses")).toBeTruthy();
     });
 

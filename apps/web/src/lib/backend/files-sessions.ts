@@ -1,7 +1,21 @@
 import { invoke } from "@/lib/native/backend";
 import type { EnvironmentDiffStatsSnapshot } from "@orkestrator/protocol/diff-stats";
 import type { PrMonitorMode, PrMonitorSnapshot } from "@orkestrator/protocol/pr-monitor";
-import type { Environment, PortMapping, Session, SessionType, SessionStatus, DefaultAgent, ClaudeMode, ClaudeNativeBackend, CodexMode, OpenCodeMode, InitialPromptImageAttachment, PersistedPaneLayout, PersistedPaneLayoutInput } from "@/types";
+import type {
+  Environment,
+  PortMapping,
+  Session,
+  SessionType,
+  SessionStatus,
+  DefaultAgent,
+  ClaudeMode,
+  ClaudeNativeBackend,
+  CodexMode,
+  OpenCodeMode,
+  InitialPromptImageAttachment,
+  PersistedPaneLayout,
+  PersistedPaneLayoutInput,
+} from "@/types";
 import { isRecord } from "./shared";
 /** PR detection result containing URL, state, and merge conflict status */
 
@@ -46,11 +60,11 @@ function normalizeConditionalArraySnapshot<T>(
     return { unchanged: false, digest: "", value: response as T[] };
   }
   if (
-    !isRecord(response)
-    || typeof response.unchanged !== "boolean"
-    || typeof response.digest !== "string"
-    || (!response.unchanged && !Array.isArray(response.value))
-    || (response.unchanged && response.value !== undefined)
+    !isRecord(response) ||
+    typeof response.unchanged !== "boolean" ||
+    typeof response.digest !== "string" ||
+    (!response.unchanged && !Array.isArray(response.value)) ||
+    (response.unchanged && response.value !== undefined)
   ) {
     throw new Error(`Invalid ${command} response`);
   }
@@ -81,10 +95,7 @@ export async function getGitStatusSnapshot(
     includeUncommitted: true,
     knownDigest: knownDigest ?? "",
   });
-  return normalizeConditionalArraySnapshot<GitFileChange>(
-    response,
-    "get_git_status",
-  );
+  return normalizeConditionalArraySnapshot<GitFileChange>(response, "get_git_status");
 }
 
 /** Get workspace file tree from a container */
@@ -106,7 +117,7 @@ export async function getFileTreeSnapshot(
 /** Read a file from inside a container */
 export async function readContainerFile(
   containerId: string,
-  filePath: string
+  filePath: string,
 ): Promise<FileContent> {
   return invoke<FileContent>("read_container_file", { containerId, filePath });
 }
@@ -117,7 +128,7 @@ export async function readContainerFile(
 export async function readFileAtBranch(
   containerId: string,
   filePath: string,
-  branch: string
+  branch: string,
 ): Promise<FileContent | null> {
   return invoke<FileContent | null>("read_file_at_branch", {
     containerId,
@@ -129,7 +140,7 @@ export async function readFileAtBranch(
 /** Read a binary file from inside a container as base64 */
 export async function readContainerFileBase64(
   containerId: string,
-  filePath: string
+  filePath: string,
 ): Promise<string> {
   return invoke<string>("read_container_file_base64", { containerId, filePath });
 }
@@ -138,7 +149,7 @@ export async function readContainerFileBase64(
 export async function writeContainerFile(
   containerId: string,
   filePath: string,
-  base64Data: string
+  base64Data: string,
 ): Promise<string> {
   return invoke<string>("write_container_file", { containerId, filePath, base64Data });
 }
@@ -169,7 +180,7 @@ export async function writeInitialPromptAttachments(
 export async function revertContainerFile(
   environmentId: string,
   filePath: string,
-  targetBranch: string
+  targetBranch: string,
 ): Promise<string> {
   return invoke<string>("revert_container_file", { environmentId, filePath, targetBranch });
 }
@@ -177,7 +188,7 @@ export async function revertContainerFile(
 /** Delete a container file and stage the deletion when it is tracked by Git. */
 export async function deleteContainerFile(
   environmentId: string,
-  filePath: string
+  filePath: string,
 ): Promise<string> {
   return invoke<string>("delete_container_file", { environmentId, filePath });
 }
@@ -208,10 +219,7 @@ export async function getLocalGitStatusSnapshot(
     includeUncommitted: true,
     knownDigest: knownDigest ?? "",
   });
-  return normalizeConditionalArraySnapshot<GitFileChange>(
-    response,
-    "get_local_git_status",
-  );
+  return normalizeConditionalArraySnapshot<GitFileChange>(response, "get_local_git_status");
 }
 
 /**
@@ -283,17 +291,11 @@ export async function getLocalFileTreeSnapshot(
     worktreePath,
     knownDigest: knownDigest ?? "",
   });
-  return normalizeConditionalArraySnapshot<FileNode>(
-    response,
-    "get_local_file_tree",
-  );
+  return normalizeConditionalArraySnapshot<FileNode>(response, "get_local_file_tree");
 }
 
 /** Read a file from a local environment (worktree path) */
-export async function readLocalFile(
-  worktreePath: string,
-  filePath: string
-): Promise<FileContent> {
+export async function readLocalFile(worktreePath: string, filePath: string): Promise<FileContent> {
   return invoke<FileContent>("read_local_file", { worktreePath, filePath });
 }
 
@@ -303,7 +305,7 @@ export async function readLocalFile(
 export async function readLocalFileAtBranch(
   worktreePath: string,
   filePath: string,
-  branch: string
+  branch: string,
 ): Promise<FileContent | null> {
   return invoke<FileContent | null>("read_local_file_at_branch", {
     worktreePath,
@@ -316,7 +318,7 @@ export async function readLocalFileAtBranch(
 export async function writeLocalFile(
   worktreePath: string,
   filePath: string,
-  base64Data: string
+  base64Data: string,
 ): Promise<string> {
   return invoke<string>("write_local_file", { worktreePath, filePath, base64Data });
 }
@@ -325,16 +327,13 @@ export async function writeLocalFile(
 export async function revertLocalFile(
   environmentId: string,
   filePath: string,
-  targetBranch: string
+  targetBranch: string,
 ): Promise<string> {
   return invoke<string>("revert_local_file", { environmentId, filePath, targetBranch });
 }
 
 /** Delete a local file and stage the deletion when it is tracked by Git. */
-export async function deleteLocalFile(
-  environmentId: string,
-  filePath: string
-): Promise<string> {
+export async function deleteLocalFile(environmentId: string, filePath: string): Promise<string> {
   return invoke<string>("delete_local_file", { environmentId, filePath });
 }
 
@@ -343,7 +342,7 @@ export async function deleteLocalFile(
 /** Update port mappings for an environment (requires restart to apply) */
 export async function updatePortMappings(
   environmentId: string,
-  portMappings: PortMapping[]
+  portMappings: PortMapping[],
 ): Promise<Environment> {
   return invoke<Environment>("update_port_mappings", {
     environmentId,
@@ -462,7 +461,7 @@ export async function createSession(
   environmentId: string,
   containerId: string,
   tabId: string,
-  sessionType: SessionType
+  sessionType: SessionType,
 ): Promise<Session> {
   return invoke<Session>("create_session", {
     environmentId,
@@ -478,24 +477,20 @@ export async function getSession(sessionId: string): Promise<Session | null> {
 }
 
 /** Get all sessions for an environment */
-export async function getSessionsByEnvironment(
-  environmentId: string
-): Promise<Session[]> {
+export async function getSessionsByEnvironment(environmentId: string): Promise<Session[]> {
   return invoke<Session[]>("get_sessions_by_environment", { environmentId });
 }
 
 /** Update session status (connected/disconnected) */
 export async function updateSessionStatus(
   sessionId: string,
-  status: SessionStatus
+  status: SessionStatus,
 ): Promise<Session> {
   return invoke<Session>("update_session_status", { sessionId, status });
 }
 
 /** Update session's last activity timestamp */
-export async function updateSessionActivity(
-  sessionId: string
-): Promise<Session> {
+export async function updateSessionActivity(sessionId: string): Promise<Session> {
   return invoke<Session>("update_session_activity", { sessionId });
 }
 
@@ -505,46 +500,34 @@ export async function deleteSession(sessionId: string): Promise<void> {
 }
 
 /** Delete all sessions for an environment */
-export async function deleteSessionsByEnvironment(
-  environmentId: string
-): Promise<string[]> {
+export async function deleteSessionsByEnvironment(environmentId: string): Promise<string[]> {
   return invoke<string[]>("delete_sessions_by_environment", { environmentId });
 }
 
 /** Rename a session */
-export async function renameSession(
-  sessionId: string,
-  name: string | null
-): Promise<Session> {
+export async function renameSession(sessionId: string, name: string | null): Promise<Session> {
   return invoke<Session>("rename_session", { sessionId, name });
 }
 
 /** Mark all sessions for an environment as disconnected */
-export async function disconnectEnvironmentSessions(
-  environmentId: string
-): Promise<Session[]> {
+export async function disconnectEnvironmentSessions(environmentId: string): Promise<Session[]> {
   return invoke<Session[]>("disconnect_environment_sessions", { environmentId });
 }
 
 /** Save a session's terminal buffer to a separate file */
-export async function saveSessionBuffer(
-  sessionId: string,
-  buffer: string
-): Promise<void> {
+export async function saveSessionBuffer(sessionId: string, buffer: string): Promise<void> {
   return invoke("save_session_buffer", { sessionId, buffer });
 }
 
 /** Load a session's terminal buffer from file */
-export async function loadSessionBuffer(
-  sessionId: string
-): Promise<string | null> {
+export async function loadSessionBuffer(sessionId: string): Promise<string | null> {
   return invoke<string | null>("load_session_buffer", { sessionId });
 }
 
 /** Sync sessions for an environment with container state */
 export async function syncSessionsWithContainer(
   environmentId: string,
-  containerRunning: boolean
+  containerRunning: boolean,
 ): Promise<Session[]> {
   return invoke<Session[]>("sync_sessions_with_container", {
     environmentId,
@@ -555,7 +538,7 @@ export async function syncSessionsWithContainer(
 /** Reorder sessions within an environment */
 export async function reorderSessions(
   environmentId: string,
-  sessionIds: string[]
+  sessionIds: string[],
 ): Promise<Session[]> {
   return invoke<Session[]>("reorder_sessions", { environmentId, sessionIds });
 }
@@ -567,9 +550,7 @@ export async function cleanupOrphanedBuffers(): Promise<string[]> {
 
 // --- Pane Layout Commands (Restore-on-connect) ---
 
-export async function getPaneLayout(
-  environmentId: string,
-): Promise<PersistedPaneLayout | null> {
+export async function getPaneLayout(environmentId: string): Promise<PersistedPaneLayout | null> {
   return invoke<PersistedPaneLayout | null>("get_pane_layout", { environmentId });
 }
 

@@ -1,36 +1,25 @@
-import { afterEach,describe,expect,mock,test } from "bun:test";
-
+import { afterEach, describe, expect, mock, test } from "bun:test";
 
 import {
-buildOpenCodeMessageFromPart,
-carryOverOpenCodeSubagentHydration,
-collectOpenCodeSubagentIds,
-getOpenCodePartKey,
-getSessionMessages,
-hasOpenCodeSubagentSession,
-mergeOpenCodeMessageInfo,
-mergeOpenCodeSubagentTranscript,
-normalizeOpenCodeMessage,
-normalizeOpenCodePart,
-type OpencodeClient,
-type OpenCodeMessage
+  buildOpenCodeMessageFromPart,
+  carryOverOpenCodeSubagentHydration,
+  collectOpenCodeSubagentIds,
+  getOpenCodePartKey,
+  getSessionMessages,
+  hasOpenCodeSubagentSession,
+  mergeOpenCodeMessageInfo,
+  mergeOpenCodeSubagentTranscript,
+  normalizeOpenCodeMessage,
+  normalizeOpenCodePart,
+  type OpencodeClient,
+  type OpenCodeMessage,
 } from "./opencode-client";
 
-
-
-
-
-
-
 const originalFetch = globalThis.fetch;
-
-
 
 function setTestUrl(url: string): void {
   (window as unknown as Window & { happyDOM: { setURL(url: string): void } }).happyDOM.setURL(url);
 }
-
-
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
@@ -38,8 +27,6 @@ afterEach(() => {
   setTestUrl("about:blank");
   mock.restore();
 });
-
-
 
 describe("opencode-client streaming part normalization", () => {
   test("normalizes text parts with source identity for incremental updates", () => {
@@ -142,10 +129,9 @@ describe("opencode-client streaming part normalization", () => {
         time: { start: 1, end: 2 },
       })?.content,
     ).toBe("**Planning next");
-    expect(
-      normalizeOpenCodePart({ type: "reasoning", text: "**Planning next" })
-        ?.content,
-    ).toBe("**Planning next");
+    expect(normalizeOpenCodePart({ type: "reasoning", text: "**Planning next" })?.content).toBe(
+      "**Planning next",
+    );
   });
 
   test("preserves inline, trailing, and completed prefix bold Markdown", () => {
@@ -157,9 +143,7 @@ describe("opencode-client streaming part normalization", () => {
       "**Planning** then **care**",
       "Planning next**",
     ]) {
-      expect(
-        normalizeOpenCodePart({ type: "reasoning", text: content })?.content,
-      ).toBe(content);
+      expect(normalizeOpenCodePart({ type: "reasoning", text: content })?.content).toBe(content);
     }
   });
 
@@ -179,9 +163,7 @@ describe("opencode-client streaming part normalization", () => {
   });
 
   test("drops reasoning parts with empty text", () => {
-    expect(
-      normalizeOpenCodePart({ id: "part-r", type: "reasoning", text: "" }),
-    ).toBeNull();
+    expect(normalizeOpenCodePart({ id: "part-r", type: "reasoning", text: "" })).toBeNull();
   });
 
   test("normalizes tool parts with mapped state and diff metadata", () => {
@@ -263,7 +245,8 @@ describe("opencode-client streaming part normalization", () => {
       state: {
         status: "completed",
         input: { description: "Background review" },
-        output: '<task id="session-background" state="running">\n<task_result>Working</task_result>\n</task>',
+        output:
+          '<task id="session-background" state="running">\n<task_result>Working</task_result>\n</task>',
       },
     });
 
@@ -332,7 +315,9 @@ describe("opencode-client streaming part normalization", () => {
     const cases = [
       {
         part: {
-          type: "tool", tool: "write", state: {
+          type: "tool",
+          tool: "write",
+          state: {
             status: "completed",
             input: { file_path: "a.ts", old_string: "old", new_string: "new" },
             metadata: { additions: 7, deletions: 3 },
@@ -342,8 +327,11 @@ describe("opencode-client streaming part normalization", () => {
       },
       {
         part: {
-          type: "tool", tool: "edit", state: {
-            status: "completed", input: { path: "b.ts" },
+          type: "tool",
+          tool: "edit",
+          state: {
+            status: "completed",
+            input: { path: "b.ts" },
             metadata: { diff: "--- a/b.ts\n+++ b/b.ts\n@@ -1 +1,2 @@\n-old\n+new\n+more" },
           },
         },
@@ -351,8 +339,11 @@ describe("opencode-client streaming part normalization", () => {
       },
       {
         part: {
-          type: "tool", tool: "patch", state: {
-            status: "completed", input: { file: "c.ts" },
+          type: "tool",
+          tool: "patch",
+          state: {
+            status: "completed",
+            input: { file: "c.ts" },
             output: "@@ -1 +1 @@\n-old\n+new",
           },
         },
@@ -360,24 +351,33 @@ describe("opencode-client streaming part normalization", () => {
       },
       {
         part: {
-          type: "tool", tool: "write", state: {
-            status: "completed", input: { filePath: "new.ts", content: "one\ntwo" },
+          type: "tool",
+          tool: "write",
+          state: {
+            status: "completed",
+            input: { filePath: "new.ts", content: "one\ntwo" },
           },
         },
         expected: { filePath: "new.ts", additions: 2, deletions: 0 },
       },
       {
         part: {
-          type: "tool", tool: "edit", state: {
-            status: "completed", input: { filePath: "old.ts", oldString: "one\ntwo" },
+          type: "tool",
+          tool: "edit",
+          state: {
+            status: "completed",
+            input: { filePath: "old.ts", oldString: "one\ntwo" },
           },
         },
         expected: { filePath: "old.ts", additions: 0, deletions: 2 },
       },
       {
         part: {
-          type: "tool", tool: "edit", state: {
-            status: "completed", input: {},
+          type: "tool",
+          tool: "edit",
+          state: {
+            status: "completed",
+            input: {},
             metadata: { filediff: { file: "meta.ts", before: "a", after: "b\nc" } },
           },
         },
@@ -387,7 +387,9 @@ describe("opencode-client streaming part normalization", () => {
         // A trailing newline terminates the last line rather than starting
         // another one, so this replaces two lines with one, not three with two.
         part: {
-          type: "tool", tool: "edit", state: {
+          type: "tool",
+          tool: "edit",
+          state: {
             status: "completed",
             input: { filePath: "nl.ts", oldString: "one\ntwo\n", newString: "three\n" },
           },
@@ -396,8 +398,11 @@ describe("opencode-client streaming part normalization", () => {
       },
       {
         part: {
-          type: "tool", tool: "write", state: {
-            status: "completed", input: { filePath: "nl-new.ts", content: "one\ntwo\n" },
+          type: "tool",
+          tool: "write",
+          state: {
+            status: "completed",
+            input: { filePath: "nl-new.ts", content: "one\ntwo\n" },
           },
         },
         expected: { filePath: "nl-new.ts", additions: 2, deletions: 0 },
@@ -407,7 +412,9 @@ describe("opencode-client streaming part normalization", () => {
         // per-chunk counts. Recounting the joined string would charge "four\n"
         // as two deletions.
         part: {
-          type: "tool", tool: "MultiEdit", state: {
+          type: "tool",
+          tool: "MultiEdit",
+          state: {
             status: "completed",
             input: {
               filePath: "c.ts",
@@ -428,7 +435,9 @@ describe("opencode-client streaming part normalization", () => {
       },
       {
         part: {
-          type: "tool", tool: "multiedit", state: {
+          type: "tool",
+          tool: "multiedit",
+          state: {
             status: "completed",
             input: {
               file_path: "sep.ts",
@@ -450,7 +459,9 @@ describe("opencode-client streaming part normalization", () => {
       {
         // Provider-authored counts remain authoritative over the mapped sides.
         part: {
-          type: "tool", tool: "MultiEdit", state: {
+          type: "tool",
+          tool: "MultiEdit",
+          state: {
             status: "completed",
             input: {
               filePath: "meta.ts",
@@ -541,8 +552,6 @@ describe("opencode-client streaming part normalization", () => {
   });
 });
 
-
-
 describe("opencode-client normalizeOpenCodeMessage", () => {
   test("aggregates text content and parts from an SDK message", () => {
     const message = normalizeOpenCodeMessage({
@@ -623,7 +632,12 @@ describe("opencode-client normalizeOpenCodeMessage", () => {
       info: { id: "unknown-finish", role: "assistant" },
       parts: [
         { id: "reasoning", messageID: "unknown-finish", type: "reasoning", text: "Working" },
-        { id: "first-finish", messageID: "unknown-finish", type: "step-finish", reason: "tool-calls" },
+        {
+          id: "first-finish",
+          messageID: "unknown-finish",
+          type: "step-finish",
+          reason: "tool-calls",
+        },
         { id: "final-finish", messageID: "unknown-finish", type: "step-finish", reason: "unknown" },
       ],
     });
@@ -634,35 +648,37 @@ describe("opencode-client normalizeOpenCodeMessage", () => {
   });
 });
 
-
-
 describe("OpenCode subagent transcript hydration", () => {
   test("collects nested ids once, deduplicates them, and caches by transcript identity", () => {
-    const messages = [{
-      id: "message-1",
-      role: "assistant",
-      content: "",
-      parts: [{
-        type: "subagent",
-        subagentId: "child",
-        content: "child",
-        subagentActions: [
-          {
-            type: "subagent",
-            subagentId: "grandchild",
-            content: "grandchild",
-            subagentActions: [],
-          },
+    const messages = [
+      {
+        id: "message-1",
+        role: "assistant",
+        content: "",
+        parts: [
           {
             type: "subagent",
             subagentId: "child",
-            content: "duplicate",
-            subagentActions: [],
+            content: "child",
+            subagentActions: [
+              {
+                type: "subagent",
+                subagentId: "grandchild",
+                content: "grandchild",
+                subagentActions: [],
+              },
+              {
+                type: "subagent",
+                subagentId: "child",
+                content: "duplicate",
+                subagentActions: [],
+              },
+            ],
           },
         ],
-      }],
-      createdAt: "2026-07-28T00:00:00.000Z",
-    }] as OpenCodeMessage[];
+        createdAt: "2026-07-28T00:00:00.000Z",
+      },
+    ] as OpenCodeMessage[];
 
     const first = collectOpenCodeSubagentIds(messages);
     const second = collectOpenCodeSubagentIds(messages);
@@ -675,55 +691,56 @@ describe("OpenCode subagent transcript hydration", () => {
     const client = {
       session: {
         messages: mock(async ({ sessionID }: { sessionID: string }) => ({
-          data: sessionID === "session-parent"
-            ? [
-                {
-                  info: { id: "parent-message", role: "assistant", time: { created: 1 } },
-                  parts: [
-                    {
-                      id: "task-part",
-                      messageID: "parent-message",
-                      type: "tool",
-                      tool: "task",
-                      state: {
-                        status: "running",
-                        input: {
-                          description: "Inspect imports",
-                          prompt: "Review imports",
-                          subagent_type: "general",
+          data:
+            sessionID === "session-parent"
+              ? [
+                  {
+                    info: { id: "parent-message", role: "assistant", time: { created: 1 } },
+                    parts: [
+                      {
+                        id: "task-part",
+                        messageID: "parent-message",
+                        type: "tool",
+                        tool: "task",
+                        state: {
+                          status: "running",
+                          input: {
+                            description: "Inspect imports",
+                            prompt: "Review imports",
+                            subagent_type: "general",
+                          },
+                          metadata: { sessionId: "session-child" },
                         },
-                        metadata: { sessionId: "session-child" },
                       },
-                    },
-                  ],
-                },
-              ]
-            : [
-                {
-                  info: { id: "child-message", role: "assistant", time: { created: 2 } },
-                  parts: [
-                    {
-                      id: "child-tool",
-                      messageID: "child-message",
-                      type: "tool",
-                      tool: "bash",
-                      state: {
-                        status: "completed",
-                        title: "Read imports",
-                        input: { command: "rg import src" },
-                        output: "src/index.ts",
-                        metadata: {},
+                    ],
+                  },
+                ]
+              : [
+                  {
+                    info: { id: "child-message", role: "assistant", time: { created: 2 } },
+                    parts: [
+                      {
+                        id: "child-tool",
+                        messageID: "child-message",
+                        type: "tool",
+                        tool: "bash",
+                        state: {
+                          status: "completed",
+                          title: "Read imports",
+                          input: { command: "rg import src" },
+                          output: "src/index.ts",
+                          metadata: {},
+                        },
                       },
-                    },
-                    {
-                      id: "child-text",
-                      messageID: "child-message",
-                      type: "text",
-                      text: "Review complete",
-                    },
-                  ],
-                },
-              ],
+                      {
+                        id: "child-text",
+                        messageID: "child-message",
+                        type: "text",
+                        text: "Review complete",
+                      },
+                    ],
+                  },
+                ],
         })),
         children: mock(async () => ({ data: [] })),
       },
@@ -754,38 +771,39 @@ describe("OpenCode subagent transcript hydration", () => {
     const client = {
       session: {
         messages: mock(async ({ sessionID }: { sessionID: string }) => ({
-          data: sessionID === "session-parent"
-            ? [
-                {
-                  info: { id: "parent-message", role: "assistant", time: { created: 1 } },
-                  parts: [
-                    {
-                      id: "task-part",
-                      messageID: "parent-message",
-                      type: "tool",
-                      tool: "task",
-                      state: {
-                        status: "completed",
-                        input: { description: "Background review" },
-                        output: '<task id="background-child" state="running">Working</task>',
+          data:
+            sessionID === "session-parent"
+              ? [
+                  {
+                    info: { id: "parent-message", role: "assistant", time: { created: 1 } },
+                    parts: [
+                      {
+                        id: "task-part",
+                        messageID: "parent-message",
+                        type: "tool",
+                        tool: "task",
+                        state: {
+                          status: "completed",
+                          input: { description: "Background review" },
+                          output: '<task id="background-child" state="running">Working</task>',
+                        },
                       },
-                    },
-                  ],
-                },
-              ]
-            : [
-                {
-                  info: { id: "child-message", role: "assistant", time: { created: 2 } },
-                  parts: [
-                    {
-                      id: "child-text",
-                      messageID: "child-message",
-                      type: "text",
-                      text: "Finished in the background",
-                    },
-                  ],
-                },
-              ],
+                    ],
+                  },
+                ]
+              : [
+                  {
+                    info: { id: "child-message", role: "assistant", time: { created: 2 } },
+                    parts: [
+                      {
+                        id: "child-text",
+                        messageID: "child-message",
+                        type: "text",
+                        text: "Finished in the background",
+                      },
+                    ],
+                  },
+                ],
         })),
         status: mock(async () => ({
           data: { "background-child": { type: "idle" } },
@@ -798,9 +816,7 @@ describe("OpenCode subagent transcript hydration", () => {
       type: "subagent",
       subagentId: "background-child",
       toolState: "success",
-      subagentActions: [
-        { type: "text", content: "Finished in the background" },
-      ],
+      subagentActions: [{ type: "text", content: "Finished in the background" }],
     });
   });
 
@@ -808,25 +824,26 @@ describe("OpenCode subagent transcript hydration", () => {
     const client = {
       session: {
         messages: mock(async ({ sessionID }: { sessionID: string }) => ({
-          data: sessionID === "session-parent"
-            ? [
-                {
-                  info: { id: "parent-message", role: "assistant", time: { created: 1 } },
-                  parts: [
-                    {
-                      id: "task-part",
-                      messageID: "parent-message",
-                      type: "tool",
-                      tool: "Task",
-                      state: {
-                        status: "running",
-                        input: { description: "Review database", subagent_type: "explore" },
+          data:
+            sessionID === "session-parent"
+              ? [
+                  {
+                    info: { id: "parent-message", role: "assistant", time: { created: 1 } },
+                    parts: [
+                      {
+                        id: "task-part",
+                        messageID: "parent-message",
+                        type: "tool",
+                        tool: "Task",
+                        state: {
+                          status: "running",
+                          input: { description: "Review database", subagent_type: "explore" },
+                        },
                       },
-                    },
-                  ],
-                },
-              ]
-            : [],
+                    ],
+                  },
+                ]
+              : [],
         })),
         children: mock(async () => ({
           data: [
@@ -898,13 +915,22 @@ describe("OpenCode subagent transcript hydration", () => {
   });
 
   test("detects nested sessions and leaves non-matching transcripts unchanged", () => {
-    const messages: OpenCodeMessage[] = [{
-      id: "parent", role: "assistant", content: "", createdAt: "now",
-      parts: [{
-        type: "subagent", content: "outer", subagentId: "outer",
-        subagentActions: [{ type: "subagent", content: "inner", subagentId: "inner" }],
-      }],
-    }];
+    const messages: OpenCodeMessage[] = [
+      {
+        id: "parent",
+        role: "assistant",
+        content: "",
+        createdAt: "now",
+        parts: [
+          {
+            type: "subagent",
+            content: "outer",
+            subagentId: "outer",
+            subagentActions: [{ type: "subagent", content: "inner", subagentId: "inner" }],
+          },
+        ],
+      },
+    ];
 
     expect(hasOpenCodeSubagentSession(messages, "inner")).toBe(true);
     expect(hasOpenCodeSubagentSession(messages, "missing")).toBe(false);
@@ -912,26 +938,37 @@ describe("OpenCode subagent transcript hydration", () => {
   });
 
   test("updates every matching row, ignores user actions, counts nested tools, and preserves terminal precedence", () => {
-    const messages: OpenCodeMessage[] = [{
-      id: "parent", role: "assistant", content: "", createdAt: "now",
-      parts: [
-        { type: "subagent", content: "first", subagentId: "child", toolState: "success" },
-        { type: "subagent", content: "second", subagentId: "child", toolState: "failure" },
-      ],
-    }];
+    const messages: OpenCodeMessage[] = [
+      {
+        id: "parent",
+        role: "assistant",
+        content: "",
+        createdAt: "now",
+        parts: [
+          { type: "subagent", content: "first", subagentId: "child", toolState: "success" },
+          { type: "subagent", content: "second", subagentId: "child", toolState: "failure" },
+        ],
+      },
+    ];
     const childMessages: OpenCodeMessage[] = [
       {
-        id: "user", role: "user", content: "hidden", createdAt: "now",
+        id: "user",
+        role: "user",
+        content: "hidden",
+        createdAt: "now",
         parts: [{ type: "tool-invocation", content: "user-tool" }],
       },
       {
-        id: "assistant", role: "assistant", content: "", createdAt: "now",
+        id: "assistant",
+        role: "assistant",
+        content: "",
+        createdAt: "now",
         parts: [
           { type: "tool-invocation", content: "top" },
           {
-            type: "subagent", content: "nested", subagentActions: [
-              { type: "tool-invocation", content: "nested-tool" },
-            ],
+            type: "subagent",
+            content: "nested",
+            subagentActions: [{ type: "tool-invocation", content: "nested-tool" }],
           },
         ],
       },
@@ -954,56 +991,96 @@ describe("OpenCode subagent transcript hydration", () => {
     const messages = mock(async ({ sessionID }: { sessionID: string }) => {
       if (sessionID === "child") throw new Error("child offline");
       return {
-        data: [{
-          info: { id: "parent", role: "assistant" },
-          parts: [{
-            type: "tool", tool: "Task",
-            state: { status: "running", input: { description: "Child" }, metadata: { sessionId: "child" } },
-          }],
-        }],
+        data: [
+          {
+            info: { id: "parent", role: "assistant" },
+            parts: [
+              {
+                type: "tool",
+                tool: "Task",
+                state: {
+                  status: "running",
+                  input: { description: "Child" },
+                  metadata: { sessionId: "child" },
+                },
+              },
+            ],
+          },
+        ],
       };
     });
     const client = { session: { messages } } as unknown as OpencodeClient;
 
     expect(await getSessionMessages(client, "parent")).toEqual([]);
-    await expect(getSessionMessages(client, "parent", { throwOnError: true })).rejects.toThrow("child offline");
+    await expect(getSessionMessages(client, "parent", { throwOnError: true })).rejects.toThrow(
+      "child offline",
+    );
   });
 
   test("continues without a status snapshot in non-strict mode and propagates it in strict mode", async () => {
     const client = {
       session: {
         messages: async ({ sessionID }: { sessionID: string }) => ({
-          data: sessionID === "parent"
-            ? [{
-                info: { id: "parent", role: "assistant" },
-                parts: [{
-                  type: "tool", tool: "Task",
-                  state: { status: "running", input: { description: "Child" }, metadata: { sessionId: "child" } },
-                }],
-              }]
-            : [{ info: { id: "child", role: "assistant" }, parts: [{ type: "text", text: "done" }] }],
+          data:
+            sessionID === "parent"
+              ? [
+                  {
+                    info: { id: "parent", role: "assistant" },
+                    parts: [
+                      {
+                        type: "tool",
+                        tool: "Task",
+                        state: {
+                          status: "running",
+                          input: { description: "Child" },
+                          metadata: { sessionId: "child" },
+                        },
+                      },
+                    ],
+                  },
+                ]
+              : [
+                  {
+                    info: { id: "child", role: "assistant" },
+                    parts: [{ type: "text", text: "done" }],
+                  },
+                ],
         }),
-        status: async () => { throw new Error("status offline"); },
+        status: async () => {
+          throw new Error("status offline");
+        },
       },
     } as unknown as OpencodeClient;
 
     expect((await getSessionMessages(client, "parent"))[0]?.parts[0]).toMatchObject({
       subagentActions: [{ type: "text", content: "done" }],
     });
-    await expect(getSessionMessages(client, "parent", { throwOnError: true })).rejects.toThrow("status offline");
+    await expect(getSessionMessages(client, "parent", { throwOnError: true })).rejects.toThrow(
+      "status offline",
+    );
   });
 
   test("handles resolved status errors and malformed status payloads", async () => {
     const messages = async ({ sessionID }: { sessionID: string }) => ({
-      data: sessionID === "parent"
-        ? [{
-            info: { id: "parent", role: "assistant" },
-            parts: [{
-              type: "tool", tool: "Task",
-              state: { status: "running", input: { description: "Child" }, metadata: { sessionId: "child" } },
-            }],
-          }]
-        : [],
+      data:
+        sessionID === "parent"
+          ? [
+              {
+                info: { id: "parent", role: "assistant" },
+                parts: [
+                  {
+                    type: "tool",
+                    tool: "Task",
+                    state: {
+                      status: "running",
+                      input: { description: "Child" },
+                      metadata: { sessionId: "child" },
+                    },
+                  },
+                ],
+              },
+            ]
+          : [],
     });
     const resolvedFailure = {
       session: {
@@ -1012,7 +1089,9 @@ describe("OpenCode subagent transcript hydration", () => {
       },
     } as unknown as OpencodeClient;
     expect(await getSessionMessages(resolvedFailure, "parent")).toHaveLength(1);
-    await expect(getSessionMessages(resolvedFailure, "parent", { throwOnError: true })).rejects.toThrow("no statuses");
+    await expect(
+      getSessionMessages(resolvedFailure, "parent", { throwOnError: true }),
+    ).rejects.toThrow("no statuses");
 
     const malformed = {
       session: { messages, status: async () => ({ data: [] }) },
@@ -1021,21 +1100,30 @@ describe("OpenCode subagent transcript hydration", () => {
   });
 
   test("handles failed and malformed child discovery responses", async () => {
-    const parentData = [{
-      info: { id: "parent", role: "assistant" },
-      parts: [{
-        type: "tool", tool: "Task",
-        state: { status: "running", input: { description: "Legacy" } },
-      }],
-    }];
+    const parentData = [
+      {
+        info: { id: "parent", role: "assistant" },
+        parts: [
+          {
+            type: "tool",
+            tool: "Task",
+            state: { status: "running", input: { description: "Legacy" } },
+          },
+        ],
+      },
+    ];
     const failed = {
       session: {
         messages: async () => ({ data: parentData }),
-        children: async () => { throw new Error("children offline"); },
+        children: async () => {
+          throw new Error("children offline");
+        },
       },
     } as unknown as OpencodeClient;
     expect((await getSessionMessages(failed, "parent"))[0]?.parts[0]?.subagentId).toBeUndefined();
-    await expect(getSessionMessages(failed, "parent", { throwOnError: true })).rejects.toThrow("children offline");
+    await expect(getSessionMessages(failed, "parent", { throwOnError: true })).rejects.toThrow(
+      "children offline",
+    );
 
     const resolvedFailure = {
       session: {
@@ -1046,8 +1134,9 @@ describe("OpenCode subagent transcript hydration", () => {
         }),
       },
     } as unknown as OpencodeClient;
-    expect((await getSessionMessages(resolvedFailure, "parent"))[0]?.parts[0]?.subagentId)
-      .toBeUndefined();
+    expect(
+      (await getSessionMessages(resolvedFailure, "parent"))[0]?.parts[0]?.subagentId,
+    ).toBeUndefined();
     await expect(
       getSessionMessages(resolvedFailure, "parent", { throwOnError: true }),
     ).rejects.toThrow("children rejected");
@@ -1058,27 +1147,36 @@ describe("OpenCode subagent transcript hydration", () => {
         children: async () => ({ data: { id: "not-an-array" } }),
       },
     } as unknown as OpencodeClient;
-    expect((await getSessionMessages(malformed, "parent"))[0]?.parts[0]?.subagentId).toBeUndefined();
+    expect(
+      (await getSessionMessages(malformed, "parent"))[0]?.parts[0]?.subagentId,
+    ).toBeUndefined();
   });
 
   test("assigns duplicate legacy titles to distinct children", async () => {
     const client = {
       session: {
         messages: async ({ sessionID }: { sessionID: string }) => ({
-          data: sessionID === "parent"
-            ? [{
-                info: { id: "parent", role: "assistant" },
-                parts: ["one", "two"].map((id) => ({
-                  id, type: "tool", tool: "Task",
-                  state: { status: "running", input: { description: "Duplicate" } },
-                })),
-              }]
-            : [],
+          data:
+            sessionID === "parent"
+              ? [
+                  {
+                    info: { id: "parent", role: "assistant" },
+                    parts: ["one", "two"].map((id) => ({
+                      id,
+                      type: "tool",
+                      tool: "Task",
+                      state: { status: "running", input: { description: "Duplicate" } },
+                    })),
+                  },
+                ]
+              : [],
         }),
-        children: async () => ({ data: [
-          { id: "child-one", title: "Duplicate" },
-          { id: "child-two", title: "Duplicate" },
-        ] }),
+        children: async () => ({
+          data: [
+            { id: "child-one", title: "Duplicate" },
+            { id: "child-two", title: "Duplicate" },
+          ],
+        }),
       },
     } as unknown as OpencodeClient;
 
@@ -1088,19 +1186,28 @@ describe("OpenCode subagent transcript hydration", () => {
 
   test("hydrates grandchildren once and terminates recursive session cycles", async () => {
     const task = (id: string, child: string) => ({
-      id, type: "tool", tool: "Task",
+      id,
+      type: "tool",
+      tool: "Task",
       state: { status: "running", input: { description: child }, metadata: { sessionId: child } },
     });
     const bySession: Record<string, unknown[]> = {
       parent: [{ info: { id: "p", role: "assistant" }, parts: [task("p-task", "child")] }],
-      child: [{ info: { id: "c", role: "assistant" }, parts: [
-        { type: "tool", tool: "bash", state: { status: "completed", input: {} } },
-        task("c-task", "grandchild"),
-      ] }],
-      grandchild: [{ info: { id: "g", role: "assistant" }, parts: [
-        task("g-task", "child"),
-        { type: "text", text: "complete" },
-      ] }],
+      child: [
+        {
+          info: { id: "c", role: "assistant" },
+          parts: [
+            { type: "tool", tool: "bash", state: { status: "completed", input: {} } },
+            task("c-task", "grandchild"),
+          ],
+        },
+      ],
+      grandchild: [
+        {
+          info: { id: "g", role: "assistant" },
+          parts: [task("g-task", "child"), { type: "text", text: "complete" }],
+        },
+      ],
     };
     const calls: string[] = [];
     const client = {
@@ -1119,10 +1226,15 @@ describe("OpenCode subagent transcript hydration", () => {
       toolState: "success",
       subagentActions: [
         { type: "tool-invocation", toolName: "bash" },
-        { type: "subagent", subagentId: "grandchild", toolState: "success", subagentActions: [
-          { type: "subagent", subagentId: "child", subagentActions: [] },
-          { type: "text", content: "complete" },
-        ] },
+        {
+          type: "subagent",
+          subagentId: "grandchild",
+          toolState: "success",
+          subagentActions: [
+            { type: "subagent", subagentId: "child", subagentActions: [] },
+            { type: "text", content: "complete" },
+          ],
+        },
       ],
     });
   });
@@ -1132,33 +1244,48 @@ describe("OpenCode subagent transcript hydration", () => {
     const client = {
       session: {
         messages: async ({ sessionID }: { sessionID: string }) => ({
-          data: sessionID === "parent"
-            ? [{
-                info: { id: "parent", role: "assistant" },
-                parts: ids.map((id) => ({
-                  type: "tool", tool: "Task",
-                  state: { status: "running", input: { description: id }, metadata: { sessionId: id } },
-                })),
-              }]
-            : sessionID === "failed-child"
-              ? [{ info: { id: "failure", role: "assistant", error: { message: "failed" } }, parts: [] }]
-              : [],
+          data:
+            sessionID === "parent"
+              ? [
+                  {
+                    info: { id: "parent", role: "assistant" },
+                    parts: ids.map((id) => ({
+                      type: "tool",
+                      tool: "Task",
+                      state: {
+                        status: "running",
+                        input: { description: id },
+                        metadata: { sessionId: id },
+                      },
+                    })),
+                  },
+                ]
+              : sessionID === "failed-child"
+                ? [
+                    {
+                      info: { id: "failure", role: "assistant", error: { message: "failed" } },
+                      parts: [],
+                    },
+                  ]
+                : [],
         }),
-        status: async () => ({ data: {
-          "busy-child": { type: "busy" },
-          "retry-child": { type: "retry" },
-          "empty-child": { type: "idle" },
-          "failed-child": { type: "idle" },
-        } }),
+        status: async () => ({
+          data: {
+            "busy-child": { type: "busy" },
+            "retry-child": { type: "retry" },
+            "empty-child": { type: "idle" },
+            "failed-child": { type: "idle" },
+          },
+        }),
       },
     } as unknown as OpencodeClient;
 
-    const states = (await getSessionMessages(client, "parent"))[0]?.parts.map((part) => part.toolState);
+    const states = (await getSessionMessages(client, "parent"))[0]?.parts.map(
+      (part) => part.toolState,
+    );
     expect(states).toEqual(["pending", "pending", "success", "failure"]);
   });
 });
-
-
 
 describe("opencode-client getOpenCodePartKey", () => {
   test("prefers the source part id", () => {
@@ -1212,8 +1339,6 @@ describe("opencode-client getOpenCodePartKey", () => {
     expect(getOpenCodePartKey({ type: "file", content: "", sourceMessageId: "m1" })).toBe(key);
   });
 });
-
-
 
 describe("opencode-client buildOpenCodeMessageFromPart", () => {
   test("creates a new assistant message when none exists", () => {
@@ -1408,12 +1533,14 @@ describe("opencode-client buildOpenCodeMessageFromPart", () => {
       id: "message-1",
       role: "assistant",
       content: "",
-      parts: [{
-        type: "file",
-        content: "a.png",
-        sourcePartId: "p1",
-        sourceMessageId: "message-1",
-      }],
+      parts: [
+        {
+          type: "file",
+          content: "a.png",
+          sourcePartId: "p1",
+          sourceMessageId: "message-1",
+        },
+      ],
       createdAt: new Date(0).toISOString(),
     };
 
@@ -1450,8 +1577,6 @@ describe("opencode-client buildOpenCodeMessageFromPart", () => {
   });
 });
 
-
-
 describe("opencode-client incremental message helpers", () => {
   test("merges message info without discarding existing parts", () => {
     const existing: OpenCodeMessage = {
@@ -1462,23 +1587,27 @@ describe("opencode-client incremental message helpers", () => {
       createdAt: "2026-04-15T00:00:00.000Z",
     };
 
-    expect(mergeOpenCodeMessageInfo(existing, {
-      id: "message-1",
-      role: "assistant",
-      providerID: "openai",
-      modelID: "gpt-5.6-sol",
-      error: { name: "ProviderError" },
-      tokens: { input: 4, output: 6 },
-    })).toMatchObject({
+    expect(
+      mergeOpenCodeMessageInfo(existing, {
+        id: "message-1",
+        role: "assistant",
+        providerID: "openai",
+        modelID: "gpt-5.6-sol",
+        error: { name: "ProviderError" },
+        tokens: { input: 4, output: 6 },
+      }),
+    ).toMatchObject({
       content: "streamed",
       parts: existing.parts,
       modelId: "openai/gpt-5.6-sol",
       hasError: true,
     });
-    expect(mergeOpenCodeMessageInfo(
-      { ...existing, hasError: true },
-      { id: "message-1", role: "assistant" },
-    )?.hasError).toBeUndefined();
+    expect(
+      mergeOpenCodeMessageInfo(
+        { ...existing, hasError: true },
+        { id: "message-1", role: "assistant" },
+      )?.hasError,
+    ).toBeUndefined();
     expect(mergeOpenCodeMessageInfo(existing, null)).toBeNull();
     expect(mergeOpenCodeMessageInfo(existing, {})).toBeNull();
   });
@@ -1492,11 +1621,13 @@ describe("opencode-client incremental message helpers", () => {
       createdAt: "2026-04-15T00:00:00.000Z",
     };
 
-    expect(mergeOpenCodeMessageInfo(existing, {
-      id: "message-1",
-      role: "assistant",
-      error: { name: "MessageAbortedError" },
-    })).toMatchObject({ hasError: true, errorName: "MessageAbortedError" });
+    expect(
+      mergeOpenCodeMessageInfo(existing, {
+        id: "message-1",
+        role: "assistant",
+        error: { name: "MessageAbortedError" },
+      }),
+    ).toMatchObject({ hasError: true, errorName: "MessageAbortedError" });
 
     // `info` is the whole record, so a retried turn that no longer reports an
     // error must lose the stale discriminator along with the flag.
@@ -1545,74 +1676,87 @@ describe("opencode-client incremental message helpers", () => {
       createdAt: "2026-04-15T10:00:01.000Z",
     };
 
-    expect(
-      mergeOpenCodeMessageInfo(existing, { id: "message-1", role: "assistant" })?.role,
-    ).toBe("assistant");
+    expect(mergeOpenCodeMessageInfo(existing, { id: "message-1", role: "assistant" })?.role).toBe(
+      "assistant",
+    );
   });
 
   test("preserves hydrated child actions and terminal state during a cheap refresh", () => {
-    const previous: OpenCodeMessage[] = [{
-      id: "parent",
-      role: "assistant",
-      content: "",
-      createdAt: "2026-04-15T00:00:00.000Z",
-      parts: [{
-        type: "subagent",
-        content: "Worker",
-        subagentId: "child",
-        toolState: "success",
-        subagentActionCount: 1,
-        subagentActions: [{ type: "text", content: "done" }],
-      }],
-    }];
-    const next: OpenCodeMessage[] = [{
-      ...previous[0]!,
-      parts: [{
-        type: "subagent",
-        content: "Worker",
-        subagentId: "child",
-        toolState: "pending",
-      }],
-    }];
+    const previous: OpenCodeMessage[] = [
+      {
+        id: "parent",
+        role: "assistant",
+        content: "",
+        createdAt: "2026-04-15T00:00:00.000Z",
+        parts: [
+          {
+            type: "subagent",
+            content: "Worker",
+            subagentId: "child",
+            toolState: "success",
+            subagentActionCount: 1,
+            subagentActions: [{ type: "text", content: "done" }],
+          },
+        ],
+      },
+    ];
+    const next: OpenCodeMessage[] = [
+      {
+        ...previous[0]!,
+        parts: [
+          {
+            type: "subagent",
+            content: "Worker",
+            subagentId: "child",
+            toolState: "pending",
+          },
+        ],
+      },
+    ];
 
-    expect(carryOverOpenCodeSubagentHydration(previous, next)[0]?.parts[0])
-      .toMatchObject({
-        toolState: "success",
-        subagentActionCount: 1,
-        subagentActions: [{ type: "text", content: "done" }],
-      });
+    expect(carryOverOpenCodeSubagentHydration(previous, next)[0]?.parts[0]).toMatchObject({
+      toolState: "success",
+      subagentActionCount: 1,
+      subagentActions: [{ type: "text", content: "done" }],
+    });
   });
 
   test("keeps an authoritative newly hydrated child instead of carrying stale actions", () => {
-    const previous: OpenCodeMessage[] = [{
-      id: "parent",
-      role: "assistant",
-      content: "",
-      createdAt: "2026-04-15T00:00:00.000Z",
-      parts: [{
-        type: "subagent",
-        content: "Worker",
-        subagentId: "child",
-        toolState: "success",
-        subagentActions: [{ type: "text", content: "old" }],
-      }],
-    }];
-    const next: OpenCodeMessage[] = [{
-      ...previous[0]!,
-      parts: [{
-        type: "subagent",
-        content: "Worker",
-        subagentId: "child",
-        toolState: "failure",
-        subagentActions: [{ type: "text", content: "new" }],
-      }],
-    }];
+    const previous: OpenCodeMessage[] = [
+      {
+        id: "parent",
+        role: "assistant",
+        content: "",
+        createdAt: "2026-04-15T00:00:00.000Z",
+        parts: [
+          {
+            type: "subagent",
+            content: "Worker",
+            subagentId: "child",
+            toolState: "success",
+            subagentActions: [{ type: "text", content: "old" }],
+          },
+        ],
+      },
+    ];
+    const next: OpenCodeMessage[] = [
+      {
+        ...previous[0]!,
+        parts: [
+          {
+            type: "subagent",
+            content: "Worker",
+            subagentId: "child",
+            toolState: "failure",
+            subagentActions: [{ type: "text", content: "new" }],
+          },
+        ],
+      },
+    ];
 
     expect(carryOverOpenCodeSubagentHydration(previous, next)).toBe(next);
   });
 });
-
-
 
 describe("opencode-client normalizeOpenCodeMessage providerUsage", () => {
   const tokens = {
@@ -1661,19 +1805,20 @@ describe("opencode-client normalizeOpenCodeMessage providerUsage", () => {
   });
 
   test("publishes the provider-confirmed model before usage counters arrive", () => {
-    expect(assistant({
-      providerID: "openai",
-      modelID: "gpt-5.6-sol",
-    })?.modelId).toBe("openai/gpt-5.6-sol");
+    expect(
+      assistant({
+        providerID: "openai",
+        modelID: "gpt-5.6-sol",
+      })?.modelId,
+    ).toBe("openai/gpt-5.6-sol");
   });
 
   test("normalizes model attribution without assigning it to user messages", () => {
-    expect(assistant({ modelID: "claude-sonnet-4" })?.modelId)
-      .toBe("claude-sonnet-4");
-    expect(assistant({ providerID: "  ", modelID: "claude-sonnet-4" })?.modelId)
-      .toBe("claude-sonnet-4");
-    expect(assistant({ providerID: "anthropic", modelID: "  " })?.modelId)
-      .toBeUndefined();
+    expect(assistant({ modelID: "claude-sonnet-4" })?.modelId).toBe("claude-sonnet-4");
+    expect(assistant({ providerID: "  ", modelID: "claude-sonnet-4" })?.modelId).toBe(
+      "claude-sonnet-4",
+    );
+    expect(assistant({ providerID: "anthropic", modelID: "  " })?.modelId).toBeUndefined();
     expect(
       normalizeOpenCodeMessage({
         info: {
@@ -1733,18 +1878,17 @@ describe("opencode-client normalizeOpenCodeMessage providerUsage", () => {
   });
 
   test("falls back to the bare model id when the provider is not named", () => {
-    expect(assistant({ tokens, modelID: "claude-sonnet-4" })?.providerUsage?.modelId)
-      .toBe("claude-sonnet-4");
-    expect(assistant({ tokens, providerID: 7, modelID: 42 })?.providerUsage?.modelId)
-      .toBe("42");
+    expect(assistant({ tokens, modelID: "claude-sonnet-4" })?.providerUsage?.modelId).toBe(
+      "claude-sonnet-4",
+    );
+    expect(assistant({ tokens, providerID: 7, modelID: 42 })?.providerUsage?.modelId).toBe("42");
     expect(assistant({ tokens })?.providerUsage?.modelId).toBe("");
   });
 
   test("omits the duration until the turn reports both timestamps", () => {
     expect(assistant({ tokens })?.providerUsage?.durationMs).toBeUndefined();
     expect(
-      assistant({ tokens, time: { created: 1_000, completed: "3500" } })
-        ?.providerUsage?.durationMs,
+      assistant({ tokens, time: { created: 1_000, completed: "3500" } })?.providerUsage?.durationMs,
     ).toBeUndefined();
   });
 
@@ -1752,8 +1896,7 @@ describe("opencode-client normalizeOpenCodeMessage providerUsage", () => {
     // Clock skew between the server and the rollout must never produce a
     // negative duration in the usage panel.
     expect(
-      assistant({ tokens, time: { created: 5_000, completed: 1_000 } })
-        ?.providerUsage?.durationMs,
+      assistant({ tokens, time: { created: 5_000, completed: 1_000 } })?.providerUsage?.durationMs,
     ).toBe(0);
   });
 });

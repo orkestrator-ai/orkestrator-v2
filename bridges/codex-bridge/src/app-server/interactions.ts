@@ -1,8 +1,6 @@
 import type { EngineGeneration } from "../engine/types.js";
 
-export type InteractionMethod =
-  | "item/tool/requestUserInput"
-  | "mcpServer/elicitation/request";
+export type InteractionMethod = "item/tool/requestUserInput" | "mcpServer/elicitation/request";
 
 export type InteractionResolution =
   | "answered"
@@ -68,9 +66,9 @@ export function isInteractionAnswerMap(value: unknown): value is Record<string, 
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   return Object.values(value as Record<string, unknown>).every(
     (entry) =>
-      Array.isArray(entry)
-      && entry.length > 0
-      && entry.every((item) => typeof item === "string" && item.length > 0),
+      Array.isArray(entry) &&
+      entry.length > 0 &&
+      entry.every((item) => typeof item === "string" && item.length > 0),
   );
 }
 
@@ -108,7 +106,7 @@ export function parseInteractionAnswer(body: unknown): InteractionAnswer | null 
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
+    ? (value as Record<string, unknown>)
     : {};
 }
 
@@ -145,17 +143,24 @@ export function describeInteraction(options: {
             const option = record(rawOption);
             const label = text(option.label);
             return label
-              ? [{ label, ...(text(option.description) ? { description: text(option.description) } : {}) }]
+              ? [
+                  {
+                    label,
+                    ...(text(option.description) ? { description: text(option.description) } : {}),
+                  },
+                ]
               : [];
           });
-          return [{
-            id,
-            header: text(question.header) ?? "Question",
-            question: prompt,
-            isOther: question.isOther === true,
-            isSecret: question.isSecret === true,
-            ...(parsedOptions.length > 0 ? { options: parsedOptions } : {}),
-          }];
+          return [
+            {
+              id,
+              header: text(question.header) ?? "Question",
+              question: prompt,
+              isOther: question.isOther === true,
+              isSecret: question.isSecret === true,
+              ...(parsedOptions.length > 0 ? { options: parsedOptions } : {}),
+            },
+          ];
         })
       : [];
     if (questions.length === 0) return null;
@@ -207,16 +212,13 @@ export function buildInteractionResponse(
     if (answer.action !== "accept") return { answers: {} };
     return {
       answers: Object.fromEntries(
-        Object.entries(answer.answers ?? {}).map(([id, answers]) => [
-          id,
-          { answers },
-        ]),
+        Object.entries(answer.answers ?? {}).map(([id, answers]) => [id, { answers }]),
       ),
     };
   }
   return {
     action: answer.action,
-    content: answer.action === "accept" ? answer.content ?? {} : null,
+    content: answer.action === "accept" ? (answer.content ?? {}) : null,
     _meta: answer.meta ?? null,
   };
 }

@@ -1,10 +1,4 @@
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type KeyboardEvent,
-} from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { AtSign, FileText, Image as ImageIcon, Loader2, Plus, Search } from "lucide-react";
 import {
   Dialog,
@@ -27,13 +21,7 @@ import { createUuid } from "@/lib/uuid";
 import type { FileCandidate } from "@/types";
 
 const MAX_RESULTS = 100;
-const IMAGE_EXTENSIONS = new Set([
-  "gif",
-  "jpeg",
-  "jpg",
-  "png",
-  "webp",
-]);
+const IMAGE_EXTENSIONS = new Set(["gif", "jpeg", "jpg", "png", "webp"]);
 
 export interface NativeAttachmentFileSearch {
   searchFiles: (
@@ -103,19 +91,15 @@ export function createWorkspaceAttachment(
   containerId?: string,
   worktreePath?: string,
 ): WorkspaceAttachment | null {
-  const relativePath = file.relativePath
-    .replace(/\\/g, "/")
-    .replace(/^\/+/, "");
+  const relativePath = file.relativePath.replace(/\\/g, "/").replace(/^\/+/, "");
   const pathSegments = relativePath.split("/");
-  const rootPath = containerId
-    ? "/workspace"
-    : normalizeRootPath(worktreePath);
+  const rootPath = containerId ? "/workspace" : normalizeRootPath(worktreePath);
 
   if (
-    !rootPath
-    || !relativePath
-    || file.isDirectory
-    || pathSegments.some((segment) => segment === ".." || segment.length === 0)
+    !rootPath ||
+    !relativePath ||
+    file.isDirectory ||
+    pathSegments.some((segment) => segment === ".." || segment.length === 0)
   ) {
     return null;
   }
@@ -141,23 +125,13 @@ function WorkspaceFilePickerDialog({
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const selectedItemRef = useRef<HTMLButtonElement>(null);
-  const {
-    searchFiles,
-    isLoading,
-    error,
-    refresh,
-    isAvailable,
-  } = fileSearch;
+  const { searchFiles, isLoading, error, refresh, isAvailable } = fileSearch;
 
   const results = useMemo(
-    () =>
-      searchFiles(query, MAX_RESULTS, { filesOnly: true }),
+    () => searchFiles(query, MAX_RESULTS, { filesOnly: true }),
     [query, searchFiles],
   );
-  const safeSelectedIndex = Math.min(
-    selectedIndex,
-    Math.max(results.length - 1, 0),
-  );
+  const safeSelectedIndex = Math.min(selectedIndex, Math.max(results.length - 1, 0));
 
   useEffect(() => {
     if (!open) {
@@ -194,9 +168,7 @@ function WorkspaceFilePickerDialog({
 
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      setSelectedIndex((current) =>
-        Math.min(current + 1, Math.max(results.length - 1, 0)),
-      );
+      setSelectedIndex((current) => Math.min(current + 1, Math.max(results.length - 1, 0)));
       return;
     }
 
@@ -263,9 +235,7 @@ function WorkspaceFilePickerDialog({
               Loading files...
             </div>
           ) : error ? (
-            <div className="px-3 py-10 text-center text-sm text-destructive">
-              {error}
-            </div>
+            <div className="px-3 py-10 text-center text-sm text-destructive">{error}</div>
           ) : results.length === 0 ? (
             <div className="px-3 py-10 text-center text-sm text-muted-foreground">
               No files match that search.
@@ -276,9 +246,7 @@ function WorkspaceFilePickerDialog({
                 const isSelected = index === safeSelectedIndex;
                 const lastSlashIndex = file.relativePath.lastIndexOf("/");
                 const directory =
-                  lastSlashIndex >= 0
-                    ? file.relativePath.slice(0, lastSlashIndex)
-                    : "";
+                  lastSlashIndex >= 0 ? file.relativePath.slice(0, lastSlashIndex) : "";
 
                 return (
                   <button
@@ -288,19 +256,12 @@ function WorkspaceFilePickerDialog({
                     onClick={() => handleSelect(file)}
                     className={cn(
                       "flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors",
-                      isSelected
-                        ? "bg-accent text-accent-foreground"
-                        : "hover:bg-accent/50",
+                      isSelected ? "bg-accent text-accent-foreground" : "hover:bg-accent/50",
                     )}
                   >
-                    <FileIcon
-                      filename={file.filename}
-                      className="h-4 w-4 shrink-0"
-                    />
+                    <FileIcon filename={file.filename} className="h-4 w-4 shrink-0" />
                     <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm font-medium">
-                        {file.filename}
-                      </div>
+                      <div className="truncate text-sm font-medium">{file.filename}</div>
                       <div className="truncate text-xs text-muted-foreground">
                         {directory || file.relativePath}
                       </div>
@@ -357,12 +318,7 @@ export function NativeAttachmentMenu({
             <Plus className="h-4 w-4" />
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent
-          side="top"
-          align="start"
-          collisionPadding={8}
-          className="w-64"
-        >
+        <DropdownMenuContent side="top" align="start" collisionPadding={8} className="w-64">
           {/*
             Attaching and mentioning are different acts — one hands the file's
             contents to the agent, the other points at a path — and every agent
@@ -405,14 +361,14 @@ export function NativeAttachmentMenu({
         open={picker !== null}
         onOpenChange={(open) => setPicker(open ? picker : null)}
         fileSearch={fileSearch}
-        onSelectFile={picker === "mention" && onMentionFile
-          ? onMentionFile
-          : onSelectFile ?? onMentionFile ?? (() => undefined)}
+        onSelectFile={
+          picker === "mention" && onMentionFile
+            ? onMentionFile
+            : (onSelectFile ?? onMentionFile ?? (() => undefined))
+        }
         onCloseAutoFocus={onCloseAutoFocus}
         title={picker === "mention" ? mentionPickerTitle : filePickerTitle}
-        description={picker === "mention"
-          ? mentionPickerDescription
-          : filePickerDescription}
+        description={picker === "mention" ? mentionPickerDescription : filePickerDescription}
       />
     </>
   );

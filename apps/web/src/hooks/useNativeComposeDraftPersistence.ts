@@ -53,25 +53,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isPersistedFileMention(value: unknown): boolean {
-  return isRecord(value)
-    && typeof value.id === "string"
-    && typeof value.filename === "string"
-    && typeof value.relativePath === "string";
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.filename === "string" &&
+    typeof value.relativePath === "string"
+  );
 }
 
-function isPersistedAttachment(
-  namespace: NativeDraftNamespace,
-  value: unknown,
-): boolean {
+function isPersistedAttachment(namespace: NativeDraftNamespace, value: unknown): boolean {
   if (
-    !isRecord(value)
-    || typeof value.id !== "string"
-    || typeof value.name !== "string"
-    || typeof value.path !== "string"
-    || (
-      value.previewUrl !== undefined
-      && typeof value.previewUrl !== "string"
-    )
+    !isRecord(value) ||
+    typeof value.id !== "string" ||
+    typeof value.name !== "string" ||
+    typeof value.path !== "string" ||
+    (value.previewUrl !== undefined && typeof value.previewUrl !== "string")
   ) {
     return false;
   }
@@ -94,11 +90,11 @@ function effectiveAttachmentNamespace(
 ): NativeDraftNamespace {
   if (namespace !== "agent-native") return namespace;
   const platform = isRecord(metadata) ? metadata.platform : undefined;
-  return platform === "claude"
-    || platform === "codex"
-    || platform === "opencode"
-    || platform === "cursor"
-    || platform === "grok"
+  return platform === "claude" ||
+    platform === "codex" ||
+    platform === "opencode" ||
+    platform === "cursor" ||
+    platform === "grok"
     ? platform
     : namespace;
 }
@@ -118,10 +114,12 @@ function readDraft<TMention, TAttachment>(
 }
 
 function isEmptyDraft(draft: PersistedNativeComposeDraft): boolean {
-  return draft.text.length === 0
-    && draft.mentions.length === 0
-    && draft.attachments.length === 0
-    && draft.metadata === undefined;
+  return (
+    draft.text.length === 0 &&
+    draft.mentions.length === 0 &&
+    draft.attachments.length === 0 &&
+    draft.metadata === undefined
+  );
 }
 
 /**
@@ -162,21 +160,14 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
             const current = readDraft(store.getState(), sessionKey);
             const operation = isEmptyDraft(current)
               ? resolveComposeDraftDiscardConflict(key)
-              : resolveComposeDraftSaveConflict(
-                  key,
-                  "environment",
-                  environmentId,
-                  current,
-                );
+              : resolveComposeDraftSaveConflict(key, "environment", environmentId, current);
             void operation.catch(reportPersistenceError);
           },
         },
       });
     };
 
-    const persist = (
-      state: NativeComposeDraftState<TMention, TAttachment>,
-    ): Promise<void> => {
+    const persist = (state: NativeComposeDraftState<TMention, TAttachment>): Promise<void> => {
       const draft = readDraft(state, sessionKey);
       return isEmptyDraft(draft)
         ? discardComposeDraft(key)
@@ -204,13 +195,11 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
       const currentMetadata = state.draftMetadata?.get(sessionKey);
       const priorMetadata = previous.draftMetadata?.get(sessionKey);
       if (
-        applyingHydration
-        || (
-          currentText === priorText
-          && currentMentions === priorMentions
-          && currentAttachments === priorAttachments
-          && currentMetadata === priorMetadata
-        )
+        applyingHydration ||
+        (currentText === priorText &&
+          currentMentions === priorMentions &&
+          currentAttachments === priorAttachments &&
+          currentMetadata === priorMetadata)
       ) {
         return;
       }
@@ -227,20 +216,17 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
         if (!isEmptyDraft(readDraft(state, sessionKey))) return;
         const value = persisted.value;
         if (
-          !value
-          || typeof value.text !== "string"
-          || !Array.isArray(value.mentions)
-          || !Array.isArray(value.attachments)
+          !value ||
+          typeof value.text !== "string" ||
+          !Array.isArray(value.mentions) ||
+          !Array.isArray(value.attachments)
         ) {
           return;
         }
         const mentions = value.mentions.filter(isPersistedFileMention);
-        const attachmentNamespace = effectiveAttachmentNamespace(
-          namespace,
-          value.metadata,
-        );
+        const attachmentNamespace = effectiveAttachmentNamespace(namespace, value.metadata);
         const attachments = value.attachments.filter((attachment) =>
-          isPersistedAttachment(attachmentNamespace, attachment)
+          isPersistedAttachment(attachmentNamespace, attachment),
         );
         applyingHydration = true;
         try {

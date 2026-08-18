@@ -12,19 +12,27 @@ const START_INFO: GatewayStartInfo = {
   authFile: "/tmp/gateway-auth.json",
 };
 
-function createHarness(options: {
-  start?: () => Promise<GatewayStartInfo | null>;
-  stop?: () => Promise<void>;
-  getTokenSettings?: () => Promise<typeof TOKEN_SETTINGS>;
-  setToken?: (token: string) => Promise<typeof TOKEN_SETTINGS>;
-  env?: NodeJS.ProcessEnv;
-} = {}) {
+function createHarness(
+  options: {
+    start?: () => Promise<GatewayStartInfo | null>;
+    stop?: () => Promise<void>;
+    getTokenSettings?: () => Promise<typeof TOKEN_SETTINGS>;
+    setToken?: (token: string) => Promise<typeof TOKEN_SETTINGS>;
+    env?: NodeJS.ProcessEnv;
+  } = {},
+) {
   const start = mock(options.start ?? (async () => START_INFO));
   const stop = mock(options.stop ?? (async () => undefined));
   const getTokenSettings = mock(options.getTokenSettings ?? (async () => TOKEN_SETTINGS));
-  const setToken = mock(options.setToken ?? (async (token: string) => ({ ...TOKEN_SETTINGS, token })));
+  const setToken = mock(
+    options.setToken ?? (async (token: string) => ({ ...TOKEN_SETTINGS, token })),
+  );
   const logger = { error: mock(() => undefined) };
-  const controller = new WebClientController({ start, stop, getTokenSettings, setToken }, options.env ?? {}, logger);
+  const controller = new WebClientController(
+    { start, stop, getTokenSettings, setToken },
+    options.env ?? {},
+    logger,
+  );
   return { controller, start, stop, getTokenSettings, setToken, logger };
 }
 
@@ -55,18 +63,24 @@ describe("WebClientController", () => {
 
   test("reports missing Tailscale and environment-disabled startup states", async () => {
     const unavailable = createHarness({ start: async () => null });
-    expect((await unavailable.controller.setEnabled(true)).error).toContain("No Tailscale connection");
+    expect((await unavailable.controller.setEnabled(true)).error).toContain(
+      "No Tailscale connection",
+    );
 
     const envDisabled = createHarness({
       start: async () => null,
       env: { ORKESTRATOR_GATEWAY_DISABLED: "1" },
     });
-    expect((await envDisabled.controller.setEnabled(true)).error).toContain("ORKESTRATOR_GATEWAY_DISABLED");
+    expect((await envDisabled.controller.setEnabled(true)).error).toContain(
+      "ORKESTRATOR_GATEWAY_DISABLED",
+    );
   });
 
   test("surfaces start errors without marking the gateway as running", async () => {
     const { controller, logger } = createHarness({
-      start: async () => { throw new Error("address in use"); },
+      start: async () => {
+        throw new Error("address in use");
+      },
     });
 
     await expect(controller.setEnabled(true)).resolves.toMatchObject({
@@ -92,7 +106,9 @@ describe("WebClientController", () => {
 
   test("retains running state when shutdown fails", async () => {
     const { controller, logger } = createHarness({
-      stop: async () => { throw new Error("close failed"); },
+      stop: async () => {
+        throw new Error("close failed");
+      },
     });
     await controller.setEnabled(true);
 
@@ -107,13 +123,24 @@ describe("WebClientController", () => {
 
   test("serializes rapid transitions in request order", async () => {
     let releaseStop: (() => void) | undefined;
-    const stopPending = new Promise<void>((resolve) => { releaseStop = resolve; });
+    const stopPending = new Promise<void>((resolve) => {
+      releaseStop = resolve;
+    });
     let markStopStarted: (() => void) | undefined;
-    const stopStarted = new Promise<void>((resolve) => { markStopStarted = resolve; });
+    const stopStarted = new Promise<void>((resolve) => {
+      markStopStarted = resolve;
+    });
     const calls: string[] = [];
     const { controller } = createHarness({
-      start: async () => { calls.push("start"); return START_INFO; },
-      stop: async () => { calls.push("stop"); markStopStarted?.(); await stopPending; },
+      start: async () => {
+        calls.push("start");
+        return START_INFO;
+      },
+      stop: async () => {
+        calls.push("stop");
+        markStopStarted?.();
+        await stopPending;
+      },
     });
 
     const disable = controller.setEnabled(false);
@@ -141,7 +168,9 @@ describe("WebClientController", () => {
 
   test("recovers the operation queue after a token read fails", async () => {
     const { controller, setToken } = createHarness({
-      getTokenSettings: async () => { throw new Error("read failed"); },
+      getTokenSettings: async () => {
+        throw new Error("read failed");
+      },
     });
 
     await expect(controller.getTokenSettings()).rejects.toThrow("read failed");
@@ -154,8 +183,12 @@ describe("WebClientController", () => {
   test("serializes token operations with enable and disable transitions", async () => {
     let releaseToken: (() => void) | undefined;
     let markTokenStarted: (() => void) | undefined;
-    const tokenPending = new Promise<void>((resolve) => { releaseToken = resolve; });
-    const tokenStarted = new Promise<void>((resolve) => { markTokenStarted = resolve; });
+    const tokenPending = new Promise<void>((resolve) => {
+      releaseToken = resolve;
+    });
+    const tokenStarted = new Promise<void>((resolve) => {
+      markTokenStarted = resolve;
+    });
     const calls: string[] = [];
     const { controller } = createHarness({
       setToken: async (token: string) => {
@@ -164,7 +197,9 @@ describe("WebClientController", () => {
         await tokenPending;
         return { ...TOKEN_SETTINGS, token };
       },
-      stop: async () => { calls.push("stop"); },
+      stop: async () => {
+        calls.push("stop");
+      },
     });
 
     const rotation = controller.setToken("replacement-token-123456");

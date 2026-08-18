@@ -10,7 +10,8 @@ describe("createUuid", () => {
   });
 
   test("uses the native randomUUID implementation when available", () => {
-    const randomUUID = () => "12345678-1234-4234-9234-123456789abc" as `${string}-${string}-${string}-${string}-${string}`;
+    const randomUUID = () =>
+      "12345678-1234-4234-9234-123456789abc" as `${string}-${string}-${string}-${string}-${string}`;
 
     expect(createUuid({ randomUUID })).toBe("12345678-1234-4234-9234-123456789abc");
   });

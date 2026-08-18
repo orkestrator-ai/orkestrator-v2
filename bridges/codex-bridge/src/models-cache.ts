@@ -91,8 +91,8 @@ export function normalizeReasoningOptions(value: unknown): ModelReasoningOption[
         : undefined;
 
     if (
-      typeof rawEffort !== "string"
-      || !MODEL_REASONING_EFFORTS.has(rawEffort as BridgeReasoningEffort)
+      typeof rawEffort !== "string" ||
+      !MODEL_REASONING_EFFORTS.has(rawEffort as BridgeReasoningEffort)
     ) {
       continue;
     }
@@ -134,10 +134,10 @@ export function parseModelCatalog(raw: string): BridgeModel[] {
     .map((entry) => entry as ModelCacheEntry)
     .filter(
       (entry) =>
-        typeof entry.slug === "string"
-        && entry.slug.trim().length > 0
-        && (entry.visibility === undefined || entry.visibility === "list")
-        && entry.supported_in_api !== false,
+        typeof entry.slug === "string" &&
+        entry.slug.trim().length > 0 &&
+        (entry.visibility === undefined || entry.visibility === "list") &&
+        entry.supported_in_api !== false,
     )
     .map((entry) => {
       const slug = (entry.slug as string).trim();
@@ -156,8 +156,9 @@ export function parseModelCatalog(raw: string): BridgeModel[] {
             : undefined,
         reasoningEfforts,
         reasoningOptions,
-        defaultReasoningEffort: (fallbackReasoningId(reasoningEfforts) as BridgeReasoningEffort)
-          ?? DEFAULT_REASONING_EFFORT,
+        defaultReasoningEffort:
+          (fallbackReasoningId(reasoningEfforts) as BridgeReasoningEffort) ??
+          DEFAULT_REASONING_EFFORT,
       } satisfies BridgeModel;
     });
 }

@@ -62,9 +62,7 @@ function textContent(entry: unknown): string {
 }
 
 function nonBlankString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0
-    ? value.trim()
-    : undefined;
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
 /**
@@ -85,15 +83,13 @@ function turnExecutionSettings(
     : isRecord(user?.model)
       ? user.model
       : undefined;
-  const providerID = nonBlankString(model?.providerID)
-    ?? nonBlankString(assistant?.providerID);
-  const modelID = nonBlankString(model?.modelID)
-    ?? nonBlankString(assistant?.modelID);
-  const agent = nonBlankString(request?.agent)
-    ?? nonBlankString(user?.agent)
-    ?? nonBlankString(assistant?.agent);
-  const variant = nonBlankString(request?.variant)
-    ?? nonBlankString(user?.variant);
+  const providerID = nonBlankString(model?.providerID) ?? nonBlankString(assistant?.providerID);
+  const modelID = nonBlankString(model?.modelID) ?? nonBlankString(assistant?.modelID);
+  const agent =
+    nonBlankString(request?.agent) ??
+    nonBlankString(user?.agent) ??
+    nonBlankString(assistant?.agent);
+  const variant = nonBlankString(request?.variant) ?? nonBlankString(user?.variant);
   return {
     ...(providerID && modelID ? { modelId: `${providerID}/${modelID}` } : {}),
     ...(agent ? { agent } : {}),
@@ -111,18 +107,16 @@ function finishReason(entry: unknown): string | undefined {
   let reason: string | undefined;
   for (const part of messageParts(entry)) {
     if (
-      part.type === "step-finish"
-      && typeof part.reason === "string"
-      && part.reason.trim().length > 0
+      part.type === "step-finish" &&
+      typeof part.reason === "string" &&
+      part.reason.trim().length > 0
     ) {
       reason = part.reason.trim();
     }
   }
   if (reason) return reason;
   const finish = messageInfo(entry)?.finish;
-  return typeof finish === "string" && finish.trim().length > 0
-    ? finish.trim()
-    : undefined;
+  return typeof finish === "string" && finish.trim().length > 0 ? finish.trim() : undefined;
 }
 
 function hasPendingToolWork(entry: unknown): boolean {
@@ -171,10 +165,10 @@ export function inspectOpenCodeIncompleteTurn(
 
   const info = messageInfo(latestAssistant)!;
   if (
-    typeof info.id !== "string"
-    || info.error !== undefined && info.error !== null
-    || finishReason(latestAssistant) !== "unknown"
-    || textContent(latestAssistant).trim().length > 0
+    typeof info.id !== "string" ||
+    (info.error !== undefined && info.error !== null) ||
+    finishReason(latestAssistant) !== "unknown" ||
+    textContent(latestAssistant).trim().length > 0
   ) {
     return null;
   }
@@ -186,8 +180,7 @@ export function inspectOpenCodeIncompleteTurn(
 
   return {
     action:
-      textContent(messages[latestUserIndex]).trim()
-        === OPENCODE_INCOMPLETE_TURN_CONTINUATION
+      textContent(messages[latestUserIndex]).trim() === OPENCODE_INCOMPLETE_TURN_CONTINUATION
         ? "exhausted"
         : "continue",
     assistantMessageId: info.id,
@@ -200,8 +193,6 @@ export function inspectOpenCodeIncompleteTurn(
  * continuation through `dispatchNativeAgentPromptOnce` with this id makes the
  * whole recovery at-most-once per stall across sweeps and backend restarts.
  */
-export function openCodeIncompleteTurnRequestId(
-  assistantMessageId: string,
-): string {
+export function openCodeIncompleteTurnRequestId(assistantMessageId: string): string {
   return `opencode-incomplete-${assistantMessageId}`;
 }

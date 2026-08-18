@@ -93,11 +93,7 @@ describe("native agent fork boundaries", () => {
 
   test("OpenCode response forks skip sibling split rows and keep persisted ids", () => {
     const rows = splitCodexTurn("oc-1", "turn-1");
-    const messages = [
-      message("user-1", "user"),
-      ...rows,
-      message("user-2", "user"),
-    ];
+    const messages = [message("user-1", "user"), ...rows, message("user-2", "user")];
     const plan = buildMessageForkPlan(messages, {
       responseInProgress: false,
       resolvePromptBoundary: (candidate, all) =>
@@ -140,11 +136,7 @@ describe("native agent fork boundaries", () => {
       "claude-1:text-block:2",
     ]);
 
-    const messages = [
-      message("user-1", "user"),
-      ...rows,
-      message("user-2", "user"),
-    ];
+    const messages = [message("user-1", "user"), ...rows, message("user-2", "user")];
     const boundaryFor = (id: string) =>
       resolveNativeAgentPromptBoundary(
         "claude",
@@ -165,8 +157,10 @@ describe("native agent fork boundaries", () => {
     const rows = splitCodexTurn("claude-1", "turn-1");
     const messages = [...rows, message("user-2", "user")];
 
-    expect(resolveNativeAgentPromptBoundary("claude", messages.at(-1)!, messages))
-      .toEqual({ type: "message", messageId: "claude-1" });
+    expect(resolveNativeAgentPromptBoundary("claude", messages.at(-1)!, messages)).toEqual({
+      type: "message",
+      messageId: "claude-1",
+    });
   });
 
   test("Claude response forks map a split display row back to the source message", () => {

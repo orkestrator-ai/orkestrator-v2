@@ -108,9 +108,6 @@ import type {
 } from "./command-fixtures";
 
 describe("Electron backend command registry", () => {
-
-
-
   // The `security` stub only takes effect on darwin, where `getHostClaudeCredentials`
   // consults the Keychain; elsewhere resolution starts at the on-disk credential.
   // Seeding both with the same payload keeps these tests asserting the same thing
@@ -126,8 +123,6 @@ if [ "$1" = "exec" ]; then
 fi
 exit 1
 `;
-
-
 
   function claudeCredentialSyncContext(
     globalConfig: Record<string, unknown> = {},
@@ -147,8 +142,6 @@ exit 1
     return created;
   }
 
-
-
   test("does not persist the configured PAT in new container metadata", async () => {
     const environment = createEnvironment({
       id: "env-container-pat",
@@ -166,33 +159,36 @@ exit 1
     });
     const commands = createCommandRegistry();
 
-    await withFakeGh(`#!/bin/sh
+    await withFakeGh(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
 exit 1
-`, async (ghLog) => {
-      await withFakeDocker(`#!/bin/sh
+`,
+      async (ghLog) => {
+        await withFakeDocker(
+          `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "create" ]; then
   printf 'container-created\\n'
   exit 0
 fi
 exit 0
-`, async (logs) => {
-        await expect(commands.get("provision_environment")?.(
-          { environmentId: environment.id },
-          context,
-        )).resolves.toBe("container-created");
+`,
+          async (logs) => {
+            await expect(
+              commands.get("provision_environment")?.({ environmentId: environment.id }, context),
+            ).resolves.toBe("container-created");
 
-        expect(await fs.readFile(ghLog, "utf8").catch(() => "")).toBe("");
-        const dockerCalls = await fs.readFile(logs.all, "utf8");
-        expect(dockerCalls).not.toContain("-e GITHUB_TOKEN");
-        expect(dockerCalls).not.toContain("-e GH_TOKEN");
-        expect(dockerCalls).not.toContain("configured-pat");
-      });
-    });
+            expect(await fs.readFile(ghLog, "utf8").catch(() => "")).toBe("");
+            const dockerCalls = await fs.readFile(logs.all, "utf8");
+            expect(dockerCalls).not.toContain("-e GITHUB_TOKEN");
+            expect(dockerCalls).not.toContain("-e GH_TOKEN");
+            expect(dockerCalls).not.toContain("configured-pat");
+          },
+        );
+      },
+    );
   });
-
-
 
   test("does not expose configured credentials in Docker argv or container creation errors", async () => {
     const githubToken = "github_secret_token";
@@ -223,40 +219,41 @@ exit 0
     });
     const commands = createCommandRegistry();
 
-    await withFakeDocker(`#!/bin/sh
+    await withFakeDocker(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "create" ]; then
   printf 'Docker permission denied for %s, %s and %s\\n' "$GITHUB_TOKEN" "$ANTHROPIC_API_KEY" "$CURSOR_API_KEY" >&2
   exit 42
 fi
 exit 0
-`, async (logs) => {
-      let failure: unknown;
-      try {
-        await commands.get("provision_environment")?.({ environmentId: environment.id }, context);
-      } catch (error) {
-        failure = error;
-      }
+`,
+      async (logs) => {
+        let failure: unknown;
+        try {
+          await commands.get("provision_environment")?.({ environmentId: environment.id }, context);
+        } catch (error) {
+          failure = error;
+        }
 
-      expect(failure).toBeInstanceOf(Error);
-      expect((failure as Error).message).toContain("Docker permission denied");
-      expect((failure as Error).message).toContain("[REDACTED]");
-      expect((failure as Error).message).not.toContain(githubToken);
-      expect((failure as Error).message).not.toContain(anthropicApiKey);
-      expect((failure as Error).message).not.toContain(cursorApiKey);
+        expect(failure).toBeInstanceOf(Error);
+        expect((failure as Error).message).toContain("Docker permission denied");
+        expect((failure as Error).message).toContain("[REDACTED]");
+        expect((failure as Error).message).not.toContain(githubToken);
+        expect((failure as Error).message).not.toContain(anthropicApiKey);
+        expect((failure as Error).message).not.toContain(cursorApiKey);
 
-      const dockerCalls = await fs.readFile(logs.all, "utf8");
-      expect(dockerCalls).not.toContain("-e GITHUB_TOKEN");
-      expect(dockerCalls).not.toContain("-e GH_TOKEN");
-      expect(dockerCalls).toContain("-e ANTHROPIC_API_KEY");
-      expect(dockerCalls).toContain("-e CURSOR_API_KEY");
-      expect(dockerCalls).not.toContain(githubToken);
-      expect(dockerCalls).not.toContain(anthropicApiKey);
-      expect(dockerCalls).not.toContain(cursorApiKey);
-    });
+        const dockerCalls = await fs.readFile(logs.all, "utf8");
+        expect(dockerCalls).not.toContain("-e GITHUB_TOKEN");
+        expect(dockerCalls).not.toContain("-e GH_TOKEN");
+        expect(dockerCalls).toContain("-e ANTHROPIC_API_KEY");
+        expect(dockerCalls).toContain("-e CURSOR_API_KEY");
+        expect(dockerCalls).not.toContain(githubToken);
+        expect(dockerCalls).not.toContain(anthropicApiKey);
+        expect(dockerCalls).not.toContain(cursorApiKey);
+      },
+    );
   });
-
-
 
   test("matches short and full container IDs before removing orphaned Docker containers", async () => {
     const currentDataDir = path.join(os.tmpdir(), "orkestrator-current-registry");
@@ -277,7 +274,8 @@ exit 0
     const { context } = createContext(environment, { dataDir: currentDataDir });
     const commands = createCommandRegistry();
 
-    await withFakeDocker(`#!/bin/sh
+    await withFakeDocker(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "ps" ]; then
   case "$*" in
@@ -314,34 +312,46 @@ if [ "$1" = "rm" ]; then
   exit 0
 fi
 exit 0
-`, async (logs) => {
-      const containers = await commands.get("get_orkestrator_containers")?.({}, context) as Array<{ id: string; name: string; isAssigned: boolean; environmentId: string | null }>;
-      expect(containers.find((container) => container.id === shortAssignedId)).toMatchObject({
-        isAssigned: true,
-        environmentId: "env-container",
-      });
-      expect(containers.find((container) => container.id === orphanId)).toMatchObject({ isAssigned: false });
-      // Created before the owner label existed: adopted, not stranded.
-      expect(containers.find((container) => container.id === legacyOrphanId)).toMatchObject({ isAssigned: false });
-      expect(containers.find((container) => container.id === foreignId)).toBeUndefined();
+`,
+      async (logs) => {
+        const containers = (await commands.get("get_orkestrator_containers")?.(
+          {},
+          context,
+        )) as Array<{
+          id: string;
+          name: string;
+          isAssigned: boolean;
+          environmentId: string | null;
+        }>;
+        expect(containers.find((container) => container.id === shortAssignedId)).toMatchObject({
+          isAssigned: true,
+          environmentId: "env-container",
+        });
+        expect(containers.find((container) => container.id === orphanId)).toMatchObject({
+          isAssigned: false,
+        });
+        // Created before the owner label existed: adopted, not stranded.
+        expect(containers.find((container) => container.id === legacyOrphanId)).toMatchObject({
+          isAssigned: false,
+        });
+        expect(containers.find((container) => container.id === foreignId)).toBeUndefined();
 
-      await expect(commands.get("cleanup_orphaned_containers")?.({}, context)).resolves.toBe(2);
-      const removed = await fs.readFile(logs.rm, "utf8");
-      expect(removed).toContain(orphanId);
-      expect(removed).toContain(legacyOrphanId);
-      expect(removed).not.toContain(shortAssignedId);
-      expect(removed).not.toContain(foreignId);
+        await expect(commands.get("cleanup_orphaned_containers")?.({}, context)).resolves.toBe(2);
+        const removed = await fs.readFile(logs.rm, "utf8");
+        expect(removed).toContain(orphanId);
+        expect(removed).toContain(legacyOrphanId);
+        expect(removed).not.toContain(shortAssignedId);
+        expect(removed).not.toContain(foreignId);
 
-      const dockerCalls = await fs.readFile(logs.all, "utf8");
-      expect(dockerCalls).toContain("--no-trunc");
-      // Ownership is decided from the returned labels. Filtering it in the
-      // daemon query would hide unlabelled pre-upgrade containers for good.
-      expect(dockerCalls).toContain("label=app=orkestrator-v2");
-      expect(dockerCalls).not.toContain(`label=orkestrator-owner=${currentOwner}`);
-    });
+        const dockerCalls = await fs.readFile(logs.all, "utf8");
+        expect(dockerCalls).toContain("--no-trunc");
+        // Ownership is decided from the returned labels. Filtering it in the
+        // daemon query would hide unlabelled pre-upgrade containers for good.
+        expect(dockerCalls).toContain("label=app=orkestrator-v2");
+        expect(dockerCalls).not.toContain(`label=orkestrator-owner=${currentOwner}`);
+      },
+    );
   });
-
-
 
   test("resolves a container's display name through its environment id when the name label is stale", async () => {
     const currentDataDir = path.join(os.tmpdir(), "orkestrator-stale-name-registry");
@@ -361,7 +371,8 @@ exit 0
     const commands = createCommandRegistry();
     const owner = dockerOwnerNamespace(currentDataDir);
 
-    await withFakeDocker(`#!/bin/sh
+    await withFakeDocker(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "ps" ]; then
   case "$*" in
@@ -373,16 +384,23 @@ if [ "$1" = "ps" ]; then
   exit 0
 fi
 exit 0
-`, async () => {
-      const containers = await commands.get("get_orkestrator_containers")?.({}, context) as Array<{ id: string; name: string }>;
+`,
+      async () => {
+        const containers = (await commands.get("get_orkestrator_containers")?.(
+          {},
+          context,
+        )) as Array<{ id: string; name: string }>;
 
-      expect(containers.find((container) => container.id === detachedId)?.name).toBe("current-name");
-      // No environment left to ask, so the creation-time label is the best available.
-      expect(containers.find((container) => container.id === orphanId)?.name).toBe("name-at-create-deleted");
-    });
+        expect(containers.find((container) => container.id === detachedId)?.name).toBe(
+          "current-name",
+        );
+        // No environment left to ask, so the creation-time label is the best available.
+        expect(containers.find((container) => container.id === orphanId)?.name).toBe(
+          "name-at-create-deleted",
+        );
+      },
+    );
   });
-
-
 
   test("persists the selected GitHub credential through stdin and container git config", async () => {
     const environment = createEnvironment({
@@ -399,7 +417,8 @@ exit 0
     });
     const commands = createCommandRegistry();
 
-    await withFakeDocker(`#!/bin/sh
+    await withFakeDocker(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "inspect" ]; then
   printf 'running\\n'
@@ -411,25 +430,27 @@ if [ "$1" = "exec" ]; then
   exit 0
 fi
 exit 0
-`, async (logs) => {
-      await expect(commands.get("propagate_github_token_to_containers")?.({}, context)).resolves.toEqual({
-        updated: ["env-container"],
-        failed: [],
-      });
+`,
+      async (logs) => {
+        await expect(
+          commands.get("propagate_github_token_to_containers")?.({}, context),
+        ).resolves.toEqual({
+          updated: ["env-container"],
+          failed: [],
+        });
 
-      const execLog = await fs.readFile(logs.exec, "utf8");
-      expect(execLog).toContain("git config --global --list");
-      expect(execLog).toContain("--remove-section");
-      expect(execLog).toContain("token_url=\"https://x-access-token:$token@github.com/\"");
-      expect(execLog).toContain("git config --global --replace-all");
-      expect(execLog).toContain("https://github.com/");
-      expect(execLog).toContain("git@github.com:");
-      expect(execLog).not.toContain("token-value");
-      expect(await fs.readFile(`${logs.exec}.stdin`, "utf8")).toBe("token-value");
-    });
+        const execLog = await fs.readFile(logs.exec, "utf8");
+        expect(execLog).toContain("git config --global --list");
+        expect(execLog).toContain("--remove-section");
+        expect(execLog).toContain('token_url="https://x-access-token:$token@github.com/"');
+        expect(execLog).toContain("git config --global --replace-all");
+        expect(execLog).toContain("https://github.com/");
+        expect(execLog).toContain("git@github.com:");
+        expect(execLog).not.toContain("token-value");
+        expect(await fs.readFile(`${logs.exec}.stdin`, "utf8")).toBe("token-value");
+      },
+    );
   });
-
-
 
   test("clears persisted GitHub token rewrites when propagation receives an empty token", async () => {
     const environment = createEnvironment({
@@ -443,7 +464,8 @@ exit 0
     });
     const commands = createCommandRegistry();
 
-    await withFakeDocker(`#!/bin/sh
+    await withFakeDocker(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "inspect" ]; then
   printf 'running\\n'
@@ -455,20 +477,22 @@ if [ "$1" = "exec" ]; then
   exit 0
 fi
 exit 0
-`, async (logs) => {
-      await expect(commands.get("propagate_github_token_to_containers")?.({}, context)).resolves.toEqual({
-        updated: ["env-container"],
-        failed: [],
-      });
+`,
+      async (logs) => {
+        await expect(
+          commands.get("propagate_github_token_to_containers")?.({}, context),
+        ).resolves.toEqual({
+          updated: ["env-container"],
+          failed: [],
+        });
 
-      const execLog = await fs.readFile(logs.exec, "utf8");
-      expect(execLog).toContain("grep '^url\\.https://x-access-token:'");
-      expect(execLog).toContain("--remove-section");
-      expect(await fs.readFile(`${logs.exec}.stdin`, "utf8")).toBe("");
-    });
+        const execLog = await fs.readFile(logs.exec, "utf8");
+        expect(execLog).toContain("grep '^url\\.https://x-access-token:'");
+        expect(execLog).toContain("--remove-section");
+        expect(await fs.readFile(`${logs.exec}.stdin`, "utf8")).toBe("");
+      },
+    );
   });
-
-
 
   test("refreshes and clears the managed credential after direct container starts", async () => {
     const environment = createEnvironment({
@@ -489,7 +513,8 @@ exit 0
     context.storage.loadConfig = mock(async () => config);
     const commands = createCommandRegistry();
 
-    await withFakeDocker(`#!/bin/sh
+    await withFakeDocker(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "start" ]; then exit 0; fi
 if [ "$1" = "exec" ]; then
@@ -499,21 +524,23 @@ if [ "$1" = "exec" ]; then
   exit 0
 fi
 exit 1
-`, async (logs) => {
-      await commands.get("docker_start_container")?.({ containerId: "container-1" }, context);
-      config.global.githubToken = "";
-      await commands.get("docker_start_container")?.({ containerId: "container-1" }, context);
+`,
+      async (logs) => {
+        await commands.get("docker_start_container")?.({ containerId: "container-1" }, context);
+        config.global.githubToken = "";
+        await commands.get("docker_start_container")?.({ containerId: "container-1" }, context);
 
-      const input = await fs.readFile(`${logs.exec}.stdin`, "utf8");
-      expect(input).toBe("rotated-token\n--sync--\n\n--sync--\n");
-      const calls = await fs.readFile(logs.all, "utf8");
-      expect(calls.match(/start container-1/g)).toHaveLength(2);
-      expect(calls.match(/exec --user root container-1 sh -c/g)).toHaveLength(2);
-      expect(calls).toContain("chgrp -R node /project-files && chmod -R g+rX,o-rwx /project-files");
-    });
+        const input = await fs.readFile(`${logs.exec}.stdin`, "utf8");
+        expect(input).toBe("rotated-token\n--sync--\n\n--sync--\n");
+        const calls = await fs.readFile(logs.all, "utf8");
+        expect(calls.match(/start container-1/g)).toHaveLength(2);
+        expect(calls.match(/exec --user root container-1 sh -c/g)).toHaveLength(2);
+        expect(calls).toContain(
+          "chgrp -R node /project-files && chmod -R g+rX,o-rwx /project-files",
+        );
+      },
+    );
   });
-
-
 
   test("delivers the host Claude credential into the container on start", async () => {
     const { context } = claudeCredentialSyncContext();
@@ -547,8 +574,6 @@ exit 1
     );
   });
 
-
-
   test("does not read or deliver the host credential when the user opted out", async () => {
     const { context } = claudeCredentialSyncContext({ useHostClaudeCredentials: false });
     const commands = createCommandRegistry();
@@ -580,8 +605,6 @@ exit 1
       credential,
     );
   });
-
-
 
   test("a failed Claude credential sync does not fail the container start", async () => {
     const { context } = claudeCredentialSyncContext();
@@ -624,8 +647,6 @@ exit 1
     );
   });
 
-
-
   test("reports a credential sync failure after a direct container start", async () => {
     const { context } = createContext(createEnvironment(), {
       globalConfig: {
@@ -635,7 +656,8 @@ exit 1
     });
     const commands = createCommandRegistry();
 
-    await withFakeDocker(`#!/bin/sh
+    await withFakeDocker(
+      `#!/bin/sh
 if [ "$1" = "start" ]; then exit 0; fi
 if [ "$1" = "exec" ]; then
   if [ "$2" = "--user" ]; then exit 0; fi
@@ -644,15 +666,14 @@ if [ "$1" = "exec" ]; then
   exit 7
 fi
 exit 1
-`, async () => {
-      await expect(commands.get("docker_start_container")?.(
-        { containerId: "container-1" },
-        context,
-      )).rejects.toThrow("sync rejected [REDACTED]");
-    });
+`,
+      async () => {
+        await expect(
+          commands.get("docker_start_container")?.({ containerId: "container-1" }, context),
+        ).rejects.toThrow("sync rejected [REDACTED]");
+      },
+    );
   });
-
-
 
   test("redacts the GitHub token from propagation failure messages", async () => {
     const environment = createEnvironment({
@@ -669,7 +690,8 @@ exit 1
     });
     const commands = createCommandRegistry();
 
-    await withFakeDocker(`#!/bin/sh
+    await withFakeDocker(
+      `#!/bin/sh
 if [ "$1" = "inspect" ]; then
   printf 'running\\n'
   exit 0
@@ -680,18 +702,19 @@ if [ "$1" = "exec" ]; then
   exit 1
 fi
 exit 0
-`, async () => {
-      const result = await commands.get("propagate_github_token_to_containers")?.(
-        {},
-        context,
-      ) as { updated: string[]; failed: [string, string][] };
+`,
+      async () => {
+        const result = (await commands.get("propagate_github_token_to_containers")?.(
+          {},
+          context,
+        )) as { updated: string[]; failed: [string, string][] };
 
-      expect(result.updated).toEqual([]);
-      expect(result.failed).toHaveLength(1);
-      const [, message] = result.failed[0]!;
-      expect(message).not.toContain("secret-token-123");
-      expect(message).toContain("[REDACTED]");
-    });
+        expect(result.updated).toEqual([]);
+        expect(result.failed).toHaveLength(1);
+        const [, message] = result.failed[0]!;
+        expect(message).not.toContain("secret-token-123");
+        expect(message).toContain("[REDACTED]");
+      },
+    );
   });
-
 });

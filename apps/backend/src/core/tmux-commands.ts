@@ -17,9 +17,7 @@ import {
   selectReapableTmuxSessions,
   tmuxSessionName,
 } from "./tmux-shared.js";
-import {
-  TmuxBackend,
-} from "./tmux-backend.js";
+import { TmuxBackend } from "./tmux-backend.js";
 import {
   TranscriptTail,
   installWorkspaceHooks,
@@ -121,10 +119,7 @@ export async function cleanupEnvironmentTmux(
   await tmuxManager.installLock(environmentId).runExclusive(async () => {
     detachInteractiveTerminalsForEnvironment(environmentId);
     const environment = await context.storage.getEnvironment(environmentId);
-    if (
-      environment?.environmentType === "containerized"
-      && environment.status === "stopped"
-    ) {
+    if (environment?.environmentType === "containerized" && environment.status === "stopped") {
       tmuxManager.removeEnvironment(environmentId);
       return;
     }
@@ -148,8 +143,9 @@ export async function cleanupEnvironmentTmux(
 
     let survivingEnvironmentIds: string[];
     try {
-      survivingEnvironmentIds = (await context.storage.loadEnvironments())
-        .map((remainingEnvironment) => remainingEnvironment.id);
+      survivingEnvironmentIds = (await context.storage.loadEnvironments()).map(
+        (remainingEnvironment) => remainingEnvironment.id,
+      );
     } catch (error) {
       cleanupComplete = false;
       survivingEnvironmentIds = [];
@@ -198,44 +194,50 @@ export function registerTmuxBackendCommands(
     claudeStatePolls.reconcile(context),
   );
 
-  register("claude_tmux_start", async ({
-    tabId,
-    environmentId,
-    initialPrompt,
-    model,
-    effort,
-    fastMode,
-    resumeSessionId,
-    replaceExisting,
-  }, context) => {
-    const envId = asString(environmentId, "environmentId");
-    const tab = asString(tabId, "tabId");
-    const resumeId = asOptionalString(resumeSessionId);
-    const replace = replaceExisting === true;
-    return tmuxManager.installLock(envId).runExclusive(async () => {
-      const environment = await context.storage.getEnvironment(envId);
-      if (!environment || environment.deletionRequestedAt) {
-        throw new Error(`environment ${envId} is being deleted`);
-      }
-      if (replace) {
-        const existing = tmuxManager.remove(envId, tab);
-        if (existing) await existing.stop();
-        else await killOrphanSession(context, envId, tab);
-      }
+  register(
+    "claude_tmux_start",
+    async (
+      {
+        tabId,
+        environmentId,
+        initialPrompt,
+        model,
+        effort,
+        fastMode,
+        resumeSessionId,
+        replaceExisting,
+      },
+      context,
+    ) => {
+      const envId = asString(environmentId, "environmentId");
+      const tab = asString(tabId, "tabId");
+      const resumeId = asOptionalString(resumeSessionId);
+      const replace = replaceExisting === true;
+      return tmuxManager.installLock(envId).runExclusive(async () => {
+        const environment = await context.storage.getEnvironment(envId);
+        if (!environment || environment.deletionRequestedAt) {
+          throw new Error(`environment ${envId} is being deleted`);
+        }
+        if (replace) {
+          const existing = tmuxManager.remove(envId, tab);
+          if (existing) await existing.stop();
+          else await killOrphanSession(context, envId, tab);
+        }
 
-      const session = await getOrCreateSession(context, envId, tab, resumeId);
-      await installWorkspaceHooks(session.backend, session.workspaceHookPaths);
-      await session.startAfterHooksInstalled(
-        context,
-        asOptionalString(initialPrompt),
-        asOptionalString(model),
-        asOptionalString(effort),
-        typeof fastMode === "boolean" ? fastMode : undefined,
-      );
-      await persistTmuxEnvironmentActivity(context, envId);
-      return session.status(await session.tmuxAlive().catch(() => false));
-    });
-  });
+        const session = await getOrCreateSession(context, envId, tab, resumeId);
+        await installWorkspaceHooks(session.backend, session.workspaceHookPaths);
+        await session.startAfterHooksInstalled(
+          context,
+          asOptionalString(initialPrompt),
+          asOptionalString(model),
+          asOptionalString(effort),
+          typeof fastMode === "boolean" ? fastMode : undefined,
+        );
+        await persistTmuxEnvironmentActivity(context, envId);
+        return session.status(await session.tmuxAlive().catch(() => false));
+      });
+    },
+  );
 
   register("claude_tmux_stop", async ({ tabId, environmentId }, context) => {
     const envId = asString(environmentId, "environmentId");
@@ -252,9 +254,11 @@ export function registerTmuxBackendCommands(
         await session.stop();
       }
       if (session && tmuxManager.sessionsInEnvironment(envId) === 0) {
-        await uninstallWorkspaceHooks(session.backend, session.workspaceHookPaths).catch((error: unknown) => {
-          console.warn("[tmux] uninstallWorkspaceHooks failed", error);
-        });
+        await uninstallWorkspaceHooks(session.backend, session.workspaceHookPaths).catch(
+          (error: unknown) => {
+            console.warn("[tmux] uninstallWorkspaceHooks failed", error);
+          },
+        );
       }
       await persistTmuxEnvironmentActivity(context, envId);
     });
@@ -266,11 +270,17 @@ export function registerTmuxBackendCommands(
     await persistTmuxEnvironmentActivity(context, envId);
   });
   register("claude_tmux_status", async ({ tabId, environmentId }) => {
-    const session = tmuxManager.get(asString(environmentId, "environmentId"), asString(tabId, "tabId"));
+    const session = tmuxManager.get(
+      asString(environmentId, "environmentId"),
+      asString(tabId, "tabId"),
+    );
     return session ? session.status(await session.tmuxAlive().catch(() => false)) : null;
   });
   register("claude_tmux_transcript", ({ tabId, environmentId }) =>
-    requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).transcriptLines(),
+    requireSession(
+      asString(environmentId, "environmentId"),
+      asString(tabId, "tabId"),
+    ).transcriptLines(),
   );
   // Authoritative task list for a tmux tab, for callers rehydrating without
   // replaying the whole transcript.
@@ -278,29 +288,42 @@ export function registerTmuxBackendCommands(
     requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).taskList(),
   );
   register("claude_tmux_pending_hooks", ({ tabId, environmentId }) =>
-    requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).pendingHooks(),
+    requireSession(
+      asString(environmentId, "environmentId"),
+      asString(tabId, "tabId"),
+    ).pendingHooks(),
   );
   register("claude_tmux_send_text", ({ tabId, text, environmentId }) =>
-    requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).sendText(asString(text, "text")),
+    requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).sendText(
+      asString(text, "text"),
+    ),
   );
   register("claude_tmux_send_keys", ({ tabId, keys, environmentId }) =>
-    requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId"))
-      .sendKeysAndRefresh(asStringArray(keys)),
+    requireSession(
+      asString(environmentId, "environmentId"),
+      asString(tabId, "tabId"),
+    ).sendKeysAndRefresh(asStringArray(keys)),
   );
-  register("claude_tmux_answer_selection_prompt", ({
-    tabId,
-    environmentId,
-    expectedGeneration,
-    expectedRevision,
-    expectedPromptFingerprint,
-    optionIndex,
-  }) => requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId"))
-    .answerSelectionPrompt({
-      expectedGeneration: asString(expectedGeneration, "expectedGeneration"),
-      expectedRevision: asNonNegativeInt(expectedRevision, "expectedRevision"),
-      expectedPromptFingerprint: asString(expectedPromptFingerprint, "expectedPromptFingerprint"),
-      optionIndex: asNonNegativeInt(optionIndex, "optionIndex"),
-    }));
+  register(
+    "claude_tmux_answer_selection_prompt",
+    ({
+      tabId,
+      environmentId,
+      expectedGeneration,
+      expectedRevision,
+      expectedPromptFingerprint,
+      optionIndex,
+    }) =>
+      requireSession(
+        asString(environmentId, "environmentId"),
+        asString(tabId, "tabId"),
+      ).answerSelectionPrompt({
+        expectedGeneration: asString(expectedGeneration, "expectedGeneration"),
+        expectedRevision: asNonNegativeInt(expectedRevision, "expectedRevision"),
+        expectedPromptFingerprint: asString(expectedPromptFingerprint, "expectedPromptFingerprint"),
+        optionIndex: asNonNegativeInt(optionIndex, "optionIndex"),
+      }),
+  );
   register("claude_tmux_submit", async ({ tabId, text, environmentId }, context) => {
     const envId = asString(environmentId, "environmentId");
     await requireSession(envId, asString(tabId, "tabId")).submit(asString(text, "text"));
@@ -323,22 +346,26 @@ export function registerTmuxBackendCommands(
     });
   });
   register("claude_tmux_switch_model", ({ tabId, model, environmentId }) =>
-    requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).switchModel(asString(model, "model")),
+    requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).switchModel(
+      asString(model, "model"),
+    ),
   );
   register("claude_tmux_switch_effort", ({ tabId, effort, environmentId }) =>
-    requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).switchEffort(asString(effort, "effort")),
+    requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).switchEffort(
+      asString(effort, "effort"),
+    ),
   );
   register("claude_tmux_switch_fast_mode", ({ tabId, fastMode, environmentId }, context) =>
-    requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).switchFastMode(
-      asBoolean(fastMode, "fastMode"),
-      context,
-    ),
+    requireSession(
+      asString(environmentId, "environmentId"),
+      asString(tabId, "tabId"),
+    ).switchFastMode(asBoolean(fastMode, "fastMode"), context),
   );
   register("claude_tmux_switch_plan_mode", ({ tabId, planMode, environmentId }, context) =>
-    requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).switchPlanMode(
-      asBoolean(planMode, "planMode"),
-      context,
-    ),
+    requireSession(
+      asString(environmentId, "environmentId"),
+      asString(tabId, "tabId"),
+    ).switchPlanMode(asBoolean(planMode, "planMode"), context),
   );
   register("claude_tmux_resize", ({ tabId, cols, rows, environmentId }) =>
     requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).resize(
@@ -346,12 +373,17 @@ export function registerTmuxBackendCommands(
       asPositiveInt(rows, "rows"),
     ),
   );
-  register("claude_tmux_answer_pre_tool_use", ({ tabId, eventId, decision, reason, environmentId }) =>
-    requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).answerPreToolUse(
-      asString(eventId, "eventId"),
-      asString(decision, "decision"),
-      asOptionalString(reason),
-    ),
+  register(
+    "claude_tmux_answer_pre_tool_use",
+    ({ tabId, eventId, decision, reason, environmentId }) =>
+      requireSession(
+        asString(environmentId, "environmentId"),
+        asString(tabId, "tabId"),
+      ).answerPreToolUse(
+        asString(eventId, "eventId"),
+        asString(decision, "decision"),
+        asOptionalString(reason),
+      ),
   );
   register("claude_tmux_reply_hook", ({ tabId, eventKind, eventId, response, environmentId }) =>
     requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).replyHook(
@@ -410,7 +442,8 @@ export function registerTmuxBackendCommands(
       } catch {
         continue;
       }
-      const listed = await backend.exec(["tmux", "list-sessions", "-F", "#{session_name}"])
+      const listed = await backend
+        .exec(["tmux", "list-sessions", "-F", "#{session_name}"])
         .catch(() => null);
       if (!listed) continue;
       if (listed.status !== 0 && !isMissingTmuxSessionError(listed.stderr)) continue;
@@ -439,7 +472,7 @@ export function registerTmuxBackendCommands(
         if (managed) {
           const stopped = await tmuxManager.installLock(environment.id).runExclusive(async () => {
             if (tmuxManager.findByTmuxName(environment.id, name) !== managed) return false;
-            if (!await managed.stop()) return false;
+            if (!(await managed.stop())) return false;
             return tmuxManager.removeIfSame(environment.id, managed.tabId, managed);
           });
           if (!stopped) continue;
@@ -463,22 +496,32 @@ export function registerTmuxBackendCommands(
     }
     return { reaped, skipped: false };
   });
-  register("claude_tmux_create_interactive_terminal", async ({ tabId, environmentId, cols, rows }, context) => {
-    const envId = asString(environmentId, "environmentId");
-    const tab = asString(tabId, "tabId");
-    const session = requireSession(envId, tab);
-    if (!await session.tmuxAlive()) throw new Error("tmux session not running");
-    const environment = await context.storage.getEnvironment(envId);
-    if (environment?.environmentType !== "local" && !environmentContainerId(environment)) {
-      throw new Error("container environment has no container id");
-    }
-    return interactiveTerminals.create(session, asPositiveInt(cols, "cols"), asPositiveInt(rows, "rows"));
-  });
+  register(
+    "claude_tmux_create_interactive_terminal",
+    async ({ tabId, environmentId, cols, rows }, context) => {
+      const envId = asString(environmentId, "environmentId");
+      const tab = asString(tabId, "tabId");
+      const session = requireSession(envId, tab);
+      if (!(await session.tmuxAlive())) throw new Error("tmux session not running");
+      const environment = await context.storage.getEnvironment(envId);
+      if (environment?.environmentType !== "local" && !environmentContainerId(environment)) {
+        throw new Error("container environment has no container id");
+      }
+      return interactiveTerminals.create(
+        session,
+        asPositiveInt(cols, "cols"),
+        asPositiveInt(rows, "rows"),
+      );
+    },
+  );
   register("claude_tmux_start_interactive_terminal", ({ terminalSessionId }, context) =>
     interactiveTerminals.start(asString(terminalSessionId, "terminalSessionId"), context),
   );
   register("claude_tmux_write_interactive_terminal", ({ terminalSessionId, data }) =>
-    interactiveTerminals.write(asString(terminalSessionId, "terminalSessionId"), asString(data, "data")),
+    interactiveTerminals.write(
+      asString(terminalSessionId, "terminalSessionId"),
+      asString(data, "data"),
+    ),
   );
   register("claude_tmux_resize_interactive_terminal", ({ terminalSessionId, cols, rows }) =>
     interactiveTerminals.resize(

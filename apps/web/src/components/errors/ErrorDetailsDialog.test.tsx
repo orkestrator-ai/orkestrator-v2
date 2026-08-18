@@ -1,17 +1,11 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import {
-  mockToastError,
-  mockToastSuccess,
-} from "../../../../../tests/mocks/sonner";
+import { mockToastError, mockToastSuccess } from "../../../../../tests/mocks/sonner";
 import { useErrorDialogStore } from "@/stores";
 import { ErrorDetailsDialog } from "./ErrorDetailsDialog";
 
 const writeText = mock(async (_text: string) => undefined);
-const clipboardDescriptor = Object.getOwnPropertyDescriptor(
-  Navigator.prototype,
-  "clipboard",
-);
+const clipboardDescriptor = Object.getOwnPropertyDescriptor(Navigator.prototype, "clipboard");
 
 describe("ErrorDetailsDialog", () => {
   beforeEach(() => {
@@ -31,11 +25,7 @@ describe("ErrorDetailsDialog", () => {
     useErrorDialogStore.setState({ error: null });
     delete (navigator as unknown as Record<string, unknown>).clipboard;
     if (clipboardDescriptor) {
-      Object.defineProperty(
-        Navigator.prototype,
-        "clipboard",
-        clipboardDescriptor,
-      );
+      Object.defineProperty(Navigator.prototype, "clipboard", clipboardDescriptor);
     }
   });
 
@@ -53,9 +43,7 @@ describe("ErrorDetailsDialog", () => {
 
     const copyButtons = screen.getAllByRole("button", { name: "Copy" });
     fireEvent.click(copyButtons[0]!);
-    await waitFor(() =>
-      expect(writeText).toHaveBeenCalledWith("retry prompt")
-    );
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("retry prompt"));
     fireEvent.click(copyButtons[1]!);
     await waitFor(() =>
       expect(writeText).toHaveBeenCalledWith(
@@ -69,7 +57,7 @@ describe("ErrorDetailsDialog", () => {
           "",
           `Timestamp: ${timestamp.toISOString()}`,
         ].join("\n"),
-      )
+      ),
     );
     expect(mockToastSuccess).toHaveBeenCalledTimes(2);
   });
@@ -87,10 +75,6 @@ describe("ErrorDetailsDialog", () => {
 
     expect(screen.queryByText("Initial Prompt") === null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Copy" }));
-    await waitFor(() =>
-      expect(mockToastError).toHaveBeenCalledWith(
-        "Failed to copy to clipboard",
-      )
-    );
+    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith("Failed to copy to clipboard"));
   });
 });

@@ -3,8 +3,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { RESULT_SENTINEL } from "../../../../scripts/opencode-live-compatibility-probe";
 
-const liveTest =
-  process.env.RUN_LIVE_OPENCODE_COMPATIBILITY === "1" ? test : test.skip;
+const liveTest = process.env.RUN_LIVE_OPENCODE_COMPATIBILITY === "1" ? test : test.skip;
 
 liveTest(
   "OpenCode CLI and the real v2 SDK complete a local server round trip",
@@ -50,9 +49,7 @@ liveTest(
     }
 
     expect(exitCode, stderr).toBe(0);
-    const resultLine = stdout
-      .split("\n")
-      .find((line) => line.startsWith(RESULT_SENTINEL));
+    const resultLine = stdout.split("\n").find((line) => line.startsWith(RESULT_SENTINEL));
     if (!resultLine) {
       throw new Error(`Probe stdout had no ${RESULT_SENTINEL} line:\n${stdout}`);
     }
@@ -61,9 +58,7 @@ liveTest(
     try {
       result = JSON.parse(payload);
     } catch (error) {
-      throw new Error(
-        `Could not parse the probe result: ${String(error)}\nstdout:\n${stdout}`,
-      );
+      throw new Error(`Could not parse the probe result: ${String(error)}\nstdout:\n${stdout}`);
     }
 
     expect(result).toEqual({

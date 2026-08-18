@@ -13,10 +13,7 @@ import {
 } from "@/lib/opencode-client";
 import { mergeNativeMessagesPreservingClientOnly } from "@/lib/chat/client-only-messages";
 import type { ContextUsageSnapshot } from "@/lib/context-usage";
-import {
-  openCodeQuestionDraftKey,
-  usePromptDraftStore,
-} from "./promptDraftStore";
+import { openCodeQuestionDraftKey, usePromptDraftStore } from "./promptDraftStore";
 import {
   buildClearEnvironmentPatch,
   buildClearSessionPatch,
@@ -70,9 +67,7 @@ type OpenCodeChatSlice = NativeChatStoreSlice<
   OpenCodeQueuedMessage
 >;
 
-interface OpenCodeState
-  extends OpenCodeChatSlice,
-    NativeEventSubscriptionSlice<OpenCodeEvent> {
+interface OpenCodeState extends OpenCodeChatSlice, NativeEventSubscriptionSlice<OpenCodeEvent> {
   // Agent-specific state (per-environment)
   models: Map<string, OpenCodeModel[]>;
   /**
@@ -108,35 +103,16 @@ interface OpenCodeState
   pendingPermissions: Map<string, PermissionRequest>;
 
   // Agent-specific actions (per-environment)
-  setModels: (
-    environmentId: string,
-    models: OpenCodeModel[],
-    source?: OpenCodeModelSource,
-  ) => void;
-  setSlashCommands: (
-    environmentId: string,
-    commands: OpenCodeSlashCommand[],
-  ) => void;
+  setModels: (environmentId: string, models: OpenCodeModel[], source?: OpenCodeModelSource) => void;
+  setSlashCommands: (environmentId: string, commands: OpenCodeSlashCommand[]) => void;
   setSelectedModel: (sessionKey: string, modelId: string) => void;
-  setSelectedVariant: (
-    sessionKey: string,
-    variant: string | undefined,
-  ) => void;
+  setSelectedVariant: (sessionKey: string, variant: string | undefined) => void;
   setComposing: (sessionKey: string, isComposing: boolean) => void;
 
   // Agent-specific actions (per-session)
-  setSelectedMode: (
-    sessionKey: string,
-    mode: OpenCodeConversationMode,
-  ) => void;
-  setContextUsage: (
-    sessionKey: string,
-    usage: ContextUsageSnapshot | null,
-  ) => void;
-  setRuntimeHealth: (
-    environmentId: string,
-    health: OpenCodeRuntimeHealth | null,
-  ) => void;
+  setSelectedMode: (sessionKey: string, mode: OpenCodeConversationMode) => void;
+  setContextUsage: (sessionKey: string, usage: ContextUsageSnapshot | null) => void;
+  setRuntimeHealth: (environmentId: string, health: OpenCodeRuntimeHealth | null) => void;
   setSelectedAgent: (sessionKey: string, agent: string | undefined) => void;
 
   // Agent-specific actions (per-request)
@@ -308,11 +284,7 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
     const sweptDraftKeys: string[] = [];
     set((state) => {
       const session = state.sessions.get(sessionKey);
-      const patch = buildClearSessionPatch(
-        state,
-        sessionKey,
-        OPENCODE_SESSION_KEYED_MAPS,
-      );
+      const patch = buildClearSessionPatch(state, sessionKey, OPENCODE_SESSION_KEYED_MAPS);
       if (!session?.sessionId) return patch;
 
       // Pending requests are keyed by requestId, so they need a sweep by the
@@ -436,16 +408,13 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
 
   // Selectors
   getSelectedModel: (sessionKey) => get().selectedModel.get(sessionKey),
-  getModels: (environmentId) =>
-    get().models.get(environmentId) ?? EMPTY_MODELS,
+  getModels: (environmentId) => get().models.get(environmentId) ?? EMPTY_MODELS,
   hasLiveModels: (environmentId) =>
     get().modelSource.get(environmentId) === "server" &&
     (get().models.get(environmentId)?.length ?? 0) > 0,
-  getSlashCommands: (environmentId) =>
-    get().slashCommands.get(environmentId) ?? EMPTY_COMMANDS,
+  getSlashCommands: (environmentId) => get().slashCommands.get(environmentId) ?? EMPTY_COMMANDS,
   getSelectedVariant: (sessionKey) => get().selectedVariant.get(sessionKey),
-  getSelectedMode: (sessionKey) =>
-    get().selectedMode.get(sessionKey) || "build",
+  getSelectedMode: (sessionKey) => get().selectedMode.get(sessionKey) || "build",
   isComposingFor: (sessionKey) => get().isComposing.get(sessionKey) || false,
 
   getPendingQuestionsForSession: (sessionId) => {
@@ -474,7 +443,6 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
 
   getContextUsage: (sessionKey) => get().contextUsage.get(sessionKey),
   getRuntimeHealth: (environmentId) => get().runtimeHealth.get(environmentId),
-  getAgents: (environmentId) =>
-    get().runtimeHealth.get(environmentId)?.agents ?? EMPTY_AGENTS,
+  getAgents: (environmentId) => get().runtimeHealth.get(environmentId)?.agents ?? EMPTY_AGENTS,
   getSelectedAgent: (sessionKey) => get().selectedAgent.get(sessionKey),
 }));

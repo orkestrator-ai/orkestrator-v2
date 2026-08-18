@@ -1,57 +1,31 @@
-import { describe,expect,test } from "bun:test";
-
+import { describe, expect, test } from "bun:test";
 
 import { promises as fs } from "node:fs";
 
-
 import { tmpdir } from "node:os";
-
 
 import path from "node:path";
 
-
-
-
 import type {
-BuildPipeline,
-PipelineSession,
-PipelineSessionPhase
+  BuildPipeline,
+  PipelineSession,
+  PipelineSessionPhase,
 } from "@orkestrator/protocol/build-pipeline";
 
+import { type StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 
-
-
-
-
-import {
-type StructuredReviewReport
-} from "@orkestrator/protocol/structured-review";
-
-
-import type {
-JsonSchema,
-StructuredOutputResult,
-} from "@orkestrator/protocol/structured-output";
-
+import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 
 import { StorageService } from "./storage.js";
 
-
-import {
-BuildPipelineService,
-} from "./build-pipeline-service.js";
-
-
-
+import { BuildPipelineService } from "./build-pipeline-service.js";
 
 import type {
-BuildPipelineProvider,
-ProviderCreateSessionOptions,
-ProviderSessionRegistration,
-ProviderStatus,
+  BuildPipelineProvider,
+  ProviderCreateSessionOptions,
+  ProviderSessionRegistration,
+  ProviderStatus,
 } from "./build-pipeline-provider.js";
-
-
 
 const cleanReview: StructuredReviewReport = {
   reviewScope: {
@@ -69,11 +43,13 @@ const cleanReview: StructuredReviewReport = {
     overview: "Implemented the task.",
     before: "Missing.",
     after: "Present.",
-    keyCodeChanges: [{
-      file: "src/app.ts",
-      line: 1,
-      description: "Adds the feature.",
-    }],
+    keyCodeChanges: [
+      {
+        file: "src/app.ts",
+        line: 1,
+        description: "Adds the feature.",
+      },
+    ],
     userImpact: "The feature is available.",
   },
   riskProfile: {
@@ -97,8 +73,6 @@ const cleanReview: StructuredReviewReport = {
   reviewSummary: "No findings.",
 };
 
-
-
 class FakeProvider implements BuildPipelineProvider {
   readonly agent = "claude" as const;
   readonly phases = new Map<string, PipelineSessionPhase>();
@@ -120,10 +94,7 @@ class FakeProvider implements BuildPipelineProvider {
   }> = [];
   private counter = 0;
 
-  registerSession(
-    sessionId: string,
-    interaction?: ProviderSessionRegistration,
-  ): void {
+  registerSession(sessionId: string, interaction?: ProviderSessionRegistration): void {
     this.registered.push({ sessionId, interaction });
   }
 
@@ -157,17 +128,16 @@ class FakeProvider implements BuildPipelineProvider {
   }
 
   async messages(sessionId: string): Promise<unknown[]> {
-    return [{
-      id: `${sessionId}-assistant`,
-      role: "assistant",
-      parts: [{ type: "text", content: "Finished" }],
-    }];
+    return [
+      {
+        id: `${sessionId}-assistant`,
+        role: "assistant",
+        parts: [{ type: "text", content: "Finished" }],
+      },
+    ];
   }
 
-  async structured<T>(
-    sessionId: string,
-    requestId: string,
-  ): Promise<StructuredOutputResult<T>> {
+  async structured<T>(sessionId: string, requestId: string): Promise<StructuredOutputResult<T>> {
     const phase = this.phases.get(sessionId);
     return {
       ok: true,
@@ -181,8 +151,6 @@ class FakeProvider implements BuildPipelineProvider {
 
   async abort(_sessionId: string): Promise<void> {}
 }
-
-
 
 async function withService(
   run: (
@@ -201,13 +169,16 @@ async function withService(
       failCommandsOnce: Map<string, number>;
       currentHead: string;
       uncommittedPaths: string[];
-      kanbanTasks: Map<string, {
-        id: string;
-        status: string;
-        prUrl?: string;
-        prState?: string;
-        comments: Array<{ text: string }>;
-      }>;
+      kanbanTasks: Map<
+        string,
+        {
+          id: string;
+          status: string;
+          prUrl?: string;
+          prState?: string;
+          comments: Array<{ text: string }>;
+        }
+      >;
     },
   ) => Promise<void>,
 ): Promise<void> {
@@ -236,13 +207,16 @@ async function withService(
     command: string;
     args: Record<string, unknown>;
   }> = [];
-  const kanbanTasks = new Map<string, {
-    id: string;
-    status: string;
-    prUrl?: string;
-    prState?: string;
-    comments: Array<{ text: string }>;
-  }>();
+  const kanbanTasks = new Map<
+    string,
+    {
+      id: string;
+      status: string;
+      prUrl?: string;
+      prState?: string;
+      comments: Array<{ text: string }>;
+    }
+  >();
   const controls = {
     dataDir,
     detection: {
@@ -262,10 +236,7 @@ async function withService(
     uncommittedPaths: [] as string[],
     kanbanTasks,
   };
-  const invoke = async <T>(
-    command: string,
-    args: Record<string, unknown> = {},
-  ): Promise<T> => {
+  const invoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
     invocations.push({ command, args });
     if (controls.failCommands.has(command)) {
       throw new Error(`${command} failed`);
@@ -318,8 +289,8 @@ async function withService(
     if (command === "update_feature_plan") return undefined as T;
     if (command === "pr_monitor_watch") return undefined as T;
     if (
-      command === "post_linear_completion_comment"
-      || command === "post_github_completion_comment"
+      command === "post_linear_completion_comment" ||
+      command === "post_github_completion_comment"
     ) {
       return {
         commentId: "comment-1",
@@ -340,18 +311,11 @@ async function withService(
   }
 }
 
-
-
-async function pipeline(
-  storage: StorageService,
-  id: string,
-): Promise<BuildPipeline> {
+async function pipeline(storage: StorageService, id: string): Promise<BuildPipeline> {
   const stored = await storage.getBuildPipeline(id);
   if (!stored) throw new Error("Pipeline disappeared");
   return stored.snapshot as BuildPipeline;
 }
-
-
 
 function startInput(
   overrides: Partial<Parameters<BuildPipelineService["start"]>[0]> = {},
@@ -374,8 +338,6 @@ function startInput(
   };
 }
 
-
-
 /** Runs the two provisioning passes and returns the live build session. */
 async function startBuilding(
   service: BuildPipelineService,
@@ -389,8 +351,6 @@ async function startBuilding(
   expect(running.phase).toBe("building");
   return { started, session: running.sessions[running.currentSessionIndex]! };
 }
-
-
 
 async function startVerifying(
   service: BuildPipelineService,
@@ -406,9 +366,6 @@ async function startVerifying(
 }
 
 describe("BuildPipelineService", () => {
-
-
-
   // The build stage is only asked to commit. Without the backend's own probe a
   // review would re-derive the worktree state inside its turn and could quietly
   // decide it was dirty and skip validation altogether.
@@ -427,12 +384,11 @@ describe("BuildPipelineService", () => {
       expect(review.prompt).toContain(
         "the backend confirmed the environment worktree was clean when this review started",
       );
-      expect((await pipeline(storage, started.id)).sessions.at(-1))
-        .toMatchObject({ structuredResultStatus: "pending" });
+      expect((await pipeline(storage, started.id)).sessions.at(-1)).toMatchObject({
+        structuredResultStatus: "pending",
+      });
     });
   });
-
-
 
   test("names the paths the build stage left uncommitted in the review prompt", async () => {
     await withService(async (service, storage, provider, _invocations, controls) => {
@@ -441,15 +397,11 @@ describe("BuildPipelineService", () => {
       await service.advanceNow(started.id);
 
       const review = provider.sent.at(-1)!;
-      expect(review.prompt).toContain(
-        "the preceding build stage did not commit everything",
-      );
+      expect(review.prompt).toContain("the preceding build stage did not commit everything");
       expect(review.prompt).toContain("- `src/forgotten.ts`");
       expect(review.prompt).toContain("- `src/forgotten.test.ts`");
     });
   });
-
-
 
   // The build stage is only asked to commit, so a review can legitimately open
   // on a dirty tree. Certification compares against that baseline rather than
@@ -475,8 +427,6 @@ describe("BuildPipelineService", () => {
     });
   });
 
-
-
   test("fails closed when validation adds a path to an already dirty worktree", async () => {
     await withService(async (service, storage, _provider, _invocations, controls) => {
       controls.uncommittedPaths = ["src/forgotten.ts"];
@@ -489,12 +439,11 @@ describe("BuildPipelineService", () => {
 
       expect(await pipeline(storage, started.id)).toMatchObject({
         phase: "failed",
-        error: "Review cannot be certified because validation left 1 uncommitted path that was not there when it started",
+        error:
+          "Review cannot be certified because validation left 1 uncommitted path that was not there when it started",
       });
     });
   });
-
-
 
   // Deleting an uncommitted leftover destroys work no commit is holding, so it
   // is a violation in the same way adding one is.
@@ -510,12 +459,11 @@ describe("BuildPipelineService", () => {
 
       expect(await pipeline(storage, started.id)).toMatchObject({
         phase: "failed",
-        error: "Review cannot be certified because validation removed 1 uncommitted path that was there when it started",
+        error:
+          "Review cannot be certified because validation removed 1 uncommitted path that was there when it started",
       });
     });
   });
-
-
 
   test("fails and retries the review before dispatch when its worktree probe fails", async () => {
     await withService(async (service, storage, provider, _invocations, controls) => {
@@ -555,8 +503,6 @@ describe("BuildPipelineService", () => {
     });
   });
 
-
-
   test("retries a transient worktree probe failure instead of failing the stage", async () => {
     await withService(async (service, storage, _provider, _invocations, controls) => {
       const { started } = await startBuilding(service, storage);
@@ -579,8 +525,6 @@ describe("BuildPipelineService", () => {
     });
   });
 
-
-
   test("fails closed when review validation leaves an uncommitted input", async () => {
     await withService(async (service, storage, _provider, _invocations, controls) => {
       const { started } = await startBuilding(service, storage);
@@ -598,38 +542,40 @@ describe("BuildPipelineService", () => {
 
       expect(await pipeline(storage, started.id)).toMatchObject({
         phase: "failed",
-        error: "Review cannot be certified because validation left 1 uncommitted path that was not there when it started",
+        error:
+          "Review cannot be certified because validation left 1 uncommitted path that was not there when it started",
       });
     });
   });
-
-
 
   // Addressing and verification each open fresh sessions. Anything the address
   // stage leaves uncommitted is the verification session's new baseline, not a
   // violation of it.
   test("rebaselines verification against what the addressing turn left behind", async () => {
     await withService(async (service, storage, provider, _invocations, controls) => {
-      provider.structured = async <T>() => ({
-        ok: true,
-        value: {
-          ...cleanReview,
-          issues: [{
-            severity: "P1",
-            confidence: 90,
-            category: "correctness",
-            title: "Address this exact finding",
-            file: "src/app.ts",
-            line: 12,
-            symbol: "run",
-            description: "The result is wrong.",
-            evidence: "The boundary test fails.",
-            suggestion: "Correct the boundary.",
-            verification: "Run the boundary test.",
-          }],
-          verdict: { ready: "with-fixes", reasoning: "One fix is required." },
-        },
-      }) as StructuredOutputResult<T>;
+      provider.structured = async <T>() =>
+        ({
+          ok: true,
+          value: {
+            ...cleanReview,
+            issues: [
+              {
+                severity: "P1",
+                confidence: 90,
+                category: "correctness",
+                title: "Address this exact finding",
+                file: "src/app.ts",
+                line: 12,
+                symbol: "run",
+                description: "The result is wrong.",
+                evidence: "The boundary test fails.",
+                suggestion: "Correct the boundary.",
+                verification: "Run the boundary test.",
+              },
+            ],
+            verdict: { ready: "with-fixes", reasoning: "One fix is required." },
+          },
+        }) as StructuredOutputResult<T>;
       const { started } = await startBuilding(service, storage);
       await service.advanceNow(started.id);
       await service.advanceNow(started.id);
@@ -651,8 +597,6 @@ describe("BuildPipelineService", () => {
     });
   });
 
-
-
   test("fails closed when verification validation commits a change", async () => {
     await withService(async (service, storage, _provider, _invocations, controls) => {
       const verifying = await startVerifying(service, storage);
@@ -673,8 +617,6 @@ describe("BuildPipelineService", () => {
     });
   });
 
-
-
   test("fails closed when Git state cannot be verified after validation", async () => {
     await withService(async (service, storage, _provider, _invocations, controls) => {
       const { started } = await startBuilding(service, storage);
@@ -691,8 +633,6 @@ describe("BuildPipelineService", () => {
     });
   });
 
-
-
   test("allows ignored validation output when Git state remains clean", async () => {
     await withService(async (service, storage, _provider, _invocations, controls) => {
       const verifying = await startVerifying(service, storage);
@@ -705,5 +645,4 @@ describe("BuildPipelineService", () => {
       expect((await pipeline(storage, verifying.id)).phase).toBe("creating-pr");
     });
   });
-
 });

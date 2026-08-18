@@ -59,7 +59,7 @@ describe("buildLaunchDefaults", () => {
     expect(defaults.preferredReasoningEfforts).toEqual({ codex: "high" });
   });
 
-  test("treats the \"default\" placeholder as no repository override", () => {
+  test('treats the "default" placeholder as no repository override', () => {
     const defaults = buildLaunchDefaults(
       makeConfig({ defaultModel: "default", defaultEffort: "default" }),
       "project-1",
@@ -162,24 +162,21 @@ describe("buildLaunchDefaults", () => {
 
   test("prefers the repository's last environment type, then the project's path", () => {
     expect(
-      buildLaunchDefaults(
-        makeConfig({ lastEnvironmentType: "containerized" }),
-        "project-1",
-        true,
-      ).defaultEnvironmentType,
+      buildLaunchDefaults(makeConfig({ lastEnvironmentType: "containerized" }), "project-1", true)
+        .defaultEnvironmentType,
     ).toBe("containerized");
     expect(
-      buildLaunchDefaults(
-        makeConfig({ lastEnvironmentType: "local" }),
-        "project-1",
-        false,
-      ).defaultEnvironmentType,
+      buildLaunchDefaults(makeConfig({ lastEnvironmentType: "local" }), "project-1", false)
+        .defaultEnvironmentType,
     ).toBe("local");
-    expect(buildLaunchDefaults(makeConfig(), "project-1", true).defaultEnvironmentType)
-      .toBe("local");
-    expect(buildLaunchDefaults(makeConfig(), "project-1", false).defaultEnvironmentType)
-      .toBe("containerized");
-    expect(buildLaunchDefaults(makeConfig(), "unknown-project", false).defaultEnvironmentType)
-      .toBe("containerized");
+    expect(buildLaunchDefaults(makeConfig(), "project-1", true).defaultEnvironmentType).toBe(
+      "local",
+    );
+    expect(buildLaunchDefaults(makeConfig(), "project-1", false).defaultEnvironmentType).toBe(
+      "containerized",
+    );
+    expect(buildLaunchDefaults(makeConfig(), "unknown-project", false).defaultEnvironmentType).toBe(
+      "containerized",
+    );
   });
 });

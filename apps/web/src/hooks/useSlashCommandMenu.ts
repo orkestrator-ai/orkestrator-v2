@@ -65,10 +65,7 @@ export function useSlashCommandMenu<TCommand extends SlashCommandOption>({
   }, [text, commands.length]);
 
   const filteredCommands = useMemo(
-    () =>
-      commands.filter((command) =>
-        command.name.toLowerCase().includes(filter.toLowerCase()),
-      ),
+    () => commands.filter((command) => command.name.toLowerCase().includes(filter.toLowerCase())),
     [commands, filter],
   );
 
@@ -92,9 +89,7 @@ export function useSlashCommandMenu<TCommand extends SlashCommandOption>({
       switch (event.key) {
         case "ArrowDown":
           event.preventDefault();
-          setSelectedIndex((index) =>
-            index < filteredCommands.length - 1 ? index + 1 : index,
-          );
+          setSelectedIndex((index) => (index < filteredCommands.length - 1 ? index + 1 : index));
           return true;
         case "ArrowUp":
           event.preventDefault();

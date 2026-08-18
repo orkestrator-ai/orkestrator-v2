@@ -1,16 +1,7 @@
 import * as shared from "./tmux-shared.js";
-import {
-  TranscriptTaskTracker,
-  runCommand,
-} from "./tmux-shared.js";
-import {
-  TmuxBackend,
-} from "./tmux-backend.js";
-import {
-  AsyncMutex,
-  TmuxSession,
-  TmuxSessionManager,
-} from "./tmux-session-manager.js";
+import { TranscriptTaskTracker, runCommand } from "./tmux-shared.js";
+import { TmuxBackend } from "./tmux-backend.js";
+import { AsyncMutex, TmuxSession, TmuxSessionManager } from "./tmux-session-manager.js";
 type CommandContext = shared.CommandContext;
 type AgentToolConnection = shared.AgentToolConnection;
 type Environment = shared.Environment;
@@ -103,22 +94,20 @@ export class ClaudeStatePollManager {
   private readonly nowMs: () => number;
 
   constructor(options: ClaudeStatePollManagerOptions = {}) {
-    this.readState = options.readState ?? (async (containerId) => {
-      const { command, args, options: runOptions } =
-        claudeStateReadCommand(containerId);
-      return (await runCommand(command, args, runOptions)).stdout.trim();
-    });
-    this.schedule = options.schedule
-      ?? ((callback) => setInterval(callback, CLAUDE_STATE_POLL_INTERVAL_MS));
+    this.readState =
+      options.readState ??
+      (async (containerId) => {
+        const { command, args, options: runOptions } = claudeStateReadCommand(containerId);
+        return (await runCommand(command, args, runOptions)).stdout.trim();
+      });
+    this.schedule =
+      options.schedule ?? ((callback) => setInterval(callback, CLAUDE_STATE_POLL_INTERVAL_MS));
     this.cancel = options.cancel ?? ((timer) => clearInterval(timer as NodeJS.Timeout));
     this.now = options.now ?? (() => new Date().toISOString());
     this.nowMs = options.nowMs ?? (() => Date.now());
   }
 
-  start(
-    containerId: string,
-    context: CommandContext,
-  ): void {
+  start(containerId: string, context: CommandContext): void {
     const existing = this.polls.get(containerId);
     if (existing) {
       // Adopt the newest backend context after a supervisor reconciliation.
@@ -180,11 +169,7 @@ export class ClaudeStatePollManager {
       .catch(() => undefined)
       .finally(() => {
         poll.inFlight = undefined;
-        if (
-          poll.active
-          && this.polls.get(containerId) === poll
-          && poll.pollRequested
-        ) {
+        if (poll.active && this.polls.get(containerId) === poll && poll.pollRequested) {
           poll.pollRequested = false;
           this.requestPoll(containerId, poll);
         }
@@ -200,8 +185,10 @@ export class ClaudeStatePollManager {
    * Undefined means it never has, which is why the first tick always checks.
    */
   private isRetirementCheckDue(poll: ClaudeStatePoll): boolean {
-    return poll.lastRetirementCheckAt === undefined
-      || this.nowMs() - poll.lastRetirementCheckAt >= CLAUDE_STATE_RETIREMENT_CHECK_MS;
+    return (
+      poll.lastRetirementCheckAt === undefined ||
+      this.nowMs() - poll.lastRetirementCheckAt >= CLAUDE_STATE_RETIREMENT_CHECK_MS
+    );
   }
 
   private async poll(containerId: string, poll: ClaudeStatePoll): Promise<void> {
@@ -229,11 +216,10 @@ export class ClaudeStatePollManager {
       return;
     }
     if (!known && poll.failedReads >= 3 && !poll.stale) {
-      const previous = poll.lastState === "working"
-        || poll.lastState === "waiting"
-        || poll.lastState === "idle"
-        ? poll.lastState
-        : environment.agentActivitySources?.["claude-terminal"]?.state ?? "idle";
+      const previous =
+        poll.lastState === "working" || poll.lastState === "waiting" || poll.lastState === "idle"
+          ? poll.lastState
+          : (environment.agentActivitySources?.["claude-terminal"]?.state ?? "idle");
       await poll.context.storage.setEnvironmentAgentActivity(
         environment.id,
         previous,
@@ -268,11 +254,10 @@ export class ClaudeStatePollManager {
     // Stop. `idle` is retained for older hook writers and recovery from a
     // backend restart. Storage's durable PR-recheck intent is authoritative,
     // so ordinary unarmed terminal turns do not manufacture monitor work.
-    const completedTurn = Boolean(environment.prRecheckAfterAgentCompletionArmedAt)
-      && (state === "idle" || state === "waiting") && (
-      poll.lastState === "working"
-      || poll.lastState === ""
-    );
+    const completedTurn =
+      Boolean(environment.prRecheckAfterAgentCompletionArmedAt) &&
+      (state === "idle" || state === "waiting") &&
+      (poll.lastState === "working" || poll.lastState === "");
     // The turn-end edge as *this* transport sees it, which is deliberately not
     // `isAgentTurnEndTransition` from the native path. There, a bridge reports
     // `waiting` for a turn that is parked on an approval and still live, so only
@@ -286,8 +271,7 @@ export class ClaudeStatePollManager {
     // turn that ended before this poll existed — probing it would cost one `gh`
     // call per running Claude tmux container on every backend start, which is
     // the standing per-environment cost the probe exists to avoid.
-    const endedTurn = (state === "idle" || state === "waiting")
-      && poll.lastState === "working";
+    const endedTurn = (state === "idle" || state === "waiting") && poll.lastState === "working";
     poll.lastState = state;
     poll.stale = false;
     if (completedTurn) {
@@ -317,10 +301,7 @@ export class ClaudeStatePollManager {
    * and GitHub being slow or absent must not delay or cancel it. A hook that
    * throws synchronously is caught for the same reason.
    */
-  private probeForAgentCreatedPullRequest(
-    poll: ClaudeStatePoll,
-    environmentId: string,
-  ): void {
+  private probeForAgentCreatedPullRequest(poll: ClaudeStatePoll, environmentId: string): void {
     const warn = (error: unknown): void => {
       console.warn(
         `[tmux] Failed to probe for an agent-created PR in ${environmentId}:`,
@@ -328,8 +309,7 @@ export class ClaudeStatePollManager {
       );
     };
     try {
-      void Promise.resolve(poll.context.probeAgentCreatedPullRequest?.(environmentId))
-        .catch(warn);
+      void Promise.resolve(poll.context.probeAgentCreatedPullRequest?.(environmentId)).catch(warn);
     } catch (error) {
       warn(error);
     }
@@ -353,6 +333,3 @@ export function shutdownClaudeStatePolling(containerId: string): void {
 export function environmentContainerId(environment: Environment | null | undefined): string {
   return environment?.containerId ?? "";
 }
-
-
-

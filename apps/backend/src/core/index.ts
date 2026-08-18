@@ -7,20 +7,14 @@ import {
   type BackendEmit,
   type CommandContext,
 } from "./commands.js";
-import {
-  reapOrphanedClaudeTmuxRuntimes,
-  reapOrphanedLocalServers,
-} from "./local-server-reaper.js";
+import { reapOrphanedClaudeTmuxRuntimes, reapOrphanedLocalServers } from "./local-server-reaper.js";
 import { claudeTmuxRuntimeRootPrefix } from "./tmux.js";
 import { StorageService } from "./storage.js";
 import { AgentToolsServer } from "./agent-tools.js";
 import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
 import { FRONTEND_AGENT_ACTIVITY_LEASE_MS } from "@orkestrator/protocol/agent-activity";
 import { BuildPipelineService } from "./build-pipeline-service.js";
-import {
-  isAgentTurnEndTransition,
-  NativeAgentService,
-} from "./native-agent-service.js";
+import { isAgentTurnEndTransition, NativeAgentService } from "./native-agent-service.js";
 import { LoopedReviewService } from "./looped-review-service.js";
 import { MultiReviewService } from "./multi-review-service.js";
 import { FeaturePlanningService } from "./feature-planning.js";
@@ -70,10 +64,7 @@ export class OrkestratorBackend {
       localServers?: typeof reapOrphanedLocalServers;
       claudeTmuxRuntimes?: typeof reapOrphanedClaudeTmuxRuntimes;
     };
-    agentTools?: Pick<
-      AgentToolsServer,
-      "connection" | "revokeEnvironment" | "start" | "stop"
-    >;
+    agentTools?: Pick<AgentToolsServer, "connection" | "revokeEnvironment" | "start" | "stop">;
     environmentLifecycleTasks?: EnvironmentLifecycleTaskTracker;
     environmentLifecycleDrainTimeoutMs?: number;
   }) {
@@ -82,8 +73,7 @@ export class OrkestratorBackend {
     this.environmentLifecycleTasks =
       options.environmentLifecycleTasks ?? new EnvironmentLifecycleTaskTracker();
     this.environmentLifecycleDrainTimeoutMs =
-      options.environmentLifecycleDrainTimeoutMs
-      ?? ENVIRONMENT_LIFECYCLE_DRAIN_TIMEOUT_MS;
+      options.environmentLifecycleDrainTimeoutMs ?? ENVIRONMENT_LIFECYCLE_DRAIN_TIMEOUT_MS;
     // Every committed mutation fans out to all connected clients, so a second
     // window or browser converges without polling. `emit` is read lazily by the
     // caller's closure, which is how this survives the gateway not existing yet.
@@ -117,14 +107,14 @@ export class OrkestratorBackend {
     this.context = context;
     const interactionMonitorMode =
       process.env.ORKESTRATOR_AGENT_INTERACTION_OBSERVE_ONLY === "1"
-        ? "observe-only" as const
-        : "disabled" as const;
+        ? ("observe-only" as const)
+        : ("disabled" as const);
     this.nativeAgents = new NativeAgentService(
       storage,
       async <T>(command: string, args: Record<string, unknown> = {}) => {
         const handler = this.commands.get(command);
         if (!handler) throw new Error(`Unknown backend command: ${command}`);
-        return await handler(args, context) as T;
+        return (await handler(args, context)) as T;
       },
       {
         interactionMonitorMode,
@@ -157,7 +147,7 @@ export class OrkestratorBackend {
       async <T>(command: string, args: Record<string, unknown> = {}) => {
         const handler = this.commands.get(command);
         if (!handler) throw new Error(`Unknown backend command: ${command}`);
-        return await handler(args, context) as T;
+        return (await handler(args, context)) as T;
       },
       {
         onInteractionObservation: (event) => {
@@ -171,7 +161,7 @@ export class OrkestratorBackend {
       async <T>(command: string, args: Record<string, unknown> = {}) => {
         const handler = this.commands.get(command);
         if (!handler) throw new Error(`Unknown backend command: ${command}`);
-        return await handler(args, context) as T;
+        return (await handler(args, context)) as T;
       },
       {
         onInteractionObservation: (event) => {
@@ -185,7 +175,7 @@ export class OrkestratorBackend {
       async <T>(command: string, args: Record<string, unknown> = {}) => {
         const handler = this.commands.get(command);
         if (!handler) throw new Error(`Unknown backend command: ${command}`);
-        return await handler(args, context) as T;
+        return (await handler(args, context)) as T;
       },
     );
     context.multiReviews = this.multiReviews;
@@ -194,7 +184,7 @@ export class OrkestratorBackend {
       async <T>(command: string, args: Record<string, unknown> = {}) => {
         const handler = this.commands.get(command);
         if (!handler) throw new Error(`Unknown backend command: ${command}`);
-        return await handler(args, context) as T;
+        return (await handler(args, context)) as T;
       },
     );
     context.featurePlanning = this.featurePlanning;
@@ -206,14 +196,12 @@ export class OrkestratorBackend {
       async <T>(command: string, args: Record<string, unknown> = {}) => {
         const handler = this.commands.get(command);
         if (!handler) throw new Error(`Unknown backend command: ${command}`);
-        return await handler(args, context) as T;
+        return (await handler(args, context)) as T;
       },
     );
-    this.reapPidServers =
-      options.startupReapers?.localServers ?? reapOrphanedLocalServers;
+    this.reapPidServers = options.startupReapers?.localServers ?? reapOrphanedLocalServers;
     this.reapTmuxRuntimes =
-      options.startupReapers?.claudeTmuxRuntimes
-      ?? reapOrphanedClaudeTmuxRuntimes;
+      options.startupReapers?.claudeTmuxRuntimes ?? reapOrphanedClaudeTmuxRuntimes;
   }
 
   /**
@@ -224,17 +212,15 @@ export class OrkestratorBackend {
    * idempotent — an environment already being monitored just gets its next
    * check brought forward.
    */
-  private probeForAgentCreatedPullRequest(
-    environmentId: string,
-    context: CommandContext,
-  ): void {
-    void Promise.resolve(context.probeAgentCreatedPullRequest?.(environmentId))
-      .catch((error: unknown) => {
+  private probeForAgentCreatedPullRequest(environmentId: string, context: CommandContext): void {
+    void Promise.resolve(context.probeAgentCreatedPullRequest?.(environmentId)).catch(
+      (error: unknown) => {
         console.warn(
           `[backend] Failed to probe for an agent-created PR in ${environmentId}:`,
           error instanceof Error ? error.message : error,
         );
-      });
+      },
+    );
   }
 
   async init(): Promise<void> {
@@ -242,8 +228,9 @@ export class OrkestratorBackend {
     // Do not accept commands while durable state claims work is still running
     // from a previous process. If this write fails, startup fails closed rather
     // than exposing progress that this backend can never complete.
-    const lifecycleRecovery =
-      await reconcileInterruptedEnvironmentLifecycleTasks(this.context.storage);
+    const lifecycleRecovery = await reconcileInterruptedEnvironmentLifecycleTasks(
+      this.context.storage,
+    );
     await this.agentTools.start();
     // No renderer can be alive yet, so every persisted `frontend` activity
     // snapshot belongs to a process that is gone. They cannot be retracted
@@ -253,33 +240,25 @@ export class OrkestratorBackend {
       console.warn("[backend] Failed to clear stale agent activity:", error);
     });
     this.activityLeaseSweep ??= setInterval(() => {
-      void this.context.storage.expireFrontendAgentActivityLeases().catch(
-        (error) => {
-          console.warn("[backend] Failed to expire agent activity leases:", error);
-        },
-      );
+      void this.context.storage.expireFrontendAgentActivityLeases().catch((error) => {
+        console.warn("[backend] Failed to expire agent activity leases:", error);
+      });
     }, FRONTEND_AGENT_ACTIVITY_LEASE_MS / 2);
     this.activityLeaseSweep.unref?.();
     // Before the gateway can accept a start command: bridges left behind by a
     // backend that died without draining must be reaped first, or the codex
     // pidfile they still hold blocks this instance's app-server ownership.
-    await this.reapPidServers({ storage: this.context.storage }).catch(
-      (error) => {
-        console.warn("[backend] Failed to reap orphaned local servers:", error);
-      },
-    );
+    await this.reapPidServers({ storage: this.context.storage }).catch((error) => {
+      console.warn("[backend] Failed to reap orphaned local servers:", error);
+    });
     // claude-tmux leaves no PID behind — its sessions belong to a tmux server
     // we do not own — so its orphans are found by their runtime roots instead.
     await this.reapTmuxRuntimes({
       storage: this.context.storage,
-      runtimeRootPrefix: claudeTmuxRuntimeRootPrefix(
-        this.context.storage.getDataDir(),
-      ),
-    }).catch(
-      (error) => {
-        console.warn("[backend] Failed to reap orphaned claude-tmux runtimes:", error);
-      },
-    );
+      runtimeRootPrefix: claudeTmuxRuntimeRootPrefix(this.context.storage.getDataDir()),
+    }).catch((error) => {
+      console.warn("[backend] Failed to reap orphaned claude-tmux runtimes:", error);
+    });
     // The durable deletion tombstone stays in place across a crash so queues,
     // pipelines, and starts remain blocked. Once orphaned processes have been
     // reaped, re-admit the ordinary idempotent delete path; it owns every child
@@ -289,15 +268,11 @@ export class OrkestratorBackend {
       throw new Error("Delete command is unavailable during lifecycle recovery");
     }
     for (const environmentId of lifecycleRecovery.deletionRecoveryEnvironmentIds) {
-      const recovery = Promise.resolve(
-        deleteEnvironment?.({ environmentId }, this.context),
-      );
+      const recovery = Promise.resolve(deleteEnvironment?.({ environmentId }, this.context));
       void recovery.catch(() => {
         // Detailed subprocess failures are logged at their owning boundary.
         // Keep this coordination log free of paths, command output, or secrets.
-        console.warn(
-          `[backend] Interrupted deletion remains pending for ${environmentId}`,
-        );
+        console.warn(`[backend] Interrupted deletion remains pending for ${environmentId}`);
       });
     }
     const reconcileTabTeardowns = this.commands.get("reconcile_tab_teardowns");
@@ -322,9 +297,7 @@ export class OrkestratorBackend {
     await this.nativeAgents.init().catch((error) => {
       console.warn("[backend] Failed to restore native agent launches:", error);
     });
-    const reconcileOrphanedTabResources = this.commands.get(
-      "reconcile_orphaned_tab_resources",
-    );
+    const reconcileOrphanedTabResources = this.commands.get("reconcile_orphaned_tab_resources");
     if (reconcileOrphanedTabResources) {
       await Promise.resolve(reconcileOrphanedTabResources({}, this.context)).catch(
         (error: unknown) => {
@@ -341,31 +314,36 @@ export class OrkestratorBackend {
       const ensureEnvironmentSetup = this.commands.get("ensure_environment_setup");
       for (const environment of environments) {
         if (
-          environment.status !== "running"
-          || environment.setupScriptsComplete
-          || environment.setupOverride
-        ) continue;
+          environment.status !== "running" ||
+          environment.setupScriptsComplete ||
+          environment.setupOverride
+        )
+          continue;
         if (environment.setupPhase === "running") {
           // A persisted `running` phase belongs to the process that owned its
           // PTY. Repository-controlled setup may not be idempotent, so fence
           // that interrupted attempt and require an explicit retry or override.
-          await this.context.storage.updateEnvironment(environment.id, {
-            setupPhase: "failed",
-            setupCompletedAt: new Date().toISOString(),
-            lifecycleError: "Environment setup was interrupted. Retry setup to continue.",
-          }).catch((error: unknown) => {
-            console.warn(`[backend] Failed to fence interrupted setup for ${environment.id}:`, error);
-          });
+          await this.context.storage
+            .updateEnvironment(environment.id, {
+              setupPhase: "failed",
+              setupCompletedAt: new Date().toISOString(),
+              lifecycleError: "Environment setup was interrupted. Retry setup to continue.",
+            })
+            .catch((error: unknown) => {
+              console.warn(
+                `[backend] Failed to fence interrupted setup for ${environment.id}:`,
+                error,
+              );
+            });
           continue;
         }
         if (environment.setupPhase !== "pending" || !ensureEnvironmentSetup) continue;
         // Pending means no setup attempt was published, so there is no side
         // effect to replay. Adopt it once now that setup no longer depends on a
         // mounted terminal component.
-        void Promise.resolve(ensureEnvironmentSetup(
-          { environmentId: environment.id },
-          this.context,
-        )).catch((error: unknown) => {
+        void Promise.resolve(
+          ensureEnvironmentSetup({ environmentId: environment.id }, this.context),
+        ).catch((error: unknown) => {
           console.warn(`[backend] Failed to adopt pending setup for ${environment.id}:`, error);
         });
       }
@@ -397,24 +375,26 @@ export class OrkestratorBackend {
     let tabTeardownReconcileInFlight: Promise<void> | null = null;
     const reconcileTabTeardownsOnce = (): void => {
       if (!reconcileTabTeardowns || tabTeardownReconcileInFlight) return;
-      tabTeardownReconcileInFlight = Promise.resolve(
-        reconcileTabTeardowns({}, this.context),
-      ).then(() => undefined).catch((error: unknown) => {
-        console.warn("[backend] Failed to reconcile tab teardowns:", error);
-      }).finally(() => {
-        tabTeardownReconcileInFlight = null;
-      });
+      tabTeardownReconcileInFlight = Promise.resolve(reconcileTabTeardowns({}, this.context))
+        .then(() => undefined)
+        .catch((error: unknown) => {
+          console.warn("[backend] Failed to reconcile tab teardowns:", error);
+        })
+        .finally(() => {
+          tabTeardownReconcileInFlight = null;
+        });
     };
     let orphanReconcileInFlight: Promise<void> | null = null;
     const reconcileOrphanedTabResourcesOnce = (): void => {
       if (!reconcileOrphanedTabResources || orphanReconcileInFlight) return;
-      orphanReconcileInFlight = Promise.resolve(
-        reconcileOrphanedTabResources({}, this.context),
-      ).then(() => undefined).catch((error: unknown) => {
-        console.warn("[backend] Failed to reconcile orphaned tab resources:", error);
-      }).finally(() => {
-        orphanReconcileInFlight = null;
-      });
+      orphanReconcileInFlight = Promise.resolve(reconcileOrphanedTabResources({}, this.context))
+        .then(() => undefined)
+        .catch((error: unknown) => {
+          console.warn("[backend] Failed to reconcile orphaned tab resources:", error);
+        })
+        .finally(() => {
+          orphanReconcileInFlight = null;
+        });
     };
     this.nativeActivitySweep ??= setInterval(() => {
       void this.nativeAgents.reconcileAgentActivity().catch((error) => {
@@ -455,7 +435,7 @@ export class OrkestratorBackend {
     if (this.shuttingDown) throw new Error("Backend is shutting down");
     const handler = this.commands.get(command);
     if (!handler) throw new Error(`Unknown backend command: ${command}`);
-    return await handler(args, this.context) as T;
+    return (await handler(args, this.context)) as T;
   }
 
   async shutdown(): Promise<void> {
@@ -479,8 +459,7 @@ export class OrkestratorBackend {
     shutdownPrMonitorTracking();
     const attempt = (async () => {
       try {
-        const lifecycleDeadline =
-          Date.now() + this.environmentLifecycleDrainTimeoutMs;
+        const lifecycleDeadline = Date.now() + this.environmentLifecycleDrainTimeoutMs;
         // Close both admission gates before waiting on any in-flight work.
         // Starting the pipeline drain immediately also prevents its scheduler
         // from admitting more backend-owned work during shutdown.

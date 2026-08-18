@@ -1,15 +1,14 @@
 import { describe, test, expect } from "bun:test";
-import {
-  TurnAccumulator,
-  unconfirmedTurnId,
-} from "./turn-accumulator.js";
+import { TurnAccumulator, unconfirmedTurnId } from "./turn-accumulator.js";
 import type { EngineItem } from "../engine/types.js";
 import {
   MAX_SUBAGENT_ACTION_OUTPUT_CHARS,
   SUBAGENT_OUTPUT_TRUNCATION_NOTICE,
 } from "../subagent-transcript.js";
 
-function accumulator(overrides: Partial<{ turnId: string; generation: number }> = {}): TurnAccumulator {
+function accumulator(
+  overrides: Partial<{ turnId: string; generation: number }> = {},
+): TurnAccumulator {
   return new TurnAccumulator({
     threadId: "thread-1",
     turnId: overrides.turnId ?? "turn-1",
@@ -91,9 +90,9 @@ describe("delta accumulation", () => {
     expect(turn.orderedForAssistantSegment().map((item) => item.id)).toEqual(["after"]);
 
     turn.onItemCompleted(agentMessage("before", "completed after steer"));
-    expect(turn.orderedForAssistantSegment("assistant-1").map((item) =>
-      turn.effectiveText(item)
-    )).toEqual(["completed after steer"]);
+    expect(
+      turn.orderedForAssistantSegment("assistant-1").map((item) => turn.effectiveText(item)),
+    ).toEqual(["completed after steer"]);
   });
 
   test("an authoritative item order places delayed post-steer items below the steer", () => {
@@ -108,10 +107,12 @@ describe("delta accumulation", () => {
     turn.freezeAssistantSegment(boundary, "2026-08-11T12:00:01.000Z");
     turn.startAssistantSegment("assistant-2", boundary, "2026-08-11T12:00:01.000Z");
 
-    expect(turn.orderedForAssistantSegment("assistant-1").map((item) => item.id))
-      .toEqual(["before"]);
-    expect(turn.orderedForAssistantSegment("assistant-2").map((item) => item.id))
-      .toEqual(["after"]);
+    expect(turn.orderedForAssistantSegment("assistant-1").map((item) => item.id)).toEqual([
+      "before",
+    ]);
+    expect(turn.orderedForAssistantSegment("assistant-2").map((item) => item.id)).toEqual([
+      "after",
+    ]);
   });
 
   describe("boundaryAfterItems", () => {
@@ -123,8 +124,7 @@ describe("delta accumulation", () => {
       const turn = accumulator();
       turn.onTextDelta("streaming", "half a thought");
 
-      expect(turn.boundaryAfterItems({ precedingItemIds: [], followingItemIds: [] }))
-        .toBe(1);
+      expect(turn.boundaryAfterItems({ precedingItemIds: [], followingItemIds: [] })).toBe(1);
       expect(turn.boundaryAfterItems({})).toBe(1);
       expect(turn.boundaryAfterItems(undefined)).toBe(1);
     });
@@ -143,10 +143,12 @@ describe("delta accumulation", () => {
       const turn = accumulator();
       turn.onItemCompleted(agentMessage("before", "before"));
 
-      expect(turn.boundaryAfterItems({
-        precedingItemIds: ["before"],
-        followingItemIds: ["not-yet-streamed"],
-      })).toBe(1);
+      expect(
+        turn.boundaryAfterItems({
+          precedingItemIds: ["before"],
+          followingItemIds: ["not-yet-streamed"],
+        }),
+      ).toBe(1);
     });
 
     test("never reaches back into an already-frozen row", () => {
@@ -159,8 +161,7 @@ describe("delta accumulation", () => {
 
       // A second steer whose projection names an item from the frozen row above
       // must not pull that row's contents back down into the live one.
-      expect(turn.boundaryAfterItems({ followingItemIds: ["first", "second"] }))
-        .toBe(first);
+      expect(turn.boundaryAfterItems({ followingItemIds: ["first", "second"] })).toBe(first);
     });
   });
 
@@ -248,19 +249,23 @@ describe("item/completed is authoritative", () => {
     const turn = accumulator();
     startPatch(turn);
 
-    expect(turn.onDynamicToolOutput(
-      "call-patch",
-      "apply_patch verification failed: Failed to find expected lines",
-    )).toBe(true);
+    expect(
+      turn.onDynamicToolOutput(
+        "call-patch",
+        "apply_patch verification failed: Failed to find expected lines",
+      ),
+    ).toBe(true);
     expect(turn.items.get("call-patch")?.item).toMatchObject({
       type: "dynamic_tool_call",
       tool: "apply_patch",
       arguments: "*** Begin Patch",
       status: "failed",
-      content_items: [{
-        type: "inputText",
-        text: "apply_patch verification failed: Failed to find expected lines",
-      }],
+      content_items: [
+        {
+          type: "inputText",
+          text: "apply_patch verification failed: Failed to find expected lines",
+        },
+      ],
     });
 
     turn.onItemCompleted({
@@ -400,17 +405,21 @@ describe("item/completed is authoritative", () => {
     const turn = accumulator();
     startPatch(turn);
 
-    expect(turn.onDynamicToolOutput("call-patch", {
-      changed: ["src/example.ts"],
-      count: 1,
-    })).toBe(false);
+    expect(
+      turn.onDynamicToolOutput("call-patch", {
+        changed: ["src/example.ts"],
+        count: 1,
+      }),
+    ).toBe(false);
     expect(turn.items.get("call-patch")?.item).toMatchObject({
       type: "dynamic_tool_call",
       status: "completed",
-      content_items: [{
-        type: "inputText",
-        text: '{\n  "changed": [\n    "src/example.ts"\n  ],\n  "count": 1\n}',
-      }],
+      content_items: [
+        {
+          type: "inputText",
+          text: '{\n  "changed": [\n    "src/example.ts"\n  ],\n  "count": 1\n}',
+        },
+      ],
     });
   });
 
@@ -445,9 +454,7 @@ describe("item/completed is authoritative", () => {
     const content = item.content_items[0];
     expect(content).toEqual({
       type: "inputText",
-      text:
-        "x".repeat(MAX_SUBAGENT_ACTION_OUTPUT_CHARS)
-        + SUBAGENT_OUTPUT_TRUNCATION_NOTICE,
+      text: "x".repeat(MAX_SUBAGENT_ACTION_OUTPUT_CHARS) + SUBAGENT_OUTPUT_TRUNCATION_NOTICE,
     });
   });
 

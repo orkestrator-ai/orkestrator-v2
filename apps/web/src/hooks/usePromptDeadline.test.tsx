@@ -1,9 +1,6 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { act, cleanup, renderHook } from "@testing-library/react";
-import {
-  formatPromptDeadline,
-  usePromptDeadline,
-} from "./usePromptDeadline";
+import { formatPromptDeadline, usePromptDeadline } from "./usePromptDeadline";
 
 describe("usePromptDeadline", () => {
   afterEach(cleanup);
@@ -25,9 +22,7 @@ describe("usePromptDeadline", () => {
 
   test("keeps elapsed absolute deadlines informational but rejects invalid values", () => {
     const past = renderHook(() => usePromptDeadline(Date.now() - 1));
-    const invalid = renderHook(() =>
-      usePromptDeadline(Number.POSITIVE_INFINITY),
-    );
+    const invalid = renderHook(() => usePromptDeadline(Number.POSITIVE_INFINITY));
 
     expect(past.result.current).toEqual({ remaining: null, expired: false });
     expect(invalid.result.current).toEqual({ remaining: null, expired: true });
@@ -55,12 +50,12 @@ describe("usePromptDeadline", () => {
     let now = 1_000;
     Date.now = () => now;
     let tick: (() => void) | undefined;
-    const setIntervalSpy = spyOn(globalThis, "setInterval").mockImplementation(
-      ((handler: TimerHandler) => {
-        tick = handler as () => void;
-        return 1 as never;
-      }) as unknown as typeof setInterval,
-    );
+    const setIntervalSpy = spyOn(globalThis, "setInterval").mockImplementation(((
+      handler: TimerHandler,
+    ) => {
+      tick = handler as () => void;
+      return 1 as never;
+    }) as unknown as typeof setInterval);
     const clearIntervalSpy = spyOn(globalThis, "clearInterval");
 
     try {
@@ -86,12 +81,12 @@ describe("usePromptDeadline", () => {
     let now = 1_000;
     Date.now = () => now;
     let tick: (() => void) | undefined;
-    const setIntervalSpy = spyOn(globalThis, "setInterval").mockImplementation(
-      ((handler: TimerHandler) => {
-        tick = handler as () => void;
-        return 1 as never;
-      }) as unknown as typeof setInterval,
-    );
+    const setIntervalSpy = spyOn(globalThis, "setInterval").mockImplementation(((
+      handler: TimerHandler,
+    ) => {
+      tick = handler as () => void;
+      return 1 as never;
+    }) as unknown as typeof setInterval);
     const clearIntervalSpy = spyOn(globalThis, "clearInterval");
 
     try {
@@ -113,9 +108,7 @@ describe("usePromptDeadline", () => {
 
   test("clears its interval when the consumer unmounts", () => {
     const clearIntervalSpy = spyOn(globalThis, "clearInterval");
-    const { unmount } = renderHook(() =>
-      usePromptDeadline(Date.now() + 65_000),
-    );
+    const { unmount } = renderHook(() => usePromptDeadline(Date.now() + 65_000));
 
     unmount();
 

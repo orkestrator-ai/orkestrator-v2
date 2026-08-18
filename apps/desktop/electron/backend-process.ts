@@ -125,9 +125,10 @@ export async function seedAgentTestDockerConfig(options: {
   const parsed = await readFile(path.join(options.sourceDir, "config.json"), "utf8")
     .then((contents) => JSON.parse(contents) as unknown)
     .catch(() => null);
-  const currentContext = parsed && typeof parsed === "object" && !Array.isArray(parsed)
-    ? (parsed as { currentContext?: unknown }).currentContext
-    : undefined;
+  const currentContext =
+    parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as { currentContext?: unknown }).currentContext
+      : undefined;
   await writeFile(
     path.join(target, "config.json"),
     `${JSON.stringify(typeof currentContext === "string" && currentContext ? { currentContext } : {}, null, 2)}\n`,
@@ -202,7 +203,11 @@ export function createBackendProcessEnvironment(
       env.NPM_CONFIG_USERCONFIG = path.join(runtime.isolatedCredentialRoot, "npmrc-disabled");
       env.DOCKER_CONFIG = agentTestDockerConfigDir(runtime.isolatedCredentialRoot);
       env.AWS_CONFIG_FILE = path.join(runtime.isolatedCredentialRoot, "aws", "config");
-      env.AWS_SHARED_CREDENTIALS_FILE = path.join(runtime.isolatedCredentialRoot, "aws", "credentials");
+      env.AWS_SHARED_CREDENTIALS_FILE = path.join(
+        runtime.isolatedCredentialRoot,
+        "aws",
+        "credentials",
+      );
       env.AWS_EC2_METADATA_DISABLED = "true";
       env.KUBECONFIG = path.join(runtime.isolatedCredentialRoot, "kube", "config");
       env.AZURE_CONFIG_DIR = path.join(runtime.isolatedCredentialRoot, "azure");
@@ -210,8 +215,9 @@ export function createBackendProcessEnvironment(
     }
     if (allowed.has("claude")) {
       if (inherited.ANTHROPIC_API_KEY) env.ANTHROPIC_API_KEY = inherited.ANTHROPIC_API_KEY;
-      const claudeConfigDir = inherited.CLAUDE_CONFIG_DIR?.trim()
-        || (inheritedHome ? path.join(inheritedHome, ".claude") : undefined);
+      const claudeConfigDir =
+        inherited.CLAUDE_CONFIG_DIR?.trim() ||
+        (inheritedHome ? path.join(inheritedHome, ".claude") : undefined);
       if (claudeConfigDir) {
         env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR = claudeConfigDir;
       }
@@ -221,20 +227,24 @@ export function createBackendProcessEnvironment(
     }
     if (allowed.has("codex")) {
       if (inherited.OPENAI_API_KEY) env.OPENAI_API_KEY = inherited.OPENAI_API_KEY;
-      const codexHome = inherited.CODEX_HOME?.trim()
-        || (inheritedHome ? path.join(inheritedHome, ".codex") : undefined);
+      const codexHome =
+        inherited.CODEX_HOME?.trim() ||
+        (inheritedHome ? path.join(inheritedHome, ".codex") : undefined);
       if (codexHome) env.CODEX_HOME = codexHome;
     } else if (runtime.isolatedCredentialRoot) {
       env.CODEX_HOME = path.join(runtime.isolatedCredentialRoot, "codex");
     }
     if (allowed.has("opencode")) {
       if (inherited.OPENCODE_API_KEY) env.OPENCODE_API_KEY = inherited.OPENCODE_API_KEY;
-      const configHome = inherited.XDG_CONFIG_HOME?.trim()
-        || (inheritedHome ? path.join(inheritedHome, ".config") : undefined);
-      const dataHome = inherited.XDG_DATA_HOME?.trim()
-        || (inheritedHome ? path.join(inheritedHome, ".local", "share") : undefined);
-      const stateHome = inherited.XDG_STATE_HOME?.trim()
-        || (inheritedHome ? path.join(inheritedHome, ".local", "state") : undefined);
+      const configHome =
+        inherited.XDG_CONFIG_HOME?.trim() ||
+        (inheritedHome ? path.join(inheritedHome, ".config") : undefined);
+      const dataHome =
+        inherited.XDG_DATA_HOME?.trim() ||
+        (inheritedHome ? path.join(inheritedHome, ".local", "share") : undefined);
+      const stateHome =
+        inherited.XDG_STATE_HOME?.trim() ||
+        (inheritedHome ? path.join(inheritedHome, ".local", "state") : undefined);
       if (configHome) env.XDG_CONFIG_HOME = configHome;
       if (dataHome) env.XDG_DATA_HOME = dataHome;
       if (stateHome) env.XDG_STATE_HOME = stateHome;
@@ -255,7 +265,10 @@ type ReadyMessage = GatewayStartInfo & { type: "orkestrator-backend-ready" };
 export class BackendHttpClient {
   private abortEvents: AbortController | null = null;
 
-  constructor(private baseUrl: string, private token: string) {}
+  constructor(
+    private baseUrl: string,
+    private token: string,
+  ) {}
 
   async invoke<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
     const response = await fetch(new URL("/__orkestrator/invoke", this.baseUrl), {
@@ -263,8 +276,9 @@ export class BackendHttpClient {
       headers: { authorization: `Bearer ${this.token}`, "content-type": "application/json" },
       body: JSON.stringify({ command, args }),
     });
-    const payload = await response.json() as { result?: T; error?: string };
-    if (!response.ok) throw new Error(payload.error ?? `Backend request failed with HTTP ${response.status}`);
+    const payload = (await response.json()) as { result?: T; error?: string };
+    if (!response.ok)
+      throw new Error(payload.error ?? `Backend request failed with HTTP ${response.status}`);
     return payload.result as T;
   }
 
@@ -302,14 +316,18 @@ export class BackendHttpClient {
     this.abortEvents = null;
   }
 
-  private async consumeEvents(signal: AbortSignal, onEvent: (event: string, payload: unknown) => void): Promise<void> {
+  private async consumeEvents(
+    signal: AbortSignal,
+    onEvent: (event: string, payload: unknown) => void,
+  ): Promise<void> {
     while (!signal.aborted) {
       try {
         const response = await fetch(new URL("/__orkestrator/events", this.baseUrl), {
           headers: { authorization: `Bearer ${this.token}` },
           signal,
         });
-        if (!response.ok || !response.body) throw new Error(`Backend event stream returned HTTP ${response.status}`);
+        if (!response.ok || !response.body)
+          throw new Error(`Backend event stream returned HTTP ${response.status}`);
         // Keep this in sync with NATIVE_EVENT_STREAM_CONNECTED_EVENT in the
         // renderer's native/events module. The transport has no replay buffer,
         // so consumers must authoritatively refetch after every connection.
@@ -323,7 +341,10 @@ export class BackendHttpClient {
           const messages = pending.split("\n\n");
           pending = messages.pop() ?? "";
           for (const message of messages) {
-            const data = message.split("\n").find((line) => line.startsWith("data: "))?.slice(6);
+            const data = message
+              .split("\n")
+              .find((line) => line.startsWith("data: "))
+              ?.slice(6);
             if (!data) continue;
             const parsed = JSON.parse(data) as { event?: unknown; payload?: unknown };
             if (typeof parsed.event === "string") onEvent(parsed.event, parsed.payload);
@@ -337,25 +358,43 @@ export class BackendHttpClient {
     }
   }
 
-  private async gatewaySettings(method: "GET" | "PUT", body?: { token: string }): Promise<GatewayTokenSettings> {
+  private async gatewaySettings(
+    method: "GET" | "PUT",
+    body?: { token: string },
+  ): Promise<GatewayTokenSettings> {
     const response = await fetch(new URL("/__orkestrator/gateway-settings", this.baseUrl), {
       method,
-      headers: { authorization: `Bearer ${this.token}`, ...(body ? { "content-type": "application/json" } : {}) },
-      body: body ? JSON.stringify(body) : undefined,
+      headers: {
+        authorization: `Bearer ${this.token}`,
+        ...(body ? { "content-type": "application/json" } : {}),
+      },
+      ...(body ? { body: JSON.stringify(body) } : {}),
     });
-    const payload = await response.json() as GatewayTokenSettings & { error?: string };
-    if (!response.ok) throw new Error(payload.error ?? `Backend settings request failed with HTTP ${response.status}`);
+    const payload = (await response.json()) as GatewayTokenSettings & { error?: string };
+    if (!response.ok)
+      throw new Error(
+        payload.error ?? `Backend settings request failed with HTTP ${response.status}`,
+      );
     return payload;
   }
 
-  private async webClientAccess(method: "GET" | "PUT" | "DELETE", body?: { enabled: boolean }): Promise<WebClientStatus> {
+  private async webClientAccess(
+    method: "GET" | "PUT" | "DELETE",
+    body?: { enabled: boolean },
+  ): Promise<WebClientStatus> {
     const response = await fetch(new URL("/__orkestrator/web-client-access", this.baseUrl), {
       method,
-      headers: { authorization: `Bearer ${this.token}`, ...(body ? { "content-type": "application/json" } : {}) },
-      body: body ? JSON.stringify(body) : undefined,
+      headers: {
+        authorization: `Bearer ${this.token}`,
+        ...(body ? { "content-type": "application/json" } : {}),
+      },
+      ...(body ? { body: JSON.stringify(body) } : {}),
     });
-    const payload = await response.json() as WebClientStatus & { error?: string };
-    if (!response.ok) throw new Error(payload.error ?? `Backend web client request failed with HTTP ${response.status}`);
+    const payload = (await response.json()) as WebClientStatus & { error?: string };
+    if (!response.ok)
+      throw new Error(
+        payload.error ?? `Backend web client request failed with HTTP ${response.status}`,
+      );
     return payload;
   }
 }
@@ -426,17 +465,34 @@ export class BackendProcess {
     const entry = options.isDev
       ? path.join(options.appRoot, "apps", "backend", "src", "main.ts")
       : path.join(options.resourceRoot, "backend", "main.js");
-    const args = [entry, "--port", String(options.gatewayPort ?? 34121),
-      "--control-host", "127.0.0.1", "--control-port", "0",
-      "--data-dir", options.dataDir, "--app-root", options.appRoot, "--resource-root", options.resourceRoot,
-      "--renderer-root", options.isDev ? path.join(options.appRoot, "apps", "web", "dist") : path.join(options.resourceRoot, "web")];
+    const args = [
+      entry,
+      "--port",
+      String(options.gatewayPort ?? 34121),
+      "--control-host",
+      "127.0.0.1",
+      "--control-port",
+      "0",
+      "--data-dir",
+      options.dataDir,
+      "--app-root",
+      options.appRoot,
+      "--resource-root",
+      options.resourceRoot,
+      "--renderer-root",
+      options.isDev
+        ? path.join(options.appRoot, "apps", "web", "dist")
+        : path.join(options.resourceRoot, "web"),
+    ];
     if (options.toolchainBinDir) args.push("--toolchain-bin-dir", options.toolchainBinDir);
     if (options.desktopWebClient) {
       args.push(
         "--desktop-web-client",
-        "--host", "127.0.0.1",
+        "--host",
+        "127.0.0.1",
         "--allow-non-tailscale-bind",
-        "--allowed-origins", HOSTED_WEB_CLIENT_ORIGINS.join(","),
+        "--allowed-origins",
+        HOSTED_WEB_CLIENT_ORIGINS.join(","),
       );
       if (options.tailscaleExecutable) args.push("--tailscale-bin", options.tailscaleExecutable);
     } else if (options.gatewayHost) {
@@ -445,14 +501,16 @@ export class BackendProcess {
       args.push("--fallback-host", options.fallbackGatewayHost ?? "127.0.0.1");
     }
     if (options.allowNonTailscaleBind) args.push("--allow-non-tailscale-bind");
-    if (options.rendererDevServerUrl) args.push("--renderer-dev-server-url", options.rendererDevServerUrl);
+    if (options.rendererDevServerUrl)
+      args.push("--renderer-dev-server-url", options.rendererDevServerUrl);
     if (options.runtimeFlavor) args.push("--runtime-flavor", options.runtimeFlavor);
     if (options.runtimeProfileId) args.push("--runtime-profile-id", options.runtimeProfileId);
     if (options.worktreeDir) args.push("--worktree-dir", options.worktreeDir);
     if (options.dockerImage) args.push("--docker-image", options.dockerImage);
     if (options.strictDockerOwner) args.push("--strict-docker-owner");
     if (options.strictGatewayPort) args.push("--strict-gateway-port");
-    if (options.credentialSources?.length) args.push("--credential-source", options.credentialSources.join(","));
+    if (options.credentialSources?.length)
+      args.push("--credential-source", options.credentialSources.join(","));
 
     // Isolate desktop startup from any remote-service configuration in the parent shell.
     const isolatedCredentialRoot = path.join(options.dataDir, "agent-credentials");
@@ -461,21 +519,29 @@ export class BackendProcess {
       options.isDev,
       options.resourceRoot,
       options.appVersion,
-      options.runtimeFlavor ? {
-        flavor: options.runtimeFlavor,
-        credentialSources: options.credentialSources,
-        isolatedCredentialRoot,
-      } : undefined,
+      options.runtimeFlavor
+        ? {
+            flavor: options.runtimeFlavor,
+            credentialSources: options.credentialSources,
+            isolatedCredentialRoot,
+          }
+        : undefined,
     );
     if (options.runtimeFlavor === "agent-test") {
       await seedAgentTestDockerConfig({
         isolatedCredentialRoot,
         sourceDir: hostDockerConfigDir(process.env),
       }).catch((error: unknown) => {
-        console.warn("[Desktop] Could not seed the isolated Docker context; falling back to the default context:", error);
+        console.warn(
+          "[Desktop] Could not seed the isolated Docker context; falling back to the default context:",
+          error,
+        );
       });
       await removeAgentTestHostKeychainLink(isolatedCredentialRoot).catch((error: unknown) => {
-        console.warn("[Desktop] Could not remove a legacy host Keychain link from the isolated profile:", error);
+        console.warn(
+          "[Desktop] Could not remove a legacy host Keychain link from the isolated profile:",
+          error,
+        );
       });
     }
     const child = spawn(bun, args, { env, stdio: ["ignore", "pipe", "pipe"] });
@@ -502,14 +568,19 @@ export class BackendProcess {
       }
     };
     child.once("error", (error) => childFailure(error));
-    child.once("exit", (code, signal) => childFailure(new Error(
-      `Backend service exited (code ${code ?? "unknown"}, signal ${signal ?? "none"})`,
-    )));
+    child.once("exit", (code, signal) =>
+      childFailure(
+        new Error(`Backend service exited (code ${code ?? "unknown"}, signal ${signal ?? "none"})`),
+      ),
+    );
 
     try {
       const ready = await new Promise<ReadyMessage>((resolve, reject) => {
         rejectStartup = reject;
-        const timeout = setTimeout(() => reject(new Error("Timed out waiting for the backend service")), 30_000);
+        const timeout = setTimeout(
+          () => reject(new Error("Timed out waiting for the backend service")),
+          30_000,
+        );
         if (!child.stdout) {
           clearTimeout(timeout);
           reject(new Error("Backend service stdout is unavailable"));
@@ -525,12 +596,13 @@ export class BackendProcess {
           try {
             const message = JSON.parse(line) as Partial<ReadyMessage>;
             if (
-              message.type !== "orkestrator-backend-ready"
-              || typeof message.url !== "string"
-              || typeof message.authFile !== "string"
-              || typeof message.bindAddress !== "string"
-              || typeof message.port !== "number"
-            ) return;
+              message.type !== "orkestrator-backend-ready" ||
+              typeof message.url !== "string" ||
+              typeof message.authFile !== "string" ||
+              typeof message.bindAddress !== "string" ||
+              typeof message.port !== "number"
+            )
+              return;
             finish(message as ReadyMessage);
           } catch {
             process.stdout.write(`[Backend] ${line}\n`);
@@ -557,9 +629,13 @@ export class BackendProcess {
     }
   }
 
-  getInfo(): GatewayStartInfo | null { return this.info; }
+  getInfo(): GatewayStartInfo | null {
+    return this.info;
+  }
 
-  getPid(): number | undefined { return this.child?.pid; }
+  getPid(): number | undefined {
+    return this.child?.pid;
+  }
 
   stop(): void {
     this.client?.stopListening();

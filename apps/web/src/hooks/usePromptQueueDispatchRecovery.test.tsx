@@ -94,8 +94,9 @@ afterEach(() => {
   cleanup();
   resetPromptQueueRevisions();
   for (const store of stores) {
-    (store as unknown as { setState: (partial: unknown) => void })
-      .setState({ messageQueue: new Map() });
+    (store as unknown as { setState: (partial: unknown) => void }).setState({
+      messageQueue: new Map(),
+    });
   }
 });
 
@@ -105,9 +106,7 @@ describe("usePromptQueueDispatchRecovery", () => {
 
     render(<Probe agent="claude" sessionKey="env-abc123:tab-1" />);
 
-    expect(screen.getByTestId("dispatch-error").textContent).toBe(
-      "Provider rejected this prompt.",
-    );
+    expect(screen.getByTestId("dispatch-error").textContent).toBe("Provider rejected this prompt.");
   });
 
   test("re-renders when the backend parks and later unparks its queue", async () => {
@@ -173,9 +172,12 @@ describe("usePromptQueueDispatchRecovery", () => {
     });
 
     expect(invokeMock.mock.calls).toEqual([
-      ["retry_prompt_queue_dispatch", {
-        queueKey: promptQueueKey("opencode", "env-abc123:tab-9"),
-      }],
+      [
+        "retry_prompt_queue_dispatch",
+        {
+          queueKey: promptQueueKey("opencode", "env-abc123:tab-9"),
+        },
+      ],
     ]);
   });
 

@@ -59,10 +59,7 @@ export function boundBrowserHistory(
   existingHistory?: string[],
 ): BoundedBrowserHistory {
   const boundedHistory = history?.slice(-MAX_BROWSER_HISTORY_ENTRIES);
-  const droppedEntries = Math.max(
-    0,
-    (history?.length ?? 0) - MAX_BROWSER_HISTORY_ENTRIES,
-  );
+  const droppedEntries = Math.max(0, (history?.length ?? 0) - MAX_BROWSER_HISTORY_ENTRIES);
   const cursorTarget = boundedHistory ?? existingHistory;
   if (historyIndex === undefined || cursorTarget === undefined) {
     return { history: boundedHistory };

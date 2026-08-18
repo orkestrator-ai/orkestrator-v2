@@ -9,8 +9,9 @@ const tempDirectories: string[] = [];
 
 afterEach(async () => {
   await Promise.all(
-    tempDirectories.splice(0).map((directory) =>
-      fs.rm(directory, { recursive: true, force: true })),
+    tempDirectories
+      .splice(0)
+      .map((directory) => fs.rm(directory, { recursive: true, force: true })),
   );
 });
 
@@ -65,11 +66,13 @@ describe("environment agent skills scanner", () => {
     const scan = JSON.parse(listed.stdout.toString()) as {
       skills: Array<{ name: string; filePath: string; scope: string }>;
     };
-    expect(scan.skills).toContainEqual(expect.objectContaining({
-      name: "review",
-      filePath: skillPath,
-      scope: "project",
-    }));
+    expect(scan.skills).toContainEqual(
+      expect.objectContaining({
+        name: "review",
+        filePath: skillPath,
+        scope: "project",
+      }),
+    );
 
     const read = runScanner(worktree, "codex", "read", skillPath);
     expect(read.exitCode).toBe(0);
@@ -92,11 +95,13 @@ describe("environment agent skills scanner", () => {
     const scan = JSON.parse(listed.stdout.toString()) as {
       skills: Array<{ name: string; filePath: string; scope: string }>;
     };
-    expect(scan.skills).toContainEqual(expect.objectContaining({
-      name: "review",
-      filePath: skillPath,
-      scope: "project",
-    }));
+    expect(scan.skills).toContainEqual(
+      expect.objectContaining({
+        name: "review",
+        filePath: skillPath,
+        scope: "project",
+      }),
+    );
   });
 
   test("lists Grok Build project skills from .grok/skills", async () => {
@@ -111,11 +116,13 @@ describe("environment agent skills scanner", () => {
     const scan = JSON.parse(listed.stdout.toString()) as {
       skills: Array<{ name: string; filePath: string; scope: string }>;
     };
-    expect(scan.skills).toContainEqual(expect.objectContaining({
-      name: "review",
-      filePath: skillPath,
-      scope: "project",
-    }));
+    expect(scan.skills).toContainEqual(
+      expect.objectContaining({
+        name: "review",
+        filePath: skillPath,
+        scope: "project",
+      }),
+    );
   });
 
   test("refuses reads outside the selected agent's skill roots", async () => {
@@ -147,8 +154,9 @@ describe("environment agent skills scanner", () => {
       errors: Array<{ message: string }>;
     };
     expect(scan.skills.some((skill) => skill.filePath === skillPath)).toBe(false);
-    expect(scan.errors.some((error) => error.message.includes("outside trusted agent roots")))
-      .toBe(true);
+    expect(scan.errors.some((error) => error.message.includes("outside trusted agent roots"))).toBe(
+      true,
+    );
 
     const read = runScanner(worktree, "codex", "read", skillPath);
     expect(read.exitCode).toBe(1);
@@ -183,10 +191,12 @@ describe("environment agent skills scanner", () => {
     };
 
     expect(scan.skills.map((skill) => skill.name)).toEqual(["kept"]);
-    expect(scan.errors).toEqual([{
-      path: path.join("~", ".claude", "skills", "escaping", "SKILL.md"),
-      message: "Refusing a skill directory that resolves outside trusted agent roots",
-    }]);
+    expect(scan.errors).toEqual([
+      {
+        path: path.join("~", ".claude", "skills", "escaping", "SKILL.md"),
+        message: "Refusing a skill directory that resolves outside trusted agent roots",
+      },
+    ]);
   });
 
   test("bounds the error list instead of returning one entry per refused path", async () => {
@@ -198,8 +208,15 @@ describe("environment agent skills scanner", () => {
     await fs.writeFile(path.join(target, "SKILL.md"), "---\nname: outside\n---\n# Outside\n");
     const userRoot = path.join(home, ".claude", "skills");
     await fs.mkdir(userRoot, { recursive: true });
-    await Promise.all(Array.from({ length: 120 }, (_, index) =>
-      fs.symlink(target, path.join(userRoot, `escaping-${String(index).padStart(3, "0")}`), "dir")));
+    await Promise.all(
+      Array.from({ length: 120 }, (_, index) =>
+        fs.symlink(
+          target,
+          path.join(userRoot, `escaping-${String(index).padStart(3, "0")}`),
+          "dir",
+        ),
+      ),
+    );
 
     const listed = runScanner(worktree, "claude", "list", "", { env: { HOME: home } });
     expect(listed.exitCode).toBe(0);
@@ -230,8 +247,9 @@ describe("environment agent skills scanner", () => {
     // Local environments run this under Bun, whose `opendir` resolves for a
     // directory that is not there; the container runs it under Node, which does
     // not. Both must report the same thing.
-    expect(scan.roots.find((root) => root.path === path.join(home, ".claude", "skills"))?.exists)
-      .toBe(false);
+    expect(
+      scan.roots.find((root) => root.path === path.join(home, ".claude", "skills"))?.exists,
+    ).toBe(false);
     expect(scan.roots.find((root) => root.path === projectRoot)?.exists).toBe(true);
   });
 
@@ -248,9 +266,12 @@ describe("environment agent skills scanner", () => {
     }
     const manifest = path.join(home, ".claude", "plugins", "installed_plugins.json");
     await fs.mkdir(path.dirname(manifest), { recursive: true });
-    await fs.writeFile(manifest, JSON.stringify({
-      plugins: { "@team/quality@official": [{ installPath: install }] },
-    }));
+    await fs.writeFile(
+      manifest,
+      JSON.stringify({
+        plugins: { "@team/quality@official": [{ installPath: install }] },
+      }),
+    );
 
     const listed = runScanner(worktree, "claude", "list", "", { env: { HOME: home } });
     expect(listed.exitCode).toBe(0);
@@ -271,8 +292,9 @@ describe("environment agent skills scanner", () => {
     // The two scanners are separate implementations of one catalogue — the
     // settings pane and the environment pane must not disagree about what the
     // same machine's skills are called.
-    expect(scanned.skills.filter((skill) => skill.filePath.startsWith(home)).map((skill) => skill.name))
-      .toEqual(hostNames);
+    expect(
+      scanned.skills.filter((skill) => skill.filePath.startsWith(home)).map((skill) => skill.name),
+    ).toEqual(hostNames);
     expect(hostNames).toEqual(["@team/quality:review", "review"]);
   });
 
@@ -293,8 +315,9 @@ describe("environment agent skills scanner", () => {
     const scan = JSON.parse(listed.stdout.toString()) as {
       skills: Array<{ filePath: string }>;
     };
-    expect(scan.skills.some((skill) => skill.filePath === path.join(projectSkillDirectory, "SKILL.md")))
-      .toBe(true);
+    expect(
+      scan.skills.some((skill) => skill.filePath === path.join(projectSkillDirectory, "SKILL.md")),
+    ).toBe(true);
   });
 
   test("recursively discovers nested Codex skills", async () => {
@@ -308,10 +331,12 @@ describe("environment agent skills scanner", () => {
     const scan = JSON.parse(listed.stdout.toString()) as {
       skills: Array<{ name: string; filePath: string }>;
     };
-    expect(scan.skills).toContainEqual(expect.objectContaining({
-      name: "nested-review",
-      filePath: skillPath,
-    }));
+    expect(scan.skills).toContainEqual(
+      expect.objectContaining({
+        name: "nested-review",
+        filePath: skillPath,
+      }),
+    );
   });
 
   test("uses Claude managed/user/project precedence and namespaces plugin skills", async () => {
@@ -327,30 +352,39 @@ describe("environment agent skills scanner", () => {
     }
     const manifest = path.join(home, ".claude", "plugins", "installed_plugins.json");
     await fs.mkdir(path.dirname(manifest), { recursive: true });
-    await fs.writeFile(manifest, JSON.stringify({
-      plugins: { "@team/quality@official": [{ installPath: plugin }] },
-    }));
+    await fs.writeFile(
+      manifest,
+      JSON.stringify({
+        plugins: { "@team/quality@official": [{ installPath: plugin }] },
+      }),
+    );
 
     const listed = runScanner(worktree, "claude", "list", "", { env: { HOME: home } });
     expect(listed.exitCode).toBe(0);
     const scan = JSON.parse(listed.stdout.toString()) as {
       skills: Array<{ name: string; filePath: string; shadowed: boolean }>;
     };
-    expect(scan.skills).toContainEqual(expect.objectContaining({
-      name: "review",
-      filePath: userSkill,
-      shadowed: false,
-    }));
-    expect(scan.skills).toContainEqual(expect.objectContaining({
-      name: "review",
-      filePath: projectSkill,
-      shadowed: true,
-    }));
-    expect(scan.skills).toContainEqual(expect.objectContaining({
-      name: "@team/quality:review",
-      filePath: pluginSkill,
-      shadowed: false,
-    }));
+    expect(scan.skills).toContainEqual(
+      expect.objectContaining({
+        name: "review",
+        filePath: userSkill,
+        shadowed: false,
+      }),
+    );
+    expect(scan.skills).toContainEqual(
+      expect.objectContaining({
+        name: "review",
+        filePath: projectSkill,
+        shadowed: true,
+      }),
+    );
+    expect(scan.skills).toContainEqual(
+      expect.objectContaining({
+        name: "@team/quality:review",
+        filePath: pluginSkill,
+        shadowed: false,
+      }),
+    );
   });
 
   test("parses inline Codex plugin config and prefers the newest stable cache", async () => {
@@ -358,7 +392,7 @@ describe("environment agent skills scanner", () => {
     const codexHome = await createTemporaryDirectory("ork-environment-codex-");
     await fs.writeFile(
       path.join(codexHome, "config.toml"),
-      "[plugins]\n\"review@official\" = { enabled = true }\n",
+      '[plugins]\n"review@official" = { enabled = true }\n',
     );
     for (const version of ["unknown", "2.0.0-beta.1", "1.9.0", "2.0.0"]) {
       const skillPath = path.join(
@@ -383,10 +417,12 @@ describe("environment agent skills scanner", () => {
     const scan = JSON.parse(listed.stdout.toString()) as {
       skills: Array<{ name: string; filePath: string }>;
     };
-    expect(scan.skills).toContainEqual(expect.objectContaining({
-      name: "review-2.0.0",
-      filePath: expect.stringContaining(`${path.sep}2.0.0${path.sep}`),
-    }));
+    expect(scan.skills).toContainEqual(
+      expect.objectContaining({
+        name: "review-2.0.0",
+        filePath: expect.stringContaining(`${path.sep}2.0.0${path.sep}`),
+      }),
+    );
     expect(scan.skills.some((skill) => skill.name.includes("unknown"))).toBe(false);
   });
 
@@ -396,18 +432,22 @@ describe("environment agent skills scanner", () => {
     const skillPath = path.join(customRoot, "remote-review", "SKILL.md");
     await fs.mkdir(path.dirname(skillPath), { recursive: true });
     await fs.writeFile(skillPath, "# Resolved remote skill\n");
-    const stdin = JSON.stringify([{
-      name: "remote-review",
-      description: "Resolved by OpenCode",
-      location: skillPath,
-    }]);
+    const stdin = JSON.stringify([
+      {
+        name: "remote-review",
+        description: "Resolved by OpenCode",
+        location: skillPath,
+      },
+    ]);
 
     const listed = runScanner(worktree, "opencode", "list", "", { stdin });
     expect(listed.exitCode).toBe(0);
-    expect(JSON.parse(listed.stdout.toString()).skills).toContainEqual(expect.objectContaining({
-      name: "remote-review",
-      filePath: skillPath,
-    }));
+    expect(JSON.parse(listed.stdout.toString()).skills).toContainEqual(
+      expect.objectContaining({
+        name: "remote-review",
+        filePath: skillPath,
+      }),
+    );
 
     const read = runScanner(worktree, "opencode", "read", skillPath, { stdin });
     expect(read.exitCode).toBe(0);
@@ -418,8 +458,11 @@ describe("environment agent skills scanner", () => {
     const worktree = await createWorktree();
     const root = path.join(worktree, ".codex", "skills");
     await fs.mkdir(root, { recursive: true });
-    await Promise.all(Array.from({ length: 501 }, (_, index) =>
-      fs.writeFile(path.join(root, `entry-${String(index).padStart(3, "0")}`), "")));
+    await Promise.all(
+      Array.from({ length: 501 }, (_, index) =>
+        fs.writeFile(path.join(root, `entry-${String(index).padStart(3, "0")}`), ""),
+      ),
+    );
 
     const listed = runScanner(worktree, "codex", "list");
     expect(listed.exitCode).toBe(0);

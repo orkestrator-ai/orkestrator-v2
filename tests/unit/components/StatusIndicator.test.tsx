@@ -5,20 +5,12 @@ import type { EnvironmentStatus } from "../../../apps/web/src/types";
 // Mock the Tooltip components since they require a context
 mock.module("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  TooltipTrigger: ({
-    children,
-    asChild,
-  }: {
-    children: React.ReactNode;
-    asChild?: boolean;
-  }) => <>{children}</>,
-  TooltipContent: ({
-    children,
-    side,
-  }: {
-    children: React.ReactNode;
-    side?: string;
-  }) => <div data-testid="tooltip-content">{children}</div>,
+  TooltipTrigger: ({ children, asChild }: { children: React.ReactNode; asChild?: boolean }) => (
+    <>{children}</>
+  ),
+  TooltipContent: ({ children, side }: { children: React.ReactNode; side?: string }) => (
+    <div data-testid="tooltip-content">{children}</div>
+  ),
 }));
 
 // Import component after mocking (lucide-react is NOT mocked to avoid
@@ -85,9 +77,7 @@ describe("StatusIndicator", () => {
   });
 
   test("applies custom className", () => {
-    const { container } = render(
-      <StatusIndicator status="running" className="custom-class" />
-    );
+    const { container } = render(<StatusIndicator status="running" className="custom-class" />);
     const element = container.querySelector(".custom-class");
     expect(element).toBeTruthy();
   });

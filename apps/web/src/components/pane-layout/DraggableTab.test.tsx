@@ -125,24 +125,25 @@ describe("DraggableTab title precedence", () => {
 
     useSessionStore.setState({
       sessions: new Map([
-        ["sess-1", {
-          id: "sess-1",
-          environmentId: "env-1",
-          tabId: "tab-a",
-          name: "Custom",
-          status: "connected",
-          sessionType: "claude",
-          containerId: "c-1",
-          createdAt: "2024-01-01T00:00:00.000Z",
-          lastActivityAt: "2024-01-01T00:00:00.000Z",
-          order: 0,
-        }],
+        [
+          "sess-1",
+          {
+            id: "sess-1",
+            environmentId: "env-1",
+            tabId: "tab-a",
+            name: "Custom",
+            status: "connected",
+            sessionType: "claude",
+            containerId: "c-1",
+            createdAt: "2024-01-01T00:00:00.000Z",
+            lastActivityAt: "2024-01-01T00:00:00.000Z",
+            order: 0,
+          },
+        ],
       ]),
     });
     useClaudeStore.setState({
-      sessions: new Map([
-        [createSessionKey("env-1", "tab-a"), { title: "Auto Title" } as never],
-      ]),
+      sessions: new Map([[createSessionKey("env-1", "tab-a"), { title: "Auto Title" } as never]]),
     });
 
     renderTab(tab, 2);
@@ -160,9 +161,7 @@ describe("DraggableTab title precedence", () => {
     };
 
     useClaudeStore.setState({
-      sessions: new Map([
-        [createSessionKey("env-1", "tab-a"), { title: "Auto Title" } as never],
-      ]),
+      sessions: new Map([[createSessionKey("env-1", "tab-a"), { title: "Auto Title" } as never]]),
     });
 
     renderTab(tab, 0);
@@ -181,18 +180,21 @@ describe("DraggableTab title precedence", () => {
     };
     useSessionStore.setState({
       sessions: new Map([
-        ["session-review", {
-          id: "session-review",
-          environmentId: "env-1",
-          tabId: "tab-review",
-          name: "Payment retry review",
-          status: "connected",
-          sessionType: "claude",
-          containerId: "container-1",
-          createdAt: "2026-07-20T10:00:00.000Z",
-          lastActivityAt: "2026-07-20T10:00:00.000Z",
-          order: 0,
-        }],
+        [
+          "session-review",
+          {
+            id: "session-review",
+            environmentId: "env-1",
+            tabId: "tab-review",
+            name: "Payment retry review",
+            status: "connected",
+            sessionType: "claude",
+            containerId: "container-1",
+            createdAt: "2026-07-20T10:00:00.000Z",
+            lastActivityAt: "2026-07-20T10:00:00.000Z",
+            order: 0,
+          },
+        ],
       ]),
     });
     useClaudeStore.setState({
@@ -323,18 +325,21 @@ describe("DraggableTab title precedence", () => {
     };
     useSessionStore.setState({
       sessions: new Map([
-        ["terminal-session", {
-          id: "terminal-session",
-          environmentId: "env-1",
-          tabId: "tab-codex",
-          name: "Pinned name",
-          status: "connected",
-          sessionType: "codex",
-          containerId: "container-1",
-          createdAt: "2026-07-20T10:00:00.000Z",
-          lastActivityAt: "2026-07-20T10:00:00.000Z",
-          order: 0,
-        }],
+        [
+          "terminal-session",
+          {
+            id: "terminal-session",
+            environmentId: "env-1",
+            tabId: "tab-codex",
+            name: "Pinned name",
+            status: "connected",
+            sessionType: "codex",
+            containerId: "container-1",
+            createdAt: "2026-07-20T10:00:00.000Z",
+            lastActivityAt: "2026-07-20T10:00:00.000Z",
+            order: 0,
+          },
+        ],
       ]),
     });
     useCodexStore.setState({
@@ -414,14 +419,17 @@ describe("DraggableTab title precedence", () => {
   });
 
   test("looped-review tabs show their default title and workflow icon", () => {
-    const view = renderTab({
-      id: "looped-a",
-      type: "looped-review",
-      loopedReviewTabData: {
-        environmentId: "env-1",
-        workflowId: "workflow-1",
+    const view = renderTab(
+      {
+        id: "looped-a",
+        type: "looped-review",
+        loopedReviewTabData: {
+          environmentId: "env-1",
+          workflowId: "workflow-1",
+        },
       },
-    }, 1);
+      1,
+    );
 
     expect(screen.getByText("Looped Review 2")).toBeDefined();
     expect(view.container.querySelector("svg.text-cyan-400")).toBeTruthy();
@@ -467,9 +475,18 @@ describe("DraggableTab title precedence", () => {
       backendRevision: 1,
     } satisfies Pick<
       MultiReviewWorkflow,
-      | "version" | "controller" | "id" | "environmentId" | "projectId"
-      | "targetBranch" | "phase" | "reviewers" | "fixModel"
-      | "createdAt" | "updatedAt" | "backendRevision"
+      | "version"
+      | "controller"
+      | "id"
+      | "environmentId"
+      | "projectId"
+      | "targetBranch"
+      | "phase"
+      | "reviewers"
+      | "fixModel"
+      | "createdAt"
+      | "updatedAt"
+      | "backendRevision"
     >;
     useMultiReviewStore.getState().replaceWorkflow(workflow as MultiReviewWorkflow);
 
@@ -521,14 +538,10 @@ describe("DraggableTab title precedence", () => {
       nativeAgentData: { platform: "claude", environmentId: "env-1" },
     };
     useClaudeStore.setState({
-      sessions: new Map([
-        [createSessionKey("env-1", "tab-a"), { title: "Claude title" } as never],
-      ]),
+      sessions: new Map([[createSessionKey("env-1", "tab-a"), { title: "Claude title" } as never]]),
     });
     useCodexStore.setState({
-      sessions: new Map([
-        [createSessionKey("env-1", "tab-a"), { title: "Codex title" } as never],
-      ]),
+      sessions: new Map([[createSessionKey("env-1", "tab-a"), { title: "Codex title" } as never]]),
     });
     useOpenCodeStore.setState({
       sessions: new Map([
@@ -553,9 +566,7 @@ describe("DraggableTab title precedence", () => {
       nativeAgentData: { platform: "claude", environmentId: "env-1" },
     };
     useCodexStore.setState({
-      sessions: new Map([
-        [createSessionKey("env-1", "tab-a"), { title: "Codex title" } as never],
-      ]),
+      sessions: new Map([[createSessionKey("env-1", "tab-a"), { title: "Codex title" } as never]]),
     });
     useOpenCodeStore.setState({
       sessions: new Map([
@@ -571,29 +582,35 @@ describe("DraggableTab title precedence", () => {
   test("build tabs use the pipeline task title", () => {
     seedPipeline("pipeline-1", "Add search");
 
-    renderTab({
-      id: "tab-build",
-      type: "claude-build",
-      buildTabData: {
-        environmentId: "env-1",
-        pipelineId: "pipeline-1",
-        taskId: "task-1",
+    renderTab(
+      {
+        id: "tab-build",
+        type: "claude-build",
+        buildTabData: {
+          environmentId: "env-1",
+          pipelineId: "pipeline-1",
+          taskId: "task-1",
+        },
       },
-    }, 0);
+      0,
+    );
 
     expect(screen.getByText("Build: Add search")).toBeDefined();
   });
 
   test("build tabs fall back to the numbered Build label when the pipeline is unknown", () => {
-    renderTab({
-      id: "tab-build",
-      type: "claude-build",
-      buildTabData: {
-        environmentId: "env-1",
-        pipelineId: "missing-pipeline",
-        taskId: "task-1",
+    renderTab(
+      {
+        id: "tab-build",
+        type: "claude-build",
+        buildTabData: {
+          environmentId: "env-1",
+          pipelineId: "missing-pipeline",
+          taskId: "task-1",
+        },
       },
-    }, 2);
+      2,
+    );
 
     expect(screen.getByText("Build 3")).toBeDefined();
   });
@@ -601,16 +618,19 @@ describe("DraggableTab title precedence", () => {
   test("build tabs prefer displayTitle over the pipeline task title", () => {
     seedPipeline("pipeline-1", "Add search");
 
-    renderTab({
-      id: "tab-build",
-      type: "claude-build",
-      displayTitle: "Pipeline",
-      buildTabData: {
-        environmentId: "env-1",
-        pipelineId: "pipeline-1",
-        taskId: "task-1",
+    renderTab(
+      {
+        id: "tab-build",
+        type: "claude-build",
+        displayTitle: "Pipeline",
+        buildTabData: {
+          environmentId: "env-1",
+          pipelineId: "pipeline-1",
+          taskId: "task-1",
+        },
       },
-    }, 0);
+      0,
+    );
 
     expect(screen.getByText("Pipeline 1")).toBeDefined();
     expect(screen.queryByText("Build: Add search") === null).toBe(true);
@@ -754,10 +774,7 @@ describe("DraggableTab icons", () => {
   }
 
   test("the browser icon is the globe rather than the default terminal", () => {
-    const { container } = renderTab(
-      { id: "t", type: "browser", browserData: { url: "" } },
-      0,
-    );
+    const { container } = renderTab({ id: "t", type: "browser", browserData: { url: "" } }, 0);
 
     expect(container.querySelector("svg.lucide-earth")).toBeTruthy();
     expect(container.querySelector("svg.lucide-terminal") === null).toBe(true);
@@ -919,11 +936,14 @@ describe("DraggableTab tooltip and context menu structure", () => {
   });
 
   test("hides the file tooltip again on mouse leave", async () => {
-    renderTab({
-      id: "tab-file",
-      type: "file",
-      fileData: { filePath: "src/components/Foo/Bar.tsx" },
-    }, 0);
+    renderTab(
+      {
+        id: "tab-file",
+        type: "file",
+        fileData: { filePath: "src/components/Foo/Bar.tsx" },
+      },
+      0,
+    );
 
     const trigger = screen.getByText("Bar.tsx").closest("div")!;
     fireEvent.mouseEnter(trigger);
@@ -933,17 +953,23 @@ describe("DraggableTab tooltip and context menu structure", () => {
 
     fireEvent.mouseLeave(trigger);
 
-    await waitFor(() => {
-      expect(screen.queryByText("src/components/Foo/Bar.tsx") === null).toBe(true);
-    }, { timeout: 10_000 });
+    await waitFor(
+      () => {
+        expect(screen.queryByText("src/components/Foo/Bar.tsx") === null).toBe(true);
+      },
+      { timeout: 10_000 },
+    );
   }, 20_000);
 
   test("shows the file tooltip on focus and hides it on blur", async () => {
-    renderTab({
-      id: "tab-file",
-      type: "file",
-      fileData: { filePath: "src/lib/util.ts" },
-    }, 0);
+    renderTab(
+      {
+        id: "tab-file",
+        type: "file",
+        fileData: { filePath: "src/lib/util.ts" },
+      },
+      0,
+    );
 
     const trigger = screen.getByText("util.ts").closest("div")!;
     fireEvent.focus(trigger);
@@ -953,9 +979,12 @@ describe("DraggableTab tooltip and context menu structure", () => {
 
     fireEvent.blur(trigger);
 
-    await waitFor(() => {
-      expect(screen.queryByText("src/lib/util.ts") === null).toBe(true);
-    }, { timeout: 10_000 });
+    await waitFor(
+      () => {
+        expect(screen.queryByText("src/lib/util.ts") === null).toBe(true);
+      },
+      { timeout: 10_000 },
+    );
   }, 20_000);
 
   test("marks a focused active tab with a full-opacity accent", () => {
@@ -1017,41 +1046,41 @@ describe("DraggableTab tooltip and context menu structure", () => {
 
   test("renders an unsaved-changes dot for a dirty file tab", () => {
     useFileDirtyStore.setState({
-      dirtyFiles: new Map([
-        ["tab-file", { content: "edited", originalContent: "on disk" }],
-      ]),
+      dirtyFiles: new Map([["tab-file", { content: "edited", originalContent: "on disk" }]]),
     });
 
-    const { container } = renderTab({
-      id: "tab-file",
-      type: "file",
-      fileData: { filePath: "src/lib/util.ts" },
-    }, 0);
+    const { container } = renderTab(
+      {
+        id: "tab-file",
+        type: "file",
+        fileData: { filePath: "src/lib/util.ts" },
+      },
+      0,
+    );
 
     expect(container.querySelector("[title='Unsaved changes']")).toBeTruthy();
   });
 
   test("renders no dot when the file tab content matches disk", () => {
     useFileDirtyStore.setState({
-      dirtyFiles: new Map([
-        ["tab-file", { content: "same", originalContent: "same" }],
-      ]),
+      dirtyFiles: new Map([["tab-file", { content: "same", originalContent: "same" }]]),
     });
 
-    const { container } = renderTab({
-      id: "tab-file",
-      type: "file",
-      fileData: { filePath: "src/lib/util.ts" },
-    }, 0);
+    const { container } = renderTab(
+      {
+        id: "tab-file",
+        type: "file",
+        fileData: { filePath: "src/lib/util.ts" },
+      },
+      0,
+    );
 
     expect(container.querySelector("[title='Unsaved changes']") === null).toBe(true);
   });
 
   test("never renders the dot for a non-file tab sharing the dirty tab id", () => {
     useFileDirtyStore.setState({
-      dirtyFiles: new Map([
-        ["tab-terminal", { content: "edited", originalContent: "on disk" }],
-      ]),
+      dirtyFiles: new Map([["tab-terminal", { content: "edited", originalContent: "on disk" }]]),
     });
 
     const { container } = renderTab({ id: "tab-terminal", type: "plain" }, 0);

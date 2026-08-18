@@ -3,12 +3,7 @@ import { promises as fs } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
-import {
-  nativeFetch,
-  spawnBridge,
-  temporaryDirectory,
-  waitFor,
-} from "./acp-test-harness.js";
+import { nativeFetch, spawnBridge, temporaryDirectory, waitFor } from "./acp-test-harness.js";
 
 type SessionSnapshot = {
   status: string;
@@ -22,60 +17,92 @@ type SessionSnapshot = {
 describe("ACP Cursor background continuation", () => {
   test("keeps a spawn-echo cursor/task live and still settles on a later duration", async () => {
     const { base, headers } = await spawnBridge();
-    const created = await nativeFetch(`${base}/session/create`, {
+    const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
-    }).then((response) => response.json()) as { id: string };
-    const read = async (): Promise<SessionSnapshot> => nativeFetch(`${base}/session/${created.id}`, { headers })
-      .then((response) => response.json()) as Promise<SessionSnapshot>;
+    }).then((response) => response.json())) as { id: string };
+    const read = async (): Promise<SessionSnapshot> =>
+      nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+        response.json(),
+      ) as Promise<SessionSnapshot>;
 
-    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ prompt: "CURSORBACKGROUNDCHILD" }),
-    })).status).toBe(202);
+    expect(
+      (
+        await nativeFetch(`${base}/session/${created.id}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "CURSORBACKGROUNDCHILD" }),
+        })
+      ).status,
+    ).toBe(202);
 
     const launched = await waitFor(
       read,
-      (value) => value.status === "idle"
-        && value.messages.some((message) => message.parts.some((part) =>
-          part.toolUseId === "cursor-subagent-1" && part.agentState === "active"
-        )),
+      (value) =>
+        value.status === "idle" &&
+        value.messages.some((message) =>
+          message.parts.some(
+            (part) => part.toolUseId === "cursor-subagent-1" && part.agentState === "active",
+          ),
+        ),
     );
-    expect(launched.messages.flatMap((message) => message.parts).find((part) =>
-      part.toolUseId === "cursor-subagent-1"
-    )).toMatchObject({
+    expect(
+      launched.messages
+        .flatMap((message) => message.parts)
+        .find((part) => part.toolUseId === "cursor-subagent-1"),
+    ).toMatchObject({
       toolState: "success",
       agentState: "active",
       toolArgs: { agentId: "child-wait-1" },
     });
-    expect((launched.messages.flatMap((message) => message.parts).find((part) =>
-      part.toolUseId === "cursor-subagent-1"
-    )?.toolArgs as { durationMs?: unknown } | undefined)?.durationMs).toBeUndefined();
-    expect(await nativeFetch(`${base}/session/${created.id}/activity`, { headers })
-      .then((response) => response.json())).toEqual({ activity: "working" });
+    expect(
+      (
+        launched.messages
+          .flatMap((message) => message.parts)
+          .find((part) => part.toolUseId === "cursor-subagent-1")?.toolArgs as
+          | { durationMs?: unknown }
+          | undefined
+      )?.durationMs,
+    ).toBeUndefined();
+    expect(
+      await nativeFetch(`${base}/session/${created.id}/activity`, { headers }).then((response) =>
+        response.json(),
+      ),
+    ).toEqual({ activity: "working" });
 
-    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ prompt: "FINISHCURSORTASK" }),
-    })).status).toBe(202);
+    expect(
+      (
+        await nativeFetch(`${base}/session/${created.id}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "FINISHCURSORTASK" }),
+        })
+      ).status,
+    ).toBe(202);
     const settled = await waitFor(
       read,
-      (value) => value.status === "idle"
-        && value.messages.some((message) => message.parts.some((part) =>
-          part.toolUseId === "cursor-subagent-1" && part.agentState === "finished"
-        )),
+      (value) =>
+        value.status === "idle" &&
+        value.messages.some((message) =>
+          message.parts.some(
+            (part) => part.toolUseId === "cursor-subagent-1" && part.agentState === "finished",
+          ),
+        ),
     );
-    expect(settled.messages.flatMap((message) => message.parts).find((part) =>
-      part.toolUseId === "cursor-subagent-1"
-    )).toMatchObject({
+    expect(
+      settled.messages
+        .flatMap((message) => message.parts)
+        .find((part) => part.toolUseId === "cursor-subagent-1"),
+    ).toMatchObject({
       toolState: "success",
       agentState: "finished",
       toolArgs: { durationMs: 84 },
     });
-    expect(await nativeFetch(`${base}/session/${created.id}/activity`, { headers })
-      .then((response) => response.json())).toEqual({ activity: "idle" });
+    expect(
+      await nativeFetch(`${base}/session/${created.id}/activity`, { headers }).then((response) =>
+        response.json(),
+      ),
+    ).toEqual({ activity: "idle" });
   });
 
   test("does not wait for a background Task whose cursor/task duration is not the spawn echo", async () => {
@@ -88,28 +115,39 @@ describe("ACP Cursor background continuation", () => {
         FAKE_ACP_COUNTER_FILE: counterFile,
       },
     });
-    const created = await nativeFetch(`${base}/session/create`, {
+    const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
-    }).then((response) => response.json()) as { id: string };
+    }).then((response) => response.json())) as { id: string };
 
-    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ prompt: "CURSORTASK: summarize" }),
-    })).status).toBe(202);
+    expect(
+      (
+        await nativeFetch(`${base}/session/${created.id}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "CURSORTASK: summarize" }),
+        })
+      ).status,
+    ).toBe(202);
 
     const settled = await waitFor(
-      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
-        .then((response) => response.json()) as Promise<SessionSnapshot>,
-      (value) => value.status === "idle"
-        && value.messages.some((message) => message.parts.some((part) =>
-          part.toolUseId === "cursor-task-1" && part.agentState === "finished"
-        )),
+      async () =>
+        nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+          response.json(),
+        ) as Promise<SessionSnapshot>,
+      (value) =>
+        value.status === "idle" &&
+        value.messages.some((message) =>
+          message.parts.some(
+            (part) => part.toolUseId === "cursor-task-1" && part.agentState === "finished",
+          ),
+        ),
     );
-    expect(settled.messages.flatMap((message) => message.parts).find((part) =>
-      part.toolUseId === "cursor-task-1"
-    )).toMatchObject({ toolState: "success", agentState: "finished" });
+    expect(
+      settled.messages
+        .flatMap((message) => message.parts)
+        .find((part) => part.toolUseId === "cursor-task-1"),
+    ).toMatchObject({ toolState: "success", agentState: "finished" });
     expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toEqual(["prompt"]);
   });
 
@@ -130,25 +168,34 @@ describe("ACP Cursor background continuation", () => {
         FAKE_ACP_COUNTER_FILE: counterFile,
       },
     });
-    const created = await nativeFetch(`${base}/session/create`, {
+    const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
-    }).then((response) => response.json()) as { id: string };
-    const read = async (): Promise<SessionSnapshot> => nativeFetch(`${base}/session/${created.id}`, { headers })
-      .then((response) => response.json()) as Promise<SessionSnapshot>;
+    }).then((response) => response.json())) as { id: string };
+    const read = async (): Promise<SessionSnapshot> =>
+      nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+        response.json(),
+      ) as Promise<SessionSnapshot>;
 
-    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ prompt: "CURSORBACKGROUNDCHILD" }),
-    })).status).toBe(202);
+    expect(
+      (
+        await nativeFetch(`${base}/session/${created.id}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "CURSORBACKGROUNDCHILD" }),
+        })
+      ).status,
+    ).toBe(202);
 
     await waitFor(
       read,
-      (value) => value.status === "running"
-        && value.messages.some((message) => message.parts.some((part) =>
-          part.toolUseId === "cursor-subagent-1" && part.agentState === "active"
-        )),
+      (value) =>
+        value.status === "running" &&
+        value.messages.some((message) =>
+          message.parts.some(
+            (part) => part.toolUseId === "cursor-subagent-1" && part.agentState === "active",
+          ),
+        ),
     );
 
     await fs.writeFile(
@@ -161,26 +208,37 @@ describe("ACP Cursor background continuation", () => {
 
     const settled = await waitFor(
       read,
-      (value) => value.status === "idle"
-        && value.messages.some((message) => message.parts.some((part) =>
-          part.toolUseId === "cursor-subagent-1" && part.agentState === "finished"
-        )),
+      (value) =>
+        value.status === "idle" &&
+        value.messages.some((message) =>
+          message.parts.some(
+            (part) => part.toolUseId === "cursor-subagent-1" && part.agentState === "finished",
+          ),
+        ),
     );
-    expect(settled.messages.some((message) =>
-      message.role === "user"
-      && message.content?.startsWith("Background subagent finished.") === true
-      && message.content.includes("All tests passed at HEAD.")
-    )).toBe(true);
-    expect(settled.messages.some((message) =>
-      message.role === "assistant"
-      && message.content?.includes("Validation passed.") === true
-    )).toBe(true);
+    expect(
+      settled.messages.some(
+        (message) =>
+          message.role === "user" &&
+          message.content?.startsWith("Background subagent finished.") === true &&
+          message.content.includes("All tests passed at HEAD."),
+      ),
+    ).toBe(true);
+    expect(
+      settled.messages.some(
+        (message) =>
+          message.role === "assistant" && message.content?.includes("Validation passed.") === true,
+      ),
+    ).toBe(true);
     expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toEqual([
       "prompt",
       "prompt",
     ]);
-    expect(await nativeFetch(`${base}/session/${created.id}/activity`, { headers })
-      .then((response) => response.json())).toEqual({ activity: "idle" });
+    expect(
+      await nativeFetch(`${base}/session/${created.id}/activity`, { headers }).then((response) =>
+        response.json(),
+      ),
+    ).toEqual({ activity: "idle" });
   });
 
   test("continues once with a timeout note when the Cursor child transcript never ends", async () => {
@@ -196,29 +254,40 @@ describe("ACP Cursor background continuation", () => {
         FAKE_ACP_COUNTER_FILE: counterFile,
       },
     });
-    const created = await nativeFetch(`${base}/session/create`, {
+    const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
-    }).then((response) => response.json()) as { id: string };
+    }).then((response) => response.json())) as { id: string };
 
-    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ prompt: "CURSORBACKGROUNDCHILD" }),
-    })).status).toBe(202);
+    expect(
+      (
+        await nativeFetch(`${base}/session/${created.id}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "CURSORBACKGROUNDCHILD" }),
+        })
+      ).status,
+    ).toBe(202);
 
     const settled = await waitFor(
-      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
-        .then((response) => response.json()) as Promise<SessionSnapshot>,
-      (value) => value.status === "idle"
-        && value.messages.some((message) => message.parts.some((part) =>
-          part.toolUseId === "cursor-subagent-1" && part.agentState === "failed"
-        )),
+      async () =>
+        nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+          response.json(),
+        ) as Promise<SessionSnapshot>,
+      (value) =>
+        value.status === "idle" &&
+        value.messages.some((message) =>
+          message.parts.some(
+            (part) => part.toolUseId === "cursor-subagent-1" && part.agentState === "failed",
+          ),
+        ),
     );
-    expect(settled.messages.some((message) =>
-      message.role === "user"
-      && message.content?.includes("Status: timeout") === true
-    )).toBe(true);
+    expect(
+      settled.messages.some(
+        (message) =>
+          message.role === "user" && message.content?.includes("Status: timeout") === true,
+      ),
+    ).toBe(true);
     expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toEqual([
       "prompt",
       "prompt",
@@ -236,49 +305,74 @@ describe("ACP Cursor background continuation", () => {
         FAKE_ACP_COUNTER_FILE: counterFile,
       },
     });
-    const created = await nativeFetch(`${base}/session/create`, {
+    const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
       body: JSON.stringify({ clientSessionKey: "env-grok-no-cursor-continue:tab-1" }),
-    }).then((response) => response.json()) as { id: string };
+    }).then((response) => response.json())) as { id: string };
 
-    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ prompt: "BACKGROUNDSUBAGENT: validate" }),
-    })).status).toBe(202);
+    expect(
+      (
+        await nativeFetch(`${base}/session/${created.id}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "BACKGROUNDSUBAGENT: validate" }),
+        })
+      ).status,
+    ).toBe(202);
 
     const active = await waitFor(
-      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
-        .then((response) => response.json()) as Promise<SessionSnapshot>,
-      (value) => value.status === "idle"
-        && value.messages.some((message) => message.parts.some((part) =>
-          part.toolUseId === "grok-subagent-tool-1" && part.agentState === "active"
-        )),
+      async () =>
+        nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+          response.json(),
+        ) as Promise<SessionSnapshot>,
+      (value) =>
+        value.status === "idle" &&
+        value.messages.some((message) =>
+          message.parts.some(
+            (part) => part.toolUseId === "grok-subagent-tool-1" && part.agentState === "active",
+          ),
+        ),
     );
-    expect(active.messages.flatMap((message) => message.parts).find((part) =>
-      part.toolUseId === "grok-subagent-tool-1"
-    )).toMatchObject({ toolState: "success", agentState: "active" });
+    expect(
+      active.messages
+        .flatMap((message) => message.parts)
+        .find((part) => part.toolUseId === "grok-subagent-tool-1"),
+    ).toMatchObject({ toolState: "success", agentState: "active" });
     expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toEqual(["prompt"]);
-    expect(await nativeFetch(`${base}/session/${created.id}/activity`, { headers })
-      .then((response) => response.json())).toEqual({ activity: "working" });
+    expect(
+      await nativeFetch(`${base}/session/${created.id}/activity`, { headers }).then((response) =>
+        response.json(),
+      ),
+    ).toEqual({ activity: "working" });
 
-    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ prompt: "FINISHSUBAGENT" }),
-    })).status).toBe(202);
+    expect(
+      (
+        await nativeFetch(`${base}/session/${created.id}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "FINISHSUBAGENT" }),
+        })
+      ).status,
+    ).toBe(202);
     const finished = await waitFor(
-      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
-        .then((response) => response.json()) as Promise<SessionSnapshot>,
-      (value) => value.status === "idle"
-        && value.messages.some((message) => message.parts.some((part) =>
-          part.toolUseId === "grok-subagent-tool-1" && part.agentState === "finished"
-        )),
+      async () =>
+        nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+          response.json(),
+        ) as Promise<SessionSnapshot>,
+      (value) =>
+        value.status === "idle" &&
+        value.messages.some((message) =>
+          message.parts.some(
+            (part) => part.toolUseId === "grok-subagent-tool-1" && part.agentState === "finished",
+          ),
+        ),
     );
-    expect(finished.messages.flatMap((message) => message.parts).find((part) =>
-      part.toolUseId === "grok-subagent-tool-1"
-    )).toMatchObject({ toolState: "success", agentState: "finished" });
+    expect(
+      finished.messages
+        .flatMap((message) => message.parts)
+        .find((part) => part.toolUseId === "grok-subagent-tool-1"),
+    ).toMatchObject({ toolState: "success", agentState: "finished" });
     expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toEqual([
       "prompt",
       "prompt",
@@ -302,25 +396,34 @@ describe("ACP Cursor background continuation", () => {
         FAKE_ACP_COUNTER_FILE: counterFile,
       },
     });
-    const created = await nativeFetch(`${base}/session/create`, {
+    const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
-    }).then((response) => response.json()) as { id: string };
-    const read = async (): Promise<SessionSnapshot> => nativeFetch(`${base}/session/${created.id}`, { headers })
-      .then((response) => response.json()) as Promise<SessionSnapshot>;
+    }).then((response) => response.json())) as { id: string };
+    const read = async (): Promise<SessionSnapshot> =>
+      nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+        response.json(),
+      ) as Promise<SessionSnapshot>;
 
-    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ prompt: "CURSORBACKGROUNDCHILD" }),
-    })).status).toBe(202);
+    expect(
+      (
+        await nativeFetch(`${base}/session/${created.id}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "CURSORBACKGROUNDCHILD" }),
+        })
+      ).status,
+    ).toBe(202);
 
     await waitFor(
       read,
-      (value) => value.status === "running"
-        && value.messages.some((message) => message.parts.some((part) =>
-          part.toolUseId === "cursor-subagent-1" && part.agentState === "active"
-        )),
+      (value) =>
+        value.status === "running" &&
+        value.messages.some((message) =>
+          message.parts.some(
+            (part) => part.toolUseId === "cursor-subagent-1" && part.agentState === "active",
+          ),
+        ),
     );
 
     await fs.writeFile(
@@ -333,17 +436,23 @@ describe("ACP Cursor background continuation", () => {
 
     const settled = await waitFor(
       read,
-      (value) => value.status === "idle"
-        && value.messages.some((message) => message.parts.some((part) =>
-          part.toolUseId === "cursor-subagent-1" && part.agentState === "failed"
-        )),
+      (value) =>
+        value.status === "idle" &&
+        value.messages.some((message) =>
+          message.parts.some(
+            (part) => part.toolUseId === "cursor-subagent-1" && part.agentState === "failed",
+          ),
+        ),
     );
-    expect(settled.messages.some((message) =>
-      message.role === "user"
-      && message.content?.startsWith("Background subagent finished.") === true
-      && message.content.includes("Status: failed") === true
-      && message.content.includes("Status: finished") !== true
-    )).toBe(true);
+    expect(
+      settled.messages.some(
+        (message) =>
+          message.role === "user" &&
+          message.content?.startsWith("Background subagent finished.") === true &&
+          message.content.includes("Status: failed") === true &&
+          message.content.includes("Status: finished") !== true,
+      ),
+    ).toBe(true);
     expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toEqual([
       "prompt",
       "prompt",
@@ -363,46 +472,68 @@ describe("ACP Cursor background continuation", () => {
         FAKE_ACP_COUNTER_FILE: counterFile,
       },
     });
-    const created = await nativeFetch(`${base}/session/create`, {
+    const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
-    }).then((response) => response.json()) as { id: string };
-    const read = async (): Promise<SessionSnapshot> => nativeFetch(`${base}/session/${created.id}`, { headers })
-      .then((response) => response.json()) as Promise<SessionSnapshot>;
+    }).then((response) => response.json())) as { id: string };
+    const read = async (): Promise<SessionSnapshot> =>
+      nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+        response.json(),
+      ) as Promise<SessionSnapshot>;
 
-    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ prompt: "CURSORBACKGROUNDCHILD" }),
-    })).status).toBe(202);
+    expect(
+      (
+        await nativeFetch(`${base}/session/${created.id}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "CURSORBACKGROUNDCHILD" }),
+        })
+      ).status,
+    ).toBe(202);
 
     await waitFor(
       read,
-      (value) => value.status === "running"
-        && value.messages.some((message) => message.parts.some((part) =>
-          part.toolUseId === "cursor-subagent-1" && part.agentState === "active"
-        )),
+      (value) =>
+        value.status === "running" &&
+        value.messages.some((message) =>
+          message.parts.some(
+            (part) => part.toolUseId === "cursor-subagent-1" && part.agentState === "active",
+          ),
+        ),
     );
 
-    expect((await nativeFetch(`${base}/session/${created.id}/cancel`, {
-      method: "POST",
-      headers,
-    })).status).toBe(202);
+    expect(
+      (
+        await nativeFetch(`${base}/session/${created.id}/cancel`, {
+          method: "POST",
+          headers,
+        })
+      ).status,
+    ).toBe(202);
 
     const settled = await waitFor(
       read,
-      (value) => value.status === "idle"
-        && value.messages.some((message) => message.parts.some((part) =>
-          part.toolUseId === "cursor-subagent-1" && part.agentState === "failed"
-        )),
+      (value) =>
+        value.status === "idle" &&
+        value.messages.some((message) =>
+          message.parts.some(
+            (part) => part.toolUseId === "cursor-subagent-1" && part.agentState === "failed",
+          ),
+        ),
     );
-    expect(settled.messages.some((message) =>
-      message.role === "user"
-      && message.content?.startsWith("Background subagent finished.") === true
-    )).toBe(false);
+    expect(
+      settled.messages.some(
+        (message) =>
+          message.role === "user" &&
+          message.content?.startsWith("Background subagent finished.") === true,
+      ),
+    ).toBe(false);
     expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toEqual(["prompt"]);
-    expect(await nativeFetch(`${base}/session/${created.id}/activity`, { headers })
-      .then((response) => response.json())).toEqual({ activity: "idle" });
+    expect(
+      await nativeFetch(`${base}/session/${created.id}/activity`, { headers }).then((response) =>
+        response.json(),
+      ),
+    ).toEqual({ activity: "idle" });
   });
 
   test("resolves the default homedir transcript root when no override is set", async () => {
@@ -412,14 +543,7 @@ describe("ACP Cursor background continuation", () => {
     await fs.mkdir(cwd);
     const slug = cwd.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\//g, "-");
     const agentId = "child-wait-1";
-    const childDir = resolve(
-      fakeHome,
-      ".cursor",
-      "projects",
-      slug,
-      "agent-transcripts",
-      agentId,
-    );
+    const childDir = resolve(fakeHome, ".cursor", "projects", slug, "agent-transcripts", agentId);
     await fs.mkdir(childDir, { recursive: true });
     await fs.writeFile(
       resolve(childDir, `${agentId}.jsonl`),
@@ -440,29 +564,38 @@ describe("ACP Cursor background continuation", () => {
         FAKE_ACP_COUNTER_FILE: counterFile,
       },
     });
-    const created = await nativeFetch(`${base}/session/create`, {
+    const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
-    }).then((response) => response.json()) as { id: string };
+    }).then((response) => response.json())) as { id: string };
 
-    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ prompt: "CURSORBACKGROUNDCHILD" }),
-    })).status).toBe(202);
+    expect(
+      (
+        await nativeFetch(`${base}/session/${created.id}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "CURSORBACKGROUNDCHILD" }),
+        })
+      ).status,
+    ).toBe(202);
 
     const settled = await waitFor(
-      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
-        .then((response) => response.json()) as Promise<SessionSnapshot>,
-      (value) => value.status === "idle"
-        && value.messages.some((message) =>
-          message.role === "user"
-          && message.content?.includes("Default path reached.") === true
+      async () =>
+        nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+          response.json(),
+        ) as Promise<SessionSnapshot>,
+      (value) =>
+        value.status === "idle" &&
+        value.messages.some(
+          (message) =>
+            message.role === "user" && message.content?.includes("Default path reached.") === true,
         ),
     );
-    expect(settled.messages.flatMap((message) => message.parts).find((part) =>
-      part.toolUseId === "cursor-subagent-1"
-    )).toMatchObject({ agentState: "finished" });
+    expect(
+      settled.messages
+        .flatMap((message) => message.parts)
+        .find((part) => part.toolUseId === "cursor-subagent-1"),
+    ).toMatchObject({ agentState: "finished" });
     expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toEqual([
       "prompt",
       "prompt",
@@ -493,40 +626,57 @@ describe("ACP Cursor background continuation", () => {
         FAKE_ACP_COUNTER_FILE: counterFile,
       },
     });
-    const created = await nativeFetch(`${base}/session/create`, {
+    const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
-    }).then((response) => response.json()) as { id: string };
+    }).then((response) => response.json())) as { id: string };
 
-    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ prompt: "CURSORBACKGROUNDCHILD" }),
-    })).status).toBe(202);
+    expect(
+      (
+        await nativeFetch(`${base}/session/${created.id}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "CURSORBACKGROUNDCHILD" }),
+        })
+      ).status,
+    ).toBe(202);
 
     const settled = await waitFor(
-      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
-        .then((response) => response.json()) as Promise<SessionSnapshot>,
-      (value) => value.status === "idle"
-        && value.messages.some((message) => message.parts.some((part) =>
-          part.toolUseId === `cursor-subagent-${continuationLimit + 1}`
-          && part.agentState === "active"
-        )),
+      async () =>
+        nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+          response.json(),
+        ) as Promise<SessionSnapshot>,
+      (value) =>
+        value.status === "idle" &&
+        value.messages.some((message) =>
+          message.parts.some(
+            (part) =>
+              part.toolUseId === `cursor-subagent-${continuationLimit + 1}` &&
+              part.agentState === "active",
+          ),
+        ),
     );
     const parts = settled.messages.flatMap((message) => message.parts);
     for (let index = 1; index <= continuationLimit; index += 1) {
-      expect(parts.find((part) => part.toolUseId === `cursor-subagent-${index}`))
-        .toMatchObject({ agentState: "finished" });
+      expect(parts.find((part) => part.toolUseId === `cursor-subagent-${index}`)).toMatchObject({
+        agentState: "finished",
+      });
     }
-    expect(settled.messages.filter((message) =>
-      message.role === "user"
-      && message.content?.startsWith("Background subagent finished.") === true
-    )).toHaveLength(continuationLimit);
+    expect(
+      settled.messages.filter(
+        (message) =>
+          message.role === "user" &&
+          message.content?.startsWith("Background subagent finished.") === true,
+      ),
+    ).toHaveLength(continuationLimit);
     expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toEqual(
       Array.from({ length: continuationLimit + 1 }, () => "prompt"),
     );
-    expect(await nativeFetch(`${base}/session/${created.id}/activity`, { headers })
-      .then((response) => response.json())).toEqual({ activity: "working" });
+    expect(
+      await nativeFetch(`${base}/session/${created.id}/activity`, { headers }).then((response) =>
+        response.json(),
+      ),
+    ).toEqual({ activity: "working" });
   });
 
   test("does not wait for a live Cursor Task that never reported an agentId", async () => {
@@ -542,32 +692,47 @@ describe("ACP Cursor background continuation", () => {
         FAKE_ACP_COUNTER_FILE: counterFile,
       },
     });
-    const created = await nativeFetch(`${base}/session/create`, {
+    const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
-    }).then((response) => response.json()) as { id: string };
+    }).then((response) => response.json())) as { id: string };
 
-    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ prompt: "CURSORBACKGROUNDNOID" }),
-    })).status).toBe(202);
+    expect(
+      (
+        await nativeFetch(`${base}/session/${created.id}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "CURSORBACKGROUNDNOID" }),
+        })
+      ).status,
+    ).toBe(202);
 
     const settled = await waitFor(
-      async () => nativeFetch(`${base}/session/${created.id}`, { headers })
-        .then((response) => response.json()) as Promise<SessionSnapshot>,
-      (value) => value.status === "idle"
-        && value.messages.some((message) => message.parts.some((part) =>
-          part.toolUseId === "cursor-subagent-1" && part.agentState === "active"
-        )),
+      async () =>
+        nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+          response.json(),
+        ) as Promise<SessionSnapshot>,
+      (value) =>
+        value.status === "idle" &&
+        value.messages.some((message) =>
+          message.parts.some(
+            (part) => part.toolUseId === "cursor-subagent-1" && part.agentState === "active",
+          ),
+        ),
     );
-    expect(settled.messages.some((message) =>
-      message.role === "user"
-      && message.content?.startsWith("Background subagent finished.") === true
-    )).toBe(false);
+    expect(
+      settled.messages.some(
+        (message) =>
+          message.role === "user" &&
+          message.content?.startsWith("Background subagent finished.") === true,
+      ),
+    ).toBe(false);
     expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toEqual(["prompt"]);
-    expect(await nativeFetch(`${base}/session/${created.id}/activity`, { headers })
-      .then((response) => response.json())).toEqual({ activity: "working" });
+    expect(
+      await nativeFetch(`${base}/session/${created.id}/activity`, { headers }).then((response) =>
+        response.json(),
+      ),
+    ).toEqual({ activity: "working" });
   });
 
   test("projects child JSONL tool_use into the parent Task card while the child is live", async () => {
@@ -585,67 +750,85 @@ describe("ACP Cursor background continuation", () => {
         CURSOR_AGENT_TRANSCRIPTS_DIR: transcripts,
       },
     });
-    const created = await nativeFetch(`${base}/session/create`, {
+    const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
-    }).then((response) => response.json()) as { id: string };
-    const read = async (): Promise<SessionSnapshot> => nativeFetch(`${base}/session/${created.id}`, { headers })
-      .then((response) => response.json()) as Promise<SessionSnapshot>;
+    }).then((response) => response.json())) as { id: string };
+    const read = async (): Promise<SessionSnapshot> =>
+      nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+        response.json(),
+      ) as Promise<SessionSnapshot>;
 
-    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ prompt: "CURSORBACKGROUNDCHILD" }),
-    })).status).toBe(202);
+    expect(
+      (
+        await nativeFetch(`${base}/session/${created.id}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "CURSORBACKGROUNDCHILD" }),
+        })
+      ).status,
+    ).toBe(202);
 
     await waitFor(
       read,
-      (value) => value.status === "running"
-        && value.messages.some((message) => message.parts.some((part) =>
-          part.toolUseId === "cursor-subagent-1" && part.agentState === "active"
-        )),
+      (value) =>
+        value.status === "running" &&
+        value.messages.some((message) =>
+          message.parts.some(
+            (part) => part.toolUseId === "cursor-subagent-1" && part.agentState === "active",
+          ),
+        ),
     );
 
     await fs.writeFile(
       jsonl,
       `${JSON.stringify({
         type: "assistant",
-        message: { content: [
-          { type: "text", text: "Checking the suite." },
-          { type: "tool_use", name: "Read", input: { path: "package.json" } },
-        ] },
+        message: {
+          content: [
+            { type: "text", text: "Checking the suite." },
+            { type: "tool_use", name: "Read", input: { path: "package.json" } },
+          ],
+        },
       })}\n`,
     );
 
-    const live = await waitFor(
-      read,
-      (value) => value.messages.some((message) => message.parts.some((part) =>
-        part.parentTaskUseId === "cursor-subagent-1"
-        && part.toolName === "Read"
-        && part.toolState === "pending"
-      )),
+    const live = await waitFor(read, (value) =>
+      value.messages.some((message) =>
+        message.parts.some(
+          (part) =>
+            part.parentTaskUseId === "cursor-subagent-1" &&
+            part.toolName === "Read" &&
+            part.toolState === "pending",
+        ),
+      ),
     );
-    expect(live.messages.flatMap((message) => message.parts).find((part) =>
-      part.parentTaskUseId === "cursor-subagent-1" && part.type === "text"
-    )).toMatchObject({ content: "Checking the suite." });
+    expect(
+      live.messages
+        .flatMap((message) => message.parts)
+        .find((part) => part.parentTaskUseId === "cursor-subagent-1" && part.type === "text"),
+    ).toMatchObject({ content: "Checking the suite." });
 
-    await fs.appendFile(
-      jsonl,
-      `${JSON.stringify({ type: "turn_ended", status: "success" })}\n`,
-    );
+    await fs.appendFile(jsonl, `${JSON.stringify({ type: "turn_ended", status: "success" })}\n`);
 
     const settled = await waitFor(
       read,
-      (value) => value.status === "idle"
-        && value.messages.some((message) => message.parts.some((part) =>
-          part.parentTaskUseId === "cursor-subagent-1"
-          && part.toolName === "Read"
-          && part.toolState === "success"
-        )),
+      (value) =>
+        value.status === "idle" &&
+        value.messages.some((message) =>
+          message.parts.some(
+            (part) =>
+              part.parentTaskUseId === "cursor-subagent-1" &&
+              part.toolName === "Read" &&
+              part.toolState === "success",
+          ),
+        ),
     );
-    expect(settled.messages.flatMap((message) => message.parts).find((part) =>
-      part.toolUseId === "cursor-subagent-1"
-    )).toMatchObject({ agentState: "finished" });
+    expect(
+      settled.messages
+        .flatMap((message) => message.parts)
+        .find((part) => part.toolUseId === "cursor-subagent-1"),
+    ).toMatchObject({ agentState: "finished" });
   });
 
   test("hydrates child JSONL into the Task card on session GET without holding the parent turn", async () => {
@@ -658,10 +841,12 @@ describe("ACP Cursor background continuation", () => {
       resolve(childDir, `${agentId}.jsonl`),
       `${JSON.stringify({
         type: "assistant",
-        message: { content: [
-          { type: "text", text: "Checking the suite." },
-          { type: "tool_use", name: "Read", input: { path: "package.json" } },
-        ] },
+        message: {
+          content: [
+            { type: "text", text: "Checking the suite." },
+            { type: "tool_use", name: "Read", input: { path: "package.json" } },
+          ],
+        },
       })}\n`,
     );
 
@@ -671,37 +856,55 @@ describe("ACP Cursor background continuation", () => {
         CURSOR_AGENT_TRANSCRIPTS_DIR: transcripts,
       },
     });
-    const created = await nativeFetch(`${base}/session/create`, {
+    const created = (await nativeFetch(`${base}/session/create`, {
       method: "POST",
       headers,
-    }).then((response) => response.json()) as { id: string };
-    const read = async (): Promise<SessionSnapshot> => nativeFetch(`${base}/session/${created.id}`, { headers })
-      .then((response) => response.json()) as Promise<SessionSnapshot>;
+    }).then((response) => response.json())) as { id: string };
+    const read = async (): Promise<SessionSnapshot> =>
+      nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+        response.json(),
+      ) as Promise<SessionSnapshot>;
 
-    expect((await nativeFetch(`${base}/session/${created.id}/prompt`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ prompt: "CURSORBACKGROUNDCHILD" }),
-    })).status).toBe(202);
+    expect(
+      (
+        await nativeFetch(`${base}/session/${created.id}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "CURSORBACKGROUNDCHILD" }),
+        })
+      ).status,
+    ).toBe(202);
 
     const hydrated = await waitFor(
       read,
-      (value) => value.status === "idle"
-        && value.messages.some((message) => message.parts.some((part) =>
-          part.parentTaskUseId === "cursor-subagent-1"
-          && part.toolName === "Read"
-          && part.toolState === "pending"
-        )),
+      (value) =>
+        value.status === "idle" &&
+        value.messages.some((message) =>
+          message.parts.some(
+            (part) =>
+              part.parentTaskUseId === "cursor-subagent-1" &&
+              part.toolName === "Read" &&
+              part.toolState === "pending",
+          ),
+        ),
     );
-    expect(hydrated.messages.flatMap((message) => message.parts).find((part) =>
-      part.parentTaskUseId === "cursor-subagent-1" && part.type === "text"
-    )).toMatchObject({ content: "Checking the suite." });
-    expect(hydrated.messages.some((message) =>
-      message.role === "user"
-      && message.content?.startsWith("Background subagent finished.") === true
-    )).toBe(false);
-    expect(await nativeFetch(`${base}/session/${created.id}/activity`, { headers })
-      .then((response) => response.json())).toEqual({ activity: "working" });
+    expect(
+      hydrated.messages
+        .flatMap((message) => message.parts)
+        .find((part) => part.parentTaskUseId === "cursor-subagent-1" && part.type === "text"),
+    ).toMatchObject({ content: "Checking the suite." });
+    expect(
+      hydrated.messages.some(
+        (message) =>
+          message.role === "user" &&
+          message.content?.startsWith("Background subagent finished.") === true,
+      ),
+    ).toBe(false);
+    expect(
+      await nativeFetch(`${base}/session/${created.id}/activity`, { headers }).then((response) =>
+        response.json(),
+      ),
+    ).toEqual({ activity: "working" });
   });
 });
 
@@ -714,52 +917,80 @@ describe("ACP Cursor transcript records", () => {
 
   beforeAll(async () => {
     process.env.ACP_PROVIDER ??= "cursor";
-    ({
-      cursorTranscriptTerminalState,
-      cursorTranscriptRoot,
-      cursorChildTranscriptPath,
-    } = await import("./acp-cursor-background.js"));
+    ({ cursorTranscriptTerminalState, cursorTranscriptRoot, cursorChildTranscriptPath } =
+      await import("./acp-cursor-background.js"));
     ({ parseCursorChildTranscriptParts } = await import("./acp-cursor-transcript-parts.js"));
     ({ MAX_CURSOR_CHILD_PARTS } = await import("./acp-context.js"));
   });
 
   test("maps success and missing status to finished, aborted and unknown to failed", () => {
-    expect(cursorTranscriptTerminalState(`${JSON.stringify({ type: "turn_ended", status: "success" })}\n`))
-      .toBe("finished");
-    expect(cursorTranscriptTerminalState(`${JSON.stringify({ type: "turn_ended" })}\n`))
-      .toBe("finished");
-    expect(cursorTranscriptTerminalState(`${JSON.stringify({ type: "turn_ended", status: "aborted" })}\n`))
-      .toBe("failed");
-    expect(cursorTranscriptTerminalState(`${JSON.stringify({ type: "turn_ended", status: "abort" })}\n`))
-      .toBe("failed");
-    expect(cursorTranscriptTerminalState(`${JSON.stringify({ type: "result", subtype: "error" })}\n`))
-      .toBe("failed");
-    expect(cursorTranscriptTerminalState(`${JSON.stringify({ type: "turn_ended", status: "running" })}\n`))
-      .toBe("failed");
-    expect(cursorTranscriptTerminalState(`${JSON.stringify({ type: "assistant", status: "success" })}\n`))
-      .toBeUndefined();
+    expect(
+      cursorTranscriptTerminalState(
+        `${JSON.stringify({ type: "turn_ended", status: "success" })}\n`,
+      ),
+    ).toBe("finished");
+    expect(cursorTranscriptTerminalState(`${JSON.stringify({ type: "turn_ended" })}\n`)).toBe(
+      "finished",
+    );
+    expect(
+      cursorTranscriptTerminalState(
+        `${JSON.stringify({ type: "turn_ended", status: "aborted" })}\n`,
+      ),
+    ).toBe("failed");
+    expect(
+      cursorTranscriptTerminalState(`${JSON.stringify({ type: "turn_ended", status: "abort" })}\n`),
+    ).toBe("failed");
+    expect(
+      cursorTranscriptTerminalState(`${JSON.stringify({ type: "result", subtype: "error" })}\n`),
+    ).toBe("failed");
+    expect(
+      cursorTranscriptTerminalState(
+        `${JSON.stringify({ type: "turn_ended", status: "running" })}\n`,
+      ),
+    ).toBe("failed");
+    expect(
+      cursorTranscriptTerminalState(
+        `${JSON.stringify({ type: "assistant", status: "success" })}\n`,
+      ),
+    ).toBeUndefined();
   });
 
   test("treats is_error and a present error field as failed", () => {
-    expect(cursorTranscriptTerminalState(`${JSON.stringify({
-      type: "turn_ended",
-      status: "success",
-      is_error: true,
-    })}\n`)).toBe("failed");
-    expect(cursorTranscriptTerminalState(`${JSON.stringify({
-      type: "turn_ended",
-      status: "success",
-      error: "child crashed",
-    })}\n`)).toBe("failed");
-    expect(cursorTranscriptTerminalState(`${JSON.stringify({
-      type: "result",
-      error: { message: "tool failed" },
-    })}\n`)).toBe("failed");
-    expect(cursorTranscriptTerminalState(`${JSON.stringify({
-      type: "turn_ended",
-      status: "success",
-      error: null,
-    })}\n`)).toBe("finished");
+    expect(
+      cursorTranscriptTerminalState(
+        `${JSON.stringify({
+          type: "turn_ended",
+          status: "success",
+          is_error: true,
+        })}\n`,
+      ),
+    ).toBe("failed");
+    expect(
+      cursorTranscriptTerminalState(
+        `${JSON.stringify({
+          type: "turn_ended",
+          status: "success",
+          error: "child crashed",
+        })}\n`,
+      ),
+    ).toBe("failed");
+    expect(
+      cursorTranscriptTerminalState(
+        `${JSON.stringify({
+          type: "result",
+          error: { message: "tool failed" },
+        })}\n`,
+      ),
+    ).toBe("failed");
+    expect(
+      cursorTranscriptTerminalState(
+        `${JSON.stringify({
+          type: "turn_ended",
+          status: "success",
+          error: null,
+        })}\n`,
+      ),
+    ).toBe("finished");
   });
 
   test("builds the default homedir transcript path from the working directory", () => {
@@ -791,10 +1022,12 @@ describe("ACP Cursor transcript records", () => {
       JSON.stringify({ type: "user", message: { content: [{ type: "text", text: "go" }] } }),
       JSON.stringify({
         type: "assistant",
-        message: { content: [
-          { type: "text", text: "Checking the suite." },
-          { type: "tool_use", name: "Read", input: { path: "package.json" } },
-        ] },
+        message: {
+          content: [
+            { type: "text", text: "Checking the suite." },
+            { type: "tool_use", name: "Read", input: { path: "package.json" } },
+          ],
+        },
       }),
       JSON.stringify({ type: "turn_ended", status: "success" }),
     ].join("\n");
@@ -855,8 +1088,10 @@ describe("ACP Cursor transcript records", () => {
       "message-1",
       "abandoned",
     );
-    expect(abandoned.map((part) => part.type === "tool-invocation" && part.toolState))
-      .toEqual(["success", "failure"]);
+    expect(abandoned.map((part) => part.type === "tool-invocation" && part.toolState)).toEqual([
+      "success",
+      "failure",
+    ]);
     expect(abandoned.at(-1)).toMatchObject({
       toolName: "Read",
       toolError: "The sub-agent ended before this tool reported a result",
@@ -869,18 +1104,22 @@ describe("ACP Cursor transcript records", () => {
       "message-1",
       "live",
     );
-    expect(live.map((part) => part.type === "tool-invocation" && part.toolState))
-      .toEqual(["success", "pending"]);
+    expect(live.map((part) => part.type === "tool-invocation" && part.toolState)).toEqual([
+      "success",
+      "pending",
+    ]);
     expect(live.at(-1)).not.toHaveProperty("toolError");
   });
 
   test("keeps only the most recent parts once the child exceeds the projection cap", () => {
     const records: string[] = [];
     for (let index = 0; index < MAX_CURSOR_CHILD_PARTS + 20; index += 1) {
-      records.push(JSON.stringify({
-        type: "assistant",
-        message: { content: [{ type: "tool_use", name: `Tool${index}`, input: {} }] },
-      }));
+      records.push(
+        JSON.stringify({
+          type: "assistant",
+          message: { content: [{ type: "tool_use", name: `Tool${index}`, input: {} }] },
+        }),
+      );
     }
 
     const parts = parseCursorChildTranscriptParts(
@@ -927,35 +1166,37 @@ describe("ACP Cursor transcript records", () => {
   test("does not replace native ACP nested children with JSONL parts", async () => {
     const { syncCursorChildTranscriptParts } = await import("./acp-cursor-transcript-parts.js");
     const state = {
-      messages: [{
-        id: "message-1",
-        role: "assistant" as const,
-        content: "",
-        createdAt: "2026-01-01T00:00:00.000Z",
-        parts: [
-          {
-            type: "tool-invocation" as const,
-            content: "Task",
-            sourcePartId: "parent",
-            sourceMessageId: "message-1",
-            toolUseId: "cursor-subagent-1",
-            toolName: "task",
-            toolArgs: { agentId: "child-wait-1" },
-            toolState: "success" as const,
-            agentState: "active" as const,
-          },
-          {
-            type: "tool-invocation" as const,
-            content: "Search Find",
-            sourcePartId: "native-child",
-            sourceMessageId: "message-1",
-            toolUseId: "cursor-child-grep-1",
-            toolName: "Grep",
-            parentTaskUseId: "cursor-subagent-1",
-            toolState: "success" as const,
-          },
-        ],
-      }],
+      messages: [
+        {
+          id: "message-1",
+          role: "assistant" as const,
+          content: "",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          parts: [
+            {
+              type: "tool-invocation" as const,
+              content: "Task",
+              sourcePartId: "parent",
+              sourceMessageId: "message-1",
+              toolUseId: "cursor-subagent-1",
+              toolName: "task",
+              toolArgs: { agentId: "child-wait-1" },
+              toolState: "success" as const,
+              agentState: "active" as const,
+            },
+            {
+              type: "tool-invocation" as const,
+              content: "Search Find",
+              sourcePartId: "native-child",
+              sourceMessageId: "message-1",
+              toolUseId: "cursor-child-grep-1",
+              toolName: "Grep",
+              parentTaskUseId: "cursor-subagent-1",
+              toolState: "success" as const,
+            },
+          ],
+        },
+      ],
       revision: 0,
       droppedMessages: 0,
       droppedParts: 0,
@@ -996,13 +1237,15 @@ describe("ACP Cursor transcript records", () => {
       agentState: "active" as const,
     });
     const state = {
-      messages: [{
-        id: "message-1",
-        role: "assistant" as const,
-        content: "",
-        createdAt: "2026-01-01T00:00:00.000Z",
-        parts: [launch("cursor-subagent-1", "child-a"), launch("cursor-subagent-2", "child-b")],
-      }],
+      messages: [
+        {
+          id: "message-1",
+          role: "assistant" as const,
+          content: "",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          parts: [launch("cursor-subagent-1", "child-a"), launch("cursor-subagent-2", "child-b")],
+        },
+      ],
       revision: 0,
       droppedMessages: 0,
       droppedParts: 0,
@@ -1011,23 +1254,28 @@ describe("ACP Cursor transcript records", () => {
       uncheckedTranscriptBytes: 0,
       status: "idle" as const,
     };
-    const record = (name: string) => `${JSON.stringify({
-      type: "assistant",
-      message: { content: [{ type: "tool_use", name, input: {} }] },
-    })}\n`;
+    const record = (name: string) =>
+      `${JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "tool_use", name, input: {} }] },
+      })}\n`;
 
-    expect(syncCursorChildTranscriptParts(
-      state as never,
-      { toolUseId: "cursor-subagent-1", agentId: "child-a" },
-      record("ReadA"),
-      "ended",
-    )).toBe(true);
-    expect(syncCursorChildTranscriptParts(
-      state as never,
-      { toolUseId: "cursor-subagent-2", agentId: "child-b" },
-      record("ReadB"),
-      "ended",
-    )).toBe(true);
+    expect(
+      syncCursorChildTranscriptParts(
+        state as never,
+        { toolUseId: "cursor-subagent-1", agentId: "child-a" },
+        record("ReadA"),
+        "ended",
+      ),
+    ).toBe(true);
+    expect(
+      syncCursorChildTranscriptParts(
+        state as never,
+        { toolUseId: "cursor-subagent-2", agentId: "child-b" },
+        record("ReadB"),
+        "ended",
+      ),
+    ).toBe(true);
 
     // Each child lands directly under its own launch and neither sync clears
     // the other's parts.
@@ -1039,12 +1287,14 @@ describe("ACP Cursor transcript records", () => {
     ]);
 
     // Re-syncing one child must not disturb the other.
-    expect(syncCursorChildTranscriptParts(
-      state as never,
-      { toolUseId: "cursor-subagent-1", agentId: "child-a" },
-      record("ReadA") + record("ReadA2"),
-      "ended",
-    )).toBe(true);
+    expect(
+      syncCursorChildTranscriptParts(
+        state as never,
+        { toolUseId: "cursor-subagent-1", agentId: "child-a" },
+        record("ReadA") + record("ReadA2"),
+        "ended",
+      ),
+    ).toBe(true);
     expect(state.messages[0]?.parts.map((part) => part.sourcePartId)).toEqual([
       "cursor-subagent-1",
       "cursor-jsonl:child-a:0:0",
@@ -1056,22 +1306,24 @@ describe("ACP Cursor transcript records", () => {
 
   describe("hydration selection and read caching", () => {
     const makeState = (launches: Array<{ toolUseId: string; agentId: string }>) => ({
-      messages: [{
-        id: "message-1",
-        role: "assistant" as const,
-        content: "",
-        createdAt: "2026-01-01T00:00:00.000Z",
-        parts: launches.map((launch) => ({
-          type: "tool-invocation" as const,
-          content: "Task",
-          sourcePartId: launch.toolUseId,
-          sourceMessageId: "message-1",
-          toolUseId: launch.toolUseId,
-          toolName: "task",
-          toolArgs: { agentId: launch.agentId },
-          toolState: "success" as const,
-        })),
-      }],
+      messages: [
+        {
+          id: "message-1",
+          role: "assistant" as const,
+          content: "",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          parts: launches.map((launch) => ({
+            type: "tool-invocation" as const,
+            content: "Task",
+            sourcePartId: launch.toolUseId,
+            sourceMessageId: "message-1",
+            toolUseId: launch.toolUseId,
+            toolName: "task",
+            toolArgs: { agentId: launch.agentId },
+            toolState: "success" as const,
+          })),
+        },
+      ],
       revision: 0,
       droppedMessages: 0,
       droppedParts: 0,
@@ -1092,18 +1344,17 @@ describe("ACP Cursor transcript records", () => {
       return file;
     }
 
-    const toolRecord = (name: string) => `${JSON.stringify({
-      type: "assistant",
-      message: { content: [{ type: "tool_use", name, input: {} }] },
-    })}\n`;
+    const toolRecord = (name: string) =>
+      `${JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "tool_use", name, input: {} }] },
+      })}\n`;
 
     // The launch parts are not in the active registry, so this exercises the
     // message-scan fallback rather than `listWatchableCursorChildren`.
     test("hydrates settled launches from the message scan, capped at the limit", async () => {
-      const {
-        hydrateCursorChildTranscripts,
-        resetCursorTranscriptReadCache,
-      } = await import("./acp-cursor-background.js");
+      const { hydrateCursorChildTranscripts, resetCursorTranscriptReadCache } =
+        await import("./acp-cursor-background.js");
       const { MAX_CURSOR_TRANSCRIPT_HYDRATE_CHILDREN } = await import("./acp-context.js");
       const root = resolve(await temporaryDirectory(), "transcripts");
       const previous = process.env.CURSOR_AGENT_TRANSCRIPTS_DIR;
@@ -1146,19 +1397,15 @@ describe("ACP Cursor transcript records", () => {
     // A child that never wrote a terminal record and is no longer tracked is
     // abandoned, not finished: its last tool must not be shown as successful.
     test("projects an untracked child without a terminal record as abandoned", async () => {
-      const {
-        hydrateCursorChildTranscripts,
-        resetCursorTranscriptReadCache,
-      } = await import("./acp-cursor-background.js");
+      const { hydrateCursorChildTranscripts, resetCursorTranscriptReadCache } =
+        await import("./acp-cursor-background.js");
       const root = resolve(await temporaryDirectory(), "transcripts");
       const previous = process.env.CURSOR_AGENT_TRANSCRIPTS_DIR;
       process.env.CURSOR_AGENT_TRANSCRIPTS_DIR = root;
       resetCursorTranscriptReadCache();
       try {
         await writeChild(root, "child-wait-1", toolRecord("Read"));
-        const state = makeState([
-          { toolUseId: "cursor-subagent-1", agentId: "child-wait-1" },
-        ]);
+        const state = makeState([{ toolUseId: "cursor-subagent-1", agentId: "child-wait-1" }]);
 
         hydrateCursorChildTranscripts(state as never);
 
@@ -1177,24 +1424,20 @@ describe("ACP Cursor transcript records", () => {
     // registry changes the derived state without touching the file. A
     // file-only cache would strand the trailing tool as `pending` forever.
     test("re-syncs when the child leaves the registry without the file changing", async () => {
-      const {
-        hydrateCursorChildTranscripts,
-        resetCursorTranscriptReadCache,
-      } = await import("./acp-cursor-background.js");
+      const { hydrateCursorChildTranscripts, resetCursorTranscriptReadCache } =
+        await import("./acp-cursor-background.js");
       const root = resolve(await temporaryDirectory(), "transcripts");
       const previous = process.env.CURSOR_AGENT_TRANSCRIPTS_DIR;
       process.env.CURSOR_AGENT_TRANSCRIPTS_DIR = root;
       resetCursorTranscriptReadCache();
       try {
         await writeChild(root, "child-wait-1", toolRecord("Read"));
-        const state = makeState([
-          { toolUseId: "cursor-subagent-1", agentId: "child-wait-1" },
-        ]);
+        const state = makeState([{ toolUseId: "cursor-subagent-1", agentId: "child-wait-1" }]);
         state.activeSubagentToolIds.add("cursor-subagent-1");
-        state.activeSubagentDescriptors.set(
-          "cursor-subagent-1",
-          { agentId: "child-wait-1", toolState: "success" } as never,
-        );
+        state.activeSubagentDescriptors.set("cursor-subagent-1", {
+          agentId: "child-wait-1",
+          toolState: "success",
+        } as never);
 
         hydrateCursorChildTranscripts(state as never);
         expect(state.messages[0]?.parts.at(-1)).toMatchObject({ toolState: "pending" });
@@ -1221,10 +1464,8 @@ describe("ACP Cursor transcript records", () => {
     });
 
     test("skips a child whose agentId is not a safe path segment", async () => {
-      const {
-        hydrateCursorChildTranscripts,
-        resetCursorTranscriptReadCache,
-      } = await import("./acp-cursor-background.js");
+      const { hydrateCursorChildTranscripts, resetCursorTranscriptReadCache } =
+        await import("./acp-cursor-background.js");
       const root = resolve(await temporaryDirectory(), "transcripts");
       const previous = process.env.CURSOR_AGENT_TRANSCRIPTS_DIR;
       process.env.CURSOR_AGENT_TRANSCRIPTS_DIR = root;
@@ -1232,9 +1473,7 @@ describe("ACP Cursor transcript records", () => {
       try {
         // A real file the traversal would reach if the id were not rejected.
         await writeChild(root, "escape", toolRecord("Secret"));
-        const state = makeState([
-          { toolUseId: "cursor-subagent-1", agentId: "../escape" },
-        ]);
+        const state = makeState([{ toolUseId: "cursor-subagent-1", agentId: "../escape" }]);
 
         hydrateCursorChildTranscripts(state as never);
 
@@ -1254,23 +1493,27 @@ describe("ACP Cursor transcript records", () => {
     const { syncCursorChildTranscriptParts } = await import("./acp-cursor-transcript-parts.js");
     const { reconcileStaleToolParts } = await import("./acp-reconciliation.js");
     const state = {
-      messages: [{
-        id: "message-1",
-        role: "assistant" as const,
-        content: "",
-        createdAt: "2026-01-01T00:00:00.000Z",
-        parts: [{
-          type: "tool-invocation" as const,
-          content: "Task",
-          sourcePartId: "parent",
-          sourceMessageId: "message-1",
-          toolUseId: "cursor-subagent-1",
-          toolName: "task",
-          toolArgs: { agentId: "child-wait-1" },
-          toolState: "success" as const,
-          agentState: "active" as const,
-        }],
-      }],
+      messages: [
+        {
+          id: "message-1",
+          role: "assistant" as const,
+          content: "",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          parts: [
+            {
+              type: "tool-invocation" as const,
+              content: "Task",
+              sourcePartId: "parent",
+              sourceMessageId: "message-1",
+              toolUseId: "cursor-subagent-1",
+              toolName: "task",
+              toolArgs: { agentId: "child-wait-1" },
+              toolState: "success" as const,
+              agentState: "active" as const,
+            },
+          ],
+        },
+      ],
       revision: 0,
       droppedMessages: 0,
       droppedParts: 0,
@@ -1294,8 +1537,8 @@ describe("ACP Cursor transcript records", () => {
       })}\n`,
       "live",
     );
-    const projected = state.messages[0]?.parts.find((part) =>
-      part.sourcePartId === "cursor-jsonl:child-wait-1:0:0"
+    const projected = state.messages[0]?.parts.find(
+      (part) => part.sourcePartId === "cursor-jsonl:child-wait-1:0:0",
     );
     expect(projected).toMatchObject({ toolState: "pending" });
 

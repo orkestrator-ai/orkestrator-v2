@@ -32,18 +32,21 @@ function isDomNode(value: object): value is {
   return typeof candidate.nodeType === "number" && typeof candidate.nodeName === "string";
 }
 
-function summarizeDomNode(value: object & {
-  nodeType: number;
-  nodeName: string;
-  textContent?: string | null;
-  getAttribute?: (name: string) => string | null;
-}): string {
+function summarizeDomNode(
+  value: object & {
+    nodeType: number;
+    nodeName: string;
+    textContent?: string | null;
+    getAttribute?: (name: string) => string | null;
+  },
+): string {
   const name = value.nodeName.toLowerCase();
   const attributes: string[] = [];
   for (const attribute of ["role", "aria-label", "data-testid", "id"]) {
     try {
       const attributeValue = value.getAttribute?.(attribute);
-      if (attributeValue) attributes.push(`${attribute}=${JSON.stringify(truncateUtf8(attributeValue, 256))}`);
+      if (attributeValue)
+        attributes.push(`${attribute}=${JSON.stringify(truncateUtf8(attributeValue, 256))}`);
     } catch {
       // A diagnostic must never invoke a hostile DOM accessor twice.
     }
@@ -64,16 +67,20 @@ export function summarizeValue(
 ): string {
   if (typeof value === "string") return truncateUtf8(value, TEST_DIAGNOSTIC_STRING_BYTES);
   if (
-    value === null
-    || value === undefined
-    || typeof value === "number"
-    || typeof value === "boolean"
-    || typeof value === "bigint"
-  ) return String(value);
+    value === null ||
+    value === undefined ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  )
+    return String(value);
   if (typeof value === "symbol") return value.toString();
   if (typeof value === "function") return `[Function ${value.name || "anonymous"}]`;
   if (value instanceof Error) {
-    return truncateUtf8(value.stack || `${value.name}: ${value.message}`, TEST_DIAGNOSTIC_ERROR_BYTES);
+    return truncateUtf8(
+      value.stack || `${value.name}: ${value.message}`,
+      TEST_DIAGNOSTIC_ERROR_BYTES,
+    );
   }
   if (isDomNode(value)) return summarizeDomNode(value);
   if (ancestors.has(value)) return "[Circular]";
@@ -82,7 +89,8 @@ export function summarizeValue(
   ancestors.add(value);
   try {
     if (Array.isArray(value)) {
-      const items = value.slice(0, MAX_COLLECTION_ITEMS)
+      const items = value
+        .slice(0, MAX_COLLECTION_ITEMS)
         .map((entry) => summarizeValue(entry, depth + 1, ancestors));
       if (value.length > items.length) items.push(`… ${value.length - items.length} more`);
       return `[${items.join(", ")}]`;
@@ -122,10 +130,11 @@ export function installBoundedConsoleDiagnostics(): void {
     const original = console[level].bind(console);
     console[level] = ((...args: unknown[]) => {
       if (
-        (level === "log" || level === "info" || level === "debug")
-        && process.env.ORKESTRATOR_TEST_VERBOSE_CONSOLE !== "1"
-      ) return;
+        (level === "log" || level === "info" || level === "debug") &&
+        process.env.ORKESTRATOR_TEST_VERBOSE_CONSOLE !== "1"
+      )
+        return;
       original(...args.map((argument) => summarizeValue(argument)));
-    }) as typeof console[typeof level];
+    }) as (typeof console)[typeof level];
   }
 }

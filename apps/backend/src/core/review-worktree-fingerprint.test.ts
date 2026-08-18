@@ -13,8 +13,7 @@ import { parseGitPorcelainPaths } from "./commands-review.js";
 const roots: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) =>
-    fs.rm(root, { recursive: true, force: true })));
+  await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
 
 async function fixture(): Promise<string> {
@@ -64,8 +63,9 @@ for (const interpreter of INTERPRETERS) {
     const second = await capture(root, { interpreter });
 
     expect(second.head).toBe(first.head);
-    expect(parseGitPorcelainPaths(second.status).sort())
-      .toEqual(parseGitPorcelainPaths(first.status).sort());
+    expect(parseGitPorcelainPaths(second.status).sort()).toEqual(
+      parseGitPorcelainPaths(first.status).sort(),
+    );
     expect(first.fingerprint).toMatch(/^[0-9a-f]{64}$/);
     expect(second.fingerprint).not.toBe(first.fingerprint);
   });
@@ -88,8 +88,9 @@ test("bun and node agree on the same worktree", async () => {
   await fs.writeFile(path.join(root, "untracked.txt"), "added\n");
   await fs.symlink("tracked.txt", path.join(root, "link.txt"));
 
-  expect(await capture(root, { interpreter: "bun" }))
-    .toEqual(await capture(root, { interpreter: "node" }));
+  expect(await capture(root, { interpreter: "bun" })).toEqual(
+    await capture(root, { interpreter: "node" }),
+  );
 });
 
 // Content hashing is the expensive half, and callers that only compare HEAD and
@@ -119,8 +120,7 @@ test("anchors to the repository root whatever directory it starts in", async () 
   const fromNested = await capture(root, { cwd: path.join(root, "nested", "deeper") });
 
   expect(fromNested).toEqual(fromRoot);
-  expect(parseGitPorcelainPaths(fromRoot.status))
-    .toEqual(["nested/deeper/untracked.txt"]);
+  expect(parseGitPorcelainPaths(fromRoot.status)).toEqual(["nested/deeper/untracked.txt"]);
 });
 
 // A symlink is hashed by its target text, never by following it, and a
@@ -156,7 +156,10 @@ test("reports git-missing rather than leaking a spawn error", async () => {
     process.execPath,
     ["-e", REVIEW_WORKTREE_FINGERPRINT_SCRIPT, "fingerprint"],
     { cwd: root, timeoutMs: 30_000, env: { PATH: emptyBin } },
-  ).then(() => null, (error: unknown) => error as Error);
+  ).then(
+    () => null,
+    (error: unknown) => error as Error,
+  );
 
   expect(failure?.message).toContain("review-worktree-probe:git-missing");
 });
@@ -176,7 +179,9 @@ test("rejects malformed fingerprint envelopes", () => {
     "[]",
     JSON.stringify({ head: "bad", status: "", fingerprint: "a".repeat(64) }),
     JSON.stringify({
-      head: "1".repeat(40), status: "not base64!", fingerprint: "a".repeat(64),
+      head: "1".repeat(40),
+      status: "not base64!",
+      fingerprint: "a".repeat(64),
     }),
     // A fingerprint that is present must still be well formed.
     JSON.stringify({ head: "1".repeat(40), status: "", fingerprint: "short" }),
@@ -189,7 +194,7 @@ test("rejects malformed fingerprint envelopes", () => {
 });
 
 test("accepts an envelope with no fingerprint", () => {
-  expect(parseReviewWorktreeFingerprint(
-    JSON.stringify({ head: "1".repeat(40), status: "" }),
-  )).toEqual({ head: "1".repeat(40), status: "" });
+  expect(
+    parseReviewWorktreeFingerprint(JSON.stringify({ head: "1".repeat(40), status: "" })),
+  ).toEqual({ head: "1".repeat(40), status: "" });
 });

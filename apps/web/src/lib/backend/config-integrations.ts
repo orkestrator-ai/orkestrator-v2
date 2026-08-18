@@ -1,8 +1,31 @@
 import { invoke } from "@/lib/native/backend";
 import { getGatewayBaseUrl } from "@/lib/gateway-url";
-import type { Environment, AppConfig, GlobalConfig, GatewayTokenSettings, WebClientStatus, RepositoryConfig, PrState, EnsureEnvironmentSetupResult, ClaudeModelCatalogSnapshot, LastEnvironmentAgentSelection } from "@/types";
-import type { LinearCompletionCommentResult, LinearConnectionStatus, LinearIssueComment, LinearIssueDetail, LinearIssueListItem } from "@/types/linear";
-import type { GitHubIssue, GitHubIssueComment, GitHubIssueDetail, GitHubIssuesSnapshot, GitHubIssueStatus } from "@/types/github";
+import type {
+  Environment,
+  AppConfig,
+  GlobalConfig,
+  GatewayTokenSettings,
+  WebClientStatus,
+  RepositoryConfig,
+  PrState,
+  EnsureEnvironmentSetupResult,
+  ClaudeModelCatalogSnapshot,
+  LastEnvironmentAgentSelection,
+} from "@/types";
+import type {
+  LinearCompletionCommentResult,
+  LinearConnectionStatus,
+  LinearIssueComment,
+  LinearIssueDetail,
+  LinearIssueListItem,
+} from "@/types/linear";
+import type {
+  GitHubIssue,
+  GitHubIssueComment,
+  GitHubIssueDetail,
+  GitHubIssuesSnapshot,
+  GitHubIssueStatus,
+} from "@/types/github";
 import type { CodexModel } from "@/lib/codex-client";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 /** PR detection result containing URL, state, and merge conflict status */
@@ -136,7 +159,7 @@ export async function getRepositoryConfig(projectId: string): Promise<Repository
 
 export async function updateRepositoryConfig(
   projectId: string,
-  repoConfig: RepositoryConfig
+  repoConfig: RepositoryConfig,
 ): Promise<AppConfig> {
   return invoke<AppConfig>("update_repository_config", { projectId, repoConfig });
 }
@@ -178,7 +201,10 @@ export async function getLinearIssue(issueId: string): Promise<LinearIssueDetail
   return invoke<LinearIssueDetail>("get_linear_issue", { issueId });
 }
 
-export async function postLinearIssueComment(issueId: string, body: string): Promise<LinearIssueComment> {
+export async function postLinearIssueComment(
+  issueId: string,
+  body: string,
+): Promise<LinearIssueComment> {
   return invoke<LinearIssueComment>("post_linear_issue_comment", { issueId, body });
 }
 
@@ -187,7 +213,11 @@ export async function postLinearCompletionComment(
   issueId: string,
   body: string,
 ): Promise<LinearCompletionCommentResult> {
-  return invoke<LinearCompletionCommentResult>("post_linear_completion_comment", { pipelineId, issueId, body });
+  return invoke<LinearCompletionCommentResult>("post_linear_completion_comment", {
+    pipelineId,
+    issueId,
+    body,
+  });
 }
 
 export async function getGitHubIssues(projectId: string): Promise<GitHubIssuesSnapshot> {
@@ -276,10 +306,7 @@ export async function openInBrowser(url: string): Promise<void> {
   // Browser clients open links locally. Electron marks gateway metadata as a
   // desktop connection so a remote-backend session still uses the native
   // system-browser command instead of a renderer-created window.
-  if (
-    window.orkestratorGateway?.enabled &&
-    !window.orkestratorGateway.desktop
-  ) {
+  if (window.orkestratorGateway?.enabled && !window.orkestratorGateway.desktop) {
     window.open(url, "_blank", "noopener,noreferrer");
     return;
   }
@@ -321,9 +348,14 @@ export async function setEnvironmentPr(
   environmentId: string,
   prUrl: string,
   prState: PrState,
-  hasMergeConflicts: boolean | null
+  hasMergeConflicts: boolean | null,
 ): Promise<Environment> {
-  return invoke<Environment>("set_environment_pr", { environmentId, prUrl, prState, hasMergeConflicts });
+  return invoke<Environment>("set_environment_pr", {
+    environmentId,
+    prUrl,
+    prState,
+    hasMergeConflicts,
+  });
 }
 
 export async function overrideEnvironmentSetup(environmentId: string): Promise<Environment> {
@@ -334,17 +366,25 @@ export async function runEnvironmentSetup(environmentId: string): Promise<Enviro
   return invoke<Environment>("run_environment_setup", { environmentId });
 }
 
-export async function ensureEnvironmentSetup(environmentId: string): Promise<EnsureEnvironmentSetupResult> {
+export async function ensureEnvironmentSetup(
+  environmentId: string,
+): Promise<EnsureEnvironmentSetupResult> {
   return invoke<EnsureEnvironmentSetupResult>("ensure_environment_setup", { environmentId });
 }
 
 /** Detect PR URL and state for the environment's branch (uses --head to check correct branch) */
-export async function detectPr(containerId: string, branch: string): Promise<PrDetectionResult | null> {
+export async function detectPr(
+  containerId: string,
+  branch: string,
+): Promise<PrDetectionResult | null> {
   return invoke<PrDetectionResult | null>("detect_pr", { containerId, branch });
 }
 
 /** Detect PR URL and state for local (worktree-based) environments (uses --head to check correct branch) */
-export async function detectPrLocal(environmentId: string, branch: string): Promise<PrDetectionResult | null> {
+export async function detectPrLocal(
+  environmentId: string,
+  branch: string,
+): Promise<PrDetectionResult | null> {
   return invoke<PrDetectionResult | null>("detect_pr_local", { environmentId, branch });
 }
 
@@ -383,7 +423,7 @@ export async function mergeEnvironmentPr(
 export async function mergePr(
   containerId: string,
   method?: MergeMethod,
-  deleteBranch?: boolean
+  deleteBranch?: boolean,
 ): Promise<MergePrResult> {
   return invoke<MergePrResult>("merge_pr", { containerId, method, deleteBranch });
 }
@@ -392,10 +432,9 @@ export async function mergePr(
 export async function mergePrLocal(
   environmentId: string,
   method?: MergeMethod,
-  deleteBranch?: boolean
+  deleteBranch?: boolean,
 ): Promise<MergePrResult> {
   return invoke<MergePrResult>("merge_pr_local", { environmentId, method, deleteBranch });
 }
 
 // --- Docker Commands ---
-

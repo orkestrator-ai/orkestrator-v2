@@ -1,18 +1,7 @@
-import {
-  afterAll,
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  mock,
-  test,
-} from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import {
-  githubIssueDetailKey,
-  useGitHubIssuesStore,
-} from "@/stores/githubIssuesStore";
+import { githubIssueDetailKey, useGitHubIssuesStore } from "@/stores/githubIssuesStore";
 import type { GitHubIssueDetail, GitHubRepository } from "@/types/github";
 import type { EnvironmentType } from "@/types";
 import type { GitHubIssueBuildInput } from "@/hooks/useBuildPipeline";
@@ -24,22 +13,24 @@ import { useProjectStore } from "@/stores/projectStore";
 
 const realBackendSnapshot = { ...realBackend };
 const openInBrowserMock = mock(async () => undefined);
-const getComposeDraftMock = mock(async (_draftKey: string) => null as Awaited<
-  ReturnType<typeof realBackend.getComposeDraft>
->);
-const saveComposeDraftMock = mock(async (
-  draftKey: string,
-  ownerType: "environment" | "project",
-  ownerId: string,
-  value: unknown,
-) => ({
-  draftKey,
-  ownerType,
-  ownerId,
-  value,
-  revision: 1,
-  updatedAt: "2026-07-28T00:00:00.000Z",
-}));
+const getComposeDraftMock = mock(
+  async (_draftKey: string) => null as Awaited<ReturnType<typeof realBackend.getComposeDraft>>,
+);
+const saveComposeDraftMock = mock(
+  async (
+    draftKey: string,
+    ownerType: "environment" | "project",
+    ownerId: string,
+    value: unknown,
+  ) => ({
+    draftKey,
+    ownerType,
+    ownerId,
+    value,
+    revision: 1,
+    updatedAt: "2026-07-28T00:00:00.000Z",
+  }),
+);
 const deleteComposeDraftMock = mock(async (_draftKey: string) => undefined);
 const retryCompletionCommentMock = mock(async (pipelineId: string) => {
   const current = useBuildPipelineStore.getState().pipelines.get(pipelineId)!;
@@ -120,11 +111,8 @@ const startBuildMock = mock<
     environmentType: EnvironmentType,
   ) => Promise<string | undefined>
 >(
-  async (
-    _issue: GitHubIssueBuildInput,
-    _projectId: string,
-    _environmentType: EnvironmentType,
-  ) => "pipeline-new",
+  async (_issue: GitHubIssueBuildInput, _projectId: string, _environmentType: EnvironmentType) =>
+    "pipeline-new",
 );
 const navigateToPipelineMock = mock(async () => undefined);
 const originalGitHubStoreState = useGitHubIssuesStore.getState();
@@ -222,28 +210,30 @@ describe("GitHubIssueDetail", () => {
     environmentId?: string,
   ) {
     const pipelineId = `pipeline-${phase}-${environmentId ?? "pending"}`;
-    useBuildPipelineStore.getState().replacePipeline(buildPipelineFixture({
-      id: pipelineId,
-      taskId: "github:acme/widget#42",
-      environmentId: environmentId ?? "",
-      phase,
-      taskTitle: "#42: Ship GitHub issues",
-      taskSnapshot: {
-        title: detail.title,
-        description: detail.body,
-        acceptanceCriteria: "",
-        comments: [],
-        images: [],
-      },
-      source: {
-        type: "github",
-        repositoryOwner: "acme",
-        repositoryName: "widget",
-        issueNumber: 42,
-        issueUrl: detail.htmlUrl,
-        status: "Todo",
-      },
-    }));
+    useBuildPipelineStore.getState().replacePipeline(
+      buildPipelineFixture({
+        id: pipelineId,
+        taskId: "github:acme/widget#42",
+        environmentId: environmentId ?? "",
+        phase,
+        taskTitle: "#42: Ship GitHub issues",
+        taskSnapshot: {
+          title: detail.title,
+          description: detail.body,
+          acceptanceCriteria: "",
+          comments: [],
+          images: [],
+        },
+        source: {
+          type: "github",
+          repositoryOwner: "acme",
+          repositoryName: "widget",
+          issueNumber: 42,
+          issueUrl: detail.htmlUrl,
+          status: "Todo",
+        },
+      }),
+    );
     return pipelineId;
   }
 
@@ -265,17 +255,17 @@ describe("GitHubIssueDetail", () => {
     fireEvent.click(screen.getByRole("button", { name: "Comment" }));
 
     expect(await screen.findByText("Comment permission denied")).toBeTruthy();
-    expect((newComment as HTMLTextAreaElement).value).toBe(
-      "Unsaved discussion draft",
-    );
+    expect((newComment as HTMLTextAreaElement).value).toBe("Unsaved discussion draft");
     view.unmount();
-    await waitFor(() => expect(saveComposeDraftMock).toHaveBeenCalledWith(
-      "github-comment:project-1:acme%2Fwidget%2342",
-      "project",
-      "project-1",
-      "Unsaved discussion draft",
-      expect.any(Number),
-    ));
+    await waitFor(() =>
+      expect(saveComposeDraftMock).toHaveBeenCalledWith(
+        "github-comment:project-1:acme%2Fwidget%2342",
+        "project",
+        "project-1",
+        "Unsaved discussion draft",
+        expect.any(Number),
+      ),
+    );
   });
 
   test("initializes editing from fresh detail rather than a stale list summary", async () => {
@@ -301,15 +291,17 @@ describe("GitHubIssueDetail", () => {
     fireEvent.click(screen.getByRole("button", { name: "Edit issue" }));
 
     await waitFor(() => {
-      expect((screen.getByRole("textbox", { name: "Issue title" }) as HTMLInputElement).value)
-        .toBe(detail.title);
-      expect((screen.getByRole("textbox", { name: "Issue body" }) as HTMLTextAreaElement).value)
-        .toBe(detail.body);
+      expect((screen.getByRole("textbox", { name: "Issue title" }) as HTMLInputElement).value).toBe(
+        detail.title,
+      );
+      expect(
+        (screen.getByRole("textbox", { name: "Issue body" }) as HTMLTextAreaElement).value,
+      ).toBe(detail.body);
     });
   });
 
   test("restores a persisted new-comment draft", async () => {
-    getComposeDraftMock.mockImplementation(async (draftKey) => (
+    getComposeDraftMock.mockImplementation(async (draftKey) =>
       draftKey === "github-comment:project-1:acme%2Fwidget%2342"
         ? {
             draftKey,
@@ -319,14 +311,16 @@ describe("GitHubIssueDetail", () => {
             revision: 2,
             updatedAt: "2026-07-28T00:00:00.000Z",
           }
-        : null
-    ));
+        : null,
+    );
 
     renderDetail();
 
-    await waitFor(() => expect((
-      screen.getByRole("textbox", { name: "Add GitHub comment" }) as HTMLTextAreaElement
-    ).value).toBe("Recovered GitHub comment"));
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("textbox", { name: "Add GitHub comment" }) as HTMLTextAreaElement).value,
+      ).toBe("Recovered GitHub comment"),
+    );
   });
 
   test("only offers comment editing when the backend grants permission", () => {
@@ -362,11 +356,7 @@ describe("GitHubIssueDetail", () => {
     fireEvent.click(screen.getByRole("button", { name: "Comment" }));
 
     await waitFor(() => {
-      expect(addCommentMock).toHaveBeenCalledWith(
-        "project-1",
-        42,
-        "A new decision",
-      );
+      expect(addCommentMock).toHaveBeenCalledWith("project-1", 42, "A new decision");
       expect(newComment.value).toBe("");
       expect(deleteComposeDraftMock).toHaveBeenCalledWith(
         "github-comment:project-1:acme%2Fwidget%2342",
@@ -396,12 +386,7 @@ describe("GitHubIssueDetail", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
     await waitFor(() => {
-      expect(editCommentMock).toHaveBeenLastCalledWith(
-        "project-1",
-        42,
-        9001,
-        "Revised comment",
-      );
+      expect(editCommentMock).toHaveBeenLastCalledWith("project-1", 42, 9001, "Revised comment");
     });
   });
 
@@ -420,9 +405,7 @@ describe("GitHubIssueDetail", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Close Issue" }));
     expect(screen.getByText("Close issue #42?")).toBeTruthy();
-    fireEvent.click(
-      screen.getAllByRole("button", { name: "Close Issue" }).at(-1)!,
-    );
+    fireEvent.click(screen.getAllByRole("button", { name: "Close Issue" }).at(-1)!);
 
     await waitFor(() => {
       expect(closeIssueMock).toHaveBeenCalledWith("project-1", 42);
@@ -435,9 +418,7 @@ describe("GitHubIssueDetail", () => {
     renderDetail();
 
     fireEvent.click(screen.getByRole("button", { name: "Close Issue" }));
-    fireEvent.click(
-      screen.getAllByRole("button", { name: "Close Issue" }).at(-1)!,
-    );
+    fireEvent.click(screen.getAllByRole("button", { name: "Close Issue" }).at(-1)!);
 
     expect(await screen.findByText("Issue changed on GitHub")).toBeTruthy();
     expect(screen.getByText("Close issue #42?")).toBeTruthy();
@@ -473,12 +454,9 @@ describe("GitHubIssueDetail", () => {
     const activeId = seedIssuePipeline("building", "env-active");
     renderDetail();
 
+    expect(screen.getByText("A build is already active for this issue.")).toBeTruthy();
     expect(
-      screen.getByText("A build is already active for this issue."),
-    ).toBeTruthy();
-    expect(
-      (screen.getByRole("button", { name: "Build Container" }) as HTMLButtonElement)
-        .disabled,
+      (screen.getByRole("button", { name: "Build Container" }) as HTMLButtonElement).disabled,
     ).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: /View Build/ }));
@@ -496,8 +474,7 @@ describe("GitHubIssueDetail", () => {
     expect(screen.getByText("Build phase: creating-environment")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /View Build/ }) === null).toBe(true);
     expect(
-      (screen.getByRole("button", { name: "Build Container" }) as HTMLButtonElement)
-        .disabled,
+      (screen.getByRole("button", { name: "Build Container" }) as HTMLButtonElement).disabled,
     ).toBe(true);
   });
 
@@ -535,8 +512,7 @@ describe("GitHubIssueDetail", () => {
     const view = render(renderWithDocker(true));
 
     expect(
-      (screen.getByRole("button", { name: "Build Container" }) as HTMLButtonElement)
-        .disabled,
+      (screen.getByRole("button", { name: "Build Container" }) as HTMLButtonElement).disabled,
     ).toBe(false);
 
     view.rerender(renderWithDocker(false));
@@ -544,9 +520,7 @@ describe("GitHubIssueDetail", () => {
     const containerBuild = screen.getByRole("button", { name: "Build Container" });
     const localBuild = screen.getByRole("button", { name: "Build Local" });
     expect((containerBuild as HTMLButtonElement).disabled).toBe(true);
-    expect(containerBuild.getAttribute("title")).toBe(
-      "Start Docker to run a container build",
-    );
+    expect(containerBuild.getAttribute("title")).toBe("Start Docker to run a container build");
     expect((localBuild as HTMLButtonElement).disabled).toBe(false);
 
     fireEvent.click(containerBuild);
@@ -564,14 +538,16 @@ describe("GitHubIssueDetail", () => {
 
   test("blocks local builds for a project with no host checkout", async () => {
     useProjectStore.setState({
-      projects: [{
-        id: "project-1",
-        name: "Remote only",
-        gitUrl: "https://example.test/remote-only.git",
-        localPath: null,
-        addedAt: "2026-08-11T00:00:00.000Z",
-        order: 0,
-      }],
+      projects: [
+        {
+          id: "project-1",
+          name: "Remote only",
+          gitUrl: "https://example.test/remote-only.git",
+          localPath: null,
+          addedAt: "2026-08-11T00:00:00.000Z",
+          order: 0,
+        },
+      ],
     });
     renderDetail();
 
@@ -661,13 +637,11 @@ describe("GitHubIssueDetail", () => {
     );
     await waitFor(() => {
       expect(
-        useBuildPipelineStore.getState().pipelines.get(olderId)
-          ?.completionCommentStatus,
+        useBuildPipelineStore.getState().pipelines.get(olderId)?.completionCommentStatus,
       ).toBeUndefined();
-      expect(
-        useBuildPipelineStore.getState().pipelines.get(newerId)
-          ?.completionCommentStatus,
-      ).toBe("failed");
+      expect(useBuildPipelineStore.getState().pipelines.get(newerId)?.completionCommentStatus).toBe(
+        "failed",
+      );
     });
   });
 
@@ -681,10 +655,12 @@ describe("GitHubIssueDetail", () => {
       backendRevision: pipeline.backendRevision + 1,
     });
     let rejectRetry!: (reason?: unknown) => void;
-    retryCompletionCommentMock.mockImplementationOnce(() =>
-      new Promise((_resolve, reject) => {
-        rejectRetry = reject;
-      }));
+    retryCompletionCommentMock.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectRetry = reject;
+        }),
+    );
     renderDetail();
     const button = screen.getByRole("button", {
       name: `Retry completion comment for build ${pipelineId}`,
@@ -697,13 +673,11 @@ describe("GitHubIssueDetail", () => {
 
     rejectRetry(new Error("still offline"));
     await waitFor(() => expect(button.disabled).toBe(false));
-    expect(mockToastError).toHaveBeenCalledWith(
-      "Failed to retry GitHub completion comment",
-      { description: "still offline" },
-    );
+    expect(mockToastError).toHaveBeenCalledWith("Failed to retry GitHub completion comment", {
+      description: "still offline",
+    });
 
     fireEvent.click(button);
-    await waitFor(() =>
-      expect(retryCompletionCommentMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(retryCompletionCommentMock).toHaveBeenCalledTimes(2));
   });
 });

@@ -77,20 +77,28 @@ export function useProjects() {
   // Converge when another client adds, renames, reorders or removes a project.
   // The snapshot cache is keyed by mutation version, so it must be invalidated
   // first or the shared in-flight read would replay stale data.
-  useEffect(() => onResourceChanged("project", () => {
-    invalidateProjectSnapshots();
-    void loadProjects();
-  }), [loadProjects]);
+  useEffect(
+    () =>
+      onResourceChanged("project", () => {
+        invalidateProjectSnapshots();
+        void loadProjects();
+      }),
+    [loadProjects],
+  );
 
   // Manifest reconciliation only reloads this collection when its opaque
   // revision differs. The global store binding owns that inactive-safe read;
   // this hook retains the explicit fallback for rolling upgrades and diagnosis.
-  useEffect(() => onResourceResync((request) => {
-    if (request.reason === "manifest") return;
-    if (request.resources !== null && !request.resources.has("project")) return;
-    invalidateProjectSnapshots();
-    return loadProjects();
-  }), [loadProjects]);
+  useEffect(
+    () =>
+      onResourceResync((request) => {
+        if (request.reason === "manifest") return;
+        if (request.resources !== null && !request.resources.has("project")) return;
+        invalidateProjectSnapshots();
+        return loadProjects();
+      }),
+    [loadProjects],
+  );
 
   const addProject = useCallback(
     async (gitUrl: string, localPath?: string) => {
@@ -111,7 +119,7 @@ export function useProjects() {
         setLoading(false);
       }
     },
-    [addProjectToStore, setLoading, setError]
+    [addProjectToStore, setLoading, setError],
   );
 
   const createProjectFromScratch = useCallback(
@@ -133,7 +141,7 @@ export function useProjects() {
         setLoading(false);
       }
     },
-    [addProjectToStore, setLoading, setError]
+    [addProjectToStore, setLoading, setError],
   );
 
   const removeProject = useCallback(
@@ -154,7 +162,7 @@ export function useProjects() {
         setLoading(false);
       }
     },
-    [removeProjectFromStore, setLoading, setError]
+    [removeProjectFromStore, setLoading, setError],
   );
 
   const validateGitUrl = useCallback(async (url: string) => {
@@ -185,7 +193,7 @@ export function useProjects() {
         throw new Error(message);
       }
     },
-    [reorderProjectsInStore, setProjects, setError, loadProjects]
+    [reorderProjectsInStore, setProjects, setError, loadProjects],
   );
 
   const updateProject = useCallback(
@@ -204,7 +212,7 @@ export function useProjects() {
         throw new Error(message);
       }
     },
-    [updateProjectInStore, setError]
+    [updateProjectInStore, setError],
   );
 
   return {

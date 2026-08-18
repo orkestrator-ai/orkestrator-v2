@@ -29,14 +29,13 @@ export function useElapsedTimer(
     return () => clearInterval(interval);
   }, [isLoading, loadingStartedAt]);
 
-  const elapsedSeconds = isLoading && loadingStartedAt !== undefined
-    ? Math.max(0, Math.floor((Date.now() - loadingStartedAt) / 1000))
-    : null;
+  const elapsedSeconds =
+    isLoading && loadingStartedAt !== undefined
+      ? Math.max(0, Math.floor((Date.now() - loadingStartedAt) / 1000))
+      : null;
 
   return {
     elapsedSeconds,
-    finalElapsedSeconds: isLoading
-      ? null
-      : (storedFinalElapsedSeconds ?? null),
+    finalElapsedSeconds: isLoading ? null : (storedFinalElapsedSeconds ?? null),
   };
 }

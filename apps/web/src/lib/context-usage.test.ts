@@ -6,9 +6,7 @@ import { extractContextUsage, formatTokenCount } from "./context-usage";
  * would produce and which `new Date("")` then renders as "Invalid Date" in the
  * UI. Match the shape and prove it round-trips through `Date`.
  */
-const ISO_TIMESTAMP = expect.stringMatching(
-  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,
-);
+const ISO_TIMESTAMP = expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
 
 function expectParseableIso(value: string | undefined): void {
   expect(typeof value).toBe("string");
@@ -182,9 +180,9 @@ describe("context-usage extractContextUsage", () => {
       ["an uppercase suffix", "3K", 3_000],
       ["a padded string", "  200 ", 200],
     ])("accepts %s", (_label, raw, expected) => {
-      expect(
-        extractContextUsage({ usedTokens: raw, maxTokens: "10b" })?.usedTokens,
-      ).toBe(expected as number);
+      expect(extractContextUsage({ usedTokens: raw, maxTokens: "10b" })?.usedTokens).toBe(
+        expected as number,
+      );
     });
 
     test.each([

@@ -8,13 +8,7 @@ function checkIgnored(path: string): {
   ignored: boolean;
   output: string;
 } {
-  const result = Bun.spawnSync([
-    "git",
-    "check-ignore",
-    "--no-index",
-    "--verbose",
-    path,
-  ], {
+  const result = Bun.spawnSync(["git", "check-ignore", "--no-index", "--verbose", path], {
     cwd: repositoryRoot,
     stdout: "pipe",
     stderr: "pipe",
@@ -29,9 +23,7 @@ function checkIgnored(path: string): {
 describe("repository ignore contract", () => {
   test("ignores root build artifacts without hiding nested source directories", () => {
     const rootArtifact = checkIgnored("build/release/app.js");
-    const nestedSource = checkIgnored(
-      "apps/web/src/components/build/FutureBuildComponent.tsx",
-    );
+    const nestedSource = checkIgnored("apps/web/src/components/build/FutureBuildComponent.tsx");
 
     expect(rootArtifact.ignored).toBe(true);
     expect(rootArtifact.output).toContain("/build/");

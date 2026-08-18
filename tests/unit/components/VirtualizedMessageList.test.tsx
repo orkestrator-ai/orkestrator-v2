@@ -132,7 +132,7 @@ describe("VirtualizedMessageList", () => {
         renderMessage={(_i, msg, _prev) => <span>{msg.text}</span>}
         scrollProps={makeScrollProps()}
         virtuosoRef={createRef<VirtuosoHandle>()}
-      />
+      />,
     );
 
     expect(screen.getByText("Hello")).toBeTruthy();
@@ -156,7 +156,7 @@ describe("VirtualizedMessageList", () => {
         }}
         scrollProps={makeScrollProps()}
         virtuosoRef={createRef<VirtuosoHandle>()}
-      />
+      />,
     );
 
     expect(prevMessages[0]).toBeNull();
@@ -193,7 +193,7 @@ describe("VirtualizedMessageList", () => {
         }}
         scrollProps={makeScrollProps()}
         virtuosoRef={createRef<VirtuosoHandle>()}
-      />
+      />,
     );
 
     // The empty placeholder is skipped: content still anchors on the user.
@@ -217,7 +217,7 @@ describe("VirtualizedMessageList", () => {
         renderMessage={(_i, msg) => <span>{msg.text}</span>}
         scrollProps={makeScrollProps()}
         virtuosoRef={createRef<VirtuosoHandle>()}
-      />
+      />,
     );
 
     expect(resolve).toHaveBeenCalledTimes(2);
@@ -243,7 +243,7 @@ describe("VirtualizedMessageList", () => {
         }}
         scrollProps={makeScrollProps()}
         virtuosoRef={createRef<VirtuosoHandle>()}
-      />
+      />,
     );
 
     // The default would have handed index 1 its neighbour; the resolver wins.
@@ -259,7 +259,7 @@ describe("VirtualizedMessageList", () => {
         emptyState={<p>No messages yet</p>}
         scrollProps={makeScrollProps()}
         virtuosoRef={createRef<VirtuosoHandle>()}
-      />
+      />,
     );
 
     expect(screen.getByText("No messages yet")).toBeTruthy();
@@ -277,7 +277,7 @@ describe("VirtualizedMessageList", () => {
         emptyState={<p>No messages yet</p>}
         scrollProps={makeScrollProps()}
         virtuosoRef={createRef<VirtuosoHandle>()}
-      />
+      />,
     );
 
     expect(screen.queryByText("No messages yet") === null).toBe(true);
@@ -295,7 +295,7 @@ describe("VirtualizedMessageList", () => {
         footer={<div>Loading...</div>}
         scrollProps={makeScrollProps()}
         virtuosoRef={createRef<VirtuosoHandle>()}
-      />
+      />,
     );
 
     expect(screen.getByText("Loading...")).toBeTruthy();
@@ -311,15 +311,14 @@ describe("VirtualizedMessageList", () => {
         renderMessage={(_i, msg) => <span>{msg.text}</span>}
         scrollProps={makeScrollProps()}
         virtuosoRef={createRef<VirtuosoHandle>()}
-      />
+      />,
     );
 
     expect(screen.queryByTestId("virtuoso-footer") === null).toBe(true);
   });
 
   test("passes scroll props through to Virtuoso", () => {
-    const followOutput = (atBottom: boolean) =>
-      atBottom ? ("auto" as const) : false;
+    const followOutput = (atBottom: boolean) => (atBottom ? ("auto" as const) : false);
     const atBottomStateChange = () => {};
     const totalListHeightChanged = () => {};
     const restoreState = { ranges: [], scrollTop: 100 } as any;
@@ -337,7 +336,7 @@ describe("VirtualizedMessageList", () => {
           restoreStateFrom: restoreState,
         }}
         virtuosoRef={createRef<VirtuosoHandle>()}
-      />
+      />,
     );
 
     expect(lastVirtuosoProps.followOutput).toBe(followOutput);
@@ -359,7 +358,7 @@ describe("VirtualizedMessageList", () => {
         renderMessage={() => null}
         scrollProps={{ ...makeScrollProps(), scrollerRef }}
         virtuosoRef={createRef<VirtuosoHandle>()}
-      />
+      />,
     );
 
     expect(lastVirtuosoProps.scrollerRef).toBe(scrollerRef);
@@ -375,7 +374,7 @@ describe("VirtualizedMessageList", () => {
         renderMessage={(_i, msg) => <span>{msg.text}</span>}
         scrollProps={makeScrollProps()}
         virtuosoRef={createRef<VirtuosoHandle>()}
-      />
+      />,
     );
 
     expect(lastVirtuosoProps.computeItemKey).toBe(computeItemKey);
@@ -389,7 +388,7 @@ describe("VirtualizedMessageList", () => {
         renderMessage={() => null}
         scrollProps={makeScrollProps()}
         virtuosoRef={createRef<VirtuosoHandle>()}
-      />
+      />,
     );
 
     expect(lastVirtuosoProps.increaseViewportBy).toEqual({
@@ -408,7 +407,7 @@ describe("VirtualizedMessageList", () => {
         footer={<div>Footer v1</div>}
         scrollProps={makeScrollProps()}
         virtuosoRef={ref}
-      />
+      />,
     );
 
     const firstComponents = lastVirtuosoProps.components;
@@ -421,7 +420,7 @@ describe("VirtualizedMessageList", () => {
         footer={<div>Footer v2</div>}
         scrollProps={makeScrollProps()}
         virtuosoRef={ref}
-      />
+      />,
     );
 
     // Components object identity must not change when only footer content changes,
@@ -441,7 +440,7 @@ describe("VirtualizedMessageList", () => {
         footer={<div>Footer</div>}
         scrollProps={makeScrollProps()}
         virtuosoRef={ref}
-      />
+      />,
     );
 
     const firstComponents = lastVirtuosoProps.components;
@@ -454,7 +453,7 @@ describe("VirtualizedMessageList", () => {
         renderMessage={(_i, msg) => <span>{(msg as any).text}</span>}
         scrollProps={makeScrollProps()}
         virtuosoRef={ref}
-      />
+      />,
     );
 
     // Components object should change because footer presence toggled
@@ -473,7 +472,7 @@ describe("VirtualizedMessageList", () => {
         emptyState={<p>Empty v1</p>}
         scrollProps={makeScrollProps()}
         virtuosoRef={ref}
-      />
+      />,
     );
 
     const firstContext = lastVirtuosoProps.context;
@@ -487,7 +486,7 @@ describe("VirtualizedMessageList", () => {
         emptyState={<p>Empty v1</p>}
         scrollProps={makeScrollProps()}
         virtuosoRef={ref}
-      />
+      />,
     );
 
     // Context should update so Virtuoso renders new footer content
@@ -504,7 +503,7 @@ describe("VirtualizedMessageList", () => {
         renderMessage={(_i, msg) => <span>{(msg as any).text}</span>}
         scrollProps={makeScrollProps()}
         virtuosoRef={createRef<VirtuosoHandle>()}
-      />
+      />,
     );
 
     expect(lastVirtuosoProps.components.Footer).toBeUndefined();
@@ -583,14 +582,16 @@ describe("VirtualizedMessageList", () => {
     const input = screen.getByRole("textbox", { name: "Find in chat" });
     fireEvent.change(input, { target: { value: "you" } });
 
-    const current = Array.from(cssHighlights.entries())
-      .find(([name]) => name.includes("agent-chat-find-current"))?.[1];
+    const current = Array.from(cssHighlights.entries()).find(([name]) =>
+      name.includes("agent-chat-find-current"),
+    )?.[1];
     expect(current?.ranges).toHaveLength(1);
     expect(current?.ranges[0]?.toString()).toBe("you");
 
     fireEvent.change(input, { target: { value: "Can you" } });
-    const fragmented = Array.from(cssHighlights.entries())
-      .find(([name]) => name.includes("agent-chat-find-current"))?.[1];
+    const fragmented = Array.from(cssHighlights.entries()).find(([name]) =>
+      name.includes("agent-chat-find-current"),
+    )?.[1];
     expect(fragmented?.ranges[0]?.toString()).toBe("Can you");
   });
 
@@ -613,8 +614,9 @@ describe("VirtualizedMessageList", () => {
       target: { value: "x" },
     });
 
-    const current = Array.from(cssHighlights.entries())
-      .find(([name]) => name.includes("agent-chat-find-current"))?.[1];
+    const current = Array.from(cssHighlights.entries()).find(([name]) =>
+      name.includes("agent-chat-find-current"),
+    )?.[1];
     expect(current?.ranges[0]?.toString()).toBe("x");
   });
 
@@ -707,9 +709,11 @@ describe("VirtualizedMessageList", () => {
         computeItemKey={(_index, message) => message.id}
         renderMessage={(_index, message) => <span>{message.text}</span>}
         scrollProps={makeScrollProps()}
-        virtuosoRef={{
-          current: { scrollToIndex },
-        } as unknown as RefObject<VirtuosoHandle>}
+        virtuosoRef={
+          {
+            current: { scrollToIndex },
+          } as unknown as RefObject<VirtuosoHandle>
+        }
         find={{ isActive: true, getSearchText: (message) => message.text }}
       />,
     );
@@ -734,9 +738,11 @@ describe("VirtualizedMessageList", () => {
         computeItemKey={(_index, message) => message.id}
         renderMessage={(_index, message) => <span>{message.text}</span>}
         scrollProps={makeScrollProps()}
-        virtuosoRef={{
-          current: { scrollToIndex: mock(() => {}) },
-        } as unknown as RefObject<VirtuosoHandle>}
+        virtuosoRef={
+          {
+            current: { scrollToIndex: mock(() => {}) },
+          } as unknown as RefObject<VirtuosoHandle>
+        }
         find={{ isActive: true, getSearchText: (message) => message.text }}
       />,
     );
@@ -779,9 +785,11 @@ describe("VirtualizedMessageList", () => {
           <span data-agent-chat-search-content="true">{message.text}</span>
         )}
         scrollProps={makeScrollProps()}
-        virtuosoRef={{
-          current: { scrollToIndex: mock(() => {}) },
-        } as unknown as RefObject<VirtuosoHandle>}
+        virtuosoRef={
+          {
+            current: { scrollToIndex: mock(() => {}) },
+          } as unknown as RefObject<VirtuosoHandle>
+        }
         find={{ isActive: true, getSearchText: (message) => message.text }}
       />,
     );

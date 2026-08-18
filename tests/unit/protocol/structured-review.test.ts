@@ -106,8 +106,7 @@ const fullyPopulatedReport = {
     limitations: ["External provider behavior was not exercised."],
   },
   whatChanged: {
-    overview:
-      "Native reviews now return one provider-independent structured report.",
+    overview: "Native reviews now return one provider-independent structured report.",
     before: "Review output was accepted only as nearby Markdown transcript text.",
     after: "Provider results are validated before the report is displayed.",
     keyCodeChanges: [
@@ -159,12 +158,10 @@ const fullyPopulatedReport = {
       file: "apps/web/src/stores/review.ts",
       line: 82,
       symbol: "completeReview",
-      description:
-        "The completion branch records success before validating the result.",
+      description: "The completion branch records success before validating the result.",
       evidence: "completeReview sets phase to completed before calling parse.",
       suggestion: "Validate first and persist success only after parsing succeeds.",
-      verification:
-        "Return malformed provider data and assert that the workflow pauses.",
+      verification: "Return malformed provider data and assert that the workflow pauses.",
       alternativeFixes: [
         "Validate in the bridge before sending completion.",
         "Make completion accept only a branded validated result.",
@@ -196,8 +193,7 @@ const fullyPopulatedReport = {
   },
   summaryOfChange:
     "The change introduces a fixed structured contract for native reviews. It also adds a readable report renderer.",
-  reviewSummary:
-    "One high-confidence correctness issue and one coverage weakness were found.",
+  reviewSummary: "One high-confidence correctness issue and one coverage weakness were found.",
 } satisfies StructuredReviewReport;
 
 const findingPool = {
@@ -233,8 +229,7 @@ const reconciliation = {
       poolId: "gap-001",
       finding: {
         file: "apps/web/src/stores/review.ts",
-        untestedBehavior:
-          "Recovery after malformed output and after a renderer remount.",
+        untestedBehavior: "Recovery after malformed output and after a renderer remount.",
       },
     },
   ],
@@ -246,14 +241,9 @@ describe("structured review report contract", () => {
       readFileSync(join(process.cwd(), "packages/protocol/package.json"), "utf8"),
     ) as { exports: Record<string, string> };
 
-    expect(packageJson.exports["./structured-review"]).toBe(
-      "./src/structured-review.ts",
-    );
+    expect(packageJson.exports["./structured-review"]).toBe("./src/structured-review.ts");
     expect(
-      Bun.resolveSync(
-        "@orkestrator/protocol/structured-review",
-        join(process.cwd(), "apps/web"),
-      ),
+      Bun.resolveSync("@orkestrator/protocol/structured-review", join(process.cwd(), "apps/web")),
     ).toBe(join(process.cwd(), "packages/protocol/src/structured-review.ts"));
   });
 
@@ -288,9 +278,7 @@ describe("structured review report contract", () => {
 
     // A live provider was handed a schema that requires `notRun`, so omitting it
     // is a malfunction to report rather than a count to invent.
-    expect(() => parseStructuredReviewReport(legacyReport)).toThrow(
-      ReviewContractValidationError,
-    );
+    expect(() => parseStructuredReviewReport(legacyReport)).toThrow(ReviewContractValidationError);
     expect(isStructuredReviewReport(legacyReport)).toBe(false);
 
     const parsed = parseStructuredReviewReport(legacyReport, {
@@ -302,8 +290,7 @@ describe("structured review report contract", () => {
       notRun: 13,
     });
     expect(parsed).not.toBe(legacyReport);
-    expect(isStructuredReviewReport(legacyReport, { allowLegacyTestResults: true }))
-      .toBe(true);
+    expect(isStructuredReviewReport(legacyReport, { allowLegacyTestResults: true })).toBe(true);
     expect(
       safeParseStructuredReviewReport(legacyReport, { allowLegacyTestResults: true }),
     ).toMatchObject({ success: true });
@@ -323,11 +310,13 @@ describe("structured review report contract", () => {
     });
 
     expect(result.success).toBe(false);
-    expect(result.success === false && result.error.issues).toEqual([{
-      path: "$.testResults.total",
-      code: "inconsistent_value",
-      message: "Total must equal passed plus failed plus notRun.",
-    }]);
+    expect(result.success === false && result.error.issues).toEqual([
+      {
+        path: "$.testResults.total",
+        code: "inconsistent_value",
+        message: "Total must equal passed plus failed plus notRun.",
+      },
+    ]);
   });
 
   test("leaves a report alone when the legacy migration has nothing to do", () => {
@@ -351,8 +340,9 @@ describe("structured review report contract", () => {
       for (const options of [undefined, { allowLegacyTestResults: true }]) {
         const result = safeParseStructuredReviewReport(report, options);
         expect(result.success).toBe(false);
-        expect(result.success === false && result.error.issues[0]?.path)
-          .toBe("$.testResults.notRun");
+        expect(result.success === false && result.error.issues[0]?.path).toBe(
+          "$.testResults.notRun",
+        );
       }
     }
   });
@@ -366,12 +356,13 @@ describe("structured review report contract", () => {
       },
     });
     expect(duplicateRiskAreas.success).toBe(false);
-    expect(duplicateRiskAreas.success === false && duplicateRiskAreas.error.issues)
-      .toEqual([{
+    expect(duplicateRiskAreas.success === false && duplicateRiskAreas.error.issues).toEqual([
+      {
         path: "$.riskProfile.riskAreas[1]",
         code: "invalid_value",
         message: 'Duplicate value "concurrency" is not allowed.',
-      }]);
+      },
+    ]);
 
     // Line numbers are 1-based; `0` is the classic "no line" sentinel and must
     // be rejected in favour of the explicit `null` the contract defines.
@@ -380,12 +371,15 @@ describe("structured review report contract", () => {
       strengths: [{ description: "Typed boundary", file: "src/a.ts", line: 0 }],
     });
     expect(zeroLine.success).toBe(false);
-    expect(zeroLine.success === false && zeroLine.error.issues[0]?.path)
-      .toBe("$.strengths[0].line");
-    expect(parseStructuredReviewReport({
-      ...emptyReport,
-      strengths: [{ description: "Typed boundary", file: "src/a.ts", line: null }],
-    }).strengths[0]?.line).toBeNull();
+    expect(zeroLine.success === false && zeroLine.error.issues[0]?.path).toBe(
+      "$.strengths[0].line",
+    );
+    expect(
+      parseStructuredReviewReport({
+        ...emptyReport,
+        strengths: [{ description: "Typed boundary", file: "src/a.ts", line: null }],
+      }).strengths[0]?.line,
+    ).toBeNull();
   });
 
   test("summarizes one issue and many issues in the thrown message", () => {
@@ -394,8 +388,8 @@ describe("structured review report contract", () => {
       summaryOfChange: 42,
     });
     expect(single.success === false && single.error.message).toBe(
-      "Invalid structured-review-report: 1 validation issue. "
-      + "$.summaryOfChange: Expected string, received integer.",
+      "Invalid structured-review-report: 1 validation issue. " +
+        "$.summaryOfChange: Expected string, received integer.",
     );
 
     const many = safeParseStructuredReviewReport({
@@ -404,11 +398,10 @@ describe("structured review report contract", () => {
       reviewSummary: 43,
     });
     expect(many.success === false && many.error.message).toBe(
-      "Invalid structured-review-report: 2 validation issues. "
-      + "$.summaryOfChange: Expected string, received integer.",
+      "Invalid structured-review-report: 2 validation issues. " +
+        "$.summaryOfChange: Expected string, received integer.",
     );
-    expect(many.success === false && many.error.contract)
-      .toBe("structured-review-report");
+    expect(many.success === false && many.error.contract).toBe("structured-review-report");
   });
 
   test("reports a missing not-run count as a missing field, not a totals mismatch", () => {
@@ -418,11 +411,13 @@ describe("structured review report contract", () => {
     });
 
     expect(result.success).toBe(false);
-    expect(result.success === false && result.error.issues).toEqual([{
-      path: "$.testResults.notRun",
-      code: "missing_field",
-      message: 'Required field "notRun" is missing.',
-    }]);
+    expect(result.success === false && result.error.issues).toEqual([
+      {
+        path: "$.testResults.notRun",
+        code: "missing_field",
+        message: 'Required field "notRun" is missing.',
+      },
+    ]);
   });
 
   test("rejects plaintext, incomplete, incompatible, and unknown data with typed errors", () => {
@@ -453,9 +448,7 @@ describe("structured review report contract", () => {
         },
       },
     ]) {
-      expect(() => parseStructuredReviewReport(invalid)).toThrow(
-        ReviewContractValidationError,
-      );
+      expect(() => parseStructuredReviewReport(invalid)).toThrow(ReviewContractValidationError);
       expect(isStructuredReviewReport(invalid)).toBe(false);
     }
 
@@ -490,24 +483,23 @@ describe("structured review report contract", () => {
       "reviewSummary",
     ]);
     expect(
-      STRUCTURED_REVIEW_REPORT_JSON_SCHEMA.properties.issues.items.properties
-        .confidence,
+      STRUCTURED_REVIEW_REPORT_JSON_SCHEMA.properties.issues.items.properties.confidence,
     ).toMatchObject({ type: "integer", minimum: 0, maximum: 100 });
+    expect(STRUCTURED_REVIEW_REPORT_JSON_SCHEMA.properties.issues.items.required).toContain(
+      "alternativeFixes",
+    );
     expect(
-      STRUCTURED_REVIEW_REPORT_JSON_SCHEMA.properties.issues.items.required,
-    ).toContain("alternativeFixes");
-    expect(
-      STRUCTURED_REVIEW_REPORT_JSON_SCHEMA.properties.issues.items.properties
-        .alternativeFixes,
+      STRUCTURED_REVIEW_REPORT_JSON_SCHEMA.properties.issues.items.properties.alternativeFixes,
     ).toMatchObject({
-      anyOf: [
-        { type: "array", items: { type: "string" } },
-        { type: "null" },
-      ],
+      anyOf: [{ type: "array", items: { type: "string" } }, { type: "null" }],
     });
-    expect(
-      STRUCTURED_REVIEW_REPORT_JSON_SCHEMA.properties.testResults.required,
-    ).toEqual(["total", "passed", "failed", "notRun", "failures"]);
+    expect(STRUCTURED_REVIEW_REPORT_JSON_SCHEMA.properties.testResults.required).toEqual([
+      "total",
+      "passed",
+      "failed",
+      "notRun",
+      "failures",
+    ]);
     // The schema the provider is given and the validator its reply meets have
     // to agree: `notRun` is required on both sides, and the legacy back-fill is
     // an opt-in for durable data rather than a hole in the live contract.
@@ -529,19 +521,21 @@ describe("structured review report contract", () => {
     for (const section of STRUCTURED_REVIEW_REPORT_JSON_SCHEMA.required) {
       const schema = properties[section];
       expect(schema).toBeTruthy();
-      const described = typeof schema.description === "string"
-        && schema.description.length > 0;
-      const childrenDescribed = schema.properties !== undefined
-        && Object.values(schema.properties).some((child) =>
-          typeof child.description === "string" && child.description.length > 0
+      const described = typeof schema.description === "string" && schema.description.length > 0;
+      const childrenDescribed =
+        schema.properties !== undefined &&
+        Object.values(schema.properties).some(
+          (child) => typeof child.description === "string" && child.description.length > 0,
         );
       expect(described || childrenDescribed).toBe(true);
     }
   });
 
   test("describes the issue and coverage-gap fields the fix agent consumes", () => {
-    const issue = STRUCTURED_REVIEW_REPORT_JSON_SCHEMA.properties.issues.items
-      .properties as Record<string, { description?: unknown }>;
+    const issue = STRUCTURED_REVIEW_REPORT_JSON_SCHEMA.properties.issues.items.properties as Record<
+      string,
+      { description?: unknown }
+    >;
 
     for (const field of ["description", "evidence", "suggestion", "verification"]) {
       expect(typeof issue[field]?.description).toBe("string");
@@ -550,16 +544,15 @@ describe("structured review report contract", () => {
     expect(issue.confidence?.description).toContain("75");
     expect(issue.severity?.description).toContain("P0");
 
-    const gap = STRUCTURED_REVIEW_REPORT_JSON_SCHEMA.properties.testCoverageGaps
-      .items.properties as Record<string, { description?: unknown }>;
+    const gap = STRUCTURED_REVIEW_REPORT_JSON_SCHEMA.properties.testCoverageGaps.items
+      .properties as Record<string, { description?: unknown }>;
     expect(gap.untestedBehavior?.description).toContain(
       "Do not report unrelated pre-existing gaps",
     );
   });
 
   test("describes the verdict enum without naming a value outside it", () => {
-    const verdict = STRUCTURED_REVIEW_REPORT_JSON_SCHEMA.properties.verdict
-      .properties.ready;
+    const verdict = STRUCTURED_REVIEW_REPORT_JSON_SCHEMA.properties.verdict.properties.ready;
 
     expect(verdict.enum).toEqual(REVIEW_VERDICTS);
     const description = verdict.description as string;
@@ -572,30 +565,29 @@ describe("structured review report contract", () => {
   test("keeps optional alternative fixes ergonomic after strict wire validation", () => {
     const parsed = parseStructuredReviewReport({
       ...emptyReport,
-      issues: [{
-        severity: "P2",
-        confidence: 80,
-        category: "maintainability",
-        title: "Consider an alternative",
-        file: "src/review.ts",
-        line: null,
-        symbol: "",
-        description: "The provider used the strict-schema null sentinel.",
-        evidence: "The wire value is null.",
-        suggestion: "Keep the domain field optional.",
-        verification: "Parse the report.",
-        alternativeFixes: null,
-      }],
+      issues: [
+        {
+          severity: "P2",
+          confidence: 80,
+          category: "maintainability",
+          title: "Consider an alternative",
+          file: "src/review.ts",
+          line: null,
+          symbol: "",
+          description: "The provider used the strict-schema null sentinel.",
+          evidence: "The wire value is null.",
+          suggestion: "Keep the domain field optional.",
+          verification: "Parse the report.",
+          alternativeFixes: null,
+        },
+      ],
     });
 
     expect(parsed.issues[0]).not.toHaveProperty("alternativeFixes");
   });
 });
 
-function assertOpenAiStrictCompatible(
-  schema: unknown,
-  path = "$",
-): void {
+function assertOpenAiStrictCompatible(schema: unknown, path = "$"): void {
   if (typeof schema !== "object" || schema === null || Array.isArray(schema)) {
     return;
   }
@@ -636,9 +628,7 @@ test("all provider-facing review schemas use the OpenAI strict subset recursivel
 describe("structured review readable formatting", () => {
   test("renders an empty report in the established section order", () => {
     const output = formatStructuredReviewReport(emptyReport);
-    const headings = output
-      .split("\n")
-      .filter((line) => line.startsWith("## "));
+    const headings = output.split("\n").filter((line) => line.startsWith("## "));
 
     expect(headings).toEqual([
       "## Review Scope",
@@ -652,9 +642,7 @@ describe("structured review readable formatting", () => {
       "## Summary of change",
       "## Review summary",
     ]);
-    expect(output).toContain(
-      "No high-confidence issues were found in the reviewed scope.",
-    );
+    expect(output).toContain("No high-confidence issues were found in the reviewed scope.");
     expect(output).toContain("- Commit created: None.");
     expect(output).not.toContain('"reviewScope"');
   });
@@ -682,17 +670,9 @@ describe("structured review readable formatting", () => {
 
   test("reports the test counts in the documented order", () => {
     const output = formatStructuredReviewReport(fullyPopulatedReport);
-    const testResults = output
-      .slice(output.indexOf("## Test Results"))
-      .split("\n")
-      .slice(1, 5);
+    const testResults = output.slice(output.indexOf("## Test Results")).split("\n").slice(1, 5);
 
-    expect(testResults).toEqual([
-      "- Total: 3",
-      "- Passed: 1",
-      "- Failed: 1",
-      "- Not run: 1",
-    ]);
+    expect(testResults).toEqual(["- Total: 3", "- Passed: 1", "- Failed: 1", "- Not run: 1"]);
   });
 
   test("renders a legacy report rather than refusing to display it", () => {
@@ -728,10 +708,7 @@ describe("pooled finding and reconciliation contracts", () => {
     expect(parseReviewFindingPool(findingPool)).toBe(findingPool);
     expect(safeParseReviewFindingPool(findingPool).success).toBe(true);
     expect(isReviewFindingPool(findingPool)).toBe(true);
-    expect(REVIEW_FINDING_POOL_JSON_SCHEMA.required).toEqual([
-      "issues",
-      "coverageGaps",
-    ]);
+    expect(REVIEW_FINDING_POOL_JSON_SCHEMA.required).toEqual(["issues", "coverageGaps"]);
   });
 
   test("rejects empty and duplicate stable pool IDs across finding kinds", () => {
@@ -780,10 +757,7 @@ describe("pooled finding and reconciliation contracts", () => {
     };
     const duplicateUpdate = {
       ...reconciliation,
-      issueUpdates: [
-        reconciliation.issueUpdates[0],
-        reconciliation.issueUpdates[0],
-      ],
+      issueUpdates: [reconciliation.issueUpdates[0], reconciliation.issueUpdates[0]],
     };
     const duplicateAcrossKinds = {
       ...reconciliation,
@@ -796,9 +770,7 @@ describe("pooled finding and reconciliation contracts", () => {
     };
 
     for (const invalid of [missingPoolId, duplicateUpdate, duplicateAcrossKinds]) {
-      expect(() => parseReviewReconciliation(invalid)).toThrow(
-        ReviewContractValidationError,
-      );
+      expect(() => parseReviewReconciliation(invalid)).toThrow(ReviewContractValidationError);
       expect(isReviewReconciliation(invalid)).toBe(false);
     }
   });

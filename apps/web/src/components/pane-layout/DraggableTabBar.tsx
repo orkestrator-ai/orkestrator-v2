@@ -1,9 +1,6 @@
 import { useMemo, useState, useCallback } from "react";
 import { toast } from "sonner";
-import {
-  SortableContext,
-  horizontalListSortingStrategy,
-} from "@dnd-kit/sortable";
+import { SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortable";
 import { usePaneLayoutStore, useFileDirtyStore } from "@/stores";
 import type { PaneLeaf } from "@/types/paneLayout";
 import { createDraggableTabId, getNativeAgentData, parseDraggableTabId } from "@/types/paneLayout";
@@ -60,33 +57,63 @@ export function DraggableTabBar({
   const isDirty = useFileDirtyStore((state) => state.isDirty);
   const clearDirty = useFileDirtyStore((state) => state.clearDirty);
 
-  const discardTabDraft = useCallback((tabId: string): Promise<void> => {
-    const tab = pane.tabs.find((candidate) => candidate.id === tabId);
-    if (tab?.type === "file" && tab.fileData?.filePath) {
-      const filePath = tab.fileData.filePath;
-      const revisionState = getFileDraftRevisionState(tabId);
-      return discardFileDraft(
-        environmentId,
-        filePath,
-        revisionState,
-      ).then(() => {
-        releaseFileDraftRevisionState(tabId);
-      }).catch((error) => {
+  const discardTabDraft = useCallback(
+    (tabId: string): Promise<void> => {
+      const tab = pane.tabs.find((candidate) => candidate.id === tabId);
+      if (tab?.type === "file" && tab.fileData?.filePath) {
+        const filePath = tab.fileData.filePath;
+        const revisionState = getFileDraftRevisionState(tabId);
+        return discardFileDraft(environmentId, filePath, revisionState)
+          .then(() => {
+            releaseFileDraftRevisionState(tabId);
+          })
+          .catch((error) => {
+            if (error instanceof DraftRevisionConflictError) {
+              toast.error("File draft changed in another window", {
+                id: `file-draft-close-conflict:${tabId}`,
+                description:
+                  "The tab stayed open. Discard the newer saved draft explicitly, then close it again.",
+                action: {
+                  label: "Discard saved draft",
+                  onClick: () => {
+                    void resolveFileDraftDiscardConflict(environmentId, filePath, revisionState)
+                      .then(() => {
+                        releaseFileDraftRevisionState(tabId);
+                      })
+                      .catch((retryError) => {
+                        console.warn(
+                          "[DraggableTabBar] Failed to resolve file draft conflict:",
+                          retryError,
+                        );
+                        toast.error("The saved draft changed again. Try discarding it once more.");
+                      });
+                  },
+                },
+              });
+            }
+            throw error;
+          });
+      }
+      const platform = tab ? getNativeAgentData(tab)?.platform : undefined;
+      const namespace =
+        platform === "claude" || platform === "codex" || platform === "opencode" ? platform : null;
+      if (!namespace) return Promise.resolve();
+      const sessionKey = createSessionKey(environmentId, tabId);
+      const draftKey = composeDraftKey(namespace, environmentId, sessionKey);
+      return discardComposeDraft(draftKey).catch((error) => {
         if (error instanceof DraftRevisionConflictError) {
-          toast.error("File draft changed in another window", {
-            id: `file-draft-close-conflict:${tabId}`,
-            description: "The tab stayed open. Discard the newer saved draft explicitly, then close it again.",
+          toast.error("Draft changed in another window", {
+            id: `compose-draft-close-conflict:${tabId}`,
+            description:
+              "The tab stayed open. Discard the newer saved draft explicitly, then close it again.",
             action: {
               label: "Discard saved draft",
               onClick: () => {
-                void resolveFileDraftDiscardConflict(
-                  environmentId,
-                  filePath,
-                  revisionState,
-                ).then(() => {
-                  releaseFileDraftRevisionState(tabId);
-                }).catch((retryError) => {
-                  console.warn("[DraggableTabBar] Failed to resolve file draft conflict:", retryError);
+                void resolveComposeDraftDiscardConflict(draftKey).catch((retryError) => {
+                  console.warn(
+                    "[DraggableTabBar] Failed to resolve compose draft conflict:",
+                    retryError,
+                  );
                   toast.error("The saved draft changed again. Try discarding it once more.");
                 });
               },
@@ -95,49 +122,19 @@ export function DraggableTabBar({
         }
         throw error;
       });
-    }
-    const platform = tab ? getNativeAgentData(tab)?.platform : undefined;
-    const namespace = platform === "claude" || platform === "codex" || platform === "opencode"
-      ? platform
-      : null;
-    if (!namespace) return Promise.resolve();
-    const sessionKey = createSessionKey(environmentId, tabId);
-    const draftKey = composeDraftKey(namespace, environmentId, sessionKey);
-    return discardComposeDraft(draftKey).catch((error) => {
-      if (error instanceof DraftRevisionConflictError) {
-        toast.error("Draft changed in another window", {
-          id: `compose-draft-close-conflict:${tabId}`,
-          description: "The tab stayed open. Discard the newer saved draft explicitly, then close it again.",
-          action: {
-            label: "Discard saved draft",
-            onClick: () => {
-              void resolveComposeDraftDiscardConflict(draftKey).catch(
-                (retryError) => {
-                  console.warn("[DraggableTabBar] Failed to resolve compose draft conflict:", retryError);
-                  toast.error("The saved draft changed again. Try discarding it once more.");
-                },
-              );
-            },
-          },
-        });
-      }
-      throw error;
-    });
-  }, [environmentId, pane.tabs]);
+    },
+    [environmentId, pane.tabs],
+  );
 
   // State for unsaved changes confirmation dialog
   const [pendingCloseTabIds, setPendingCloseTabIds] = useState<string[]>([]);
-  const [pendingCloseTabNames, setPendingCloseTabNames] = useState<string[]>(
-    [],
-  );
+  const [pendingCloseTabNames, setPendingCloseTabNames] = useState<string[]>([]);
 
   // Create sortable IDs for all tabs in this pane
   // When a tab from another pane is being dragged over this pane,
   // include it in the sortable items so dnd-kit can show visual feedback
   const sortableIds = useMemo(() => {
-    const ids: string[] = pane.tabs.map((tab) =>
-      createDraggableTabId(tab.id, pane.id),
-    );
+    const ids: string[] = pane.tabs.map((tab) => createDraggableTabId(tab.id, pane.id));
 
     // If a tab from another pane is being dragged over this pane, add it to the list
     if (activeDragId && dragOverPaneId === pane.id) {
@@ -166,9 +163,7 @@ export function DraggableTabBar({
   const closeTabs = useCallback(
     async (tabIds: string[]) => {
       const uniqueTabIds = Array.from(new Set(tabIds));
-      const idsInPane = uniqueTabIds.filter((tabId) =>
-        pane.tabs.some((tab) => tab.id === tabId),
-      );
+      const idsInPane = uniqueTabIds.filter((tabId) => pane.tabs.some((tab) => tab.id === tabId));
 
       if (idsInPane.length === 0) {
         return;
@@ -231,9 +226,7 @@ export function DraggableTabBar({
 
   const handleCloseOthers = useCallback(
     (tabId: string) => {
-      closeTabs(
-        pane.tabs.filter((tab) => tab.id !== tabId).map((tab) => tab.id),
-      );
+      closeTabs(pane.tabs.filter((tab) => tab.id !== tabId).map((tab) => tab.id));
     },
     [closeTabs, pane.tabs],
   );
@@ -298,10 +291,7 @@ export function DraggableTabBar({
           isDropTarget && "bg-primary/10",
         )}
       >
-        <SortableContext
-          items={sortableIds}
-          strategy={horizontalListSortingStrategy}
-        >
+        <SortableContext items={sortableIds} strategy={horizontalListSortingStrategy}>
           {pane.tabs.map((tab, index) => {
             const isActive = tab.id === pane.activeTabId;
             return (
@@ -341,15 +331,12 @@ export function DraggableTabBar({
           <AlertDialogHeader>
             <AlertDialogTitle>Unsaved Changes</AlertDialogTitle>
             <AlertDialogDescription>
-              You have unsaved changes in {pendingCloseTabLabel}. Are you sure
-              you want to close these tabs without saving? Your changes will be
-              lost.
+              You have unsaved changes in {pendingCloseTabLabel}. Are you sure you want to close
+              these tabs without saving? Your changes will be lost.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel onClick={handleCancelClose}>
-              Cancel
-            </AlertDialogCancel>
+            <AlertDialogCancel onClick={handleCancelClose}>Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleConfirmClose}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"

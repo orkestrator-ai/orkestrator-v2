@@ -49,26 +49,26 @@ export interface AcpNormalizedSessionConfig {
 
 export type AcpConfigRpc =
   | {
-    method: "session/set_config_option";
-    params: {
-      sessionId: string;
-      configId: string;
-      value: string | boolean;
-      type?: "boolean";
-    };
-  }
+      method: "session/set_config_option";
+      params: {
+        sessionId: string;
+        configId: string;
+        value: string | boolean;
+        type?: "boolean";
+      };
+    }
   | {
-    method: "session/set_mode";
-    params: { sessionId: string; modeId: string };
-  }
+      method: "session/set_mode";
+      params: { sessionId: string; modeId: string };
+    }
   | {
-    method: "session/set_model";
-    params: {
-      sessionId: string;
-      modelId: string;
-      _meta?: { reasoningEffort: string };
+      method: "session/set_model";
+      params: {
+        sessionId: string;
+        modelId: string;
+        _meta?: { reasoningEffort: string };
+      };
     };
-  };
 
 const PLATFORM_LABEL: Record<AcpProvider, string> = {
   cursor: "Cursor",
@@ -123,8 +123,8 @@ export function normalizeAcpSessionConfig(
     configOptions,
     availableModeIds,
     usesSetModel,
-    currentModelId: grokModels.currentModelId
-      ?? optionCurrentString(selectOption(configOptions, "model")),
+    currentModelId:
+      grokModels.currentModelId ?? optionCurrentString(selectOption(configOptions, "model")),
   };
 
   const composer = usesSetModel
@@ -161,9 +161,10 @@ export function applyConfigOptionUpdate(
             description: model.description,
             _meta: {
               supportsReasoningEffort: (model.reasoning?.length ?? 0) > 0,
-              reasoningEffort: model.id === current.composer.selectedModelId
-                ? current.composer.selectedReasoningId
-                : model.defaultReasoningId,
+              reasoningEffort:
+                model.id === current.composer.selectedModelId
+                  ? current.composer.selectedReasoningId
+                  : model.defaultReasoningId,
               reasoningEfforts: model.reasoning?.map((option) => ({ value: option.id })),
               totalContextTokens: model.contextWindow,
             },
@@ -183,11 +184,12 @@ export function applyCurrentModeUpdate(
     composer: {
       ...current.composer,
       selectedModeId,
-      modes: current.composer.modes.length > 0
-        ? current.composer.modes
-        : Object.keys(current.wire.availableModeIds).length > 0
-          ? CONVERSATION_MODES.filter((mode) => current.wire.availableModeIds[mode.id])
-          : [],
+      modes:
+        current.composer.modes.length > 0
+          ? current.composer.modes
+          : Object.keys(current.wire.availableModeIds).length > 0
+            ? CONVERSATION_MODES.filter((mode) => current.wire.availableModeIds[mode.id])
+            : [],
     },
   };
 }
@@ -198,19 +200,21 @@ export function applyGrokModelChange(
   update: unknown,
 ): AcpNormalizedSessionConfig {
   const root = isObject(update) ? update : {};
-  const modelId = typeof root.model_id === "string"
-    ? root.model_id
-    : typeof root.modelId === "string"
-      ? root.modelId
-      : current.composer.selectedModelId;
-  const effort = typeof root.reasoning_effort === "string"
-    ? root.reasoning_effort
-    : current.composer.selectedReasoningId;
-  const models = current.composer.models.map((model) => (
+  const modelId =
+    typeof root.model_id === "string"
+      ? root.model_id
+      : typeof root.modelId === "string"
+        ? root.modelId
+        : current.composer.selectedModelId;
+  const effort =
+    typeof root.reasoning_effort === "string"
+      ? root.reasoning_effort
+      : current.composer.selectedReasoningId;
+  const models = current.composer.models.map((model) =>
     model.id === modelId && effort
       ? { ...model, defaultReasoningId: model.defaultReasoningId }
-      : model
-  ));
+      : model,
+  );
   const selected = models.find((model) => model.id === modelId) ?? models[0];
   // When the agent exposes an explicit fast toggle, that option is the state —
   // a model id switch says nothing about it.
@@ -221,15 +225,17 @@ export function applyGrokModelChange(
       ...current.composer,
       models,
       selectedModelId: selected?.id,
-      selectedReasoningId: effort && selected?.reasoning?.some((option) => option.id === effort)
-        ? effort
-        : selected?.defaultReasoningId,
+      selectedReasoningId:
+        effort && selected?.reasoning?.some((option) => option.id === effort)
+          ? effort
+          : selected?.defaultReasoningId,
       fastModeAvailable: selected?.supportsSpeed === true,
-      fastModeEnabled: selected?.supportsSpeed !== true
-        ? null
-        : fastOption
-          ? fastModeFromOption(fastOption)
-          : isFastModelId(selected.id),
+      fastModeEnabled:
+        selected?.supportsSpeed !== true
+          ? null
+          : fastOption
+            ? fastModeFromOption(fastOption)
+            : isFastModelId(selected.id),
     },
   };
 }
@@ -310,8 +316,11 @@ export function planComposerApply(
   const nextReasoningId = patch.reasoningId ?? current.composer.selectedReasoningId;
   const nextFast = patch.fastMode ?? current.composer.fastModeEnabled === true;
 
-  if (patch.mode && current.wire.availableModeIds[patch.mode]
-    && patch.mode !== current.composer.selectedModeId) {
+  if (
+    patch.mode &&
+    current.wire.availableModeIds[patch.mode] &&
+    patch.mode !== current.composer.selectedModeId
+  ) {
     calls.push({
       method: "session/set_mode",
       params: { sessionId, modeId: current.wire.availableModeIds[patch.mode]! },
@@ -326,8 +335,7 @@ export function planComposerApply(
   let modelSentAsOption = false;
   let reasoningSentAsOption = false;
 
-  if (modelOption && patch.modelId
-    && patch.modelId !== current.composer.selectedModelId) {
+  if (modelOption && patch.modelId && patch.modelId !== current.composer.selectedModelId) {
     const value = resolveSelectValue(modelOption, patch.modelId);
     if (value !== undefined) {
       calls.push({
@@ -338,8 +346,11 @@ export function planComposerApply(
     }
   }
 
-  if (thoughtOption && patch.reasoningId
-    && patch.reasoningId !== current.composer.selectedReasoningId) {
+  if (
+    thoughtOption &&
+    patch.reasoningId &&
+    patch.reasoningId !== current.composer.selectedReasoningId
+  ) {
     const value = resolveSelectValue(thoughtOption, patch.reasoningId);
     if (value !== undefined) {
       calls.push({
@@ -350,8 +361,11 @@ export function planComposerApply(
     }
   }
 
-  if (fastOption && patch.fastMode !== undefined
-    && patch.fastMode !== optionIsEnabled(fastOption)) {
+  if (
+    fastOption &&
+    patch.fastMode !== undefined &&
+    patch.fastMode !== optionIsEnabled(fastOption)
+  ) {
     if (fastOption.type === "boolean") {
       calls.push({
         method: "session/set_config_option",
@@ -363,8 +377,9 @@ export function planComposerApply(
         },
       });
     } else {
-      const value = resolveSelectValue(fastOption, patch.fastMode ? "fast" : "normal")
-        ?? (patch.fastMode ? "true" : "false");
+      const value =
+        resolveSelectValue(fastOption, patch.fastMode ? "fast" : "normal") ??
+        (patch.fastMode ? "true" : "false");
       calls.push({
         method: "session/set_config_option",
         params: { sessionId, configId: fastOption.configId, value },
@@ -376,37 +391,33 @@ export function planComposerApply(
   // config-option calls above; repeating the change as `session/set_model`
   // would re-send effort in a `_meta` field Cursor does not read, and race the
   // `session/update` the config option is about to produce.
-  const needsSetModel = current.wire.usesSetModel && (
-    (
-      !modelSentAsOption
-      && patch.modelId !== undefined
-      && patch.modelId !== current.composer.selectedModelId
-    )
-    || (
-      !reasoningSentAsOption
-      && patch.reasoningId !== undefined
-      && patch.reasoningId !== current.composer.selectedReasoningId
-    )
-    || (
-      patch.fastMode !== undefined
-      && current.composer.fastModeAvailable
-      && !fastOption
-      && !modelOption
-    )
-  );
+  const needsSetModel =
+    current.wire.usesSetModel &&
+    ((!modelSentAsOption &&
+      patch.modelId !== undefined &&
+      patch.modelId !== current.composer.selectedModelId) ||
+      (!reasoningSentAsOption &&
+        patch.reasoningId !== undefined &&
+        patch.reasoningId !== current.composer.selectedReasoningId) ||
+      (patch.fastMode !== undefined &&
+        current.composer.fastModeAvailable &&
+        !fastOption &&
+        !modelOption));
   if (needsSetModel && nextModelId) {
-    const modelId = patch.fastMode !== undefined && current.composer.fastModeAvailable && !fastOption
-      ? siblingFastModelId(nextModelId, current.composer.models, nextFast) ?? nextModelId
-      : nextModelId;
+    const modelId =
+      patch.fastMode !== undefined && current.composer.fastModeAvailable && !fastOption
+        ? (siblingFastModelId(nextModelId, current.composer.models, nextFast) ?? nextModelId)
+        : nextModelId;
     const selected = current.composer.models.find((model) => model.id === modelId);
     // Effort rides along only for agents whose model catalogue owns it. Where a
     // `thought_level` option exists it is the effort surface, and its values are
     // not the `_meta.reasoningEffort` vocabulary this field carries.
-    const carry = !thoughtOption
-      && nextReasoningId
-      && selected?.reasoning?.some((option) => option.id === nextReasoningId)
-      ? nextReasoningId
-      : undefined;
+    const carry =
+      !thoughtOption &&
+      nextReasoningId &&
+      selected?.reasoning?.some((option) => option.id === nextReasoningId)
+        ? nextReasoningId
+        : undefined;
     calls.push({
       method: "session/set_model",
       params: {
@@ -416,10 +427,10 @@ export function planComposerApply(
       },
     });
   } else if (
-    !current.wire.usesSetModel
-    && !modelOption
-    && patch.modelId
-    && patch.modelId !== current.composer.selectedModelId
+    !current.wire.usesSetModel &&
+    !modelOption &&
+    patch.modelId &&
+    patch.modelId !== current.composer.selectedModelId
   ) {
     // Cursor sometimes advertises an empty `configOptions[model]` list. The
     // startup `--model` flag is the documented pin; `session/set_model` is the
@@ -471,8 +482,7 @@ function composerFromConfigOptions(
       supportsMode: Object.keys(availableModeIds).length > 0,
     };
   });
-  const selectedModelId = optionCurrentString(modelOption)
-    || models[0]?.id;
+  const selectedModelId = optionCurrentString(modelOption) || models[0]?.id;
   const selected = models.find((model) => model.id === selectedModelId) ?? models[0];
   const fastModeAvailable = Boolean(fastOption) || selected?.supportsSpeed === true;
   const fastModeEnabled = fastOption
@@ -487,9 +497,10 @@ function composerFromConfigOptions(
     fastModeEnabled: fastModeAvailable ? fastModeEnabled : null,
     fastModeAvailable,
     selectedModeId: mapModeId(currentModeId),
-    modes: Object.keys(availableModeIds).length > 0
-      ? CONVERSATION_MODES.filter((mode) => availableModeIds[mode.id])
-      : [],
+    modes:
+      Object.keys(availableModeIds).length > 0
+        ? CONVERSATION_MODES.filter((mode) => availableModeIds[mode.id])
+        : [],
   };
 }
 
@@ -517,11 +528,12 @@ function composerFromGrokModels(
     // snapshot by `applyConfigOptionUpdate`, so allowing it to win here would
     // freeze obsolete values and discard the option's vendor-provided labels.
     const reasoning = shared.options.length > 0 ? shared.options : own;
-    const fastSibling = catalog.models.some((candidate) => (
-      candidate.modelId !== entry.modelId
-      && sameModelFamily(candidate.modelId, entry.modelId)
-      && isFastModelId(candidate.modelId) !== isFastModelId(entry.modelId)
-    ));
+    const fastSibling = catalog.models.some(
+      (candidate) =>
+        candidate.modelId !== entry.modelId &&
+        sameModelFamily(candidate.modelId, entry.modelId) &&
+        isFastModelId(candidate.modelId) !== isFastModelId(entry.modelId),
+    );
     return {
       platform: provider,
       id: entry.modelId,
@@ -529,9 +541,10 @@ function composerFromGrokModels(
       description: entry.description,
       providerLabel: PLATFORM_LABEL[provider],
       reasoning: reasoning.length > 0 ? reasoning : undefined,
-      defaultReasoningId: shared.options.length > 0
-        ? shared.selectedId ?? fallbackReasoningId(reasoning)
-        : entry.reasoningEffort ?? fallbackReasoningId(reasoning),
+      defaultReasoningId:
+        shared.options.length > 0
+          ? (shared.selectedId ?? fallbackReasoningId(reasoning))
+          : (entry.reasoningEffort ?? fallbackReasoningId(reasoning)),
       supportsSpeed: fastSibling || Boolean(fastOption),
       supportsMode: Object.keys(availableModeIds).length > 0,
       ...(entry.contextWindow === undefined ? {} : { contextWindow: entry.contextWindow }),
@@ -545,17 +558,19 @@ function composerFromGrokModels(
     selectedModelId: selected?.id,
     // The config option is the agent's live effort state, so it outranks a
     // per-model default carried over from the previous snapshot.
-    selectedReasoningId: shared.selectedId
-      ?? selectedReasoning?.reasoningEffort
-      ?? selected?.defaultReasoningId,
+    selectedReasoningId:
+      shared.selectedId ?? selectedReasoning?.reasoningEffort ?? selected?.defaultReasoningId,
     fastModeEnabled: fastOption
       ? fastState
-      : selected?.supportsSpeed ? isFastModelId(selected.id) : null,
+      : selected?.supportsSpeed
+        ? isFastModelId(selected.id)
+        : null,
     fastModeAvailable: selected?.supportsSpeed === true,
     selectedModeId: mapModeId(currentModeId),
-    modes: Object.keys(availableModeIds).length > 0
-      ? CONVERSATION_MODES.filter((mode) => availableModeIds[mode.id])
-      : [],
+    modes:
+      Object.keys(availableModeIds).length > 0
+        ? CONVERSATION_MODES.filter((mode) => availableModeIds[mode.id])
+        : [],
   };
 }
 
@@ -587,10 +602,12 @@ function parseAvailableModes(value: unknown): { currentId?: string; available: P
   const available = Array.isArray(value.availableModes)
     ? value.availableModes.flatMap((candidate) => {
         if (!isObject(candidate) || typeof candidate.id !== "string") return [];
-        return [{
-          id: candidate.id,
-          name: typeof candidate.name === "string" ? candidate.name : candidate.id,
-        }];
+        return [
+          {
+            id: candidate.id,
+            name: typeof candidate.name === "string" ? candidate.name : candidate.id,
+          },
+        ];
       })
     : [];
   return {
@@ -611,7 +628,12 @@ function modeIdMap(available: ParsedMode[]): AcpConfigWire["availableModeIds"] {
 function mapModeId(modeId: string | undefined): AgentConversationMode | undefined {
   if (!modeId) return undefined;
   const normalized = modeId.trim().toLowerCase();
-  if (normalized === "agent" || normalized === "code" || normalized === "build" || normalized === "agentic") {
+  if (
+    normalized === "agent" ||
+    normalized === "code" ||
+    normalized === "build" ||
+    normalized === "agentic"
+  ) {
     return "build";
   }
   if (normalized === "plan" || normalized === "architect" || normalized === "ask") {
@@ -629,10 +651,7 @@ function reverseModeId(
 
 function persistedModes(current: AcpNormalizedSessionConfig): Record<string, unknown> {
   return {
-    currentModeId: reverseModeId(
-      current.wire.availableModeIds,
-      current.composer.selectedModeId,
-    ),
+    currentModeId: reverseModeId(current.wire.availableModeIds, current.composer.selectedModeId),
     availableModes: Object.entries(current.wire.availableModeIds).map(([id, modeId]) => ({
       id: modeId,
       name: id === "plan" ? "Plan" : "Build",
@@ -644,48 +663,57 @@ function parseConfigOptions(value: unknown): AcpConfigOption[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((candidate) => {
     if (!isObject(candidate)) return [];
-    const configId = typeof candidate.configId === "string"
-      ? candidate.configId
-      : typeof candidate.id === "string"
-        ? candidate.id
-        : "";
-    if (!configId) return [];
-    const type = candidate.type === "boolean" ? "boolean" as const : "select" as const;
-    const currentValue = type === "boolean"
-      ? candidate.currentValue === true
-      : typeof candidate.currentValue === "string"
-        ? candidate.currentValue
-        : typeof candidate.currentValue === "boolean"
-          ? candidate.currentValue
+    const configId =
+      typeof candidate.configId === "string"
+        ? candidate.configId
+        : typeof candidate.id === "string"
+          ? candidate.id
           : "";
+    if (!configId) return [];
+    const type = candidate.type === "boolean" ? ("boolean" as const) : ("select" as const);
+    const currentValue =
+      type === "boolean"
+        ? candidate.currentValue === true
+        : typeof candidate.currentValue === "string"
+          ? candidate.currentValue
+          : typeof candidate.currentValue === "boolean"
+            ? candidate.currentValue
+            : "";
     const seenValues = new Set<string>();
     const options = Array.isArray(candidate.options)
       ? candidate.options.flatMap((option) => {
           if (!isObject(option)) return [];
-          const optionValue = typeof option.value === "string"
-            ? option.value
-            : typeof option.id === "string"
-              ? option.id
-              : "";
+          const optionValue =
+            typeof option.value === "string"
+              ? option.value
+              : typeof option.id === "string"
+                ? option.id
+                : "";
           // Model ids come straight from here, and a duplicate would fail the
           // persisted validator on the next bridge start.
-          if (!optionValue || seenValues.has(optionValue)
-            || seenValues.size >= MAX_CATALOG_MODELS) return [];
+          if (!optionValue || seenValues.has(optionValue) || seenValues.size >= MAX_CATALOG_MODELS)
+            return [];
           seenValues.add(optionValue);
-          return [{
-            value: optionValue,
-            name: typeof option.name === "string" ? option.name : optionValue,
-            ...(typeof option.description === "string" ? { description: option.description } : {}),
-          }];
+          return [
+            {
+              value: optionValue,
+              name: typeof option.name === "string" ? option.name : optionValue,
+              ...(typeof option.description === "string"
+                ? { description: option.description }
+                : {}),
+            },
+          ];
         })
       : undefined;
-    return [{
-      configId,
-      ...(typeof candidate.category === "string" ? { category: candidate.category } : {}),
-      type,
-      currentValue,
-      ...(options ? { options } : {}),
-    }];
+    return [
+      {
+        configId,
+        ...(typeof candidate.category === "string" ? { category: candidate.category } : {}),
+        type,
+        currentValue,
+        ...(options ? { options } : {}),
+      },
+    ];
   });
 }
 
@@ -710,11 +738,12 @@ function parseGrokModelCatalog(value: unknown): GrokModelCatalog {
   const seen = new Set<string>();
   const models = list.flatMap((candidate) => {
     if (!isObject(candidate)) return [];
-    const modelId = typeof candidate.modelId === "string"
-      ? candidate.modelId
-      : typeof candidate.id === "string"
-        ? candidate.id
-        : "";
+    const modelId =
+      typeof candidate.modelId === "string"
+        ? candidate.modelId
+        : typeof candidate.id === "string"
+          ? candidate.id
+          : "";
     // A duplicate id would survive normalization but fail the persisted
     // validator, so the bridge would write state it cannot load back.
     if (!modelId || seen.has(modelId) || seen.size >= MAX_CATALOG_MODELS) return [];
@@ -723,26 +752,33 @@ function parseGrokModelCatalog(value: unknown): GrokModelCatalog {
     const seenEfforts = new Set<string>();
     const reasoningEfforts = Array.isArray(meta.reasoningEfforts)
       ? meta.reasoningEfforts.flatMap((entry) => {
-          const effort = typeof entry === "string"
-            ? entry
-            : isObject(entry) && typeof entry.value === "string"
-              ? entry.value
-              : "";
-          if (!effort || seenEfforts.has(effort)
-            || seenEfforts.size >= MAX_REASONING_OPTIONS) return [];
+          const effort =
+            typeof entry === "string"
+              ? entry
+              : isObject(entry) && typeof entry.value === "string"
+                ? entry.value
+                : "";
+          if (!effort || seenEfforts.has(effort) || seenEfforts.size >= MAX_REASONING_OPTIONS)
+            return [];
           seenEfforts.add(effort);
           return [effort];
         })
       : [];
     const contextWindow = positiveInteger(meta.totalContextTokens);
-    return [{
-      modelId,
-      name: typeof candidate.name === "string" ? candidate.name : modelId,
-      ...(typeof candidate.description === "string" ? { description: candidate.description } : {}),
-      ...(typeof meta.reasoningEffort === "string" ? { reasoningEffort: meta.reasoningEffort } : {}),
-      reasoningEfforts,
-      ...(contextWindow === undefined ? {} : { contextWindow }),
-    }];
+    return [
+      {
+        modelId,
+        name: typeof candidate.name === "string" ? candidate.name : modelId,
+        ...(typeof candidate.description === "string"
+          ? { description: candidate.description }
+          : {}),
+        ...(typeof meta.reasoningEffort === "string"
+          ? { reasoningEffort: meta.reasoningEffort }
+          : {}),
+        reasoningEfforts,
+        ...(contextWindow === undefined ? {} : { contextWindow }),
+      },
+    ];
   });
   return {
     currentModelId: typeof value.currentModelId === "string" ? value.currentModelId : undefined,
@@ -755,13 +791,14 @@ function parsePersistedComposer(
   value: Record<string, unknown>,
 ): NativeAgentComposerState | null {
   if (
-    !Array.isArray(value.models)
-    || value.models.length > MAX_CATALOG_MODELS
-    || !Array.isArray(value.modes)
-    || value.modes.length > CONVERSATION_MODES.length
-    || typeof value.fastModeAvailable !== "boolean"
-    || !(typeof value.fastModeEnabled === "boolean" || value.fastModeEnabled === null)
-  ) return null;
+    !Array.isArray(value.models) ||
+    value.models.length > MAX_CATALOG_MODELS ||
+    !Array.isArray(value.modes) ||
+    value.modes.length > CONVERSATION_MODES.length ||
+    typeof value.fastModeAvailable !== "boolean" ||
+    !(typeof value.fastModeEnabled === "boolean" || value.fastModeEnabled === null)
+  )
+    return null;
 
   const models: AgentModel[] = [];
   const modelIds = new Set<string>();
@@ -773,8 +810,8 @@ function parsePersistedComposer(
     modelIds.add(id);
     let reasoning: AgentReasoningOption[] | undefined;
     if (candidate.reasoning !== undefined) {
-      if (!Array.isArray(candidate.reasoning)
-        || candidate.reasoning.length > MAX_REASONING_OPTIONS) return null;
+      if (!Array.isArray(candidate.reasoning) || candidate.reasoning.length > MAX_REASONING_OPTIONS)
+        return null;
       reasoning = [];
       const reasoningIds = new Set<string>();
       for (const option of candidate.reasoning) {
@@ -799,9 +836,10 @@ function parsePersistedComposer(
     const defaultReasoningId = optionalBoundedString(candidate.defaultReasoningId, 256);
     if (providerLabel === null || description === null || defaultReasoningId === null) return null;
     if (
-      candidate.supportsSpeed !== undefined && typeof candidate.supportsSpeed !== "boolean"
-      || candidate.supportsMode !== undefined && typeof candidate.supportsMode !== "boolean"
-    ) return null;
+      (candidate.supportsSpeed !== undefined && typeof candidate.supportsSpeed !== "boolean") ||
+      (candidate.supportsMode !== undefined && typeof candidate.supportsMode !== "boolean")
+    )
+      return null;
     const contextWindow = positiveInteger(candidate.contextWindow);
     if (candidate.contextWindow !== undefined && contextWindow === undefined) return null;
     models.push({
@@ -812,8 +850,12 @@ function parsePersistedComposer(
       ...(description ? { description } : {}),
       ...(reasoning ? { reasoning } : {}),
       ...(defaultReasoningId ? { defaultReasoningId } : {}),
-      ...(typeof candidate.supportsSpeed === "boolean" ? { supportsSpeed: candidate.supportsSpeed } : {}),
-      ...(typeof candidate.supportsMode === "boolean" ? { supportsMode: candidate.supportsMode } : {}),
+      ...(typeof candidate.supportsSpeed === "boolean"
+        ? { supportsSpeed: candidate.supportsSpeed }
+        : {}),
+      ...(typeof candidate.supportsMode === "boolean"
+        ? { supportsMode: candidate.supportsMode }
+        : {}),
       ...(contextWindow === undefined ? {} : { contextWindow }),
     });
   }
@@ -831,7 +873,11 @@ function parsePersistedComposer(
   const selectedModelId = optionalBoundedString(value.selectedModelId, 1_024);
   const selectedReasoningId = optionalBoundedString(value.selectedReasoningId, 256);
   if (selectedModelId === null || selectedReasoningId === null) return null;
-  if (value.selectedModeId !== undefined && value.selectedModeId !== "build" && value.selectedModeId !== "plan") {
+  if (
+    value.selectedModeId !== undefined &&
+    value.selectedModeId !== "build" &&
+    value.selectedModeId !== "plan"
+  ) {
     return null;
   }
   return {
@@ -847,11 +893,12 @@ function parsePersistedComposer(
 
 function parsePersistedWire(value: Record<string, unknown>): AcpConfigWire | null {
   if (
-    !Array.isArray(value.configOptions)
-    || value.configOptions.length > 64
-    || !isObject(value.availableModeIds)
-    || typeof value.usesSetModel !== "boolean"
-  ) return null;
+    !Array.isArray(value.configOptions) ||
+    value.configOptions.length > 64 ||
+    !isObject(value.availableModeIds) ||
+    typeof value.usesSetModel !== "boolean"
+  )
+    return null;
   const configOptions = parseConfigOptions(value.configOptions);
   if (configOptions.length !== value.configOptions.length) return null;
   const availableModeIds: AcpConfigWire["availableModeIds"] = {};
@@ -870,12 +917,11 @@ function parsePersistedWire(value: Record<string, unknown>): AcpConfigWire | nul
   };
 }
 
-function selectOption(
-  options: AcpConfigOption[],
-  category: string,
-): AcpConfigOption | undefined {
-  return options.find((option) => option.category === category)
-    ?? options.find((option) => option.configId === category);
+function selectOption(options: AcpConfigOption[], category: string): AcpConfigOption | undefined {
+  return (
+    options.find((option) => option.category === category) ??
+    options.find((option) => option.configId === category)
+  );
 }
 
 function optionCurrentString(option: AcpConfigOption | undefined): string | undefined {
@@ -889,11 +935,13 @@ function optionIsEnabled(option: AcpConfigOption): boolean {
 }
 
 function selectFastOption(options: AcpConfigOption[]): AcpConfigOption | undefined {
-  return options.find((option) =>
-    option.category === "model_config"
-    && /fast|speed|variant/i.test(option.configId)
-  ) ?? options.find((option) => option.category === "model_config" && option.type === "boolean")
-    ?? options.find((option) => /fast|speed/i.test(option.configId));
+  return (
+    options.find(
+      (option) => option.category === "model_config" && /fast|speed|variant/i.test(option.configId),
+    ) ??
+    options.find((option) => option.category === "model_config" && option.type === "boolean") ??
+    options.find((option) => /fast|speed/i.test(option.configId))
+  );
 }
 
 function resolveSelectValue(option: AcpConfigOption, requested: string): string | undefined {
@@ -903,9 +951,10 @@ function resolveSelectValue(option: AcpConfigOption, requested: string): string 
   return byName?.value;
 }
 
-function reasoningFromOptions(
-  thoughtOption: AcpConfigOption | undefined,
-): { options: AgentReasoningOption[]; selectedId?: string } {
+function reasoningFromOptions(thoughtOption: AcpConfigOption | undefined): {
+  options: AgentReasoningOption[];
+  selectedId?: string;
+} {
   if (!thoughtOption) return { options: [] };
   const options = (thoughtOption.options ?? [])
     .slice(0, MAX_REASONING_OPTIONS)
@@ -939,11 +988,12 @@ function isFastValue(value: string): boolean {
 }
 
 function hasFastSibling(id: string, options: AcpConfigOptionValue[]): boolean {
-  return options.some((option) => (
-    option.value !== id
-    && sameModelFamily(option.value, id)
-    && isFastModelId(option.value) !== isFastModelId(id)
-  ));
+  return options.some(
+    (option) =>
+      option.value !== id &&
+      sameModelFamily(option.value, id) &&
+      isFastModelId(option.value) !== isFastModelId(id),
+  );
 }
 
 function sameModelFamily(left: string, right: string): boolean {
@@ -964,9 +1014,9 @@ function siblingFastModelId(
   fast: boolean,
 ): string | undefined {
   if (isFastModelId(modelId) === fast) return modelId;
-  return models.find((model) => (
-    sameModelFamily(model.id, modelId) && isFastModelId(model.id) === fast
-  ))?.id;
+  return models.find(
+    (model) => sameModelFamily(model.id, modelId) && isFastModelId(model.id) === fast,
+  )?.id;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -985,18 +1035,12 @@ function boundedString(value: unknown, maximumBytes: number): string | undefined
 
 /** Vendor token counts, kept sane enough that a garbage value cannot render. */
 function positiveInteger(value: unknown): number | undefined {
-  return typeof value === "number"
-    && Number.isSafeInteger(value)
-    && value > 0
-    ? value
-    : undefined;
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
 function optionalBoundedString(value: unknown, maximumBytes: number): string | null | undefined {
   if (value === undefined) return undefined;
-  return typeof value === "string" && Buffer.byteLength(value) <= maximumBytes
-    ? value
-    : null;
+  return typeof value === "string" && Buffer.byteLength(value) <= maximumBytes ? value : null;
 }
 
 export { EMPTY_NATIVE_AGENT_COMPOSER_STATE };

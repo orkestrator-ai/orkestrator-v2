@@ -196,8 +196,8 @@ export async function replayRecording(
       unknownMethods.push(reduced.unknownMethod);
     }
     if (
-      reduced.unsupportedItemType
-      && !unsupportedItemTypes.includes(reduced.unsupportedItemType)
+      reduced.unsupportedItemType &&
+      !unsupportedItemTypes.includes(reduced.unsupportedItemType)
     ) {
       unsupportedItemTypes.push(reduced.unsupportedItemType);
     }

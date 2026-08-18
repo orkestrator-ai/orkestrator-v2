@@ -3,7 +3,11 @@
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { ImageBlockParam, TextBlockParam, ContentBlockParam } from "@anthropic-ai/sdk/resources/messages/messages";
+import type {
+  ImageBlockParam,
+  TextBlockParam,
+  ContentBlockParam,
+} from "@anthropic-ai/sdk/resources/messages/messages";
 import type {
   ModelInfo,
   SessionState,
@@ -31,10 +35,7 @@ import type {
 import { isSdkCompactBoundaryMessage, isSdkResultMessage } from "../types/index.js";
 import { TaskRegistry, isTaskListTool } from "@orkestrator/protocol/task-list";
 import { AGENT_INTERACTION_DEFAULT_TIMEOUT_MS } from "@orkestrator/protocol/agent-interactions";
-import {
-  isRootAssistantRecord,
-  normalizeBackendModelId,
-} from "@orkestrator/protocol/model-id";
+import { isRootAssistantRecord, normalizeBackendModelId } from "@orkestrator/protocol/model-id";
 import {
   structuredOutputFailure,
   type StructuredOutputResult,
@@ -63,9 +64,7 @@ import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import * as core from "./session-manager-core.js";
-import {
-  generateMessageId,
-} from "./session-manager-core.js";
+import { generateMessageId } from "./session-manager-core.js";
 import {
   LIVE_BACKGROUND_TASK_STATUSES,
   boundBackgroundTaskHistory,
@@ -154,7 +153,7 @@ export interface OrderedPartEntry {
  */
 export function parseMcpToolName(
   toolName: string,
-  knownServerNames?: Set<string>
+  knownServerNames?: Set<string>,
 ): McpToolMetadata {
   if (!toolName.startsWith("mcp_")) {
     return { isMcpTool: false };
@@ -171,10 +170,7 @@ export function parseMcpToolName(
 
     for (const serverName of knownServerNames) {
       // Check if remainder starts with "servername_"
-      if (
-        remainder.startsWith(serverName + "_") &&
-        serverName.length > maxLength
-      ) {
+      if (remainder.startsWith(serverName + "_") && serverName.length > maxLength) {
         matchedServer = serverName;
         maxLength = serverName.length;
       }
@@ -232,7 +228,7 @@ export function parseMessageContent(
   toolTracker?: ToolTracker,
   mcpServerNames?: Set<string>,
   activeTaskIds?: Set<string>,
-  taskRegistry?: Pick<TaskRegistry, "apply">
+  taskRegistry?: Pick<TaskRegistry, "apply">,
 ): {
   content: string;
   thinkingParts: NormalizedPart[];
@@ -301,10 +297,10 @@ export function parseMessageContent(
       const toolName = block.name || "Unknown tool";
       const isTask = isTaskToolName(toolName);
 
-      const toolDiff = block.input && typeof block.input === "object"
-        && !Array.isArray(block.input)
-        ? buildClaudeToolDiff(toolName, block.input as Record<string, unknown>)
-        : undefined;
+      const toolDiff =
+        block.input && typeof block.input === "object" && !Array.isArray(block.input)
+          ? buildClaudeToolDiff(toolName, block.input as Record<string, unknown>)
+          : undefined;
 
       // Check if this is an MCP tool
       const { isMcpTool, mcpServerName } = parseMcpToolName(toolName, mcpServerNames);
@@ -331,18 +327,22 @@ export function parseMessageContent(
 
       // Register tool with tracker
       if (typeof block.id === "string" && block.id.length > 0) {
-        toolTracker.addTool(block.id, {
-          type: "tool-invocation",
-          content: toolName,
-          toolName,
-          toolArgs: block.input,
-          toolState: "pending",
-          toolDiff,
-          toolUseId: block.id,
-          // MCP tool metadata
-          isMcpTool,
-          mcpServerName,
-        }, parentTaskUseId);
+        toolTracker.addTool(
+          block.id,
+          {
+            type: "tool-invocation",
+            content: toolName,
+            toolName,
+            toolArgs: block.input,
+            toolState: "pending",
+            toolDiff,
+            toolUseId: block.id,
+            // MCP tool metadata
+            isMcpTool,
+            mcpServerName,
+          },
+          parentTaskUseId,
+        );
 
         // Track order: add tool reference with parent info
         orderedParts.push({
@@ -363,7 +363,8 @@ export function parseMessageContent(
     } else if (block.type === "tool_result" && toolTracker) {
       // Update tool tracker with result
       if (typeof block.tool_use_id === "string" && block.tool_use_id.length > 0) {
-        const resultContent = typeof block.content === "string" ? block.content : JSON.stringify(block.content);
+        const resultContent =
+          typeof block.content === "string" ? block.content : JSON.stringify(block.content);
 
         // Replay successful task tool calls into the session task list so this
         // part can carry the resulting list state. A failed call changed
@@ -432,9 +433,7 @@ export function buildMessageParts(
       const tool = toolTracker.getTool(entry.value);
       if (tool) {
         result.push(
-          entry.timestamp && !tool.createdAt
-            ? { ...tool, createdAt: entry.timestamp }
-            : tool,
+          entry.timestamp && !tool.createdAt ? { ...tool, createdAt: entry.timestamp } : tool,
         );
       }
     } else if (entry.type === "text") {
@@ -452,11 +451,7 @@ export function buildMessageParts(
 }
 
 export interface BackgroundTaskSystemMessage {
-  subtype:
-    | "task_started"
-    | "task_progress"
-    | "task_updated"
-    | "task_notification";
+  subtype: "task_started" | "task_progress" | "task_updated" | "task_notification";
   task_id: string;
   tool_use_id?: string;
   description?: string;
@@ -477,17 +472,17 @@ export const MAX_PERSISTED_TIMESTAMP_FUTURE_SKEW_MS = 5 * 60 * 1000;
 
 export function persistedTaskIdentifier(value: unknown): string | undefined {
   if (
-    typeof value !== "string"
-    || value.length === 0
-    || value.length > MAX_PERSISTED_BACKGROUND_TASK_ID_LENGTH
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > MAX_PERSISTED_BACKGROUND_TASK_ID_LENGTH
   ) {
     return undefined;
   }
   const normalized = value.trim();
   if (
-    normalized.length === 0
-    || normalized.length > MAX_PERSISTED_BACKGROUND_TASK_ID_LENGTH
-    || /[\u0000-\u001f\u007f]/.test(normalized)
+    normalized.length === 0 ||
+    normalized.length > MAX_PERSISTED_BACKGROUND_TASK_ID_LENGTH ||
+    /[\u0000-\u001f\u007f]/.test(normalized)
   ) {
     return undefined;
   }
@@ -523,40 +518,37 @@ export function provisionalBackgroundTaskId(toolUseId: string): string {
 }
 
 export const BACKGROUND_TASK_LABEL_BODY =
-  "(?:Command running in background with ID:"
-  + "|Command was manually backgrounded by user with ID:"
-  + "|Command [^\\r\\n]{0,160}\\btimeout and was moved to the background \\(ID:"
-  + "|Background task ID:)\\s*([A-Za-z0-9_-]+)";
+  "(?:Command running in background with ID:" +
+  "|Command was manually backgrounded by user with ID:" +
+  "|Command [^\\r\\n]{0,160}\\btimeout and was moved to the background \\(ID:" +
+  "|Background task ID:)\\s*([A-Za-z0-9_-]+)";
 /** Anchored to a line start; used only once provider-authored intent exists. */
 export const LINE_LEADING_BACKGROUND_TASK_LABEL = new RegExp(
   `(?:^|\\n)[ \\t]*${BACKGROUND_TASK_LABEL_BODY}`,
   "i",
 );
 /** Anchored to the start of the whole result; used to *establish* intent. */
-export const EXCLUSIVE_BACKGROUND_TASK_LABEL = new RegExp(
-  `^${BACKGROUND_TASK_LABEL_BODY}`,
-  "i",
-);
+export const EXCLUSIVE_BACKGROUND_TASK_LABEL = new RegExp(`^${BACKGROUND_TASK_LABEL_BODY}`, "i");
 
 export function backgroundTaskResultText(content: unknown): string {
   return typeof content === "string"
     ? content
     : Array.isArray(content)
       ? content
-        .filter((block): block is { type: "text"; text: string } =>
-          block !== null
-          && typeof block === "object"
-          && (block as { type?: unknown }).type === "text"
-          && typeof (block as { text?: unknown }).text === "string")
-        .map((block) => block.text)
-        .join("\n")
+          .filter(
+            (block): block is { type: "text"; text: string } =>
+              block !== null &&
+              typeof block === "object" &&
+              (block as { type?: unknown }).type === "text" &&
+              typeof (block as { text?: unknown }).text === "string",
+          )
+          .map((block) => block.text)
+          .join("\n")
       : "";
 }
 
 export function backgroundTaskIdFromToolResultContent(content: unknown): string | undefined {
-  const match = backgroundTaskResultText(content).match(
-    LINE_LEADING_BACKGROUND_TASK_LABEL,
-  );
+  const match = backgroundTaskResultText(content).match(LINE_LEADING_BACKGROUND_TASK_LABEL);
   return persistedTaskIdentifier(match?.[1]);
 }
 
@@ -598,9 +590,9 @@ export function correlatedBashToolResults(
   const results: CorrelatedBashToolResult[] = [];
   for (const block of content) {
     if (
-      !block
-      || typeof block !== "object"
-      || (block as { type?: unknown }).type !== "tool_result"
+      !block ||
+      typeof block !== "object" ||
+      (block as { type?: unknown }).type !== "tool_result"
     ) {
       continue;
     }
@@ -634,16 +626,14 @@ export function exclusiveBashToolResultId(
   message: SDKUserMessage,
   toolTracker: ToolTracker,
 ): string | undefined {
-  const content = (
-    message.message as { content?: unknown } | undefined
-  )?.content;
+  const content = (message.message as { content?: unknown } | undefined)?.content;
   const toolUseIds: string[] = [];
   if (Array.isArray(content)) {
     for (const block of content) {
       if (
-        block
-        && typeof block === "object"
-        && (block as { type?: unknown }).type === "tool_result"
+        block &&
+        typeof block === "object" &&
+        (block as { type?: unknown }).type === "tool_result"
       ) {
         const resultBlock = block as {
           tool_use_id?: unknown;
@@ -699,10 +689,10 @@ export function bashToolResultOutcomes(
   const exclusiveToolUseId = exclusiveBashToolResultId(message, toolTracker);
   const structuredResult = message.tool_use_result;
   const structuredRecord =
-    structuredResult !== null
-    && typeof structuredResult === "object"
-    && !Array.isArray(structuredResult)
-      ? structuredResult as Record<string, unknown>
+    structuredResult !== null &&
+    typeof structuredResult === "object" &&
+    !Array.isArray(structuredResult)
+      ? (structuredResult as Record<string, unknown>)
       : undefined;
 
   const outcomes: BashToolResultOutcome[] = [];
@@ -717,24 +707,18 @@ export function bashToolResultOutcomes(
     }
     // Structured evidence in a batched message cannot be pinned to a block, so
     // only the per-block label speaks for it there.
-    const structured = exclusiveToolUseId === result.toolUseId
-      ? structuredRecord
-      : undefined;
+    const structured = exclusiveToolUseId === result.toolUseId ? structuredRecord : undefined;
     const tool = toolTracker.getTool(result.toolUseId);
     const toolArgs =
-      tool?.toolArgs
-      && typeof tool.toolArgs === "object"
-      && !Array.isArray(tool.toolArgs)
-        ? tool.toolArgs as Record<string, unknown>
+      tool?.toolArgs && typeof tool.toolArgs === "object" && !Array.isArray(tool.toolArgs)
+        ? (tool.toolArgs as Record<string, unknown>)
         : undefined;
     const providerIntent =
-      toolArgs?.run_in_background === true
-      || structured?.backgroundedByUser === true
-      || (
-        typeof structured?.timedOutAfterMs === "number"
-        && Number.isFinite(structured.timedOutAfterMs)
-        && structured.timedOutAfterMs >= 0
-      );
+      toolArgs?.run_in_background === true ||
+      structured?.backgroundedByUser === true ||
+      (typeof structured?.timedOutAfterMs === "number" &&
+        Number.isFinite(structured.timedOutAfterMs) &&
+        structured.timedOutAfterMs >= 0);
     // Provider-authored intent already exists, so the label only has to supply
     // an id and a line anchor is enough. Without it the label is the *only*
     // claim that this happened at all, and it must be the whole result.
@@ -758,11 +742,12 @@ export function bashToolResultOutcomes(
       });
       continue;
     }
-    const description = persistedTaskText(toolArgs?.description)
-      ?? persistedTaskText(toolArgs?.command)
+    const description =
+      persistedTaskText(toolArgs?.description) ??
+      persistedTaskText(toolArgs?.command) ??
       // `content` is the provider tool label ("Bash") and is the only title
       // the Claude parsing path currently retains on a normalized invocation.
-      ?? persistedTaskText(tool?.content);
+      persistedTaskText(tool?.content);
     outcomes.push({
       toolUseId: result.toolUseId,
       failed: false,
@@ -780,29 +765,27 @@ export function bashToolResultOutcomes(
 export function provisionalBackgroundTaskLaunchesFromAssistantMessage(
   message: unknown,
 ): BackgroundTaskLaunch[] {
-  const content = (
-    message as { message?: { content?: unknown } } | undefined
-  )?.message?.content;
+  const content = (message as { message?: { content?: unknown } } | undefined)?.message?.content;
   if (!Array.isArray(content)) return [];
 
   const launches: BackgroundTaskLaunch[] = [];
   for (const block of content) {
     if (
-      !block
-      || typeof block !== "object"
-      || (block as { type?: unknown }).type !== "tool_use"
-      || (block as { name?: unknown }).name !== "Bash"
+      !block ||
+      typeof block !== "object" ||
+      (block as { type?: unknown }).type !== "tool_use" ||
+      (block as { name?: unknown }).name !== "Bash"
     ) {
       continue;
     }
     const toolUseId = persistedTaskIdentifier((block as { id?: unknown }).id);
     const input = (block as { input?: unknown }).input;
     if (
-      !toolUseId
-      || !input
-      || typeof input !== "object"
-      || Array.isArray(input)
-      || (input as { run_in_background?: unknown }).run_in_background !== true
+      !toolUseId ||
+      !input ||
+      typeof input !== "object" ||
+      Array.isArray(input) ||
+      (input as { run_in_background?: unknown }).run_in_background !== true
     ) {
       continue;
     }
@@ -810,25 +793,22 @@ export function provisionalBackgroundTaskLaunchesFromAssistantMessage(
     launches.push({
       id: provisionalBackgroundTaskId(toolUseId),
       toolUseId,
-      description: persistedTaskText(args.description)
-        ?? persistedTaskText(args.command),
+      description: persistedTaskText(args.description) ?? persistedTaskText(args.command),
     });
   }
   return launches;
 }
 
 export function bashToolUseIdsFromAssistantMessage(message: unknown): string[] {
-  const content = (
-    message as { message?: { content?: unknown } } | undefined
-  )?.message?.content;
+  const content = (message as { message?: { content?: unknown } } | undefined)?.message?.content;
   if (!Array.isArray(content)) return [];
   const ids: string[] = [];
   for (const block of content) {
     if (
-      !block
-      || typeof block !== "object"
-      || (block as { type?: unknown }).type !== "tool_use"
-      || (block as { name?: unknown }).name !== "Bash"
+      !block ||
+      typeof block !== "object" ||
+      (block as { type?: unknown }).type !== "tool_use" ||
+      (block as { name?: unknown }).name !== "Bash"
     ) {
       continue;
     }
@@ -838,15 +818,13 @@ export function bashToolUseIdsFromAssistantMessage(message: unknown): string[] {
   return ids;
 }
 
-export function persistedTaskStatus(
-  value: unknown,
-): BackgroundTaskSnapshot["status"] | undefined {
-  return value === "pending"
-    || value === "running"
-    || value === "completed"
-    || value === "failed"
-    || value === "killed"
-    || value === "paused"
+export function persistedTaskStatus(value: unknown): BackgroundTaskSnapshot["status"] | undefined {
+  return value === "pending" ||
+    value === "running" ||
+    value === "completed" ||
+    value === "failed" ||
+    value === "killed" ||
+    value === "paused"
     ? value
     : undefined;
 }
@@ -854,24 +832,15 @@ export function persistedTaskStatus(
 export function persistedNotificationStatus(
   value: unknown,
 ): "completed" | "failed" | "stopped" | undefined {
-  return value === "completed" || value === "failed" || value === "stopped"
-    ? value
-    : undefined;
+  return value === "completed" || value === "failed" || value === "stopped" ? value : undefined;
 }
 
-export function persistedTimestamp(
-  value: unknown,
-  now: number,
-): number | undefined {
+export function persistedTimestamp(value: unknown, now: number): number | undefined {
   const timestamp =
-    typeof value === "number"
-      ? value
-      : typeof value === "string"
-        ? Date.parse(value)
-        : Number.NaN;
-  return Number.isFinite(timestamp)
-    && timestamp >= 0
-    && timestamp <= now + MAX_PERSISTED_TIMESTAMP_FUTURE_SKEW_MS
+    typeof value === "number" ? value : typeof value === "string" ? Date.parse(value) : Number.NaN;
+  return Number.isFinite(timestamp) &&
+    timestamp >= 0 &&
+    timestamp <= now + MAX_PERSISTED_TIMESTAMP_FUTURE_SKEW_MS
     ? timestamp
     : undefined;
 }
@@ -886,10 +855,10 @@ export function persistedBackgroundTaskMessage(raw: {
     if (!candidate || typeof candidate !== "object") continue;
     const message = candidate as Record<string, unknown>;
     if (
-      message.subtype !== "task_started"
-      && message.subtype !== "task_progress"
-      && message.subtype !== "task_updated"
-      && message.subtype !== "task_notification"
+      message.subtype !== "task_started" &&
+      message.subtype !== "task_progress" &&
+      message.subtype !== "task_updated" &&
+      message.subtype !== "task_notification"
     ) {
       continue;
     }
@@ -907,22 +876,20 @@ export function persistedBackgroundTaskMessage(raw: {
     }
     const rawPatch =
       message.patch && typeof message.patch === "object" && !Array.isArray(message.patch)
-        ? message.patch as Record<string, unknown>
+        ? (message.patch as Record<string, unknown>)
         : undefined;
     const patchStatus = persistedTaskStatus(rawPatch?.status);
     const patchDescription = persistedTaskText(rawPatch?.description);
     const patchEndTime = persistedTimestamp(rawPatch?.end_time, Date.now());
     const patchError = persistedTaskText(rawPatch?.error);
     const patchIsBackgrounded =
-      typeof rawPatch?.is_backgrounded === "boolean"
-        ? rawPatch.is_backgrounded
-        : undefined;
+      typeof rawPatch?.is_backgrounded === "boolean" ? rawPatch.is_backgrounded : undefined;
     const hasPatch =
-      patchStatus !== undefined
-      || patchDescription !== undefined
-      || patchEndTime !== undefined
-      || patchError !== undefined
-      || patchIsBackgrounded !== undefined;
+      patchStatus !== undefined ||
+      patchDescription !== undefined ||
+      patchEndTime !== undefined ||
+      patchError !== undefined ||
+      patchIsBackgrounded !== undefined;
     return {
       subtype: message.subtype,
       task_id: taskId,
@@ -979,52 +946,40 @@ export function reducePersistedBackgroundTaskMessage(
             ? "completed"
             : "killed";
     return boundBackgroundTaskHistory({
-      ...(tasks ?? {}),
+      ...tasks,
       [message.task_id]: {
         id: message.task_id,
         toolUseId: message.tool_use_id ?? previous?.toolUseId,
-        description:
-          previous?.description
-          ?? message.description
-          ?? message.summary,
+        description: previous?.description ?? message.description ?? message.summary,
         status: terminalStatus,
         isBackgrounded: previous?.isBackgrounded,
         startedAt,
         endedAt,
-        error:
-          terminalStatus === "failed"
-            ? (message.summary ?? previous?.error)
-            : previous?.error,
+        error: terminalStatus === "failed" ? (message.summary ?? previous?.error) : previous?.error,
       },
     });
   }
 
   const patchStatus = message.patch?.status;
   const nextStatus =
-    previous && !LIVE_BACKGROUND_TASK_STATUSES.has(previous.status)
-      && (patchStatus === undefined || LIVE_BACKGROUND_TASK_STATUSES.has(patchStatus))
+    previous &&
+    !LIVE_BACKGROUND_TASK_STATUSES.has(previous.status) &&
+    (patchStatus === undefined || LIVE_BACKGROUND_TASK_STATUSES.has(patchStatus))
       ? previous.status
       : (patchStatus ?? previous?.status ?? "running");
   const startedAt = previous?.startedAt ?? timestamp;
   const patchedEndTime =
-    message.patch?.end_time !== undefined
-    && message.patch.end_time >= startedAt
+    message.patch?.end_time !== undefined && message.patch.end_time >= startedAt
       ? message.patch.end_time
       : undefined;
   return boundBackgroundTaskHistory({
-    ...(tasks ?? {}),
+    ...tasks,
     [message.task_id]: {
       id: message.task_id,
       toolUseId: message.tool_use_id ?? previous?.toolUseId,
-      description:
-        message.patch?.description
-        ?? message.description
-        ?? previous?.description,
+      description: message.patch?.description ?? message.description ?? previous?.description,
       status: nextStatus,
-      isBackgrounded:
-        message.patch?.is_backgrounded
-        ?? previous?.isBackgrounded
-        ?? true,
+      isBackgrounded: message.patch?.is_backgrounded ?? previous?.isBackgrounded ?? true,
       startedAt,
       endedAt: patchedEndTime ?? previous?.endedAt,
       error: message.patch?.error ?? previous?.error,
@@ -1068,13 +1023,7 @@ export function normalizePersistedSessionMessages(
       }
       continue;
     }
-    const result = parseMessageContent(
-      raw,
-      toolTracker,
-      undefined,
-      activeTaskIds,
-      taskRegistry,
-    );
+    const result = parseMessageContent(raw, toolTracker, undefined, activeTaskIds, taskRegistry);
     for (const taskId of result.newTaskIds) activeTaskIds.add(taskId);
     for (const taskId of result.completedTaskIds) activeTaskIds.delete(taskId);
     parsed.push({
@@ -1095,20 +1044,14 @@ export function normalizePersistedSessionMessages(
     }
     const rawTimestamp = (entry.raw as unknown as { timestamp?: unknown }).timestamp;
     const timestamp =
-      typeof rawTimestamp === "string"
-        ? rawTimestamp
-        : new Date(now + index).toISOString();
+      typeof rawTimestamp === "string" ? rawTimestamp : new Date(now + index).toISOString();
     const isRootAssistant =
-      entry.raw.type === "assistant"
-      && isRootAssistantRecord(
-        entry.raw.parent_tool_use_id,
-        entry.raw.isSidechain,
-      );
-    const modelId = isRootAssistant
-      && entry.raw.message
-      && typeof entry.raw.message === "object"
-      ? normalizeBackendModelId((entry.raw.message as { model?: unknown }).model)
-      : undefined;
+      entry.raw.type === "assistant" &&
+      isRootAssistantRecord(entry.raw.parent_tool_use_id, entry.raw.isSidechain);
+    const modelId =
+      isRootAssistant && entry.raw.message && typeof entry.raw.message === "object"
+        ? normalizeBackendModelId((entry.raw.message as { model?: unknown }).model)
+        : undefined;
     messages.push({
       id: entry.raw.uuid || generateMessageId(),
       role: entry.raw.type,
@@ -1133,9 +1076,7 @@ export function normalizePersistedSessionMessages(
                 ...task,
                 status: "killed" as const,
                 endedAt: task.endedAt ?? processEndedAt,
-                error:
-                  task.error
-                  ?? "The Claude process that owned this task is no longer running",
+                error: task.error ?? "The Claude process that owned this task is no longer running",
               }
             : task,
         ]),

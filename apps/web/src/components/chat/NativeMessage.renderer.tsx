@@ -1,16 +1,8 @@
-import {
-  useContext,
-  useEffect,
-  useState,
-} from "react";
-import {
-  isEditTool,
-} from "@/lib/tool-names";
+import { useContext, useEffect, useState } from "react";
+import { isEditTool } from "@/lib/tool-names";
 import { isTodoTool } from "@/lib/todo-tool";
 import { TodoToolPart } from "@/components/todo/TodoToolPart";
-import {
-  type NativeMessagePart,
-} from "@/lib/chat/native-message-types";
+import { type NativeMessagePart } from "@/lib/chat/native-message-types";
 import type { NativeAgentToolDetails } from "@orkestrator/protocol/native-agent";
 import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
 import {
@@ -56,8 +48,8 @@ export function DeferredToolMessagePart({
   const expansionKey = `native-tool:${expansionScope}:${getToolExpansionKey(part, partKey)}`;
   const [isOpen] = useMessagePartExpansion(expansionKey);
   const detailRef = part.detailRef!;
-  const [details, setDetails] = useState<NativeAgentToolDetails | undefined>(
-    () => cachedToolDetails(detailRef),
+  const [details, setDetails] = useState<NativeAgentToolDetails | undefined>(() =>
+    cachedToolDetails(detailRef),
   );
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -85,7 +77,9 @@ export function DeferredToolMessagePart({
         if (cancelled) return;
         setLoadError(error instanceof Error ? error.message : "Tool details are unavailable");
       });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [detailRef, details, isOpen, loadError, loadToolDetails]);
 
   /*
@@ -101,9 +95,7 @@ export function DeferredToolMessagePart({
     ...(details?.toolOutput !== undefined ? { toolOutput: details.toolOutput } : {}),
     ...(details?.toolError !== undefined ? { toolError: details.toolError } : {}),
     ...(!details && loadError ? { toolError: loadError } : {}),
-    ...(!details && !loadError && isOpen
-      ? { toolOutput: "Loading tool details…" }
-      : {}),
+    ...(!details && !loadError && isOpen ? { toolOutput: "Loading tool details…" } : {}),
     ...(part.toolDiff || details?.toolDiff
       ? {
           toolDiff: {
@@ -174,9 +166,10 @@ export function MessagePart({
       />
     );
   }
-  const toolExpansionKey = part.type === "tool-invocation"
-    ? `native-tool:${expansionScope}:${getToolExpansionKey(part, partKey)}`
-    : "";
+  const toolExpansionKey =
+    part.type === "tool-invocation"
+      ? `native-tool:${expansionScope}:${getToolExpansionKey(part, partKey)}`
+      : "";
 
   switch (part.type) {
     case "thinking":
@@ -255,25 +248,12 @@ export function MessagePart({
       );
     case "subagent":
       return (
-        <SubagentPart
-          part={part}
-          containerId={containerId}
-          partKey={partKey}
-          embedded={embedded}
-        />
+        <SubagentPart part={part} containerId={containerId} partKey={partKey} embedded={embedded} />
       );
     case "agent-group":
-      return (
-        <AgentGroupPart
-          part={part}
-          containerId={containerId}
-          partKey={partKey}
-        />
-      );
+      return <AgentGroupPart part={part} containerId={containerId} partKey={partKey} />;
     case "tool-group":
-      return (
-        <ToolGroupPart part={part} containerId={containerId} partKey={partKey} />
-      );
+      return <ToolGroupPart part={part} containerId={containerId} partKey={partKey} />;
     case "task-group":
       return (
         <TaskGroupPart

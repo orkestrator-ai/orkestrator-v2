@@ -1,11 +1,4 @@
-import {
-  afterAll,
-  beforeEach,
-  describe,
-  expect,
-  mock,
-  test,
-} from "bun:test";
+import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import * as realBackend from "@/lib/backend";
 import type { KanbanTask } from "@/lib/backend";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
@@ -116,7 +109,10 @@ describe("kanbanStore.clearTaskBuildStatus", () => {
       environmentId: "env-b",
     });
     useBuildPipelineStore.setState({
-      pipelines: new Map([[first.id, first], [second.id, second]]),
+      pipelines: new Map([
+        [first.id, first],
+        [second.id, second],
+      ]),
       buildEnvironmentIds: new Set(["env-a", "env-b"]),
     });
 
@@ -142,9 +138,7 @@ describe("kanbanStore.clearTaskBuildStatus", () => {
     await useKanbanStore.getState().clearTaskBuildStatus("task-1");
 
     expect(useKanbanStore.getState().tasks[0]?.buildPipelineId).toBe(pipeline.id);
-    expect(useBuildPipelineStore.getState().pipelines.has("pipeline-fail")).toBe(
-      true,
-    );
+    expect(useBuildPipelineStore.getState().pipelines.has("pipeline-fail")).toBe(true);
     expect(mockToastError).toHaveBeenCalledTimes(1);
   });
 
@@ -184,12 +178,8 @@ describe("kanbanStore.clearTaskBuildStatus", () => {
 
     await useKanbanStore.getState().clearTaskBuildStatus("task-1");
 
-    expect(useKanbanStore.getState().tasks[0]?.buildPipelineId).toBe(
-      "pipeline-update-fail",
-    );
-    expect(
-      useBuildPipelineStore.getState().pipelines.has("pipeline-update-fail"),
-    ).toBe(true);
+    expect(useKanbanStore.getState().tasks[0]?.buildPipelineId).toBe("pipeline-update-fail");
+    expect(useBuildPipelineStore.getState().pipelines.has("pipeline-update-fail")).toBe(true);
   });
 });
 
@@ -322,9 +312,9 @@ describe("kanbanStore project notes", () => {
     useKanbanStore.setState({ currentNotesProjectId: "project-1", notes: "original" });
     saveProjectNotesMock.mockRejectedValue(new Error("disk full"));
 
-    await expect(
-      useKanbanStore.getState().saveNotes("project-1", "replacement"),
-    ).rejects.toThrow("disk full");
+    await expect(useKanbanStore.getState().saveNotes("project-1", "replacement")).rejects.toThrow(
+      "disk full",
+    );
     expect(useKanbanStore.getState().notes).toBe("original");
   });
 });
@@ -359,7 +349,10 @@ describe("kanbanStore task actions", () => {
     await useKanbanStore.getState().loadTasks("project-2");
     stale.resolve([task({ id: "old" })]);
     await first;
-    expect(useKanbanStore.getState()).toMatchObject({ currentProjectId: "project-2", isLoading: false });
+    expect(useKanbanStore.getState()).toMatchObject({
+      currentProjectId: "project-2",
+      isLoading: false,
+    });
     expect(useKanbanStore.getState().tasks.map((item) => item.id)).toEqual(["new"]);
   });
 
@@ -384,7 +377,9 @@ describe("kanbanStore task actions", () => {
 
   test("adds, updates, and deletes tasks", async () => {
     addKanbanTaskMock.mockResolvedValueOnce(task({ id: "created", title: "Created" }));
-    await expect(useKanbanStore.getState().addTask("project-1", "Created", "Description")).resolves.toBe("created");
+    await expect(
+      useKanbanStore.getState().addTask("project-1", "Created", "Description"),
+    ).resolves.toBe("created");
     updateKanbanTaskMock.mockResolvedValueOnce(task({ id: "created", title: "Updated" }));
     await useKanbanStore.getState().updateTask("created", { title: "Updated" });
     expect(useKanbanStore.getState().tasks[0]?.title).toBe("Updated");

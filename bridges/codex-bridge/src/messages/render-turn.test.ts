@@ -104,9 +104,7 @@ describe("effectiveItem", () => {
 
     accumulator.onReasoningDelta("invisible-summary", "\u0085\u200B", "summary", 0);
     accumulator.onReasoningDelta("invisible-summary", "visible content", "content", 0);
-    expect(
-      effectiveItem(accumulator, accumulator.items.get("invisible-summary")!),
-    ).toMatchObject({
+    expect(effectiveItem(accumulator, accumulator.items.get("invisible-summary")!)).toMatchObject({
       type: "reasoning",
       text: "visible content",
     });
@@ -145,16 +143,10 @@ describe("effectiveItem", () => {
     });
     accumulator.onDynamicToolOutput("raw-patch", "Done!");
 
-    expect(effectiveItem(
-      accumulator,
-      accumulator.items.get("raw-patch")!,
-    )).toBeNull();
+    expect(effectiveItem(accumulator, accumulator.items.get("raw-patch")!)).toBeNull();
 
     accumulator.complete("completed");
-    expect(effectiveItem(
-      accumulator,
-      accumulator.items.get("raw-patch")!,
-    )).toMatchObject({
+    expect(effectiveItem(accumulator, accumulator.items.get("raw-patch")!)).toMatchObject({
       type: "dynamic_tool_call",
       status: "completed",
     });
@@ -181,10 +173,10 @@ describe("effectiveItem", () => {
       status: "in_progress",
     });
 
-    expect(effectiveItem(
-      accumulator,
-      accumulator.items.get("call-patch")!,
-    )).toMatchObject({ type: "file_change", status: "in_progress" });
+    expect(effectiveItem(accumulator, accumulator.items.get("call-patch")!)).toMatchObject({
+      type: "file_change",
+      status: "in_progress",
+    });
   });
 
   test("a failed raw patch is visible immediately, without waiting for the turn", () => {
@@ -199,16 +191,13 @@ describe("effectiveItem", () => {
     });
     // No structured `fileChange` is coming for a failure, so holding it back
     // would leave the user with no sign the patch was even attempted.
-    accumulator.onDynamicToolOutput(
-      "raw-patch",
-      "Failed to read file to update: missing.ts",
-    );
+    accumulator.onDynamicToolOutput("raw-patch", "Failed to read file to update: missing.ts");
 
     expect(accumulator.isTerminal()).toBe(false);
-    expect(effectiveItem(
-      accumulator,
-      accumulator.items.get("raw-patch")!,
-    )).toMatchObject({ type: "dynamic_tool_call", status: "failed" });
+    expect(effectiveItem(accumulator, accumulator.items.get("raw-patch")!)).toMatchObject({
+      type: "dynamic_tool_call",
+      status: "failed",
+    });
   });
 
   test("combines command deltas, truncation, and empty authoritative text", () => {
@@ -315,12 +304,13 @@ describe("renderTurn", () => {
       text: "stable",
     });
     const state = createTurnRenderState();
-    const render = () => renderTurn(accumulator, {
-      threadId: "thread-1",
-      cwd: "/tmp",
-      state,
-      loadSubagentParts: async () => [],
-    });
+    const render = () =>
+      renderTurn(accumulator, {
+        threadId: "thread-1",
+        cwd: "/tmp",
+        state,
+        loadSubagentParts: async () => [],
+      });
 
     const first = await render();
     accumulator.onTextDelta("streaming", "new");
@@ -423,15 +413,8 @@ describe("renderTurn", () => {
   test("passes each assistant segment's item and transcript boundaries to rendering", async () => {
     const accumulator = turn();
     accumulator.onItemCompleted({ id: "before", type: "agent_message", text: "before" });
-    const boundary = accumulator.freezeAssistantSegment(
-      undefined,
-      "2026-07-25T12:00:01.000Z",
-    );
-    accumulator.startAssistantSegment(
-      "message-2",
-      boundary,
-      "2026-07-25T12:00:01.000Z",
-    );
+    const boundary = accumulator.freezeAssistantSegment(undefined, "2026-07-25T12:00:01.000Z");
+    accumulator.startAssistantSegment("message-2", boundary, "2026-07-25T12:00:01.000Z");
     accumulator.onItemCompleted({ id: "after", type: "agent_message", text: "after" });
     const received: Array<Record<string, unknown>> = [];
 
@@ -466,22 +449,25 @@ describe("renderTurn", () => {
   test("scopes sub-agent discovery by the ids a row's own items claim", async () => {
     const seen: Array<readonly string[] | undefined> = [];
     const derive = async (items: Array<Record<string, unknown>>) => {
-      await loadSubagentPartsFromTranscripts({
-        threadId: "thread-1",
-        turnStartedAt: "2026-07-25T12:00:00.000Z",
-        items: items as never,
-      }, {
-        createTranscriptMetaLoader: () => async (threadId) => ({
-          id: threadId,
-          updatedAt: "2026-07-25T12:00:00.000Z",
-          transcriptPath: `/transcripts/${threadId}.jsonl`,
-        }),
-        deriveTranscriptParts: async (options) => {
-          seen.push(options.ownedSubagentIds);
-          return [];
+      await loadSubagentPartsFromTranscripts(
+        {
+          threadId: "thread-1",
+          turnStartedAt: "2026-07-25T12:00:00.000Z",
+          items: items as never,
         },
-        readTranscript: async () => ({ records: [] }),
-      });
+        {
+          createTranscriptMetaLoader: () => async (threadId) => ({
+            id: threadId,
+            updatedAt: "2026-07-25T12:00:00.000Z",
+            transcriptPath: `/transcripts/${threadId}.jsonl`,
+          }),
+          deriveTranscriptParts: async (options) => {
+            seen.push(options.ownedSubagentIds);
+            return [];
+          },
+          readTranscript: async () => ({ records: [] }),
+        },
+      );
     };
     const spawn = (id: string, receiver?: string) => ({
       id,
@@ -496,102 +482,110 @@ describe("renderTurn", () => {
     // set, or the ones it failed to name would vanish.
     await derive([spawn("a", "child-1"), spawn("b")]);
     await derive([]);
-    await derive([{
-      id: "wait",
-      type: "collab_tool_call",
-      tool: "wait",
-      receiver_thread_ids: ["child-wrapper"],
-      status: "completed",
-    }]);
-
-    expect(seen).toEqual([
-      ["child-1", "child-2"],
-      undefined,
-      undefined,
-      ["child-wrapper"],
+    await derive([
+      {
+        id: "wait",
+        type: "collab_tool_call",
+        tool: "wait",
+        receiver_thread_ids: ["child-wrapper"],
+        status: "completed",
+      },
     ]);
+
+    expect(seen).toEqual([["child-1", "child-2"], undefined, undefined, ["child-wrapper"]]);
   });
 
   test("maps transcript fields and folds live collaboration state with injected dependencies", async () => {
-    const items = [{
-      id: "spawn",
-      type: "collab_tool_call" as const,
-      tool: "spawn_agent",
-      receiver_thread_ids: ["child-1"],
-      prompt: "live prompt",
-      agents_states: {
-        "child-1": { status: "completed" as const, message: "live final response" },
+    const items = [
+      {
+        id: "spawn",
+        type: "collab_tool_call" as const,
+        tool: "spawn_agent",
+        receiver_thread_ids: ["child-1"],
+        prompt: "live prompt",
+        agents_states: {
+          "child-1": { status: "completed" as const, message: "live final response" },
+        },
+        status: "completed" as const,
       },
-      status: "completed" as const,
-    }];
-    const parts = await loadSubagentPartsFromTranscripts({
-      threadId: "thread-1",
-      turnStartedAt: "2026-07-25T12:00:00.000Z",
-      items,
-    }, {
-      createTranscriptMetaLoader: () => async (threadId) => ({
-        id: threadId,
-        updatedAt: "2026-07-25T12:00:00.000Z",
-        transcriptPath: `/transcripts/${threadId}.jsonl`,
-      }),
-      deriveTranscriptParts: async (options) => {
-        expect(options.threadId).toBe("thread-1");
-        expect(options.currentTurnStartedAt).toBe("2026-07-25T12:00:00.000Z");
-        expect(options.fallbackAgentIdsInSpawnOrder).toEqual(["child-1"]);
-        expect(await options.loadSessionMeta("child-1")).toMatchObject({
-          id: "child-1",
-          transcriptPath: "/transcripts/child-1.jsonl",
-        });
-        expect(await options.loadTranscript("/transcripts/child-1.jsonl")).toMatchObject({
-          fileId: "child-1",
+    ];
+    const parts = await loadSubagentPartsFromTranscripts(
+      {
+        threadId: "thread-1",
+        turnStartedAt: "2026-07-25T12:00:00.000Z",
+        items,
+      },
+      {
+        createTranscriptMetaLoader: () => async (threadId) => ({
+          id: threadId,
+          updatedAt: "2026-07-25T12:00:00.000Z",
+          transcriptPath: `/transcripts/${threadId}.jsonl`,
+        }),
+        deriveTranscriptParts: async (options) => {
+          expect(options.threadId).toBe("thread-1");
+          expect(options.currentTurnStartedAt).toBe("2026-07-25T12:00:00.000Z");
+          expect(options.fallbackAgentIdsInSpawnOrder).toEqual(["child-1"]);
+          expect(await options.loadSessionMeta("child-1")).toMatchObject({
+            id: "child-1",
+            transcriptPath: "/transcripts/child-1.jsonl",
+          });
+          expect(await options.loadTranscript("/transcripts/child-1.jsonl")).toMatchObject({
+            fileId: "child-1",
+            records: [],
+          });
+          return [
+            {
+              type: "subagent",
+              content: "child transcript",
+              toolState: "pending",
+              subagentId: "child-1",
+              subagentName: "Ada",
+              subagentRole: "reviewer",
+              subagentPrompt: "transcript prompt",
+              subagentActions: [
+                {
+                  type: "tool-invocation",
+                  content: "checked files",
+                  toolName: "read",
+                  toolState: "success",
+                },
+              ],
+              subagentActionCount: 1,
+            },
+          ];
+        },
+        readTranscript: async (path) => ({
+          fileId: path.includes("child-1") ? "child-1" : "other",
+          size: 0,
+          modifiedAtNs: "0",
+          remainder: "",
+          lines: [],
           records: [],
-        });
-        return [{
-          type: "subagent",
-          content: "child transcript",
-          toolState: "pending",
-          subagentId: "child-1",
-          subagentName: "Ada",
-          subagentRole: "reviewer",
-          subagentPrompt: "transcript prompt",
-          subagentActions: [{
+        }),
+      },
+    );
+
+    expect(parts).toEqual([
+      {
+        type: "subagent",
+        content: "child transcript",
+        toolState: "success",
+        subagentId: "child-1",
+        subagentName: "Ada",
+        subagentRole: "reviewer",
+        subagentPrompt: "transcript prompt",
+        subagentActions: [
+          {
             type: "tool-invocation",
             content: "checked files",
             toolName: "read",
             toolState: "success",
-          }],
-          subagentActionCount: 1,
-        }];
+          },
+          { type: "text", content: "live final response" },
+        ],
+        subagentActionCount: 1,
       },
-      readTranscript: async (path) => ({
-        fileId: path.includes("child-1") ? "child-1" : "other",
-        size: 0,
-        modifiedAtNs: "0",
-        remainder: "",
-        lines: [],
-        records: [],
-      }),
-    });
-
-    expect(parts).toEqual([{
-      type: "subagent",
-      content: "child transcript",
-      toolState: "success",
-      subagentId: "child-1",
-      subagentName: "Ada",
-      subagentRole: "reviewer",
-      subagentPrompt: "transcript prompt",
-      subagentActions: [
-        {
-          type: "tool-invocation",
-          content: "checked files",
-          toolName: "read",
-          toolState: "success",
-        },
-        { type: "text", content: "live final response" },
-      ],
-      subagentActionCount: 1,
-    }]);
+    ]);
   });
 
   test("loads subagent activity through the real on-disk transcript path", async () => {
@@ -689,18 +683,22 @@ describe("renderTurn", () => {
         state: createTurnRenderState(),
       });
 
-      expect(rendered.parts).toContainEqual(expect.objectContaining({
-        type: "subagent",
-        subagentId: "thread-child",
-        subagentName: "Verifier",
-        subagentRole: "worker",
-        subagentPrompt: "Inspect the real transcript loader",
-        toolState: "success",
-        subagentActions: [{
-          type: "text",
-          content: "Checked the persisted transcript.",
-        }],
-      }));
+      expect(rendered.parts).toContainEqual(
+        expect.objectContaining({
+          type: "subagent",
+          subagentId: "thread-child",
+          subagentName: "Verifier",
+          subagentRole: "worker",
+          subagentPrompt: "Inspect the real transcript loader",
+          toolState: "success",
+          subagentActions: [
+            {
+              type: "text",
+              content: "Checked the persisted transcript.",
+            },
+          ],
+        }),
+      );
     } finally {
       clearTranscriptCache();
       if (previousCodexHome === undefined) {
@@ -727,21 +725,24 @@ describe("renderTurn", () => {
     accumulator.onItemCompleted({ id: "text", type: "agent_message", text: "done" });
     const state = createTurnRenderState();
     let loads = 0;
-    const render = () => renderTurn(accumulator, {
-      threadId: "thread-1",
-      cwd: "/tmp",
-      state,
-      subagentProbeIntervalMs: 60_000,
-      loadSubagentParts: async () => {
-        loads += 1;
-        return [{
-          type: "subagent",
-          content: "child",
-          subagentId: "child-1",
-          toolState: "pending",
-        }];
-      },
-    });
+    const render = () =>
+      renderTurn(accumulator, {
+        threadId: "thread-1",
+        cwd: "/tmp",
+        state,
+        subagentProbeIntervalMs: 60_000,
+        loadSubagentParts: async () => {
+          loads += 1;
+          return [
+            {
+              type: "subagent",
+              content: "child",
+              subagentId: "child-1",
+              toolState: "pending",
+            },
+          ];
+        },
+      });
 
     // First render probes (nothing has probed yet)…
     expect((await render()).parts.map((part) => part.type)).toEqual(["text", "subagent"]);
@@ -767,16 +768,17 @@ describe("renderTurn", () => {
     accumulator.onItemCompleted({ id: "text", type: "agent_message", text: "done" });
     const state = createTurnRenderState();
     let loads = 0;
-    const render = () => renderTurn(accumulator, {
-      threadId: "thread-1",
-      cwd: "/tmp",
-      state,
-      subagentProbeIntervalMs: SUBAGENT_TRANSCRIPT_PROBE_INTERVAL_MS,
-      loadSubagentParts: async () => {
-        loads += 1;
-        return [];
-      },
-    });
+    const render = () =>
+      renderTurn(accumulator, {
+        threadId: "thread-1",
+        cwd: "/tmp",
+        state,
+        subagentProbeIntervalMs: SUBAGENT_TRANSCRIPT_PROBE_INTERVAL_MS,
+        loadSubagentParts: async () => {
+          loads += 1;
+          return [];
+        },
+      });
 
     await render();
     await render();
@@ -792,12 +794,14 @@ describe("renderTurn", () => {
       threadId: "thread-1",
       cwd: "/tmp",
       state,
-      loadSubagentParts: async () => [{
-        type: "subagent",
-        content: "child",
-        subagentId: "child-1",
-        toolState: "success",
-      }],
+      loadSubagentParts: async () => [
+        {
+          type: "subagent",
+          content: "child",
+          subagentId: "child-1",
+          toolState: "success",
+        },
+      ],
     });
 
     expect(rendered.content).toBe("done");
@@ -815,12 +819,13 @@ describe("renderTurn", () => {
       toolState: "pending" as const,
       subagentActions: [],
     };
-    const render = () => renderTurn(accumulator, {
-      threadId: "thread-1",
-      cwd: "/tmp",
-      state,
-      loadSubagentParts: async () => [subagent],
-    });
+    const render = () =>
+      renderTurn(accumulator, {
+        threadId: "thread-1",
+        cwd: "/tmp",
+        state,
+        loadSubagentParts: async () => [subagent],
+      });
 
     accumulator.onItemCompleted({ id: "before-agent", type: "agent_message", text: "Delegating" });
     expect((await render()).parts.map((part) => part.content)).toEqual(["Delegating", "child"]);
@@ -885,12 +890,13 @@ describe("renderTurn", () => {
   test("restores a late-materializing command to its earlier parent-item position", async () => {
     const accumulator = turn();
     const state = createTurnRenderState();
-    const render = () => renderTurn(accumulator, {
-      threadId: "thread-1",
-      cwd: "/tmp",
-      state,
-      loadSubagentParts: async () => [],
-    });
+    const render = () =>
+      renderTurn(accumulator, {
+        threadId: "thread-1",
+        cwd: "/tmp",
+        state,
+        loadSubagentParts: async () => [],
+      });
 
     accumulator.onCommandOutputDelta("command", "ab");
     accumulator.onItemCompleted({ id: "message", type: "agent_message", text: "after command" });
@@ -970,7 +976,7 @@ describe("renderTurn", () => {
       subagentId: "child-1",
       toolState: "success" as const,
     };
-    const render = (loadSubagentParts: () => Promise<typeof subagent[]>) =>
+    const render = (loadSubagentParts: () => Promise<(typeof subagent)[]>) =>
       renderTurn(accumulator, {
         threadId: "thread-1",
         cwd: "/tmp",
@@ -1055,10 +1061,7 @@ describe("renderTurn", () => {
       // the file's newer contents and silently rewrite history.
       expect(firstAgain.parts[0]).toBe(added.parts[0]);
       expect(firstAgain.parts[0]?.toolDiff?.after).toBeUndefined();
-      expect([...firstState.fileChange.baselines.keys()]).toEqual([
-        "unused.txt",
-        "example.txt",
-      ]);
+      expect([...firstState.fileChange.baselines.keys()]).toEqual(["unused.txt", "example.txt"]);
 
       const secondTurn = turn();
       secondTurn.onItemCompleted({
@@ -1152,12 +1155,14 @@ describe("renderTurn", () => {
       threadId: "thread-1",
       cwd: "/tmp",
       state,
-      loadSubagentParts: async () => [{
-        type: "subagent",
-        content: "last known child",
-        subagentId: "child-1",
-        toolState: "pending",
-      }],
+      loadSubagentParts: async () => [
+        {
+          type: "subagent",
+          content: "last known child",
+          subagentId: "child-1",
+          toolState: "pending",
+        },
+      ],
     });
     expect(first.parts.map((part) => part.content)).toEqual(["kept", "last known child"]);
     accumulator.onItemCompleted({
@@ -1193,12 +1198,14 @@ describe("renderTurn", () => {
       threadId: "thread-1",
       cwd: "/tmp",
       state,
-      loadSubagentParts: async () => [{
-        type: "subagent",
-        content: "last known child",
-        subagentId: "child-1",
-        toolState: "pending",
-      }],
+      loadSubagentParts: async () => [
+        {
+          type: "subagent",
+          content: "last known child",
+          subagentId: "child-1",
+          toolState: "pending",
+        },
+      ],
     });
     expect(recovered.parts.map((part) => part.content)).toEqual([
       "kept",

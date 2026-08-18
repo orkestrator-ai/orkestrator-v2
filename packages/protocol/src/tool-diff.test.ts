@@ -26,7 +26,16 @@ describe("tool diff line stats", () => {
     expect(splitTextLines("\n")).toEqual([""]);
     expect(splitTextLines("\n\n")).toEqual(["", ""]);
     expect(splitTextLines("one\nfour\n")).toEqual(["one", "four"]);
-    for (const value of [undefined, "", "one", "one\ntwo", "one\ntwo\n", "\n", "\n\n", "one\r\ntwo\r\n"]) {
+    for (const value of [
+      undefined,
+      "",
+      "one",
+      "one\ntwo",
+      "one\ntwo\n",
+      "\n",
+      "\n\n",
+      "one\r\ntwo\r\n",
+    ]) {
       expect(splitTextLines(value)).toHaveLength(countTextLines(value));
     }
   });
@@ -77,11 +86,13 @@ describe("toolDiffFromToolInput", () => {
 
   test("maps every edit-shaped tool name and both field casings", () => {
     for (const name of ["Edit", "file_edit", "STR_REPLACE_EDITOR", "replace"]) {
-      expect(toolDiffFromToolInput(name, {
-        file_path: "a.ts",
-        old_string: "one\ntwo",
-        new_string: "three",
-      })).toEqual({
+      expect(
+        toolDiffFromToolInput(name, {
+          file_path: "a.ts",
+          old_string: "one\ntwo",
+          new_string: "three",
+        }),
+      ).toEqual({
         filePath: "a.ts",
         before: "one\ntwo",
         after: "three",
@@ -90,11 +101,13 @@ describe("toolDiffFromToolInput", () => {
       });
     }
 
-    expect(toolDiffFromToolInput("edit", {
-      filePath: "a.ts",
-      oldString: "one",
-      newString: "two\nthree",
-    })).toEqual({
+    expect(
+      toolDiffFromToolInput("edit", {
+        filePath: "a.ts",
+        oldString: "one",
+        newString: "two\nthree",
+      }),
+    ).toEqual({
       filePath: "a.ts",
       before: "one",
       after: "two\nthree",
@@ -113,10 +126,12 @@ describe("toolDiffFromToolInput", () => {
 
   test("maps write-shaped tools against an empty prior state", () => {
     for (const name of ["Write", "create_file"]) {
-      expect(toolDiffFromToolInput(name, {
-        file_path: "a.ts",
-        content: "one\ntwo\n",
-      })).toEqual({
+      expect(
+        toolDiffFromToolInput(name, {
+          file_path: "a.ts",
+          content: "one\ntwo\n",
+        }),
+      ).toEqual({
         filePath: "a.ts",
         before: "",
         after: "one\ntwo\n",
@@ -142,13 +157,15 @@ describe("toolDiffFromToolInput", () => {
      * unconditionally would put a blank line after "four\n" — a line the file
      * never had — and count it, so the badge would read -3 for two deletions.
      */
-    expect(toolDiffFromToolInput("MultiEdit", {
-      file_path: "c.ts",
-      edits: [
-        { old_string: "four\n", new_string: "x\n" },
-        { old_string: "one", new_string: "y" },
-      ],
-    })).toEqual({
+    expect(
+      toolDiffFromToolInput("MultiEdit", {
+        file_path: "c.ts",
+        edits: [
+          { old_string: "four\n", new_string: "x\n" },
+          { old_string: "one", new_string: "y" },
+        ],
+      }),
+    ).toEqual({
       filePath: "c.ts",
       before: "four\none",
       after: "x\ny",
@@ -158,13 +175,15 @@ describe("toolDiffFromToolInput", () => {
   });
 
   test("counts each multiedit chunk on its own so multi-line chunks still add up", () => {
-    expect(toolDiffFromToolInput("multiedit", {
-      file_path: "c.ts",
-      edits: [
-        { old_string: "one", new_string: "two\nthree" },
-        { old_string: "four\n", new_string: "five" },
-      ],
-    })).toEqual({
+    expect(
+      toolDiffFromToolInput("multiedit", {
+        file_path: "c.ts",
+        edits: [
+          { old_string: "one", new_string: "two\nthree" },
+          { old_string: "four\n", new_string: "five" },
+        ],
+      }),
+    ).toEqual({
       filePath: "c.ts",
       before: "one\nfour\n",
       after: "two\nthree\nfive",
@@ -174,16 +193,18 @@ describe("toolDiffFromToolInput", () => {
   });
 
   test("skips malformed multiedit entries and survives an absent edits array", () => {
-    expect(toolDiffFromToolInput("multiedit", {
-      file_path: "c.ts",
-      edits: [
-        null,
-        ["old", "new"],
-        "not an edit",
-        { old_string: 42, new_string: "kept" },
-        { oldString: "camel", newString: "case" },
-      ],
-    })).toEqual({
+    expect(
+      toolDiffFromToolInput("multiedit", {
+        file_path: "c.ts",
+        edits: [
+          null,
+          ["old", "new"],
+          "not an edit",
+          { old_string: 42, new_string: "kept" },
+          { oldString: "camel", newString: "case" },
+        ],
+      }),
+    ).toEqual({
       filePath: "c.ts",
       before: "camel",
       after: "kept\ncase",
@@ -201,10 +222,12 @@ describe("toolDiffFromToolInput", () => {
   });
 
   test("maps a notebook edit and omits counts when there is no new source", () => {
-    expect(toolDiffFromToolInput("NotebookEdit", {
-      notebook_path: "n.ipynb",
-      new_source: "a\nb\n",
-    })).toEqual({
+    expect(
+      toolDiffFromToolInput("NotebookEdit", {
+        notebook_path: "n.ipynb",
+        new_source: "a\nb\n",
+      }),
+    ).toEqual({
       filePath: "n.ipynb",
       after: "a\nb\n",
       additions: 2,
@@ -213,10 +236,12 @@ describe("toolDiffFromToolInput", () => {
 
     // Delete-mode removes a cell and carries no source. Reporting zero
     // additions there would state a count nothing measured.
-    expect(toolDiffFromToolInput("NotebookEdit", {
-      notebook_path: "n.ipynb",
-      edit_mode: "delete",
-    })).toEqual({
+    expect(
+      toolDiffFromToolInput("NotebookEdit", {
+        notebook_path: "n.ipynb",
+        edit_mode: "delete",
+      }),
+    ).toEqual({
       filePath: "n.ipynb",
       after: undefined,
     });

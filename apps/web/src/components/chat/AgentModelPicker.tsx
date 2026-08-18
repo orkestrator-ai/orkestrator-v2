@@ -39,7 +39,11 @@ import {
 import { cn } from "@/lib/utils";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import type { AgentModel, AgentModelRef, AgentReasoningOption } from "@orkestrator/protocol/native-agent";
+import type {
+  AgentModel,
+  AgentModelRef,
+  AgentReasoningOption,
+} from "@orkestrator/protocol/native-agent";
 import { synthesizedOpenCodeAgentModel } from "@orkestrator/protocol/native-agent";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 
@@ -181,7 +185,7 @@ function preferredCatalogView(
 ): AgentPlatform | "favorites" {
   return favorites.length > 0
     ? "favorites"
-    : selectedPlatform ?? models[0]?.platform ?? "favorites";
+    : (selectedPlatform ?? models[0]?.platform ?? "favorites");
 }
 
 function ModelRow({
@@ -220,7 +224,11 @@ function ModelRow({
             <span className="min-w-0 truncate text-sm font-medium">{model.label}</span>
           </span>
           <span className="flex min-w-0 items-center gap-1 text-[10px] text-muted-foreground/80">
-            <span data-native-model-row-platform={model.platform} className="flex shrink-0" aria-hidden="true">
+            <span
+              data-native-model-row-platform={model.platform}
+              className="flex shrink-0"
+              aria-hidden="true"
+            >
               <AgentPlatformIcon platform={model.platform} accent className="size-3" />
             </span>
             <span className="truncate">
@@ -260,14 +268,7 @@ function SortableModelRow({
   onToggleFavorite,
 }: Omit<Parameters<typeof ModelRow>[0], "sortable">) {
   const modelKey = modelRowKey(model);
-  const {
-    setNodeRef,
-    attributes,
-    listeners,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({
+  const { setNodeRef, attributes, listeners, transform, transition, isDragging } = useSortable({
     id: modelKey,
   });
   return (
@@ -494,27 +495,21 @@ function SpeedItems({
       value={fastModeEnabled === null ? "" : fastModeEnabled ? "fast" : "normal"}
       onValueChange={(value) => onFastModeChange?.(value === "fast")}
     >
-      <DropdownMenuRadioItem
-        value="normal"
-        disabled={!canChange}
-        className={RADIO_ROW_CLASS}
-      >
+      <DropdownMenuRadioItem value="normal" disabled={!canChange} className={RADIO_ROW_CLASS}>
         <span className="flex min-w-0 flex-col">
           <span>Normal</span>
           <span className="text-xs text-muted-foreground">Standard speed and credit rate</span>
         </span>
       </DropdownMenuRadioItem>
-      <DropdownMenuRadioItem
-        value="fast"
-        disabled={!canChange}
-        className={RADIO_ROW_CLASS}
-      >
+      <DropdownMenuRadioItem value="fast" disabled={!canChange} className={RADIO_ROW_CLASS}>
         <span className="flex min-w-0 flex-col">
           <span className="flex items-center gap-1">
             Fast <Zap className={cn("h-3 w-3 text-amber-500", fastModeEnabled && "fill-current")} />
           </span>
           <span className="text-xs text-muted-foreground">
-            {fastModeAvailable ? "Lower latency, higher credit rate" : "Not available for this model"}
+            {fastModeAvailable
+              ? "Lower latency, higher credit rate"
+              : "Not available for this model"}
           </span>
         </span>
       </DropdownMenuRadioItem>
@@ -608,13 +603,7 @@ export function AgentModelPicker({
       if (next !== "favorites" && next !== selectedPlatform) onPlatformChange?.(next);
       return true;
     },
-    [
-      availablePlatforms,
-      catalogView,
-      onPlatformChange,
-      platformSelectionLocked,
-      selectedPlatform,
-    ],
+    [availablePlatforms, catalogView, onPlatformChange, platformSelectionLocked, selectedPlatform],
   );
   useLayoutEffect(() => {
     if (!focusModelListRef.current) return;
@@ -633,9 +622,14 @@ export function AgentModelPicker({
   };
   const visibleModels = useMemo(() => {
     const byKey = new Map(models.map((model) => [`${model.platform}:${model.id}`, model]));
-    const ordered: PickerModel[] = catalogView === "favorites"
-      ? favorites.map((favorite) => byKey.get(`${favorite.platform}:${favorite.modelId}`) ?? favoritePlaceholder(favorite))
-      : models.filter((model) => model.platform === catalogView);
+    const ordered: PickerModel[] =
+      catalogView === "favorites"
+        ? favorites.map(
+            (favorite) =>
+              byKey.get(`${favorite.platform}:${favorite.modelId}`) ??
+              favoritePlaceholder(favorite),
+          )
+        : models.filter((model) => model.platform === catalogView);
     if (!normalizedSearch) return ordered;
     return ordered.filter((model) =>
       `${model.label} ${model.id} ${model.description ?? ""} ${model.platform}`
@@ -643,9 +637,10 @@ export function AgentModelPicker({
         .includes(normalizedSearch),
     );
   }, [catalogView, favorites, models, normalizedSearch]);
-  const triggerPlatform = selectedPlatform
-    ?? models.find((model) => model.id === selectedModelId)?.platform
-    ?? models[0]?.platform;
+  const triggerPlatform =
+    selectedPlatform ??
+    models.find((model) => model.id === selectedModelId)?.platform ??
+    models[0]?.platform;
   const showSpeedControls = Boolean(onFastModeChange);
   // `fastModeEnabled === null` is an unknown snapshot only on a platform that
   // owns speed at all. OpenCode has no speed surface — it encodes speed in the
@@ -659,12 +654,15 @@ export function AgentModelPicker({
     ? `${selectedModelLabel} (${selectedReasoningLabel}${fastModeEnabled ? " ⚡" : ""}${fastModeUnknown ? "; speed unknown" : ""})`
     : `${selectedModelLabel}${fastModeEnabled ? " (⚡)" : fastModeUnknown ? " (speed unknown)" : ""}`;
   const moreModelCount = Math.max(0, visibleModels.length - VISIBLE_MODEL_ROWS);
-  const canReorderFavorites = catalogView === "favorites"
-    && Boolean(onReorderFavorites)
-    && !normalizedSearch
-    && visibleModels.length > 1;
+  const canReorderFavorites =
+    catalogView === "favorites" &&
+    Boolean(onReorderFavorites) &&
+    !normalizedSearch &&
+    visibleModels.length > 1;
   const favoriteReorderMode: FavoriteReorderMode | undefined = canReorderFavorites
-    ? isMobile ? "long-press" : "drag"
+    ? isMobile
+      ? "long-press"
+      : "drag"
     : undefined;
   const favoriteEmptyLabel = normalizedSearch ? "No matches" : "No favorite models";
   const choiceLabels = [
@@ -672,9 +670,10 @@ export function AgentModelPicker({
     showReasoningControls ? "reasoning" : null,
     showSpeedControls ? "speed" : null,
   ].filter((label): label is string => label !== null);
-  const choiceLabel = choiceLabels.length === 1
-    ? choiceLabels[0]
-    : `${choiceLabels.slice(0, -1).join(", ")}${choiceLabels.length > 2 ? "," : ""} and ${choiceLabels.at(-1)}`;
+  const choiceLabel =
+    choiceLabels.length === 1
+      ? choiceLabels[0]
+      : `${choiceLabels.slice(0, -1).join(", ")}${choiceLabels.length > 2 ? "," : ""} and ${choiceLabels.at(-1)}`;
   const effectiveTitle = title ?? `Choose ${choiceLabel}`;
 
   const openMobileSubmenu = (submenu: MobileSubmenu) => {
@@ -946,9 +945,13 @@ export function AgentModelPicker({
                 selectedPlatform={selectedPlatform}
                 disabled={disabled}
                 onSelect={commitModelSelection}
-                emptyLabel={catalogView === "favorites"
-                  ? favoriteEmptyLabel
-                  : normalizedSearch ? "No matches" : "No models available"}
+                emptyLabel={
+                  catalogView === "favorites"
+                    ? favoriteEmptyLabel
+                    : normalizedSearch
+                      ? "No matches"
+                      : "No models available"
+                }
                 favorites={favorites}
                 sortable={canReorderFavorites}
                 isMobile
@@ -1062,7 +1065,12 @@ export function AgentModelPicker({
                   event.preventDefault();
                   setCatalogView("favorites");
                 }}
-                className={cn("grid size-8 place-items-center rounded", catalogView === "favorites" ? "bg-muted text-amber-400" : "text-muted-foreground hover:bg-muted/60")}
+                className={cn(
+                  "grid size-8 place-items-center rounded",
+                  catalogView === "favorites"
+                    ? "bg-muted text-amber-400"
+                    : "text-muted-foreground hover:bg-muted/60",
+                )}
               >
                 <Star className="size-4" />
               </button>
@@ -1104,9 +1112,13 @@ export function AgentModelPicker({
                   selectedPlatform={selectedPlatform}
                   disabled={disabled}
                   onSelect={commitModelSelection}
-                  emptyLabel={catalogView === "favorites"
-                    ? favoriteEmptyLabel
-                    : models.length > 0 ? "No matches" : "No models available"}
+                  emptyLabel={
+                    catalogView === "favorites"
+                      ? favoriteEmptyLabel
+                      : models.length > 0
+                        ? "No matches"
+                        : "No models available"
+                  }
                   favorites={favorites}
                   sortable={canReorderFavorites}
                   isMobile={false}

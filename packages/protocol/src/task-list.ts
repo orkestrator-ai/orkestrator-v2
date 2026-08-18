@@ -132,13 +132,14 @@ export function isTaskListTool(toolName: string | undefined): boolean {
  * Exported alongside `TASK_SNAPSHOT_STATUSES` so a consumer validating a
  * foreign snapshot accepts exactly the spellings the registry itself accepts.
  */
-export function parseTaskSnapshotStatus(
-  value: unknown,
-): TaskSnapshotStatus | undefined {
+export function parseTaskSnapshotStatus(value: unknown): TaskSnapshotStatus | undefined {
   if (typeof value !== "string") return undefined;
   // `[in progress]` and `[in-progress]` mean the same thing as `[in_progress]`;
   // accepting only the underscore spelling would silently drop the row.
-  const normalized = value.trim().toLowerCase().replace(/[-\s]+/g, "_");
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[-\s]+/g, "_");
   return TASK_SNAPSHOT_STATUSES.includes(normalized as TaskSnapshotStatus)
     ? (normalized as TaskSnapshotStatus)
     : undefined;
@@ -248,9 +249,7 @@ export class TaskRegistry {
 
   /** Current list state, independent of any particular call. */
   snapshot(): TaskListSnapshot {
-    const ordered = Array.from(this.tasks.values()).sort((a, b) =>
-      compareIds(a.id, b.id),
-    );
+    const ordered = Array.from(this.tasks.values()).sort((a, b) => compareIds(a.id, b.id));
     const items = ordered
       .slice(0, MAX_SNAPSHOT_ITEMS)
       .map((task) => ({ id: task.id, subject: task.subject, status: task.status }));
@@ -358,9 +357,7 @@ export class TaskRegistry {
 
     const header = toolOutput.trim().match(GET_HEADER);
     const id =
-      header?.[1] ??
-      asNonEmptyString(toolArgs?.taskId) ??
-      asNonEmptyString(toolArgs?.task_id);
+      header?.[1] ?? asNonEmptyString(toolArgs?.taskId) ?? asNonEmptyString(toolArgs?.task_id);
     if (!id) return undefined;
 
     const existing = this.tasks.get(id);

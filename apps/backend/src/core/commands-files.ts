@@ -1,8 +1,33 @@
-import { fsConstants, fs, os, path, randomUUID, inferLanguage, runCommand, MAX_BINARY_FILE_BYTES, validateRelativeFilePath, writeConfinedFile, INITIAL_PROMPT_STAGING_DIRECTORY } from "./commands-dependencies.js";
+import {
+  fsConstants,
+  fs,
+  os,
+  path,
+  randomUUID,
+  inferLanguage,
+  runCommand,
+  MAX_BINARY_FILE_BYTES,
+  validateRelativeFilePath,
+  writeConfinedFile,
+  INITIAL_PROMPT_STAGING_DIRECTORY,
+} from "./commands-dependencies.js";
 import { WORKSPACE_ARTIFACT_GIT_EXCLUDE_PATTERNS } from "./commands-runtime-state.js";
 import type { Environment, AppConfig, StorageService } from "./commands-dependencies.js";
-import { AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV, CONTAINER_GITHUB_CREDENTIAL_FILE, CONTAINER_CLAUDE_CREDENTIAL_FILE, CONTAINER_CURSOR_API_KEY_FILE, CONTAINER_CURSOR_CREDENTIAL_DIR, HOST_CLAUDE_KEYCHAIN_SERVICE, CONTAINER_UNTRACKED_STATS_SCANNER, gitFetchScheduler } from "./commands-runtime-state.js";
-import { UNTRACKED_SCAN_CONCURRENCY, UNTRACKED_SCAN_MAX_FILES, FILE_LINE_COUNT_CHUNK_BYTES } from "./commands-validation.js";
+import {
+  AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV,
+  CONTAINER_GITHUB_CREDENTIAL_FILE,
+  CONTAINER_CLAUDE_CREDENTIAL_FILE,
+  CONTAINER_CURSOR_API_KEY_FILE,
+  CONTAINER_CURSOR_CREDENTIAL_DIR,
+  HOST_CLAUDE_KEYCHAIN_SERVICE,
+  CONTAINER_UNTRACKED_STATS_SCANNER,
+  gitFetchScheduler,
+} from "./commands-runtime-state.js";
+import {
+  UNTRACKED_SCAN_CONCURRENCY,
+  UNTRACKED_SCAN_MAX_FILES,
+  FILE_LINE_COUNT_CHUNK_BYTES,
+} from "./commands-validation.js";
 import { quoteShell, validateGitRefName } from "./commands-agent-support.js";
 import { dockerExec } from "./commands-container-exec.js";
 
@@ -38,11 +63,7 @@ export async function buildFileTree(
     // Workspace symlinks are not valid picker targets. In addition to keeping
     // the tree inside its declared root, skipping them here prevents recursive
     // traversal if platform Dirent semantics ever change.
-    if (
-      entry.name === ".git"
-      || entry.name === "node_modules"
-      || entry.isSymbolicLink()
-    ) continue;
+    if (entry.name === ".git" || entry.name === "node_modules" || entry.isSymbolicLink()) continue;
     budget.remaining -= 1;
     const childRelativePath = path.join(relativePath, entry.name);
     if (entry.isDirectory()) {
@@ -61,7 +82,9 @@ export async function buildFileTree(
       });
     }
   }
-  return nodes.sort((a, b) => Number(b.isDirectory) - Number(a.isDirectory) || a.name.localeCompare(b.name));
+  return nodes.sort(
+    (a, b) => Number(b.isDirectory) - Number(a.isDirectory) || a.name.localeCompare(b.name),
+  );
 }
 
 export type GitFileChange = {
@@ -82,7 +105,9 @@ export function splitNulTerminatedGitFields(output: string, label: string): stri
   return output.slice(0, -1).split("\0");
 }
 
-export function parseGitNumstat(numstatOutput: string): Map<string, { additions: number; deletions: number }> {
+export function parseGitNumstat(
+  numstatOutput: string,
+): Map<string, { additions: number; deletions: number }> {
   const stats = new Map<string, { additions: number; deletions: number }>();
   const fields = splitNulTerminatedGitFields(numstatOutput, "git numstat output");
   for (let index = 0; index < fields.length;) {
@@ -95,8 +120,8 @@ export function parseGitNumstat(numstatOutput: string): Map<string, { additions:
     const additions = header.slice(0, firstTab);
     const deletions = header.slice(firstTab + 1, secondTab);
     if (
-      (additions !== "-" && !/^\d+$/.test(additions))
-      || (deletions !== "-" && !/^\d+$/.test(deletions))
+      (additions !== "-" && !/^\d+$/.test(additions)) ||
+      (deletions !== "-" && !/^\d+$/.test(deletions))
     ) {
       throw new Error("Malformed git numstat output: invalid statistics");
     }
@@ -120,7 +145,10 @@ export function parseGitNumstat(numstatOutput: string): Map<string, { additions:
   return stats;
 }
 
-export function parseGitFileChanges(nameStatusOutput: string, numstatOutput: string): GitFileChange[] {
+export function parseGitFileChanges(
+  nameStatusOutput: string,
+  numstatOutput: string,
+): GitFileChange[] {
   const stats = parseGitNumstat(numstatOutput);
   const fields = splitNulTerminatedGitFields(nameStatusOutput, "git name-status output");
   const changes: GitFileChange[] = [];
@@ -160,7 +188,10 @@ export function decodeGitStatusSection(payload: string, label: string): string {
   // strict about content while not depending on the container's exact coreutils.
   const encoded = payload.replace(/\s+/g, "");
   if (encoded.length === 0) return "";
-  if (encoded.length % 4 !== 0 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) {
+  if (
+    encoded.length % 4 !== 0 ||
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)
+  ) {
     throw new Error(`Malformed ${label}: invalid base64`);
   }
   return Buffer.from(encoded, "base64").toString("utf8");
@@ -277,7 +308,10 @@ export function isMissingTargetRefResponse(output: string): boolean {
   return output === GIT_STATUS_MISSING_REF_MARKER;
 }
 
-export function parseContainerGitStatusResponse(output: string, includeWorkingTree: boolean): GitFileChange[] {
+export function parseContainerGitStatusResponse(
+  output: string,
+  includeWorkingTree: boolean,
+): GitFileChange[] {
   return parseContainerGitStatusResponseDetailed(output, includeWorkingTree).changes;
 }
 
@@ -292,11 +326,11 @@ export function parseContainerGitStatusResponseDetailed(
   const untrackedStart = output.indexOf(GIT_STATUS_UNTRACKED_MARKER);
   const endStart = output.indexOf(GIT_STATUS_END_MARKER);
   if (
-    nameStatusStart !== 0
-    || numstatStart < nameStatusStart
-    || untrackedStart < numstatStart
-    || endStart < untrackedStart
-    || endStart + GIT_STATUS_END_MARKER.length !== output.length
+    nameStatusStart !== 0 ||
+    numstatStart < nameStatusStart ||
+    untrackedStart < numstatStart ||
+    endStart < untrackedStart ||
+    endStart + GIT_STATUS_END_MARKER.length !== output.length
   ) {
     throw new Error("Malformed container git status response");
   }
@@ -341,7 +375,10 @@ export async function getContainerGitStatusDetailed(
   includeWorkingTree: boolean,
 ): Promise<{ changes: GitFileChange[]; truncated: boolean }> {
   const ref = validateGitRefName(targetBranch, "target branch");
-  const output = await dockerExec(containerId, buildContainerGitStatusScript(ref, includeWorkingTree));
+  const output = await dockerExec(
+    containerId,
+    buildContainerGitStatusScript(ref, includeWorkingTree),
+  );
   // Distinguishes "the requested baseline is not in this container" - which
   // happens when a container is recreated from a different clone - from a
   // corrupt response, so callers do not see both as one opaque exec failure.
@@ -369,14 +406,18 @@ export async function getLocalGitStatusDetailed(
   const base = await resolveLocalGitBase(worktreePath, targetBranch);
   const endRef = includeUncommitted ? [] : ["HEAD"];
   const [nameStatus, numstat, porcelain] = await Promise.all([
-    runCommand("git", ["-C", worktreePath, "diff", "--name-status", "-z", "-M", base, ...endRef], { timeoutMs: 60_000 }),
-    runCommand("git", ["-C", worktreePath, "diff", "--numstat", "-z", "-M", base, ...endRef], { timeoutMs: 60_000 }),
+    runCommand("git", ["-C", worktreePath, "diff", "--name-status", "-z", "-M", base, ...endRef], {
+      timeoutMs: 60_000,
+    }),
+    runCommand("git", ["-C", worktreePath, "diff", "--numstat", "-z", "-M", base, ...endRef], {
+      timeoutMs: 60_000,
+    }),
     includeUncommitted
       ? runCommand(
-        "git",
-        ["-C", worktreePath, "status", "--porcelain=v1", "-z", "--untracked-files=all"],
-        { timeoutMs: 60_000 },
-      )
+          "git",
+          ["-C", worktreePath, "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+          { timeoutMs: 60_000 },
+        )
       : Promise.resolve({ stdout: "" }),
   ]);
 
@@ -437,7 +478,7 @@ export async function mapWithConcurrency<T, R>(
   worker: (item: T, index: number) => Promise<R>,
 ): Promise<R[]> {
   if (items.length === 0) return [];
-  const results = new Array<R>(items.length);
+  const results = Array.from<R>({ length: items.length });
   let cursor = 0;
 
   const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
@@ -471,9 +512,7 @@ export async function countLocalFileLines(rootPath: string, relativePath: string
   // gets measured is provably the one that passed the size check.
   const handle = await fs.open(
     fullPath,
-    fsConstants.O_RDONLY
-      | (fsConstants.O_NOFOLLOW || 0)
-      | (fsConstants.O_NONBLOCK || 0),
+    fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW || 0) | (fsConstants.O_NONBLOCK || 0),
   );
   try {
     const stat = await handle.stat();
@@ -515,16 +554,25 @@ export async function countLocalFileLines(rootPath: string, relativePath: string
 }
 
 export async function gitRefExists(worktreePath: string, refName: string): Promise<boolean> {
-  return runCommand("git", ["-C", worktreePath, "rev-parse", "--verify", "--quiet", `${refName}^{commit}`], { timeoutMs: 10_000 })
-    .then(() => true, () => false);
+  return runCommand(
+    "git",
+    ["-C", worktreePath, "rev-parse", "--verify", "--quiet", `${refName}^{commit}`],
+    { timeoutMs: 10_000 },
+  ).then(
+    () => true,
+    () => false,
+  );
 }
 
-export async function resolveRemoteWorktreeStartPoint(projectPath: string, baseBranch: string): Promise<string> {
+export async function resolveRemoteWorktreeStartPoint(
+  projectPath: string,
+  baseBranch: string,
+): Promise<string> {
   const branch = validateGitRefName(baseBranch, "base branch");
   await runCommand("git", ["-C", projectPath, "fetch", "origin", branch], { timeoutMs: 120_000 });
 
   const remoteRef = `origin/${branch}`;
-  if (!await gitRefExists(projectPath, remoteRef)) {
+  if (!(await gitRefExists(projectPath, remoteRef))) {
     throw new Error(`Remote base branch not found: ${remoteRef}`);
   }
   return remoteRef;
@@ -542,10 +590,13 @@ export function isImmutableCommitRef(ref: string): boolean {
   return /^[0-9a-f]{40}$/i.test(ref.trim());
 }
 
-export async function resolveLocalGitBase(worktreePath: string, targetBranch: string): Promise<string> {
+export async function resolveLocalGitBase(
+  worktreePath: string,
+  targetBranch: string,
+): Promise<string> {
   const branch = validateGitRefName(targetBranch, "target branch");
 
-  if (isImmutableCommitRef(branch) && await gitRefExists(worktreePath, branch)) {
+  if (isImmutableCommitRef(branch) && (await gitRefExists(worktreePath, branch))) {
     return branch;
   }
 
@@ -582,14 +633,21 @@ export async function enableGitScanCaches(worktreePath: string): Promise<void> {
     "git",
     ["-C", worktreePath, "config", "extensions.worktreeConfig", "true"],
     { timeoutMs: 10_000 },
-  ).then(() => true, () => false);
+  ).then(
+    () => true,
+    () => false,
+  );
   // Without per-worktree scoping the only way to set these would be to write the
   // shared config, so stop rather than reach outside the worktree.
   if (!enabled) return;
 
-  for (const [key, value] of [["core.untrackedCache", "true"], ["core.fsmonitor", "true"]] as const) {
-    await runCommand("git", ["-C", worktreePath, "config", "--worktree", key, value], { timeoutMs: 10_000 })
-      .catch(() => undefined);
+  for (const [key, value] of [
+    ["core.untrackedCache", "true"],
+    ["core.fsmonitor", "true"],
+  ] as const) {
+    await runCommand("git", ["-C", worktreePath, "config", "--worktree", key, value], {
+      timeoutMs: 10_000,
+    }).catch(() => undefined);
   }
 }
 
@@ -601,7 +659,10 @@ export function validateWorkspaceMutationPath(relativePath: string, label = "fil
   return target;
 }
 
-export async function assertNoLocalSymlinkAncestors(worktreePath: string, target: string): Promise<void> {
+export async function assertNoLocalSymlinkAncestors(
+  worktreePath: string,
+  target: string,
+): Promise<void> {
   const root = await fs.realpath(worktreePath);
   let current = root;
   const ancestors = target.split("/").slice(0, -1);
@@ -660,11 +721,17 @@ export async function pruneLocalInitialPromptBatches(worktreePath: string): Prom
   }
 
   const expected = await fs.lstat(directory);
-  await runCommand(process.execPath, [
-    "-e", PINNED_INITIAL_PROMPT_PRUNE,
-    String(expected.dev), String(expected.ino),
-    String(INITIAL_PROMPT_BATCH_RETENTION - 1),
-  ], { cwd: directory, timeoutMs: 30_000 });
+  await runCommand(
+    process.execPath,
+    [
+      "-e",
+      PINNED_INITIAL_PROMPT_PRUNE,
+      String(expected.dev),
+      String(expected.ino),
+      String(INITIAL_PROMPT_BATCH_RETENTION - 1),
+    ],
+    { cwd: directory, timeoutMs: 30_000 },
+  );
 }
 
 /** The container-side equivalent of {@link pruneLocalInitialPromptBatches}. */
@@ -777,23 +844,26 @@ export function writeConfinedLocalArtifact(
   return writeConfinedFile(worktreePath, relativePath, payload, { exclusive: true });
 }
 
-export async function removeLocalWorkspacePath(worktreePath: string, target: string): Promise<void> {
+export async function removeLocalWorkspacePath(
+  worktreePath: string,
+  target: string,
+): Promise<void> {
   await assertNoLocalSymlinkAncestors(worktreePath, target);
-  await runCommand(
-    "git",
-    ["-C", worktreePath, "rm", "-f", "--ignore-unmatch", "--", target],
-    { timeoutMs: 30_000 },
-  );
+  await runCommand("git", ["-C", worktreePath, "rm", "-f", "--ignore-unmatch", "--", target], {
+    timeoutMs: 30_000,
+  });
   // Git clean understands worktree boundaries and does not traverse a symlinked
   // parent. It handles the untracked/ignored case left behind by git rm.
-  await runCommand(
-    "git",
-    ["-C", worktreePath, "clean", "-f", "-x", "--", target],
-    { timeoutMs: 30_000 },
-  );
+  await runCommand("git", ["-C", worktreePath, "clean", "-f", "-x", "--", target], {
+    timeoutMs: 30_000,
+  });
 }
 
-export async function gitPathExistsAtRef(worktreePath: string, refName: string, target: string): Promise<boolean> {
+export async function gitPathExistsAtRef(
+  worktreePath: string,
+  refName: string,
+  target: string,
+): Promise<boolean> {
   const { stdout } = await runCommand(
     "git",
     ["-C", worktreePath, "ls-tree", "-z", "--name-only", refName, "--", target],
@@ -829,7 +899,11 @@ export async function findLocalRenamePair(
   return null;
 }
 
-export async function restoreLocalPathFromBase(worktreePath: string, base: string, target: string): Promise<void> {
+export async function restoreLocalPathFromBase(
+  worktreePath: string,
+  base: string,
+  target: string,
+): Promise<void> {
   await assertNoLocalSymlinkAncestors(worktreePath, target);
   if (await gitPathExistsAtRef(worktreePath, base, target)) {
     await runCommand(
@@ -842,10 +916,14 @@ export async function restoreLocalPathFromBase(worktreePath: string, base: strin
   }
 }
 
-export async function revertLocalFile(worktreePath: string, relativePath: string, targetBranch: string): Promise<string> {
+export async function revertLocalFile(
+  worktreePath: string,
+  relativePath: string,
+  targetBranch: string,
+): Promise<string> {
   const target = validateWorkspaceMutationPath(relativePath);
   const base = await resolveLocalGitBase(worktreePath, targetBranch);
-  if (!await gitRefExists(worktreePath, base)) {
+  if (!(await gitRefExists(worktreePath, base))) {
     throw new Error(`Target ref not found: ${targetBranch}`);
   }
   const rename = await findLocalRenamePair(worktreePath, base, target);
@@ -871,7 +949,10 @@ export async function deleteLocalFile(worktreePath: string, relativePath: string
   return target;
 }
 
-export async function requireLocalMutationEnvironment(storage: StorageService, environmentId: string): Promise<Environment> {
+export async function requireLocalMutationEnvironment(
+  storage: StorageService,
+  environmentId: string,
+): Promise<Environment> {
   const environment = await storage.getEnvironment(environmentId);
   if (!environment) throw new Error(`Environment not found: ${environmentId}`);
   if (environment.environmentType !== "local" || !environment.worktreePath) {
@@ -880,7 +961,10 @@ export async function requireLocalMutationEnvironment(storage: StorageService, e
   return environment;
 }
 
-export async function requireContainerMutationEnvironment(storage: StorageService, environmentId: string): Promise<Environment> {
+export async function requireContainerMutationEnvironment(
+  storage: StorageService,
+  environmentId: string,
+): Promise<Environment> {
   const environment = await storage.getEnvironment(environmentId);
   if (!environment) throw new Error(`Environment not found: ${environmentId}`);
   if (environment.environmentType === "local" || !environment.containerId) {
@@ -891,29 +975,29 @@ export async function requireContainerMutationEnvironment(storage: StorageServic
 
 export const CONTAINER_SAFE_MUTATION_FUNCTIONS = [
   "assert_safe_path() {",
-  "  local candidate=\"$1\"",
-  "  case \"$candidate\" in .git|.git/*) echo \"Git metadata cannot be modified\" >&2; return 1 ;; esac",
+  '  local candidate="$1"',
+  '  case "$candidate" in .git|.git/*) echo "Git metadata cannot be modified" >&2; return 1 ;; esac',
   "  local current=/workspace",
   "  local -a parts=()",
   "  local index",
-  "  IFS=/ read -r -a parts <<< \"$candidate\"",
+  '  IFS=/ read -r -a parts <<< "$candidate"',
   "  for ((index = 0; index < ${#parts[@]} - 1; index++)); do",
-  "    current=\"$current/${parts[$index]}\"",
-  "    if [ -L \"$current\" ]; then",
-  "      echo \"Symlink ancestor is not allowed: $candidate\" >&2",
+  '    current="$current/${parts[$index]}"',
+  '    if [ -L "$current" ]; then',
+  '      echo "Symlink ancestor is not allowed: $candidate" >&2',
   "      return 1",
   "    fi",
-  "    if [ -e \"$current\" ] && [ ! -d \"$current\" ]; then",
-  "      echo \"Path ancestor is not a directory: $candidate\" >&2",
+  '    if [ -e "$current" ] && [ ! -d "$current" ]; then',
+  '      echo "Path ancestor is not a directory: $candidate" >&2',
   "      return 1",
   "    fi",
   "  done",
   "}",
   "remove_path() {",
-  "  local candidate=\"$1\"",
-  "  assert_safe_path \"$candidate\" || return 1",
-  "  git rm -f --ignore-unmatch -- \"$candidate\"",
-  "  git clean -f -x -- \"$candidate\"",
+  '  local candidate="$1"',
+  '  assert_safe_path "$candidate" || return 1',
+  '  git rm -f --ignore-unmatch -- "$candidate"',
+  '  git clean -f -x -- "$candidate"',
   "}",
 ].join("\n");
 
@@ -1006,15 +1090,21 @@ export function isGitShowMissingPathError(error: unknown): boolean {
   return (
     message.includes("exists on disk, but not in") ||
     message.includes("does not exist in") ||
-    message.includes("Path ") && message.includes(" does not exist")
+    (message.includes("Path ") && message.includes(" does not exist"))
   );
 }
 
-export async function readLocalFileAtBranch(worktreePath: string, filePath: string, branch: string): Promise<{ path: string; content: string; language: string } | null> {
+export async function readLocalFileAtBranch(
+  worktreePath: string,
+  filePath: string,
+  branch: string,
+): Promise<{ path: string; content: string; language: string } | null> {
   const target = validateRelativeFilePath(filePath, "filePath");
   const base = await resolveLocalGitBase(worktreePath, branch);
   try {
-    const { stdout } = await runCommand("git", ["-C", worktreePath, "show", `${base}:${target}`], { timeoutMs: 30_000 });
+    const { stdout } = await runCommand("git", ["-C", worktreePath, "show", `${base}:${target}`], {
+      timeoutMs: 30_000,
+    });
     return { path: target, content: stdout, language: inferLanguage(target) };
   } catch (error) {
     if (isGitShowMissingPathError(error)) return null;
@@ -1058,16 +1148,13 @@ export function buildSyncContainerGitHubCredentialCommand(
 `;
 }
 
-export const SYNC_CONTAINER_GITHUB_CREDENTIAL_COMMAND =
-  buildSyncContainerGitHubCredentialCommand();
+export const SYNC_CONTAINER_GITHUB_CREDENTIAL_COMMAND = buildSyncContainerGitHubCredentialCommand();
 
 export async function getHostGitHubToken(): Promise<string | undefined> {
   try {
-    const { stdout } = await runCommand(
-      "gh",
-      ["auth", "token", "--hostname", "github.com"],
-      { timeoutMs: 10_000 },
-    );
+    const { stdout } = await runCommand("gh", ["auth", "token", "--hostname", "github.com"], {
+      timeoutMs: 10_000,
+    });
     return stdout.trim() || undefined;
   } catch {
     return undefined;
@@ -1153,8 +1240,7 @@ export function buildSyncContainerClaudeCredentialCommand(
 `;
 }
 
-export const SYNC_CONTAINER_CLAUDE_CREDENTIAL_COMMAND =
-  buildSyncContainerClaudeCredentialCommand();
+export const SYNC_CONTAINER_CLAUDE_CREDENTIAL_COMMAND = buildSyncContainerClaudeCredentialCommand();
 
 const MAX_HOST_AGENT_CREDENTIAL_BYTES = 1024 * 1024;
 const HOST_CURSOR_KEYCHAIN_ACCOUNT = "cursor-user";
@@ -1222,9 +1308,7 @@ export async function getHostClaudeCredentials(
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
         return undefined;
       }
-      return Object.keys(parsed as Record<string, unknown>).length > 0
-        ? trimmed
-        : undefined;
+      return Object.keys(parsed as Record<string, unknown>).length > 0 ? trimmed : undefined;
     } catch {
       return undefined;
     }
@@ -1290,9 +1374,9 @@ export function getClaudeOAuthAccessToken(
     if (typeof accessToken !== "string") return undefined;
     const expiresAt = parsed.claudeAiOauth?.expiresAt;
     if (
-      typeof expiresAt === "number"
-      && Number.isFinite(expiresAt)
-      && expiresAt <= now + CLAUDE_OAUTH_EXPIRY_SKEW_MS
+      typeof expiresAt === "number" &&
+      Number.isFinite(expiresAt) &&
+      expiresAt <= now + CLAUDE_OAUTH_EXPIRY_SKEW_MS
     ) {
       return undefined;
     }
@@ -1407,10 +1491,7 @@ export async function syncContainerCursorApiKey(
   apiKey: string | undefined,
 ): Promise<void> {
   if (!apiKey) {
-    await dockerExec(
-      containerId,
-      `rm -f ${CONTAINER_CURSOR_API_KEY_FILE}`,
-    );
+    await dockerExec(containerId, `rm -f ${CONTAINER_CURSOR_API_KEY_FILE}`);
     return;
   }
   const command = [
@@ -1419,21 +1500,17 @@ export async function syncContainerCursorApiKey(
     'mkdir -p "$credential_dir"',
     'chmod 700 "$credential_dir"',
     'credential_tmp="$(mktemp "$credential_dir/.cursor-api-key.XXXXXX")"',
-    'trap \'rm -f "$credential_tmp"\' EXIT',
+    "trap 'rm -f \"$credential_tmp\"' EXIT",
     'cat > "$credential_tmp"',
     'chmod 600 "$credential_tmp"',
     `mv "$credential_tmp" ${quoteShell(CONTAINER_CURSOR_API_KEY_FILE)}`,
     "trap - EXIT",
   ].join("\n");
-  await runCommand(
-    "docker",
-    ["exec", "-i", containerId, "sh", "-c", command],
-    {
-      stdin: apiKey,
-      timeoutMs: 30_000,
-      redactValues: [apiKey],
-    },
-  );
+  await runCommand("docker", ["exec", "-i", containerId, "sh", "-c", command], {
+    stdin: apiKey,
+    timeoutMs: 30_000,
+    redactValues: [apiKey],
+  });
 }
 
 /**
@@ -1452,9 +1529,9 @@ export async function resolveContainerClaudeCredentials(
   return getHostClaudeCredentials(
     process.platform,
     agentTestHostHome || os.homedir(),
-    process.env[AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV]?.trim()
-      || process.env.CLAUDE_CONFIG_DIR?.trim()
-      || undefined,
+    process.env[AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV]?.trim() ||
+      process.env.CLAUDE_CONFIG_DIR?.trim() ||
+      undefined,
     // Only an agent-test profile needs the lookup pinned to one keychain file.
     // An ordinary install runs as the logged-in user and may keep the record
     // outside `login.keychain-db`, so it keeps the default search list.
@@ -1531,7 +1608,11 @@ export async function addLocalWorkspaceArtifactsToGitExclude(worktreePath: strin
 }
 
 export async function resolveLocalGitExcludeFile(worktreePath: string): Promise<string> {
-  const { stdout } = await runCommand("git", ["-C", worktreePath, "rev-parse", "--git-path", "info/exclude"], { timeoutMs: 10_000 });
+  const { stdout } = await runCommand(
+    "git",
+    ["-C", worktreePath, "rev-parse", "--git-path", "info/exclude"],
+    { timeoutMs: 10_000 },
+  );
   const excludeFile = stdout.trim();
   if (!excludeFile) throw new Error(`Could not resolve git exclude file for ${worktreePath}`);
   return path.isAbsolute(excludeFile) ? excludeFile : path.resolve(worktreePath, excludeFile);

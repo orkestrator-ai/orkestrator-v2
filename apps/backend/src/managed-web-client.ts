@@ -26,8 +26,12 @@ function createVolatileOwnershipStore(): ManagedWebClientOwnershipStore {
   let ownership: ManagedWebClientOwnership | null = null;
   return {
     load: async () => ownership,
-    save: async (next) => { ownership = next; },
-    clear: async () => { ownership = null; },
+    save: async (next) => {
+      ownership = next;
+    },
+    clear: async () => {
+      ownership = null;
+    },
   };
 }
 
@@ -43,13 +47,13 @@ export function createFileOwnershipStore(filePath: string): ManagedWebClientOwne
       }
       const parsed = JSON.parse(raw) as Partial<ManagedWebClientOwnership>;
       if (
-        parsed.version !== 1
-        || !Number.isInteger(parsed.targetPort)
-        || parsed.targetPort! < 1
-        || parsed.targetPort! > 65535
-        || !Number.isInteger(parsed.httpsPort)
-        || parsed.httpsPort! < 1
-        || parsed.httpsPort! > 65535
+        parsed.version !== 1 ||
+        !Number.isInteger(parsed.targetPort) ||
+        parsed.targetPort! < 1 ||
+        parsed.targetPort! > 65535 ||
+        !Number.isInteger(parsed.httpsPort) ||
+        parsed.httpsPort! < 1 ||
+        parsed.httpsPort! > 65535
       ) {
         throw new Error("Managed web client ownership file is invalid");
       }
@@ -149,8 +153,8 @@ export class ManagedWebClient {
     try {
       const targetPort = getTailscaleServeTargetPort(this.browserListenerUrl);
       ownership = await this.ownershipStore.load();
-      const canAdopt = ownership?.targetPort === targetPort
-        && ownership.httpsPort === this.httpsPort;
+      const canAdopt =
+        ownership?.targetPort === targetPort && ownership.httpsPort === this.httpsPort;
       if (ownership && !canAdopt) {
         if (this.serve.stopOwned) {
           await this.serve.stopOwned(ownership.targetPort, ownership.httpsPort);

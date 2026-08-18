@@ -94,9 +94,10 @@ export function stripTmuxAnsi(text: string): string {
         continue;
       }
       // Charset selection sequences such as ESC(B contain one additional byte.
-      index += introducer === "(" || introducer === ")"
-        ? Math.min(3, text.length - index)
-        : Math.min(2, text.length - index);
+      index +=
+        introducer === "(" || introducer === ")"
+          ? Math.min(3, text.length - index)
+          : Math.min(2, text.length - index);
       continue;
     }
     // tmux captures may contain cursor-return/backspace controls. They are not
@@ -108,17 +109,17 @@ export function stripTmuxAnsi(text: string): string {
 }
 
 function boundedSnapshotLines(snapshot: string): string[] {
-  const bounded = snapshot.length > MAX_SNAPSHOT_CHARS
-    ? snapshot.slice(-MAX_SNAPSHOT_CHARS)
-    : snapshot;
+  const bounded =
+    snapshot.length > MAX_SNAPSHOT_CHARS ? snapshot.slice(-MAX_SNAPSHOT_CHARS) : snapshot;
   const lines = stripTmuxAnsi(bounded).split(/\r?\n/);
-  return lines.length > MAX_SNAPSHOT_LINES
-    ? lines.slice(-MAX_SNAPSHOT_LINES)
-    : lines;
+  return lines.length > MAX_SNAPSHOT_LINES ? lines.slice(-MAX_SNAPSHOT_LINES) : lines;
 }
 
 function stripTreePrefix(line: string): string {
-  return line.trim().replace(/^[│├└┌┐┘┴┬─╭╰╮╯┼┤○●◦∙\s]+/, "").trim();
+  return line
+    .trim()
+    .replace(/^[│├└┌┐┘┴┬─╭╰╮╯┼┤○●◦∙\s]+/, "")
+    .trim();
 }
 
 function hasAgentLineMarker(line: string): boolean {
@@ -132,19 +133,12 @@ function parseCompactNumber(value: string): number | null {
   const amount = Number(match.groups.amount);
   if (!Number.isFinite(amount)) return null;
   const suffix = match.groups.suffix?.toLowerCase();
-  const multiplier = suffix === "k"
-    ? 1_000
-    : suffix === "m"
-      ? 1_000_000
-      : suffix === "b"
-        ? 1_000_000_000
-        : 1;
+  const multiplier =
+    suffix === "k" ? 1_000 : suffix === "m" ? 1_000_000 : suffix === "b" ? 1_000_000_000 : 1;
   return Math.round(amount * multiplier);
 }
 
-export function parseTmuxAgentUsageSummaries(
-  snapshot: string,
-): TmuxAgentUsageSummary[] {
+export function parseTmuxAgentUsageSummaries(snapshot: string): TmuxAgentUsageSummary[] {
   const summaries: TmuxAgentUsageSummary[] = [];
   let currentRole: string | undefined;
   let remainingHeaderRows = 0;
@@ -183,7 +177,9 @@ export function parseTmuxAgentUsageSummaries(
     const tokenOnly = TOKEN_SUFFIX_RE.exec(line);
     const tokens = tokenOnly?.groups?.tokens;
     if (!tokenOnly || !tokens) continue;
-    const label = line.slice(0, tokenOnly.index).trimEnd()
+    const label = line
+      .slice(0, tokenOnly.index)
+      .trimEnd()
       .replace(/[↓↑↕][ \t]*$/u, "")
       .replace(/[·•][ \t]*$/u, "")
       .replace(DURATION_SUFFIX_RE, "")
@@ -222,9 +218,7 @@ function parseSelectionOptionLine(
   if (!match) return null;
   const number = Number.parseInt(match[2] ?? "", 10);
   const label = (match[3] ?? "").trim();
-  return Number.isFinite(number) && label
-    ? { prefix: match[1] ?? "", number, label }
-    : null;
+  return Number.isFinite(number) && label ? { prefix: match[1] ?? "", number, label } : null;
 }
 
 function isBoundary(line: string): boolean {
@@ -234,10 +228,12 @@ function isBoundary(line: string): boolean {
 function isContextParagraph(lines: string[]): boolean {
   if (lines.length === 0) return false;
   const text = lines.join(" ");
-  return !lines.every(isBoundary)
-    && !/^\[[^\]]+\]/.test(text)
-    && !/^[^@\s]+@[^$#]+[$#]\s*$/.test(text)
-    && !lines.every((line) => /^\d+\.\s+/.test(line));
+  return (
+    !lines.every(isBoundary) &&
+    !/^\[[^\]]+\]/.test(text) &&
+    !/^[^@\s]+@[^$#]+[$#]\s*$/.test(text) &&
+    !lines.every((line) => /^\d+\.\s+/.test(line))
+  );
 }
 
 function selectionQuestion(lines: string[], optionBlockStart: number): string | null {
@@ -246,7 +242,11 @@ function selectionQuestion(lines: string[], optionBlockStart: number): string | 
   let start = end;
   while (start > 0 && lines[start - 1]?.trim() !== "") start -= 1;
   const barePointer = /^https?:\/\/\S+$/i.test(
-    lines.slice(start, end).map((line) => line.trim()).filter(Boolean).join(" "),
+    lines
+      .slice(start, end)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .join(" "),
   );
   if (barePointer) {
     let cursor = start;
@@ -256,7 +256,10 @@ function selectionQuestion(lines: string[], optionBlockStart: number): string | 
       if (previousEnd <= 0) break;
       let previousStart = previousEnd;
       while (previousStart > 0 && lines[previousStart - 1]?.trim() !== "") previousStart -= 1;
-      const raw = lines.slice(previousStart, previousEnd).map((line) => line.trim()).filter(Boolean);
+      const raw = lines
+        .slice(previousStart, previousEnd)
+        .map((line) => line.trim())
+        .filter(Boolean);
       const boundary = findLastIndex(raw, isBoundary);
       const paragraph = boundary >= 0 ? raw.slice(boundary + 1) : raw;
       if (!isContextParagraph(paragraph)) break;
@@ -266,8 +269,12 @@ function selectionQuestion(lines: string[], optionBlockStart: number): string | 
     }
   }
   while (start < end && isBoundary(lines[start]?.trim() ?? "")) start += 1;
-  const question = lines.slice(start, end).map((line) => line.trim()).join("\n")
-    .replace(/\n{3,}/g, "\n\n").trim();
+  const question = lines
+    .slice(start, end)
+    .map((line) => line.trim())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
   return question || null;
 }
 
@@ -357,9 +364,7 @@ function parseSelectionPromptAtHint(
     question: selectionQuestion(lines, optionBlockStart),
     options,
     selectedOptionIndex,
-    inputMode: /Enter\s+to\s+confirm/i.test(hintLine) && !navigates
-      ? "number"
-      : "navigate",
+    inputMode: /Enter\s+to\s+confirm/i.test(hintLine) && !navigates ? "number" : "navigate",
   };
 }
 

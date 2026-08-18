@@ -110,32 +110,38 @@ export function AgentLaunchDialog({
 
   const models = modelsForAgent(catalog, agent);
   const selectedModel = models.find((option) => option.id === model) ?? models[0];
-  const reasoningEfforts = selectedModel?.reasoningEfforts ?? [];
+  // Stable identity: the `?? []` fallback otherwise re-created the array every
+  // render, defeating the reasoningOptions memo below.
+  const reasoningEfforts = useMemo(
+    () => selectedModel?.reasoningEfforts ?? [],
+    [selectedModel?.reasoningEfforts],
+  );
   const effortAvailable = reasoningEfforts.length > 0;
   const effectiveEffort =
-    effortAvailable
-    && (reasoningEffort === "default" || reasoningEfforts.includes(reasoningEffort))
+    effortAvailable && (reasoningEffort === "default" || reasoningEfforts.includes(reasoningEffort))
       ? reasoningEffort
       : "default";
 
   const pickerModels = useMemo<AgentModel[]>(
-    () => enabledAgents.flatMap((platform) =>
-      modelsForAgent(catalog, platform).map((option) => ({
-        platform,
-        id: option.id,
-        label: option.name,
-        description: option.description,
-      })),
-    ),
+    () =>
+      enabledAgents.flatMap((platform) =>
+        modelsForAgent(catalog, platform).map((option) => ({
+          platform,
+          id: option.id,
+          label: option.name,
+          description: option.description,
+        })),
+      ),
     [catalog, enabledAgents],
   );
   const reasoningOptions = useMemo<AgentReasoningOption[]>(
-    () => (effortAvailable
-      ? [
-          { id: "default", label: "Default" },
-          ...reasoningEfforts.map((effort) => ({ id: effort, label: effortLabel(effort) })),
-        ]
-      : []),
+    () =>
+      effortAvailable
+        ? [
+            { id: "default", label: "Default" },
+            ...reasoningEfforts.map((effort) => ({ id: effort, label: effortLabel(effort) })),
+          ]
+        : [],
     [effortAvailable, reasoningEfforts],
   );
 
@@ -144,12 +150,9 @@ export function AgentLaunchDialog({
   const selectAgentModel = (nextModel: AgentModel) => {
     setAgent(nextModel.platform);
     setModel(nextModel.id);
-    setReasoningEffort(defaultEffortFor(
-      nextModel.platform,
-      nextModel.id,
-      catalog,
-      preferredReasoningEfforts,
-    ));
+    setReasoningEffort(
+      defaultEffortFor(nextModel.platform, nextModel.id, catalog, preferredReasoningEfforts),
+    );
   };
 
   const selectAgent = (nextAgent: LaunchAgent) => {
@@ -157,9 +160,7 @@ export function AgentLaunchDialog({
     const nextModel = firstModelFor(nextAgent, catalog, preferredModels);
     setAgent(nextAgent);
     setModel(nextModel);
-    setReasoningEffort(
-      defaultEffortFor(nextAgent, nextModel, catalog, preferredReasoningEfforts),
-    );
+    setReasoningEffort(defaultEffortFor(nextAgent, nextModel, catalog, preferredReasoningEfforts));
   };
 
   const isResolve = kind === "resolve-conflicts";
@@ -186,8 +187,7 @@ export function AgentLaunchDialog({
         onCloseAutoFocus={(event) => {
           const primaryTarget = returnFocusRef?.current;
           const focusTarget =
-            returnFocusFallback?.() ??
-            (primaryTarget?.isConnected ? primaryTarget : null);
+            returnFocusFallback?.() ?? (primaryTarget?.isConnected ? primaryTarget : null);
           if (!focusTarget) return;
           event.preventDefault();
           focusTarget.focus();
@@ -196,9 +196,11 @@ export function AgentLaunchDialog({
         <DialogHeader className="shrink-0 border-b border-zinc-800 bg-gradient-to-br from-cyan-500/[0.08] via-transparent to-transparent px-5 pb-4 pt-5 sm:px-6">
           <DialogTitle className="flex items-center gap-2 text-base">
             <span className="grid size-8 shrink-0 place-items-center rounded-full border border-cyan-400/25 bg-cyan-500/10 text-cyan-300">
-              {isResolve
-                ? <AlertTriangle className="size-4" />
-                : <GitPullRequest className="size-4" />}
+              {isResolve ? (
+                <AlertTriangle className="size-4" />
+              ) : (
+                <GitPullRequest className="size-4" />
+              )}
             </span>
             {isResolve ? "Configure conflict resolution" : "Configure pull request"}
           </DialogTitle>
@@ -206,12 +208,13 @@ export function AgentLaunchDialog({
             {isResolve ? (
               <>
                 Launch an agent to resolve this pull request&apos;s merge conflicts against{" "}
-                <span className="text-zinc-300">{targetBranch}</span>, then commit and push the result.
+                <span className="text-zinc-300">{targetBranch}</span>, then commit and push the
+                result.
               </>
             ) : (
               <>
-                Launch an agent that commits the work, pushes the branch, and opens a
-                pull request against <span className="text-zinc-300">{targetBranch}</span>.
+                Launch an agent that commits the work, pushes the branch, and opens a pull request
+                against <span className="text-zinc-300">{targetBranch}</span>.
               </>
             )}
           </DialogDescription>
@@ -226,8 +229,7 @@ export function AgentLaunchDialog({
             onConfirm({
               agent,
               model: selectedModel?.id ?? model,
-              reasoningEffort:
-                effectiveEffort === "default" ? undefined : effectiveEffort,
+              reasoningEffort: effectiveEffort === "default" ? undefined : effectiveEffort,
             });
           }}
         >
@@ -241,75 +243,81 @@ export function AgentLaunchDialog({
             `disabled` still propagates — that is a DOM rule, not a layout one.
           */}
           <fieldset disabled={busy} className="contents">
-          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 sm:px-6">
-            <Label
-              htmlFor={pickerId}
-              className="mb-2 block text-xs font-medium uppercase tracking-[0.14em] text-zinc-400"
-            >
-              Agent, model and reasoning
-            </Label>
-            <AgentModelPicker
-              id={pickerId}
-              ariaLabel="Agent, model and reasoning"
-              models={pickerModels}
-              enabledPlatforms={enabledAgents}
-              selectedPlatform={agent}
-              favorites={favorites}
-              onPlatformChange={selectAgent}
-              onToggleFavorite={toggleFavorite}
-              onReorderFavorites={reorderFavorites}
-              selectedModelId={selectedModel?.id ?? model}
-              selectedModelLabel={selectedModel?.name ?? "Choose a model"}
-              onModelChange={(nextModelId) =>
-                selectAgentModel({ platform: agent, id: nextModelId, label: nextModelId })}
-              onModelSelect={selectAgentModel}
-              reasoningOptions={reasoningOptions}
-              selectedReasoningId={effectiveEffort}
-              selectedReasoningLabel={
-                reasoningOptions.find((option) => option.id === effectiveEffort)?.label
-              }
-              onReasoningChange={setReasoningEffort}
-              title="Choose agent, model, and reasoning"
-              className="min-h-11 w-full max-w-none justify-start border border-zinc-700/80 bg-zinc-900 py-2.5 text-sm text-zinc-100 md:max-w-none md:flex-1"
-            />
-            {!effortAvailable && (
-              <p className="mt-1.5 text-xs text-zinc-500">
-                This model uses its default reasoning setting.
-              </p>
-            )}
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 sm:px-6">
+              <Label
+                htmlFor={pickerId}
+                className="mb-2 block text-xs font-medium uppercase tracking-[0.14em] text-zinc-400"
+              >
+                Agent, model and reasoning
+              </Label>
+              <AgentModelPicker
+                id={pickerId}
+                ariaLabel="Agent, model and reasoning"
+                models={pickerModels}
+                enabledPlatforms={enabledAgents}
+                selectedPlatform={agent}
+                favorites={favorites}
+                onPlatformChange={selectAgent}
+                onToggleFavorite={toggleFavorite}
+                onReorderFavorites={reorderFavorites}
+                selectedModelId={selectedModel?.id ?? model}
+                selectedModelLabel={selectedModel?.name ?? "Choose a model"}
+                onModelChange={(nextModelId) =>
+                  selectAgentModel({ platform: agent, id: nextModelId, label: nextModelId })
+                }
+                onModelSelect={selectAgentModel}
+                reasoningOptions={reasoningOptions}
+                selectedReasoningId={effectiveEffort}
+                selectedReasoningLabel={
+                  reasoningOptions.find((option) => option.id === effectiveEffort)?.label
+                }
+                onReasoningChange={setReasoningEffort}
+                title="Choose agent, model, and reasoning"
+                className="min-h-11 w-full max-w-none justify-start border border-zinc-700/80 bg-zinc-900 py-2.5 text-sm text-zinc-100 md:max-w-none md:flex-1"
+              />
+              {!effortAvailable && (
+                <p className="mt-1.5 text-xs text-zinc-500">
+                  This model uses its default reasoning setting.
+                </p>
+              )}
 
-            <div className="mt-5 rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-xs text-zinc-400">
-              <span className="text-zinc-500">Launch:</span> {summary}
-            </div>
-            {/* A launch in flight is progress, not a fault: reporting it through
+              <div className="mt-5 rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-xs text-zinc-400">
+                <span className="text-zinc-500">Launch:</span> {summary}
+              </div>
+              {/* A launch in flight is progress, not a fault: reporting it through
                 the destructive alert would tell the user their own successful
                 submission had failed for as long as the launch took. */}
-            {busy ? (
-              <p
-                role="status"
-                className="mt-3 flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-xs text-zinc-400"
-              >
-                <Loader2 className="size-3.5 animate-spin" />
-                Launching…
-              </p>
-            ) : error ? (
-              <p
-                role="alert"
-                className="mt-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
-              >
-                {error}
-              </p>
-            ) : null}
-          </div>
+              {busy ? (
+                <p
+                  role="status"
+                  className="mt-3 flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-xs text-zinc-400"
+                >
+                  <Loader2 className="size-3.5 animate-spin" />
+                  Launching…
+                </p>
+              ) : error ? (
+                <p
+                  role="alert"
+                  className="mt-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+                >
+                  {error}
+                </p>
+              ) : null}
+            </div>
 
-          <DialogFooter className="shrink-0 flex-row justify-end border-t border-zinc-800 bg-zinc-950/40 px-5 py-4 sm:px-6">
-            <Button type="button" variant="outline" disabled={busy} onClick={() => onOpenChange(false)}>
-              Cancel
-            </Button>
-            <Button type="submit" disabled={confirmDisabled || busy}>
-              {confirmLabel}
-            </Button>
-          </DialogFooter>
+            <DialogFooter className="shrink-0 flex-row justify-end border-t border-zinc-800 bg-zinc-950/40 px-5 py-4 sm:px-6">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={busy}
+                onClick={() => onOpenChange(false)}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={confirmDisabled || busy}>
+                {confirmLabel}
+              </Button>
+            </DialogFooter>
           </fieldset>
         </form>
       </DialogContent>

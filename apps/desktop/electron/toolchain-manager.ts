@@ -124,10 +124,7 @@ export function toolchainRootDir(dataDir: string): string {
  * duplicated path join would keep validating until the layout changed, and then
  * silently seed into a directory the installer never looks at.
  */
-export function pinnedArtifactDirectory(
-  dataDir: string,
-  artifact: ToolchainArtifact,
-): string {
+export function pinnedArtifactDirectory(dataDir: string, artifact: ToolchainArtifact): string {
   return artifactDirectory(toolchainRootDir(dataDir), artifact);
 }
 
@@ -136,7 +133,10 @@ function artifactExecutablePath(rootDir: string, artifact: ToolchainArtifact): s
 }
 
 function upstreamExecutablePath(rootDir: string, artifact: ToolchainArtifact): string {
-  return path.join(artifactDirectory(rootDir, artifact), `.upstream-${artifact.executable.fileName}`);
+  return path.join(
+    artifactDirectory(rootDir, artifact),
+    `.upstream-${artifact.executable.fileName}`,
+  );
 }
 
 function artifactCompanions(artifact: ToolchainArtifact): readonly ToolchainCompanion[] {
@@ -175,13 +175,11 @@ function assertValidArtifactMetadata(artifact: ToolchainArtifact): void {
     throw new Error(`${artifact.name} manifest has unsupported archive format`);
   }
   if (
-    artifact.archive.bundleRoot !== undefined
-    && (
-      artifact.archive.format !== "tar.gz"
-      || !artifact.archive.bundleRoot.endsWith("/")
-      || artifact.archive.bundleRoot.startsWith("/")
-      || artifact.archive.bundleRoot.includes("..")
-    )
+    artifact.archive.bundleRoot !== undefined &&
+    (artifact.archive.format !== "tar.gz" ||
+      !artifact.archive.bundleRoot.endsWith("/") ||
+      artifact.archive.bundleRoot.startsWith("/") ||
+      artifact.archive.bundleRoot.includes(".."))
   ) {
     throw new Error(`${artifact.name} manifest has an unsafe bundle root`);
   }
@@ -193,14 +191,14 @@ function assertValidArtifactMetadata(artifact: ToolchainArtifact): void {
     for (const file of artifact.archive.bundleFiles) {
       const normalized = path.posix.normalize(file.path);
       if (
-        normalized !== file.path
-        || normalized.startsWith("../")
-        || normalized.startsWith("/")
-        || normalized.includes("\\")
-        || paths.has(normalized)
-        || !Number.isSafeInteger(file.size)
-        || file.size < 1
-        || !/^[a-f0-9]{64}$/.test(file.sha256)
+        normalized !== file.path ||
+        normalized.startsWith("../") ||
+        normalized.startsWith("/") ||
+        normalized.includes("\\") ||
+        paths.has(normalized) ||
+        !Number.isSafeInteger(file.size) ||
+        file.size < 1 ||
+        !/^[a-f0-9]{64}$/.test(file.sha256)
       ) {
         throw new Error(`${artifact.name} manifest has an unsafe bundle file`);
       }
@@ -210,13 +208,13 @@ function assertValidArtifactMetadata(artifact: ToolchainArtifact): void {
   if (artifact.archive.bundleIntegrity !== undefined) {
     const integrity = artifact.archive.bundleIntegrity;
     if (
-      !artifact.archive.bundleRoot
-      || artifact.archive.bundleFiles !== undefined
-      || !Number.isSafeInteger(integrity.fileCount)
-      || integrity.fileCount < 1
-      || !Number.isSafeInteger(integrity.totalSize)
-      || integrity.totalSize < 1
-      || !/^[a-f0-9]{64}$/.test(integrity.sha256)
+      !artifact.archive.bundleRoot ||
+      artifact.archive.bundleFiles !== undefined ||
+      !Number.isSafeInteger(integrity.fileCount) ||
+      integrity.fileCount < 1 ||
+      !Number.isSafeInteger(integrity.totalSize) ||
+      integrity.totalSize < 1 ||
+      !/^[a-f0-9]{64}$/.test(integrity.sha256)
     ) {
       throw new Error(`${artifact.name} manifest has invalid bundle integrity`);
     }
@@ -228,28 +226,27 @@ function assertValidArtifactMetadata(artifact: ToolchainArtifact): void {
       `${artifact.name} manifest must provide installedSize and installedSha256 together`,
     );
   }
-  if (hasSize && (
-    !Number.isSafeInteger(artifact.executable.installedSize)
-    || artifact.executable.installedSize! <= 0
-    || !/^[a-f0-9]{64}$/.test(artifact.executable.installedSha256!)
-  )) {
+  if (
+    hasSize &&
+    (!Number.isSafeInteger(artifact.executable.installedSize) ||
+      artifact.executable.installedSize! <= 0 ||
+      !/^[a-f0-9]{64}$/.test(artifact.executable.installedSha256!))
+  ) {
     throw new Error(`${artifact.name} manifest has invalid installed executable metadata`);
   }
   if (artifact.executable.repairInvalidMacSignature && hasSize) {
-    throw new Error(
-      `${artifact.name} manifest cannot pin locally repaired executable bytes`,
-    );
+    throw new Error(`${artifact.name} manifest cannot pin locally repaired executable bytes`);
   }
 
   const activationNames = new Set<string>([artifact.name, artifact.executable.fileName]);
   for (const alias of artifact.activationAliases ?? []) {
     if (
-      !alias
-      || alias.startsWith(".")
-      || alias.includes("/")
-      || alias.includes("\\")
-      || alias !== path.basename(alias)
-      || activationNames.has(alias)
+      !alias ||
+      alias.startsWith(".") ||
+      alias.includes("/") ||
+      alias.includes("\\") ||
+      alias !== path.basename(alias) ||
+      activationNames.has(alias)
     ) {
       throw new Error(`${artifact.name} manifest has an unsafe or duplicate activation alias`);
     }
@@ -264,11 +261,11 @@ function assertValidArtifactMetadata(artifact: ToolchainArtifact): void {
     // A companion is written into, and symlinked out of, directories this
     // module owns. Anything that is not a plain file name could escape them.
     if (
-      !companion.fileName
-      || companion.fileName.startsWith(".")
-      || companion.fileName.includes("/")
-      || companion.fileName.includes("\\")
-      || companion.fileName !== path.basename(companion.fileName)
+      !companion.fileName ||
+      companion.fileName.startsWith(".") ||
+      companion.fileName.includes("/") ||
+      companion.fileName.includes("\\") ||
+      companion.fileName !== path.basename(companion.fileName)
     ) {
       throw new Error(`${artifact.name} companion has an unsafe file name`);
     }
@@ -277,11 +274,13 @@ function assertValidArtifactMetadata(artifact: ToolchainArtifact): void {
     }
     companionNames.add(companion.fileName);
     if (
-      !Number.isSafeInteger(companion.executable.size)
-      || companion.executable.size <= 0
-      || !/^[a-f0-9]{64}$/.test(companion.executable.sha256)
+      !Number.isSafeInteger(companion.executable.size) ||
+      companion.executable.size <= 0 ||
+      !/^[a-f0-9]{64}$/.test(companion.executable.sha256)
     ) {
-      throw new Error(`${artifact.name} companion ${companion.fileName} has invalid executable metadata`);
+      throw new Error(
+        `${artifact.name} companion ${companion.fileName} has invalid executable metadata`,
+      );
     }
   }
 }
@@ -332,12 +331,15 @@ function assertUniqueActivationNames(artifacts: readonly ToolchainArtifact[]): v
 }
 
 function pinnedInstalledState(artifact: ToolchainArtifact): InstalledExecutableState {
-  const { size, sha256, installedSize, installedSha256, repairInvalidMacSignature } = artifact.executable;
+  const { size, sha256, installedSize, installedSha256, repairInvalidMacSignature } =
+    artifact.executable;
   if (installedSize !== undefined && installedSha256 !== undefined) {
     return { size: installedSize, sha256: installedSha256 };
   }
   if (repairInvalidMacSignature) {
-    throw new Error(`${artifact.name} locally repaired executable has no reproducible pinned state`);
+    throw new Error(
+      `${artifact.name} locally repaired executable has no reproducible pinned state`,
+    );
   }
   return { size, sha256 };
 }
@@ -345,10 +347,12 @@ function pinnedInstalledState(artifact: ToolchainArtifact): InstalledExecutableS
 async function isValidFile(filePath: string, expected: InstalledExecutableState): Promise<boolean> {
   try {
     const file = await lstat(filePath);
-    return file.isFile()
-      && !file.isSymbolicLink()
-      && file.size === expected.size
-      && await sha256File(filePath) === expected.sha256;
+    return (
+      file.isFile() &&
+      !file.isSymbolicLink() &&
+      file.size === expected.size &&
+      (await sha256File(filePath)) === expected.sha256
+    );
   } catch {
     return false;
   }
@@ -377,16 +381,21 @@ async function isValidExecutable(rootDir: string, artifact: ToolchainArtifact): 
     const expected = pinnedInstalledState(artifact);
     const file = await lstat(executablePath);
     if (!file.isFile() || file.isSymbolicLink() || file.size !== expected.size) return false;
-    if (await sha256File(executablePath) !== expected.sha256) return false;
+    if ((await sha256File(executablePath)) !== expected.sha256) return false;
     if ((file.mode & 0o777) !== 0o500) await chmod(executablePath, 0o500);
     for (const bundled of artifact.archive.bundleFiles ?? []) {
-      if (!await isValidFile(path.join(artifactDirectory(rootDir, artifact), ...bundled.path.split("/")), bundled)) {
+      if (
+        !(await isValidFile(
+          path.join(artifactDirectory(rootDir, artifact), ...bundled.path.split("/")),
+          bundled,
+        ))
+      ) {
         return false;
       }
     }
     if (
-      artifact.archive.bundleIntegrity
-      && !await hasValidBundleIntegrity(artifactDirectory(rootDir, artifact), artifact)
+      artifact.archive.bundleIntegrity &&
+      !(await hasValidBundleIntegrity(artifactDirectory(rootDir, artifact), artifact))
     ) {
       return false;
     }
@@ -460,9 +469,11 @@ async function hasValidBundleIntegrity(
   const expected = artifact.archive.bundleIntegrity;
   if (!expected) return true;
   const actual = bundleTreeDigest(await bundleTreeEntries(directory, artifact.executable.fileName));
-  return actual.fileCount === expected.fileCount
-    && actual.totalSize === expected.totalSize
-    && actual.sha256 === expected.sha256;
+  return (
+    actual.fileCount === expected.fileCount &&
+    actual.totalSize === expected.totalSize &&
+    actual.sha256 === expected.sha256
+  );
 }
 
 async function isValidCompanion(
@@ -473,8 +484,9 @@ async function isValidCompanion(
   const filePath = companionPath(rootDir, artifact, companion);
   try {
     const file = await lstat(filePath);
-    if (!file.isFile() || file.isSymbolicLink() || file.size !== companion.executable.size) return false;
-    if (await sha256File(filePath) !== companion.executable.sha256) return false;
+    if (!file.isFile() || file.isSymbolicLink() || file.size !== companion.executable.size)
+      return false;
+    if ((await sha256File(filePath)) !== companion.executable.sha256) return false;
     if ((file.mode & 0o777) !== 0o500) await chmod(filePath, 0o500);
     return true;
   } catch {
@@ -487,8 +499,9 @@ async function missingCompanions(
   artifact: ToolchainArtifact,
 ): Promise<ToolchainCompanion[]> {
   const companions = artifactCompanions(artifact);
-  const validity = await Promise.all(companions
-    .map((companion) => isValidCompanion(rootDir, artifact, companion)));
+  const validity = await Promise.all(
+    companions.map((companion) => isValidCompanion(rootDir, artifact, companion)),
+  );
   return companions.filter((_, index) => !validity[index]);
 }
 
@@ -513,7 +526,7 @@ async function installationStatus(
   rootDir: string,
   artifact: ToolchainArtifact,
 ): Promise<InstallationStatus> {
-  if (!await isValidExecutable(rootDir, artifact)) return { state: "missing" };
+  if (!(await isValidExecutable(rootDir, artifact))) return { state: "missing" };
   const companions = await missingCompanions(rootDir, artifact);
   return companions.length === 0 ? { state: "valid" } : { state: "companions-missing", companions };
 }
@@ -535,7 +548,11 @@ type InstallLock = {
 async function readInstallLockOwner(lockPath: string): Promise<InstallLockOwner | null> {
   try {
     const parsed = JSON.parse(await readFile(lockPath, "utf8")) as Partial<InstallLockOwner>;
-    if (typeof parsed.token !== "string" || typeof parsed.pid !== "number" || typeof parsed.createdAt !== "string") {
+    if (
+      typeof parsed.token !== "string" ||
+      typeof parsed.pid !== "number" ||
+      typeof parsed.createdAt !== "string"
+    ) {
       return null;
     }
     return { token: parsed.token, pid: parsed.pid, createdAt: parsed.createdAt };
@@ -596,12 +613,14 @@ async function acquireInstallLock(
       let heartbeat: Promise<void> = Promise.resolve();
       const heartbeatInterval = Math.max(10, Math.floor(timings.lockStaleAfterMs / 3));
       const heartbeatTimer = setInterval(() => {
-        heartbeat = heartbeat.then(async () => {
-          const current = await readInstallLockOwner(lockPath);
-          if (current?.token !== owner.token) return;
-          const now = new Date();
-          await utimes(lockPath, now, now);
-        }).catch(() => undefined);
+        heartbeat = heartbeat
+          .then(async () => {
+            const current = await readInstallLockOwner(lockPath);
+            if (current?.token !== owner.token) return;
+            const now = new Date();
+            await utimes(lockPath, now, now);
+          })
+          .catch(() => undefined);
       }, heartbeatInterval);
       heartbeatTimer.unref();
       return {
@@ -613,7 +632,9 @@ async function acquireInstallLock(
             throw new Error("Orkestrator toolchain installation lock disappeared unexpectedly");
           }
           if (current.token !== owner.token) {
-            throw new Error("Orkestrator toolchain installation lock ownership changed unexpectedly");
+            throw new Error(
+              "Orkestrator toolchain installation lock ownership changed unexpectedly",
+            );
           }
           await rm(lockPath, { force: true });
         },
@@ -636,11 +657,7 @@ async function acquireInstallLock(
     }
 
     const lockStat = await stat(lockPath).catch(() => null);
-    if (
-      !observedOwner
-      && lockStat
-      && Date.now() - lockStat.mtimeMs > timings.lockStaleAfterMs
-    ) {
+    if (!observedOwner && lockStat && Date.now() - lockStat.mtimeMs > timings.lockStaleAfterMs) {
       // A newly-created lock can briefly be empty while its owner metadata is
       // written. Only malformed locks need the age safeguard.
       const currentOwner = await readInstallLockOwner(lockPath);
@@ -666,7 +683,10 @@ function assertDownloadLocation(
 ): void {
   const requested = new URL(archive.url);
   const resolved = new URL(response.url || archive.url);
-  if (!allowInsecureDownloadsForTests && (requested.protocol !== "https:" || resolved.protocol !== "https:")) {
+  if (
+    !allowInsecureDownloadsForTests &&
+    (requested.protocol !== "https:" || resolved.protocol !== "https:")
+  ) {
     throw new Error(`${label} download did not use HTTPS`);
   }
   if (!archive.allowedHosts.includes(requested.hostname)) {
@@ -702,9 +722,7 @@ async function downloadArchive(
 
     const contentLength = response.headers.get("content-length");
     if (contentLength !== null && Number(contentLength) !== archive.size) {
-      throw new Error(
-        `${label} archive size header did not match the pinned manifest`,
-      );
+      throw new Error(`${label} archive size header did not match the pinned manifest`);
     }
 
     handle = await open(archivePath, "wx", 0o600);
@@ -763,10 +781,14 @@ async function extractTarGzipEntry(
       stream.resume();
       return;
     }
-    void pipeline(
-      stream,
-      createWriteStream(destinationPath, { flags: "wx", mode: 0o500 }),
-    ).then(next, (error: unknown) => extract.destroy(error instanceof Error ? error : new Error(String(error))));
+    // `next` is tar-stream's per-entry callback; signalling it once the write
+    // settles is how the callback stream and the promise pipeline are bridged.
+    void pipeline(stream, createWriteStream(destinationPath, { flags: "wx", mode: 0o500 })).then(
+      // oxlint-disable-next-line promise/no-callback-in-promise
+      next,
+      (error: unknown) =>
+        extract.destroy(error instanceof Error ? error : new Error(String(error))),
+    );
   });
 
   await pipeline(createReadStream(archivePath), createGunzip(), extract);
@@ -804,10 +826,10 @@ async function extractTarGzipBundle(
     }
     const normalized = path.posix.normalize(relative);
     if (
-      normalized.startsWith("../")
-      || normalized.startsWith("/")
-      || normalized.includes("\\")
-      || path.isAbsolute(normalized)
+      normalized.startsWith("../") ||
+      normalized.startsWith("/") ||
+      normalized.includes("\\") ||
+      path.isAbsolute(normalized)
     ) {
       extract.destroy(new Error(`Unsafe path in ${label} bundle`));
       stream.resume();
@@ -841,14 +863,20 @@ async function extractTarGzipBundle(
     }
     if (header.name === archive.entryPath) foundExecutable = true;
     void mkdir(path.dirname(destination), { recursive: true, mode: 0o700 })
-      .then(() => pipeline(
-        stream,
-        createWriteStream(destination, {
-          flags: "wx",
-          mode: (header.mode ?? 0) & 0o111 ? 0o500 : 0o400,
-        }),
-      ))
-      .then(next, (error: unknown) => extract.destroy(error instanceof Error ? error : new Error(String(error))));
+      .then(() =>
+        pipeline(
+          stream,
+          createWriteStream(destination, {
+            flags: "wx",
+            mode: (header.mode ?? 0) & 0o111 ? 0o500 : 0o400,
+          }),
+        ),
+      )
+      // As above: `next` is tar-stream's per-entry callback.
+      // oxlint-disable-next-line promise/no-callback-in-promise
+      .then(next, (error: unknown) =>
+        extract.destroy(error instanceof Error ? error : new Error(String(error))),
+      );
   });
   await pipeline(createReadStream(archivePath), createGunzip(), extract);
   if (!foundExecutable) throw new Error(`${label} executable was not found in its bundle`);
@@ -947,17 +975,27 @@ async function probeExecutable(
     }, timeoutMs);
     child.once("error", (error) => {
       clearTimeout(timeout);
-      reject(new Error(
-        `${artifact.name} could not execute from the Orkestrator toolchain cache: ${error.message}`,
-      ));
+      reject(
+        new Error(
+          `${artifact.name} could not execute from the Orkestrator toolchain cache: ${error.message}`,
+        ),
+      );
     });
     child.once("exit", (code, signal) => {
       clearTimeout(timeout);
       const output = Buffer.concat(chunks).toString("utf8");
       if (code !== 0) {
-        reject(new Error(`${artifact.name} version check failed (code ${code ?? "unknown"}, signal ${signal ?? "none"})`));
+        reject(
+          new Error(
+            `${artifact.name} version check failed (code ${code ?? "unknown"}, signal ${signal ?? "none"})`,
+          ),
+        );
       } else if (!output.includes(artifact.version)) {
-        reject(new Error(`${artifact.name} reported an unexpected version: ${output.trim() || "no output"}`));
+        reject(
+          new Error(
+            `${artifact.name} reported an unexpected version: ${output.trim() || "no output"}`,
+          ),
+        );
       } else {
         resolve();
       }
@@ -972,9 +1010,13 @@ async function verifyMacCodeSignature(
   spawnProcess: typeof spawn,
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const child = spawnProcess("/usr/bin/codesign", ["--verify", "--strict", "--verbose=2", executablePath], {
-      stdio: ["ignore", "ignore", "pipe"],
-    });
+    const child = spawnProcess(
+      "/usr/bin/codesign",
+      ["--verify", "--strict", "--verbose=2", executablePath],
+      {
+        stdio: ["ignore", "ignore", "pipe"],
+      },
+    );
     const errors: Buffer[] = [];
     child.stderr.on("data", (chunk) => errors.push(Buffer.from(chunk)));
     const timeout = setTimeout(() => {
@@ -992,9 +1034,11 @@ async function verifyMacCodeSignature(
         return;
       }
       const detail = Buffer.concat(errors).toString("utf8").trim();
-      reject(new Error(
-        `${label} has an invalid macOS code signature (code ${code ?? "unknown"}, signal ${signal ?? "none"})${detail ? `: ${detail}` : ""}`,
-      ));
+      reject(
+        new Error(
+          `${label} has an invalid macOS code signature (code ${code ?? "unknown"}, signal ${signal ?? "none"})${detail ? `: ${detail}` : ""}`,
+        ),
+      );
     });
   });
 }
@@ -1024,9 +1068,11 @@ async function runCodesign(
         return;
       }
       const detail = Buffer.concat(errors).toString("utf8").trim();
-      reject(new Error(
-        `${failureMessage} (code ${code ?? "unknown"}, signal ${signal ?? "none"})${detail ? `: ${detail}` : ""}`,
-      ));
+      reject(
+        new Error(
+          `${failureMessage} (code ${code ?? "unknown"}, signal ${signal ?? "none"})${detail ? `: ${detail}` : ""}`,
+        ),
+      );
     });
   });
 }
@@ -1096,7 +1142,7 @@ async function refreshRepairableArtifact(
   spawnProcess: typeof spawn,
 ): Promise<void> {
   const sourcePath = upstreamExecutablePath(rootDir, artifact);
-  if (!await isValidUpstreamExecutable(rootDir, artifact)) {
+  if (!(await isValidUpstreamExecutable(rootDir, artifact))) {
     throw new Error(`${artifact.name} trusted upstream executable failed verification`);
   }
   await prepareRepairableExecutable(
@@ -1173,8 +1219,10 @@ async function stageCompanions(
         `${companion.fileName} extracted executable size did not match the pinned manifest`,
       );
     }
-    if (await sha256File(companionFilePath) !== companion.executable.sha256) {
-      throw new Error(`${companion.fileName} executable checksum did not match the pinned manifest`);
+    if ((await sha256File(companionFilePath)) !== companion.executable.sha256) {
+      throw new Error(
+        `${companion.fileName} executable checksum did not match the pinned manifest`,
+      );
     }
     if (!skipExecutableProbeForTests && artifact.platform === "darwin") {
       await verifyMacCodeSignature(
@@ -1266,17 +1314,10 @@ async function installArtifact(
       timings.downloadTimeoutMs,
     );
     if (artifact.archive.bundleRoot) {
-      await extractTarGzipBundle(
-        archivePath,
-        stagingDirectory,
-        artifact.name,
-        artifact.archive,
-      );
+      await extractTarGzipBundle(archivePath, stagingDirectory, artifact.name, artifact.archive);
       const bundledExecutable = path.join(
         stagingDirectory,
-        ...artifact.archive.entryPath
-          .slice(artifact.archive.bundleRoot.length)
-          .split("/"),
+        ...artifact.archive.entryPath.slice(artifact.archive.bundleRoot.length).split("/"),
       );
       if (bundledExecutable !== extractedPath) {
         await rename(bundledExecutable, extractedPath);
@@ -1302,8 +1343,8 @@ async function installArtifact(
     }
     if (artifact.archive.format !== "raw") await rm(archivePath, { force: true });
     if (
-      artifact.archive.bundleIntegrity
-      && !await hasValidBundleIntegrity(stagingDirectory, artifact)
+      artifact.archive.bundleIntegrity &&
+      !(await hasValidBundleIntegrity(stagingDirectory, artifact))
     ) {
       throw new Error(`${artifact.name} extracted bundle did not match the pinned manifest`);
     }
@@ -1311,9 +1352,11 @@ async function installArtifact(
 
     const extracted = await lstat(extractedPath);
     if (!extracted.isFile() || extracted.size !== artifact.executable.size) {
-      throw new Error(`${artifact.name} extracted executable size did not match the pinned manifest`);
+      throw new Error(
+        `${artifact.name} extracted executable size did not match the pinned manifest`,
+      );
     }
-    if (await sha256File(extractedPath) !== artifact.executable.sha256) {
+    if ((await sha256File(extractedPath)) !== artifact.executable.sha256) {
       throw new Error(`${artifact.name} executable checksum did not match the pinned manifest`);
     }
     if (artifact.executable.repairInvalidMacSignature) {
@@ -1327,15 +1370,16 @@ async function installArtifact(
       );
       await chmod(extractedPath, 0o400);
     } else if (
-      !skipExecutableProbeForTests
-      && artifact.platform === "darwin"
-      && !artifact.executable.skipMacSignatureVerification
+      !skipExecutableProbeForTests &&
+      artifact.platform === "darwin" &&
+      !artifact.executable.skipMacSignatureVerification
     ) {
-      try {
-        await verifyMacCodeSignature(executablePath, artifact.name, timings.processTimeoutMs, spawnProcess);
-      } catch (error) {
-        throw error;
-      }
+      await verifyMacCodeSignature(
+        executablePath,
+        artifact.name,
+        timings.processTimeoutMs,
+        spawnProcess,
+      );
     }
 
     if (!artifact.executable.repairInvalidMacSignature) {
@@ -1389,9 +1433,11 @@ async function installArtifact(
 
 async function cleanStagingDirectories(rootDir: string): Promise<void> {
   const entries = await readdir(rootDir, { withFileTypes: true });
-  await Promise.all(entries
-    .filter((entry) => entry.isDirectory() && entry.name.startsWith(".staging-"))
-    .map((entry) => rm(path.join(rootDir, entry.name), { recursive: true, force: true })));
+  await Promise.all(
+    entries
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith(".staging-"))
+      .map((entry) => rm(path.join(rootDir, entry.name), { recursive: true, force: true })),
+  );
 }
 
 /**
@@ -1422,10 +1468,14 @@ async function acquireVersionLease(
 ): Promise<void> {
   const leaseKey = `${rootDir}\0${artifact.name}\0${artifact.version}`;
   const existingLeasePath = processVersionLeases.get(leaseKey);
-  if (existingLeasePath && await lstat(existingLeasePath).then(
-    (entry) => entry.isFile() && !entry.isSymbolicLink(),
-    () => false,
-  )) return;
+  if (
+    existingLeasePath &&
+    (await lstat(existingLeasePath).then(
+      (entry) => entry.isFile() && !entry.isSymbolicLink(),
+      () => false,
+    ))
+  )
+    return;
   processVersionLeases.delete(leaseKey);
   const owner: VersionLeaseOwner = {
     token: randomUUID(),
@@ -1456,24 +1506,30 @@ async function versionHasLiveLease(
   const directory = versionLeaseDirectory(rootDir, name, version);
   const entries = await readdir(directory, { withFileTypes: true }).catch(() => []);
   let live = false;
-  await Promise.all(entries.filter((entry) => entry.isFile()).map(async (entry) => {
-    const leasePath = path.join(directory, entry.name);
-    try {
-      const parsed = JSON.parse(await readFile(leasePath, "utf8")) as Partial<VersionLeaseOwner>;
-      if (
-        typeof parsed.token === "string"
-        && typeof parsed.pid === "number"
-        && typeof parsed.createdAt === "string"
-        && ownerProcessExists(parsed.pid)
-      ) {
-        live = true;
-        return;
-      }
-    } catch {
-      // Malformed leases cannot prove that a process owns this version.
-    }
-    await rm(leasePath, { force: true }).catch(() => undefined);
-  }));
+  await Promise.all(
+    entries
+      .filter((entry) => entry.isFile())
+      .map(async (entry) => {
+        const leasePath = path.join(directory, entry.name);
+        try {
+          const parsed = JSON.parse(
+            await readFile(leasePath, "utf8"),
+          ) as Partial<VersionLeaseOwner>;
+          if (
+            typeof parsed.token === "string" &&
+            typeof parsed.pid === "number" &&
+            typeof parsed.createdAt === "string" &&
+            ownerProcessExists(parsed.pid)
+          ) {
+            live = true;
+            return;
+          }
+        } catch {
+          // Malformed leases cannot prove that a process owns this version.
+        }
+        await rm(leasePath, { force: true }).catch(() => undefined);
+      }),
+  );
   return live;
 }
 
@@ -1508,29 +1564,35 @@ async function pruneSupersededVersions(
   }
 
   const staleBefore = Date.now() - retainSupersededMs;
-  await Promise.all(Array.from(keepByName, async ([name, keep]) => {
-    const toolDir = path.join(rootDir, name);
-    try {
-      const entries = await readdir(toolDir, { withFileTypes: true });
-      await Promise.all(entries
-        .filter((entry) => entry.isDirectory() && !keep.has(entry.name))
-        .map(async (entry) => {
-          const versionDir = path.join(toolDir, entry.name);
-          try {
-            if ((await stat(versionDir)).mtimeMs > staleBefore) return;
-            if (await versionHasLiveLease(rootDir, name, entry.name, ownerProcessExists)) return;
-            // Re-check after async lease cleanup so a version is never deleted
-            // after a cooperative process has established ownership.
-            if (await versionHasLiveLease(rootDir, name, entry.name, ownerProcessExists)) return;
-            await removeVersion(versionDir, { recursive: true, force: true });
-          } catch {
-            // Raced with another instance, or not readable. Try again next launch.
-          }
-        }));
-    } catch {
-      // Nothing installed for this tool yet, or the directory is unreadable.
-    }
-  }));
+  await Promise.all(
+    Array.from(keepByName, async ([name, keep]) => {
+      const toolDir = path.join(rootDir, name);
+      try {
+        const entries = await readdir(toolDir, { withFileTypes: true });
+        await Promise.all(
+          entries
+            .filter((entry) => entry.isDirectory() && !keep.has(entry.name))
+            .map(async (entry) => {
+              const versionDir = path.join(toolDir, entry.name);
+              try {
+                if ((await stat(versionDir)).mtimeMs > staleBefore) return;
+                if (await versionHasLiveLease(rootDir, name, entry.name, ownerProcessExists))
+                  return;
+                // Re-check after async lease cleanup so a version is never deleted
+                // after a cooperative process has established ownership.
+                if (await versionHasLiveLease(rootDir, name, entry.name, ownerProcessExists))
+                  return;
+                await removeVersion(versionDir, { recursive: true, force: true });
+              } catch {
+                // Raced with another instance, or not readable. Try again next launch.
+              }
+            }),
+        );
+      } catch {
+        // Nothing installed for this tool yet, or the directory is unreadable.
+      }
+    }),
+  );
 }
 
 function activationSetId(artifacts: readonly ToolchainArtifact[]): string {
@@ -1615,10 +1677,7 @@ async function activateExecutables(
 
   for (const artifact of artifacts) {
     const executablePath = artifactExecutablePath(rootDir, artifact);
-    executables[artifact.name] = await activate(
-      artifact.name,
-      executablePath,
-    );
+    executables[artifact.name] = await activate(artifact.name, executablePath);
     for (const alias of artifact.activationAliases ?? []) {
       await activate(alias, executablePath);
     }
@@ -1636,24 +1695,28 @@ async function activateExecutables(
 export async function ensurePinnedToolchains(
   options: EnsurePinnedToolchainsOptions,
 ): Promise<PinnedToolchainResult> {
-  const artifacts = options.artifacts ?? pinnedToolchainArtifacts(options.platform, options.architecture);
+  const artifacts =
+    options.artifacts ?? pinnedToolchainArtifacts(options.platform, options.architecture);
   for (const artifact of artifacts) assertValidArtifactMetadata(artifact);
   assertUniqueActivationNames(artifacts);
   const fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init));
   const onProgress = options.onProgress ?? (() => undefined);
   const timings = { ...DEFAULT_TIMINGS, ...options.timingsForTests };
   const spawnProcess = options.spawnForTests ?? spawn;
-  const ownerProcessExists = options.processExistsForTests
-    ?? ((pid: number) => processExists(pid, options.processKillForTests));
+  const ownerProcessExists =
+    options.processExistsForTests ??
+    ((pid: number) => processExists(pid, options.processKillForTests));
   const rootDir = path.join(options.dataDir, TOOLCHAIN_DIRECTORY);
   const totalTools = artifacts.length;
   const toolFractions = new Map<ToolchainName, number>(
     artifacts.map((artifact) => [artifact.name, 0]),
   );
   const progress = (value: Omit<ToolchainProgress, "totalTools" | "overallFraction">) => {
-    const overallFraction = totalTools === 0
-      ? 1
-      : Array.from(toolFractions.values()).reduce((sum, fraction) => sum + fraction, 0) / totalTools;
+    const overallFraction =
+      totalTools === 0
+        ? 1
+        : Array.from(toolFractions.values()).reduce((sum, fraction) => sum + fraction, 0) /
+          totalTools;
     onProgress({ ...value, totalTools, overallFraction });
   };
 
@@ -1665,108 +1728,118 @@ export async function ensurePinnedToolchains(
     message: "Checking pinned Orkestrator tools…",
   });
 
-  const installLock = await acquireInstallLock(rootDir, (message) => progress({
-    phase: "waiting",
-    completedTools: 0,
-    message,
-  }), timings, options.openLockFileForTests ?? open, ownerProcessExists);
+  const installLock = await acquireInstallLock(
+    rootDir,
+    (message) =>
+      progress({
+        phase: "waiting",
+        completedTools: 0,
+        message,
+      }),
+    timings,
+    options.openLockFileForTests ?? open,
+    ownerProcessExists,
+  );
   try {
     // Validation, installation, activation, lease publication, and pruning are
     // one cache-wide transaction. Cached callers also take the lock so pruning
     // in another app window cannot remove a version between its validation and
     // activation.
     await cleanStagingDirectories(rootDir);
-    const statuses = await Promise.all(artifacts.map((artifact) => installationStatus(rootDir, artifact)));
-    artifacts.forEach((artifact, index) => toolFractions.set(
-      artifact.name,
-      statuses[index]!.state === "valid" ? 1 : 0,
-    ));
+    const statuses = await Promise.all(
+      artifacts.map((artifact) => installationStatus(rootDir, artifact)),
+    );
+    artifacts.forEach((artifact, index) =>
+      toolFractions.set(artifact.name, statuses[index]!.state === "valid" ? 1 : 0),
+    );
     const pending = artifacts
       .map((artifact, index) => ({ artifact, status: statuses[index]! }))
       .filter((entry) => entry.status.state !== "valid");
     let completedTools = totalTools - pending.length;
 
-    const installations = await Promise.allSettled(pending.map(async ({ artifact, status }) => {
-      // A cache that predates a companion has a verified primary executable on
-      // disk already. Repairing only what is missing keeps the download to the
-      // companion itself and leaves the version directory — which a running
-      // older build may have activated — in place.
-      const companions = status.state === "companions-missing" ? status.companions : [];
-      const repairable = status.state === "companions-missing";
-      const bytesTotal = repairable
-        ? companions.reduce((total, companion) => total + companion.archive.size, 0)
-        : artifactArchiveBytes(artifact);
-      progress({
-        phase: "downloading",
-        tool: artifact.name,
-        completedTools,
-        bytesReceived: 0,
-        bytesTotal,
-        message: `Downloading ${artifact.name} ${artifact.version}…`,
-      });
-      let lastReportedAt = 0;
-      const onBytes = (bytesReceived: number) => {
-        toolFractions.set(artifact.name, bytesReceived / bytesTotal);
-        const now = Date.now();
-        if (now - lastReportedAt < 200 && bytesReceived !== bytesTotal) return;
-        lastReportedAt = now;
+    const installations = await Promise.allSettled(
+      pending.map(async ({ artifact, status }) => {
+        // A cache that predates a companion has a verified primary executable on
+        // disk already. Repairing only what is missing keeps the download to the
+        // companion itself and leaves the version directory — which a running
+        // older build may have activated — in place.
+        const companions = status.state === "companions-missing" ? status.companions : [];
+        const repairable = status.state === "companions-missing";
+        const bytesTotal = repairable
+          ? companions.reduce((total, companion) => total + companion.archive.size, 0)
+          : artifactArchiveBytes(artifact);
         progress({
           phase: "downloading",
           tool: artifact.name,
           completedTools,
-          bytesReceived,
+          bytesReceived: 0,
           bytesTotal,
           message: `Downloading ${artifact.name} ${artifact.version}…`,
         });
-      };
-      const onVerify = () => {
-        // Every byte — the primary archive and then each companion — has
-        // already been reported through onBytes, so the fraction is where it
-        // should be and only the phase moves on. `installArtifact` fires this
-        // after its companion staging, and the repair path fires it after
-        // staging too, so "downloading" never follows "verifying".
+        let lastReportedAt = 0;
+        const onBytes = (bytesReceived: number) => {
+          toolFractions.set(artifact.name, bytesReceived / bytesTotal);
+          const now = Date.now();
+          if (now - lastReportedAt < 200 && bytesReceived !== bytesTotal) return;
+          lastReportedAt = now;
+          progress({
+            phase: "downloading",
+            tool: artifact.name,
+            completedTools,
+            bytesReceived,
+            bytesTotal,
+            message: `Downloading ${artifact.name} ${artifact.version}…`,
+          });
+        };
+        const onVerify = () => {
+          // Every byte — the primary archive and then each companion — has
+          // already been reported through onBytes, so the fraction is where it
+          // should be and only the phase moves on. `installArtifact` fires this
+          // after its companion staging, and the repair path fires it after
+          // staging too, so "downloading" never follows "verifying".
+          progress({
+            phase: "verifying",
+            tool: artifact.name,
+            completedTools,
+            message: `Verifying ${artifact.name} ${artifact.version}…`,
+          });
+        };
+        if (repairable) {
+          await repairArtifactCompanions(
+            rootDir,
+            artifact,
+            companions,
+            fetchImpl,
+            onBytes,
+            onVerify,
+            options.allowInsecureDownloadsForTests ?? false,
+            options.skipExecutableProbeForTests ?? false,
+            timings,
+            spawnProcess,
+          );
+        } else {
+          await installArtifact(
+            rootDir,
+            artifact,
+            fetchImpl,
+            onBytes,
+            onVerify,
+            options.allowInsecureDownloadsForTests ?? false,
+            options.skipExecutableProbeForTests ?? false,
+            timings,
+            spawnProcess,
+          );
+        }
+        toolFractions.set(artifact.name, 1);
+        completedTools += 1;
         progress({
-          phase: "verifying",
+          phase: "installing",
           tool: artifact.name,
           completedTools,
-          message: `Verifying ${artifact.name} ${artifact.version}…`,
+          message: `Installed ${artifact.name} ${artifact.version}`,
         });
-      };
-      if (repairable) {
-        await repairArtifactCompanions(
-          rootDir,
-          artifact,
-          companions,
-          fetchImpl,
-          onBytes,
-          onVerify,
-          options.allowInsecureDownloadsForTests ?? false,
-          options.skipExecutableProbeForTests ?? false,
-          timings,
-          spawnProcess,
-        );
-      } else {
-        await installArtifact(
-          rootDir,
-          artifact,
-          fetchImpl,
-          onBytes,
-          onVerify,
-          options.allowInsecureDownloadsForTests ?? false,
-          options.skipExecutableProbeForTests ?? false,
-          timings,
-          spawnProcess,
-        );
-      }
-      toolFractions.set(artifact.name, 1);
-      completedTools += 1;
-      progress({
-        phase: "installing",
-        tool: artifact.name,
-        completedTools,
-        message: `Installed ${artifact.name} ${artifact.version}`,
-      });
-    }));
+      }),
+    );
     const failedInstallation = installations.find(
       (result): result is PromiseRejectedResult => result.status === "rejected",
     );
@@ -1774,33 +1847,39 @@ export async function ensurePinnedToolchains(
 
     // Never trust a mutable digest next to a locally re-signed executable.
     // Recreate those runnable bytes from the manifest-pinned pristine copy.
-    await Promise.all(artifacts
-      .filter((artifact) => artifact.executable.repairInvalidMacSignature)
-      .map((artifact) => refreshRepairableArtifact(
-        rootDir,
-        artifact,
-        options.skipExecutableProbeForTests ?? false,
-        timings.processTimeoutMs,
-        spawnProcess,
-      )));
+    await Promise.all(
+      artifacts
+        .filter((artifact) => artifact.executable.repairInvalidMacSignature)
+        .map((artifact) =>
+          refreshRepairableArtifact(
+            rootDir,
+            artifact,
+            options.skipExecutableProbeForTests ?? false,
+            timings.processTimeoutMs,
+            spawnProcess,
+          ),
+        ),
+    );
 
     await options.beforeFinalVerificationForTests?.();
-    const finalValidity = await Promise.all(artifacts.map(async (artifact) => {
-      if (!await isValidInstallation(rootDir, artifact)) return false;
-      const executable = await lstat(artifactExecutablePath(rootDir, artifact)).catch(() => null);
-      return executable?.isFile() === true && !executable.isSymbolicLink();
-    }));
+    const finalValidity = await Promise.all(
+      artifacts.map(async (artifact) => {
+        if (!(await isValidInstallation(rootDir, artifact))) return false;
+        const executable = await lstat(artifactExecutablePath(rootDir, artifact)).catch(() => null);
+        return executable?.isFile() === true && !executable.isSymbolicLink();
+      }),
+    );
     if (finalValidity.some((valid) => !valid)) {
       throw new Error("One or more pinned Orkestrator tools failed final verification");
     }
     const result = await activateExecutables(rootDir, artifacts);
     await Promise.all(artifacts.map((artifact) => touchArtifactDirectory(rootDir, artifact)));
     if (!options.skipVersionLeaseForTests) {
-      await Promise.all(artifacts.map((artifact) => acquireVersionLease(
-        rootDir,
-        artifact,
-        options.openLeaseFileForTests ?? open,
-      )));
+      await Promise.all(
+        artifacts.map((artifact) =>
+          acquireVersionLease(rootDir, artifact, options.openLeaseFileForTests ?? open),
+        ),
+      );
     }
     await pruneSupersededVersions(
       rootDir,

@@ -16,10 +16,10 @@ export default async function globalTeardown(): Promise<void> {
   let auth: { token?: string } = {};
   try {
     const status = statusResult.stdout.trim()
-      ? JSON.parse(statusResult.stdout) as { authFile?: string }
+      ? (JSON.parse(statusResult.stdout) as { authFile?: string })
       : {};
     auth = status.authFile
-      ? JSON.parse(await readFile(status.authFile, "utf8")) as { token?: string }
+      ? (JSON.parse(await readFile(status.authFile, "utf8")) as { token?: string })
       : {};
   } catch {
     // Cookie values are still pattern-redacted below. The persistent token is

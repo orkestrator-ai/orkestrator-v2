@@ -1,9 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import { fireEvent, render, screen } from "@testing-library/react";
-import {
-  MobileTerminalKeyBar,
-  resolveTerminalKeyData,
-} from "./MobileTerminalKeyBar";
+import { MobileTerminalKeyBar, resolveTerminalKeyData } from "./MobileTerminalKeyBar";
 
 describe("resolveTerminalKeyData", () => {
   test("converts only complete CSI arrow sequences in application cursor mode", () => {
@@ -50,9 +47,7 @@ describe("MobileTerminalKeyBar", () => {
       fireEvent.click(screen.getByRole("button", { name }));
     }
 
-    expect(onInput.mock.calls.map(([data]) => data)).toEqual(
-      expected.map(([, data]) => data),
-    );
+    expect(onInput.mock.calls.map(([data]) => data)).toEqual(expected.map(([, data]) => data));
   });
 
   test("disables every control without forwarding input", () => {
@@ -67,13 +62,7 @@ describe("MobileTerminalKeyBar", () => {
   });
 
   test("supports contained positioning and caller classes", () => {
-    render(
-      <MobileTerminalKeyBar
-        onInput={() => {}}
-        contained
-        className="test-position"
-      />,
-    );
+    render(<MobileTerminalKeyBar onInput={() => {}} contained className="test-position" />);
 
     const container = screen.getByRole("toolbar", { name: "Terminal keys" }).parentElement;
     expect(container?.className).toContain("relative");

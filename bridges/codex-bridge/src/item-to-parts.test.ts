@@ -53,9 +53,7 @@ describe("itemToParts", () => {
 
     const parts = await itemToParts(item, DUMMY_CWD);
 
-    expect(parts).toEqual([
-      { type: "thinking", content: "Let me think about this..." },
-    ]);
+    expect(parts).toEqual([{ type: "thinking", content: "Let me think about this..." }]);
   });
 
   test("converts a plan to a labelled successful tool invocation", async () => {
@@ -65,14 +63,16 @@ describe("itemToParts", () => {
       text: "1. Inspect\n2. Implement",
     };
 
-    expect(await itemToParts(item, DUMMY_CWD)).toEqual([{
-      type: "tool-invocation",
-      content: "1. Inspect\n2. Implement",
-      toolName: "plan",
-      toolState: "success",
-      toolTitle: "Plan",
-      toolOutput: "1. Inspect\n2. Implement",
-    }]);
+    expect(await itemToParts(item, DUMMY_CWD)).toEqual([
+      {
+        type: "tool-invocation",
+        content: "1. Inspect\n2. Implement",
+        toolName: "plan",
+        toolState: "success",
+        toolTitle: "Plan",
+        toolOutput: "1. Inspect\n2. Implement",
+      },
+    ]);
   });
 
   test("does not render subagent activity or collaboration timeline items", async () => {
@@ -157,7 +157,7 @@ describe("itemToParts", () => {
       namespace: "functions",
       tool: "exec",
       arguments:
-        "const r = await tools.exec_command({\"cmd\":\"git status --short\",\"yield_time_ms\":10000});",
+        'const r = await tools.exec_command({"cmd":"git status --short","yield_time_ms":10000});',
       content_items: [
         { type: "inputText", text: " M src/example.ts" },
         { type: "inputImage", imageUrl: "data:image/png;base64,abc" },
@@ -165,20 +165,22 @@ describe("itemToParts", () => {
       status: "completed",
     };
 
-    expect(await itemToParts(item, DUMMY_CWD)).toEqual([{
-      type: "tool-invocation",
-      content: "exec",
-      toolName: "exec",
-      toolArgs: {
-        input:
-          "const r = await tools.exec_command({\"cmd\":\"git status --short\",\"yield_time_ms\":10000});",
-        command: "git status --short",
+    expect(await itemToParts(item, DUMMY_CWD)).toEqual([
+      {
+        type: "tool-invocation",
+        content: "exec",
+        toolName: "exec",
+        toolArgs: {
+          input:
+            'const r = await tools.exec_command({"cmd":"git status --short","yield_time_ms":10000});',
+          command: "git status --short",
+        },
+        toolState: "success",
+        toolTitle: "functions:exec",
+        toolOutput: " M src/example.ts\n[image]",
+        toolError: undefined,
       },
-      toolState: "success",
-      toolTitle: "functions:exec",
-      toolOutput: " M src/example.ts\n[image]",
-      toolError: undefined,
-    }]);
+    ]);
   });
 
   test("renders failed dynamic tool output as an error", async () => {
@@ -287,8 +289,9 @@ describe("itemToParts", () => {
       status: "completed",
     };
 
-    expect((await itemToParts(item, DUMMY_CWD))[0]!.toolOutput)
-      .toBe("[image]\n[audio]\nhttps://example.test/a.png");
+    expect((await itemToParts(item, DUMMY_CWD))[0]!.toolOutput).toBe(
+      "[image]\n[audio]\nhttps://example.test/a.png",
+    );
   });
 
   test("stringifies dynamic content entries it does not recognize", async () => {
@@ -310,14 +313,16 @@ describe("itemToParts", () => {
       status: "completed",
     };
 
-    expect((await itemToParts(item, DUMMY_CWD))[0]!.toolOutput).toBe([
-      JSON.stringify({ type: "inputText" }, null, 2),
-      JSON.stringify({ type: "somethingElse", value: 1 }, null, 2),
-      "42",
-      "null",
-      JSON.stringify(["a"], null, 2),
-      JSON.stringify({ type: "inputImage", imageUrl: 7 }, null, 2),
-    ].join("\n"));
+    expect((await itemToParts(item, DUMMY_CWD))[0]!.toolOutput).toBe(
+      [
+        JSON.stringify({ type: "inputText" }, null, 2),
+        JSON.stringify({ type: "somethingElse", value: 1 }, null, 2),
+        "42",
+        "null",
+        JSON.stringify(["a"], null, 2),
+        JSON.stringify({ type: "inputImage", imageUrl: 7 }, null, 2),
+      ].join("\n"),
+    );
   });
 
   test("caps oversized dynamic tool output", async () => {
@@ -466,28 +471,40 @@ describe("itemToParts", () => {
       };
 
       writeFileSync(filePath, "alpha\nbeta\n", "utf8");
-      const addParts = await itemToParts({
-        id: "patch-add",
-        type: "file_change",
-        changes: [{ path: "lifecycle.txt", kind: "add" }],
-        status: "completed",
-      }, dir, context);
+      const addParts = await itemToParts(
+        {
+          id: "patch-add",
+          type: "file_change",
+          changes: [{ path: "lifecycle.txt", kind: "add" }],
+          status: "completed",
+        },
+        dir,
+        context,
+      );
 
       writeFileSync(filePath, "alpha\nbeta\ngamma\n", "utf8");
-      const updateParts = await itemToParts({
-        id: "patch-update",
-        type: "file_change",
-        changes: [{ path: "lifecycle.txt", kind: "update" }],
-        status: "completed",
-      }, dir, context);
+      const updateParts = await itemToParts(
+        {
+          id: "patch-update",
+          type: "file_change",
+          changes: [{ path: "lifecycle.txt", kind: "update" }],
+          status: "completed",
+        },
+        dir,
+        context,
+      );
 
       unlinkSync(filePath);
-      const deleteParts = await itemToParts({
-        id: "patch-delete",
-        type: "file_change",
-        changes: [{ path: "lifecycle.txt", kind: "delete" }],
-        status: "completed",
-      }, dir, context);
+      const deleteParts = await itemToParts(
+        {
+          id: "patch-delete",
+          type: "file_change",
+          changes: [{ path: "lifecycle.txt", kind: "delete" }],
+          status: "completed",
+        },
+        dir,
+        context,
+      );
 
       expect(addParts[0]?.toolDiff?.additions).toBe(2);
       expect(addParts[0]?.toolDiff?.deletions).toBe(0);
@@ -510,18 +527,22 @@ describe("itemToParts", () => {
       writeFileSync(join(dir, "first.txt"), "first\n", "utf8");
       writeFileSync(join(dir, "second.txt"), "second\n", "utf8");
 
-      const parts = await itemToParts({
-        id: "patch-multi",
-        type: "file_change",
-        changes: [
-          { path: "first.txt", kind: "add" },
-          { path: "second.txt", kind: "add" },
-        ],
-        status: "failed",
-      }, dir, {
-        baselines: new BaselineMap(),
-        cache: new Map(),
-      });
+      const parts = await itemToParts(
+        {
+          id: "patch-multi",
+          type: "file_change",
+          changes: [
+            { path: "first.txt", kind: "add" },
+            { path: "second.txt", kind: "add" },
+          ],
+          status: "failed",
+        },
+        dir,
+        {
+          baselines: new BaselineMap(),
+          cache: new Map(),
+        },
+      );
 
       expect(parts).toHaveLength(2);
       expect(parts[0]?.toolState).toBe("failure");
@@ -532,12 +553,17 @@ describe("itemToParts", () => {
   });
 
   test("returns no invocations for a file change with no changed files", async () => {
-    expect(await itemToParts({
-      id: "patch-empty",
-      type: "file_change",
-      changes: [],
-      status: "completed",
-    }, DUMMY_CWD)).toEqual([]);
+    expect(
+      await itemToParts(
+        {
+          id: "patch-empty",
+          type: "file_change",
+          changes: [],
+          status: "completed",
+        },
+        DUMMY_CWD,
+      ),
+    ).toEqual([]);
   });
 
   test("recomputes file metadata against HEAD when no context or cache is supplied", async () => {
@@ -581,15 +607,19 @@ describe("itemToParts", () => {
 
   test("handles missing file changes without throwing", async () => {
     await withGitWorkspace(async (dir) => {
-      const parts = await itemToParts({
-        id: "patch-missing",
-        type: "file_change",
-        changes: [{ path: "missing.txt", kind: "delete" }],
-        status: "completed",
-      }, dir, {
-        baselines: new BaselineMap(),
-        cache: new Map(),
-      });
+      const parts = await itemToParts(
+        {
+          id: "patch-missing",
+          type: "file_change",
+          changes: [{ path: "missing.txt", kind: "delete" }],
+          status: "completed",
+        },
+        dir,
+        {
+          baselines: new BaselineMap(),
+          cache: new Map(),
+        },
+      );
 
       expect(parts[0]?.toolDiff).toMatchObject({
         additions: 0,
@@ -612,15 +642,19 @@ describe("itemToParts", () => {
       });
 
       writeFileSync(filePath, "before\nafter\n", "utf8");
-      const parts = await itemToParts({
-        id: "patch-absolute",
-        type: "file_change",
-        changes: [{ path: filePath, kind: "update" }],
-        status: "completed",
-      }, dir, {
-        baselines: new BaselineMap(),
-        cache: new Map(),
-      });
+      const parts = await itemToParts(
+        {
+          id: "patch-absolute",
+          type: "file_change",
+          changes: [{ path: filePath, kind: "update" }],
+          status: "completed",
+        },
+        dir,
+        {
+          baselines: new BaselineMap(),
+          cache: new Map(),
+        },
+      );
 
       expect(parts[0]?.toolDiff?.filePath).toBe(filePath);
       expect(parts[0]?.toolDiff?.diff).toContain("--- a/absolute.txt");
@@ -719,13 +753,15 @@ describe("itemToParts", () => {
 
     const parts = await itemToParts(item, DUMMY_CWD);
 
-    expect(parts).toEqual([expect.objectContaining({
-      type: "tool-invocation",
-      toolName: "slow_tool",
-      toolState: "pending",
-      toolTitle: "pending-server:slow_tool",
-      toolArgs: { value: 1 },
-    })]);
+    expect(parts).toEqual([
+      expect.objectContaining({
+        type: "tool-invocation",
+        toolName: "slow_tool",
+        toolState: "pending",
+        toolTitle: "pending-server:slow_tool",
+        toolArgs: { value: 1 },
+      }),
+    ]);
   });
 
   test("returns empty array for unknown item type", async () => {

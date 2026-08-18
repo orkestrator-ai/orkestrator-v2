@@ -1,8 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ClaudeMessage, ClaudeMessagePart } from "@/lib/claude-client";
-import {
-  applyTmuxAgentUsageSummaries,
-} from "./claude-tmux-usage";
+import { applyTmuxAgentUsageSummaries } from "./claude-tmux-usage";
 import { parseTmuxAgentUsageSummaries } from "@orkestrator/protocol/tmux-observation";
 
 describe("Claude tmux agent usage summaries", () => {
@@ -102,9 +100,7 @@ Running 2 Explore agents...
   });
 
   test("ignores token-bearing lines without a role, header, or agent marker", () => {
-    const summaries = parseTmuxAgentUsageSummaries(
-      "context left until auto-compact: 12.0k tokens",
-    );
+    const summaries = parseTmuxAgentUsageSummaries("context left until auto-compact: 12.0k tokens");
 
     expect(summaries).toEqual([]);
   });
@@ -117,7 +113,8 @@ Running 2 Explore agents...
       createdAt: "2026-06-25T18:20:00.000Z",
       parts: [
         {
-          type: "tool-invocation", content: "",
+          type: "tool-invocation",
+          content: "",
           toolName: "Agent",
           toolTitle: "Agent",
           toolState: "pending",
@@ -128,7 +125,8 @@ Running 2 Explore agents...
           toolUseId: "agent-1",
         },
         {
-          type: "tool-invocation", content: "",
+          type: "tool-invocation",
+          content: "",
           toolName: "Read",
           toolTitle: "Read",
           toolState: "success",
@@ -137,15 +135,18 @@ Running 2 Explore agents...
       ],
     };
 
-    const [updated] = applyTmuxAgentUsageSummaries([message], [
-      {
-        name: "Review API-client source modules group 1",
-        role: "Explore",
-        toolUseCount: 8,
-        tokenCount: 20_400,
-        tokenCountText: "20.4k tokens",
-      },
-    ]);
+    const [updated] = applyTmuxAgentUsageSummaries(
+      [message],
+      [
+        {
+          name: "Review API-client source modules group 1",
+          role: "Explore",
+          toolUseCount: 8,
+          tokenCount: 20_400,
+          tokenCountText: "20.4k tokens",
+        },
+      ],
+    );
 
     expect(updated?.parts[0]).toMatchObject({
       toolUseCount: 8,
@@ -214,7 +215,8 @@ Running 3 Worker agents...
       createdAt: "2026-06-25T18:20:00.000Z",
       parts: [
         {
-          type: "tool-invocation", content: "",
+          type: "tool-invocation",
+          content: "",
           toolName: "Agent",
           toolTitle: "Agent",
           toolState: "pending",
@@ -224,15 +226,18 @@ Running 3 Worker agents...
       ],
     };
 
-    const [updated] = applyTmuxAgentUsageSummaries([message], [
-      {
-        name: "Pane shortened label",
-        role: "Explore",
-        toolUseCount: 6,
-        tokenCount: 12_000,
-        tokenCountText: "12.0k tokens",
-      },
-    ]);
+    const [updated] = applyTmuxAgentUsageSummaries(
+      [message],
+      [
+        {
+          name: "Pane shortened label",
+          role: "Explore",
+          toolUseCount: 6,
+          tokenCount: 12_000,
+          tokenCountText: "12.0k tokens",
+        },
+      ],
+    );
 
     expect(updated?.parts[0]).toMatchObject({
       toolUseCount: 6,
@@ -249,7 +254,8 @@ Running 3 Worker agents...
       createdAt: "2026-06-25T18:20:00.000Z",
       parts: [
         {
-          type: "tool-invocation", content: "",
+          type: "tool-invocation",
+          content: "",
           toolName: "Agent",
           toolTitle: "Agent",
           toolState: "success",
@@ -265,7 +271,8 @@ Running 3 Worker agents...
       createdAt: "2026-06-25T18:21:00.000Z",
       parts: [
         {
-          type: "tool-invocation", content: "",
+          type: "tool-invocation",
+          content: "",
           toolName: "Agent",
           toolTitle: "Agent",
           toolState: "pending",
@@ -307,7 +314,8 @@ Running 3 Worker agents...
       createdAt: "2026-06-25T18:20:00.000Z",
       parts: [
         {
-          type: "tool-invocation", content: "",
+          type: "tool-invocation",
+          content: "",
           toolName: "Agent",
           toolTitle: "Agent",
           toolState: "success",
@@ -343,7 +351,8 @@ Running 3 Worker agents...
 
   test("preserves message and part identity when a matching live summary is already applied", () => {
     const part: ClaudeMessagePart = {
-      type: "tool-invocation", content: "",
+      type: "tool-invocation",
+      content: "",
       toolName: "Agent",
       toolTitle: "Agent",
       toolState: "success",
@@ -364,13 +373,15 @@ Running 3 Worker agents...
     };
     const messages = [message];
 
-    const updated = applyTmuxAgentUsageSummaries(messages, [{
-      name: "Review db-api test correctness",
-      role: "Explore",
-      toolUseCount: 12,
-      tokenCount: 45_700,
-      tokenCountText: "45.7k tokens",
-    }]);
+    const updated = applyTmuxAgentUsageSummaries(messages, [
+      {
+        name: "Review db-api test correctness",
+        role: "Explore",
+        toolUseCount: 12,
+        tokenCount: 45_700,
+        tokenCountText: "45.7k tokens",
+      },
+    ]);
 
     expect(updated).toBe(messages);
     expect(updated[0]).toBe(message);
@@ -389,7 +400,8 @@ Running 3 Worker agents...
       createdAt: "2026-06-25T18:20:00.000Z",
       parts: [
         {
-          type: "tool-invocation", content: "",
+          type: "tool-invocation",
+          content: "",
           toolName: "Agent",
           toolTitle: "Agent",
           toolState: "success",

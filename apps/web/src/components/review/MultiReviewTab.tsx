@@ -18,10 +18,7 @@ import { StackedEyes } from "./MultiReviewLaunchDialog";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { hydrateMultiReviewWorkflow } from "@/lib/multi-review-persistence";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
-import {
-  useOptionalTerminalContext,
-  type CreateTabOptions,
-} from "@/contexts/TerminalContext";
+import { useOptionalTerminalContext, type CreateTabOptions } from "@/contexts/TerminalContext";
 import { MultiReviewReviewerTab } from "./MultiReviewReviewerTab";
 import * as backend from "@/lib/backend";
 
@@ -100,15 +97,12 @@ export function reviewerStatusNote(
   return null;
 }
 
-export function reviewerProgressSummary(
-  reviewers: MultiReviewWorkflow["reviewers"],
-): string {
+export function reviewerProgressSummary(reviewers: MultiReviewWorkflow["reviewers"]): string {
   const completed = reviewers.filter((reviewer) => reviewer.status === "completed").length;
   const stopped = reviewers.filter((reviewer) => reviewer.status === "cancelled").length;
   const activePanelSize = reviewers.length - stopped;
-  const completion = activePanelSize === 0
-    ? `${completed} complete`
-    : `${completed}/${activePanelSize} complete`;
+  const completion =
+    activePanelSize === 0 ? `${completed} complete` : `${completed}/${activePanelSize} complete`;
   return stopped === 0 ? completion : `${completion} · ${stopped} stopped`;
 }
 
@@ -152,9 +146,7 @@ function MultiReviewOverviewTab({
     if (!target) return "no-session";
     const options = multiReviewFixSessionTabOptions(target);
     if (!options) return "no-session";
-    return createTab?.(target.fixModel.agent, options) === true
-      ? "opened"
-      : "tab-unavailable";
+    return createTab?.(target.fixModel.agent, options) === true ? "opened" : "tab-unavailable";
   };
 
   const openFixSessionError = (outcome: "no-session" | "tab-unavailable"): string =>
@@ -210,8 +202,8 @@ function MultiReviewOverviewTab({
       replaceWorkflow(handedOff);
       if (openFixSession(handedOff) !== "opened") {
         setError(
-          "The fix session is running, but a tab could not be opened. "
-          + "Close a tab, then use Open fix session to continue.",
+          "The fix session is running, but a tab could not be opened. " +
+            "Close a tab, then use Open fix session to continue.",
         );
       }
     } catch (reason) {
@@ -229,9 +221,8 @@ function MultiReviewOverviewTab({
       // A crash or transport failure can leave the terminal interactive
       // snapshot with its idempotent backend dispatch still pending. Resume
       // that durable half before presenting the session in a new tab.
-      const target = workflow.addressPromptPending === true
-        ? await commands.address(workflow.id)
-        : workflow;
+      const target =
+        workflow.addressPromptPending === true ? await commands.address(workflow.id) : workflow;
       if (target !== workflow) replaceWorkflow(target);
       const outcome = openFixSession(target);
       if (outcome !== "opened") setError(openFixSessionError(outcome));
@@ -246,20 +237,36 @@ function MultiReviewOverviewTab({
     return (
       <div className="grid h-full place-items-center p-6 text-center">
         <div>
-          {error ? <AlertCircle className="mx-auto mb-3 size-6 text-destructive" /> : <Loader2 className="mx-auto mb-3 size-6 animate-spin text-cyan-400" />}
+          {error ? (
+            <AlertCircle className="mx-auto mb-3 size-6 text-destructive" />
+          ) : (
+            <Loader2 className="mx-auto mb-3 size-6 animate-spin text-cyan-400" />
+          )}
           <p className="text-sm text-muted-foreground">{error ?? "Restoring Multi Review…"}</p>
-          {error && <Button className="mt-4" variant="outline" size="sm" onClick={() => void hydrate()}><RefreshCw className="mr-2 size-3.5" />Retry</Button>}
+          {error && (
+            <Button className="mt-4" variant="outline" size="sm" onClick={() => void hydrate()}>
+              <RefreshCw className="mr-2 size-3.5" />
+              Retry
+            </Button>
+          )}
         </div>
       </div>
     );
   }
 
-  const busy = workflow.phase === "reviewing" || workflow.phase === "consolidating"
-    || workflow.phase === "fixing" || workflow.phase === "cancelling";
-  const fixSessionStalled = (workflow.phase === "consolidating" || workflow.phase === "fixing")
-    && workflow.fixSession?.stalledSince !== undefined;
-  const canCancel = workflow.phase !== "completed" && workflow.phase !== "cancelled"
-    && workflow.phase !== "cancelling" && workflow.phase !== "interactive";
+  const busy =
+    workflow.phase === "reviewing" ||
+    workflow.phase === "consolidating" ||
+    workflow.phase === "fixing" ||
+    workflow.phase === "cancelling";
+  const fixSessionStalled =
+    (workflow.phase === "consolidating" || workflow.phase === "fixing") &&
+    workflow.fixSession?.stalledSince !== undefined;
+  const canCancel =
+    workflow.phase !== "completed" &&
+    workflow.phase !== "cancelled" &&
+    workflow.phase !== "cancelling" &&
+    workflow.phase !== "interactive";
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
@@ -270,7 +277,9 @@ function MultiReviewOverviewTab({
           </span>
           <div className="min-w-0">
             <h1 className="truncate text-sm font-semibold">Multi Review</h1>
-            <p className={`truncate text-xs ${fixSessionStalled ? "text-amber-500" : "text-muted-foreground"}`}>
+            <p
+              className={`truncate text-xs ${fixSessionStalled ? "text-amber-500" : "text-muted-foreground"}`}
+            >
               {fixSessionStalled ? "No activity from the fix model" : phaseCopy(workflow.phase)}
             </p>
           </div>
@@ -331,18 +340,32 @@ function MultiReviewOverviewTab({
                         });
                       }}
                     >
-                      {reviewer.status === "completed" ? <CheckCircle2 className="size-4 shrink-0 text-emerald-500" />
-                        : reviewer.status === "failed" ? <AlertCircle className="size-4 shrink-0 text-destructive" />
-                          : reviewer.status === "cancelled" ? <Square className="size-4 shrink-0 text-muted-foreground" />
-                            : reviewer.status === "running" ? <Loader2 className="size-4 shrink-0 animate-spin text-cyan-400" />
-                              : <Circle className="size-4 shrink-0 text-muted-foreground" />}
+                      {reviewer.status === "completed" ? (
+                        <CheckCircle2 className="size-4 shrink-0 text-emerald-500" />
+                      ) : reviewer.status === "failed" ? (
+                        <AlertCircle className="size-4 shrink-0 text-destructive" />
+                      ) : reviewer.status === "cancelled" ? (
+                        <Square className="size-4 shrink-0 text-muted-foreground" />
+                      ) : reviewer.status === "running" ? (
+                        <Loader2 className="size-4 shrink-0 animate-spin text-cyan-400" />
+                      ) : (
+                        <Circle className="size-4 shrink-0 text-muted-foreground" />
+                      )}
                       <div className="min-w-0">
-                        <p className="truncate text-xs font-medium">Reviewer {index + 1} · {reviewer.agent}</p>
-                        <p className="truncate text-[11px] text-muted-foreground">{reviewer.model}{reviewer.reasoningEffort ? ` · ${reviewer.reasoningEffort}` : ""}</p>
+                        <p className="truncate text-xs font-medium">
+                          Reviewer {index + 1} · {reviewer.agent}
+                        </p>
+                        <p className="truncate text-[11px] text-muted-foreground">
+                          {reviewer.model}
+                          {reviewer.reasoningEffort ? ` · ${reviewer.reasoningEffort}` : ""}
+                        </p>
                         {/* The workflow error generalizes a shared cause; this is
                             the only place the reviewer's own outcome is legible. */}
                         {note ? (
-                          <p className={`truncate text-[11px] ${NOTE_TONE_CLASS[note.tone]}`} title={note.text}>
+                          <p
+                            className={`truncate text-[11px] ${NOTE_TONE_CLASS[note.tone]}`}
+                            title={note.text}
+                          >
                             {note.text}
                           </p>
                         ) : null}
@@ -358,9 +381,11 @@ function MultiReviewOverviewTab({
                         disabled={stoppingReviewerId !== null}
                         onClick={() => void stopReviewer(reviewer.id)}
                       >
-                        {stoppingReviewerId === reviewer.id
-                          ? <Loader2 className="size-3.5 animate-spin" />
-                          : <Square className="size-3.5" />}
+                        {stoppingReviewerId === reviewer.id ? (
+                          <Loader2 className="size-3.5 animate-spin" />
+                        ) : (
+                          <Square className="size-3.5" />
+                        )}
                       </Button>
                     )}
                   </div>
@@ -393,12 +418,21 @@ function MultiReviewOverviewTab({
 
       <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-border/60 bg-background/90 px-4 py-3 sm:px-5">
         {workflow.phase === "failed" && (
-          <Button variant="outline" disabled={pending} onClick={() => void run(() => commands.retry(workflow.id))}>
-            <RefreshCw className="mr-2 size-4" />Retry failed stage
+          <Button
+            variant="outline"
+            disabled={pending}
+            onClick={() => void run(() => commands.retry(workflow.id))}
+          >
+            <RefreshCw className="mr-2 size-4" />
+            Retry failed stage
           </Button>
         )}
         {canCancel && (
-          <Button variant="outline" disabled={pending} onClick={() => void run(() => commands.cancel(workflow.id))}>
+          <Button
+            variant="outline"
+            disabled={pending}
+            onClick={() => void run(() => commands.cancel(workflow.id))}
+          >
             <Square className="mr-2 size-4" />
             {workflow.phase === "ready" || workflow.phase === "failed" ? "Abandon" : "Cancel"}
           </Button>
@@ -407,17 +441,17 @@ function MultiReviewOverviewTab({
           <Button
             variant="outline"
             disabled={pending || !createTab}
-            onClick={() => { void openInteractiveFixSession(); }}
+            onClick={() => {
+              void openInteractiveFixSession();
+            }}
           >
             Open fix session
           </Button>
         )}
         {workflow.phase === "ready" && (
-          <Button
-            disabled={pending || !createTab}
-            onClick={() => void addressAll()}
-          >
-            <Wrench className="mr-2 size-4" />{ADDRESS_ALL_REVIEW_PROMPT}
+          <Button disabled={pending || !createTab} onClick={() => void addressAll()}>
+            <Wrench className="mr-2 size-4" />
+            {ADDRESS_ALL_REVIEW_PROMPT}
           </Button>
         )}
       </footer>

@@ -131,9 +131,7 @@ import { NativeAgentServiceDispatch } from "./native-agent-service-dispatch.ts";
  * own a task — a command backgrounded with Ctrl+B or by a foreground timeout
  * carries no `run_in_background` argument, and would otherwise be invisible.
  */
-function backgroundTaskIdFromProjectedLaunch(
-  part: Record<string, unknown>,
-): string | undefined {
+function backgroundTaskIdFromProjectedLaunch(part: Record<string, unknown>): string | undefined {
   if (part.type !== "tool-invocation") return undefined;
   return recoverBackgroundTaskLaunchId(part);
 }
@@ -171,10 +169,10 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
 
   protected pruneToolDetailCache(): void {
     while (
-      this.toolDetailCache.size
-        > (this.options.toolDetailCacheMaxEntries ?? NATIVE_TOOL_DETAIL_CACHE_MAX_ENTRIES)
-      || this.toolDetailCacheBytes
-        > (this.options.toolDetailCacheMaxBytes ?? NATIVE_TOOL_DETAIL_CACHE_MAX_BYTES)
+      this.toolDetailCache.size >
+        (this.options.toolDetailCacheMaxEntries ?? NATIVE_TOOL_DETAIL_CACHE_MAX_ENTRIES) ||
+      this.toolDetailCacheBytes >
+        (this.options.toolDetailCacheMaxBytes ?? NATIVE_TOOL_DETAIL_CACHE_MAX_BYTES)
     ) {
       const oldest = [...this.toolDetailCache.keys()].find(
         (candidate) => !this.pinnedToolDetailRefs.has(candidate),
@@ -201,33 +199,28 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     // A staged path is the durable image reference. Re-sending the same image
     // as an inline data URL on every snapshot only duplicates transport bytes.
     if (
-      part.type === "file"
-      && typeof part.content === "string"
-      && (
-        part.content.startsWith("/")
-        || part.content.startsWith("file://")
-        || /^[A-Za-z]:[\\/]/.test(part.content)
-      )
-      && typeof part.fileUrl === "string"
-      && part.fileUrl.startsWith("data:image/")
+      part.type === "file" &&
+      typeof part.content === "string" &&
+      (part.content.startsWith("/") ||
+        part.content.startsWith("file://") ||
+        /^[A-Za-z]:[\\/]/.test(part.content)) &&
+      typeof part.fileUrl === "string" &&
+      part.fileUrl.startsWith("data:image/")
     ) {
       delete projected.fileUrl;
     }
 
-    const rawDiff = part.toolDiff && typeof part.toolDiff === "object"
-      && !Array.isArray(part.toolDiff)
-      ? part.toolDiff as Record<string, unknown>
-      : undefined;
-    const hasHeavyDiff = Boolean(rawDiff && (
-      typeof rawDiff.diff === "string"
-      || typeof rawDiff.before === "string"
-      || typeof rawDiff.after === "string"
-    ));
-    if (
-      typeof part.toolOutput === "string"
-      || typeof part.toolError === "string"
-      || hasHeavyDiff
-    ) {
+    const rawDiff =
+      part.toolDiff && typeof part.toolDiff === "object" && !Array.isArray(part.toolDiff)
+        ? (part.toolDiff as Record<string, unknown>)
+        : undefined;
+    const hasHeavyDiff = Boolean(
+      rawDiff &&
+      (typeof rawDiff.diff === "string" ||
+        typeof rawDiff.before === "string" ||
+        typeof rawDiff.after === "string"),
+    );
+    if (typeof part.toolOutput === "string" || typeof part.toolError === "string" || hasHeavyDiff) {
       projected.detailRef = this.cacheToolDetails(sessionKey, messageId, partPath, {
         ...(typeof part.toolOutput === "string" ? { toolOutput: part.toolOutput } : {}),
         ...(typeof part.toolError === "string" ? { toolError: part.toolError } : {}),
@@ -252,16 +245,11 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     for (const field of ["parts", "childTools", "subagentActions"] as const) {
       if (!Array.isArray(part[field])) continue;
       projected[field] = part[field].map((child, index) =>
-        this.projectionPart(sessionKey, messageId, child, `${partPath}/${field}/${index}`)
+        this.projectionPart(sessionKey, messageId, child, `${partPath}/${field}/${index}`),
       );
     }
     if (part.task && typeof part.task === "object" && !Array.isArray(part.task)) {
-      projected.task = this.projectionPart(
-        sessionKey,
-        messageId,
-        part.task,
-        `${partPath}/task`,
-      );
+      projected.task = this.projectionPart(sessionKey, messageId, part.task, `${partPath}/task`);
     }
     return projected;
   }
@@ -272,28 +260,27 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     limit: number,
   ): { messages: unknown[]; window: NativeAgentMessageWindow } {
     const requested = messages.slice(-limit).map((raw) => {
-      const message = raw && typeof raw === "object" && !Array.isArray(raw)
-        ? raw as Record<string, unknown>
-        : null;
+      const message =
+        raw && typeof raw === "object" && !Array.isArray(raw)
+          ? (raw as Record<string, unknown>)
+          : null;
       const role = message?.role;
       if (
-        !message
-        || typeof message.id !== "string"
-        || (role !== "user" && role !== "assistant" && role !== "system")
-        || typeof message.content !== "string"
-        || !Array.isArray(message.parts)
-        || typeof message.createdAt !== "string"
+        !message ||
+        typeof message.id !== "string" ||
+        (role !== "user" && role !== "assistant" && role !== "system") ||
+        typeof message.content !== "string" ||
+        !Array.isArray(message.parts) ||
+        typeof message.createdAt !== "string"
       ) {
-        throw new ProviderUnavailableError(
-          "Provider returned a non-normalized native transcript",
-        );
+        throw new ProviderUnavailableError("Provider returned a non-normalized native transcript");
       }
       return {
         id: message.id,
         role,
         content: message.content,
         parts: message.parts.map((part, index) =>
-          this.projectionPart(sessionKey, message.id as string, part, String(index))
+          this.projectionPart(sessionKey, message.id as string, part, String(index)),
         ),
         createdAt: message.createdAt,
         ...(typeof message.modelId === "string" ? { modelId: message.modelId } : {}),
@@ -322,9 +309,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
        * transcript twice on every refresh.
        */
       if (!(error instanceof TypeError)) throw error;
-      throw new ProviderUnavailableError(
-        "Provider returned a non-serializable native transcript",
-      );
+      throw new ProviderUnavailableError("Provider returned a non-serializable native transcript");
     }
     const { messages: bounded, messageWindow, overflowed } = boundedTranscript;
     if (overflowed) {
@@ -347,7 +332,9 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
               ...(omittedMessages > 0 ? { omittedMessages } : {}),
               ...(omittedParts > 0 ? { omittedParts } : {}),
             }
-          : truncatedByCount ? { truncationReason: "count" as const } : {}),
+          : truncatedByCount
+            ? { truncationReason: "count" as const }
+            : {}),
       },
     };
   }
@@ -440,47 +427,47 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         }
       }
     }
-    const selectedModelId = providerControls?.modelId
-      ?? session.controls?.modelId
-      ?? providerComposer?.selectedModelId
-      ?? models[0]?.id;
-    const selectedModel = models.find((model) => model.id === selectedModelId)
-      ?? models[0];
-    const selectedReasoningId = providerControls?.reasoningId
-      ?? session.controls?.reasoningId
-      ?? providerComposer?.selectedReasoningId
+    const selectedModelId =
+      providerControls?.modelId ??
+      session.controls?.modelId ??
+      providerComposer?.selectedModelId ??
+      models[0]?.id;
+    const selectedModel = models.find((model) => model.id === selectedModelId) ?? models[0];
+    const selectedReasoningId =
+      providerControls?.reasoningId ??
+      session.controls?.reasoningId ??
+      providerComposer?.selectedReasoningId ??
       // The advertised default matters for Cursor/Grok, where it carries the
       // agent's own current effort rather than a static catalog value.
-      ?? resolveReasoningId(
+      resolveReasoningId(
         selectedModel?.reasoning ?? [],
         undefined,
         selectedModel?.defaultReasoningId,
-      )
-      ?? selectedModel?.defaultReasoningId;
+      ) ??
+      selectedModel?.defaultReasoningId;
     const capabilities = nativeCapabilities(input.agent);
     // The compose bar renders `fastModeAvailable` directly, so the table has to
     // be consulted here and not only in `nativeComposerControls`. Without it a
     // provider that grew a fast surface would show the toggle on a platform the
     // table says has none, and `updateProjectionControls` would then accept the
     // patch because its own guard reads this same field.
-    const supportsSpeed = capabilities.composer.speed
-      && (providerComposer?.fastModeAvailable === true
-        || selectedModel?.supportsSpeed === true);
+    const supportsSpeed =
+      capabilities.composer.speed &&
+      (providerComposer?.fastModeAvailable === true || selectedModel?.supportsSpeed === true);
     const executionProfiles = capabilities.composer.executionProfile
-      ? providerComposer?.executionProfiles ?? []
+      ? (providerComposer?.executionProfiles ?? [])
       : [];
     // A session created before a platform's Build/Plan pair was reclassified as
     // an execution profile still carries `controls.mode`. That value was already
     // dispatched as the provider's agent name, so it names the same thing the
     // profile now names; without this the upgraded session silently falls back
     // to the provider default and runs a different agent than the user chose.
-    const legacyModeProfileId = !capabilities.composer.mode
-      ? session.controls?.mode
-      : undefined;
-    const storedExecutionProfileId = providerControls?.executionProfileId
-      ?? session.controls?.executionProfileId
-      ?? providerComposer?.selectedExecutionProfileId
-      ?? legacyModeProfileId;
+    const legacyModeProfileId = !capabilities.composer.mode ? session.controls?.mode : undefined;
+    const storedExecutionProfileId =
+      providerControls?.executionProfileId ??
+      session.controls?.executionProfileId ??
+      providerComposer?.selectedExecutionProfileId ??
+      legacyModeProfileId;
     // Only drop the stored selection when the provider actually told us which
     // profiles exist. An empty list means the agent listing failed or has not
     // arrived, and the stored id is then the best evidence we have — discarding
@@ -488,12 +475,13 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     // transient read. A non-empty list that omits the id is different: that id
     // demonstrably does not exist, and sending it would fail the dispatch.
     const profilesAreKnown = executionProfiles.length > 0;
-    const selectedExecutionProfileId = capabilities.composer.executionProfile
-      && storedExecutionProfileId !== undefined
-      && (!profilesAreKnown
-        || executionProfiles.some((profile) => profile.id === storedExecutionProfileId))
-      ? storedExecutionProfileId
-      : undefined;
+    const selectedExecutionProfileId =
+      capabilities.composer.executionProfile &&
+      storedExecutionProfileId !== undefined &&
+      (!profilesAreKnown ||
+        executionProfiles.some((profile) => profile.id === storedExecutionProfileId))
+        ? storedExecutionProfileId
+        : undefined;
     return {
       models,
       ...(selectedModel ? { selectedModelId: selectedModel.id } : {}),
@@ -504,39 +492,51 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         : {}),
       fastModeAvailable: supportsSpeed,
       fastModeEnabled: supportsSpeed
-        ? providerControls?.fastMode
-          ?? session.controls?.fastMode
-          ?? providerComposer?.fastModeEnabled
-          ?? false
+        ? (providerControls?.fastMode ??
+          session.controls?.fastMode ??
+          providerComposer?.fastModeEnabled ??
+          false)
         : null,
-      ...(capabilities.composer.mode ? {
-        selectedModeId: providerControls?.mode
-          ?? session.controls?.mode
-          ?? providerComposer?.selectedModeId
-          ?? "build",
-      } : {}),
+      ...(capabilities.composer.mode
+        ? {
+            selectedModeId:
+              providerControls?.mode ??
+              session.controls?.mode ??
+              providerComposer?.selectedModeId ??
+              "build",
+          }
+        : {}),
       modes: capabilities.composer.mode
         ? providerComposer?.modes.length
           ? providerComposer.modes
-          : [{ id: "build", label: "Build" }, { id: "plan", label: "Plan" }]
+          : [
+              { id: "build", label: "Build" },
+              { id: "plan", label: "Plan" },
+            ]
         : [],
       // Execution profiles were previously copied across whenever the provider
       // reported any, so a platform whose table says `executionProfile: false`
       // would grow the control the moment its bridge started listing agents.
       ...(executionProfiles.length ? { executionProfiles } : {}),
       ...(selectedExecutionProfileId ? { selectedExecutionProfileId } : {}),
-      ...(capabilities.composer.localSettings ? {
-        includeLocalSettings: providerControls?.includeLocalSettings
-          ?? session.controls?.includeLocalSettings
-          ?? providerComposer?.includeLocalSettings
-          ?? false,
-      } : {}),
-      ...(capabilities.composer.promptSuggestions ? {
-        promptSuggestionsEnabled: providerControls?.promptSuggestions
-          ?? session.controls?.promptSuggestions
-          ?? providerComposer?.promptSuggestionsEnabled
-          ?? false,
-      } : {}),
+      ...(capabilities.composer.localSettings
+        ? {
+            includeLocalSettings:
+              providerControls?.includeLocalSettings ??
+              session.controls?.includeLocalSettings ??
+              providerComposer?.includeLocalSettings ??
+              false,
+          }
+        : {}),
+      ...(capabilities.composer.promptSuggestions
+        ? {
+            promptSuggestionsEnabled:
+              providerControls?.promptSuggestions ??
+              session.controls?.promptSuggestions ??
+              providerComposer?.promptSuggestionsEnabled ??
+              false,
+          }
+        : {}),
     };
   }
 
@@ -545,17 +545,16 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     if (pending) return pending.operation;
     const validity = { current: true };
     const operation = (async () => {
-      const catalog = await this.invoke<AgentModel[]>(
-        "get_native_agent_model_catalog",
-        { environmentId },
-      );
+      const catalog = await this.invoke<AgentModel[]>("get_native_agent_model_catalog", {
+        environmentId,
+      });
       const bounded = Array.isArray(catalog) ? catalog.slice(0, 512) : [];
       if (!validity.current) {
         throw new ProviderUnavailableError("Model catalog refresh was invalidated");
       }
       if (
-        !this.modelCatalogCache.has(environmentId)
-        && this.modelCatalogCache.size >= NATIVE_MODEL_CATALOG_CACHE_LIMIT
+        !this.modelCatalogCache.has(environmentId) &&
+        this.modelCatalogCache.size >= NATIVE_MODEL_CATALOG_CACHE_LIMIT
       ) {
         const oldest = this.modelCatalogCache.keys().next().value as string | undefined;
         if (oldest) this.modelCatalogCache.delete(oldest);
@@ -588,8 +587,8 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         throw new ProviderUnavailableError("Slash command refresh was invalidated");
       }
       if (
-        !this.slashCommandCache.has(key)
-        && this.slashCommandCache.size >= NATIVE_SLASH_COMMAND_CACHE_LIMIT
+        !this.slashCommandCache.has(key) &&
+        this.slashCommandCache.size >= NATIVE_SLASH_COMMAND_CACHE_LIMIT
       ) {
         const oldest = this.slashCommandCache.keys().next().value as string | undefined;
         if (oldest) this.slashCommandCache.delete(oldest);
@@ -704,16 +703,9 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     epoch: number,
   ): Promise<NativeAgentSessionProjection | null> {
     const previous = this.projectionCache.get(key);
-    const messageLimit = this.resolveMessageLimit(
-      input.messageLimit,
-      previous?.input.messageLimit,
-    );
+    const messageLimit = this.resolveMessageLimit(input.messageLimit, previous?.input.messageLimit);
     const windowed: NativeAgentProjectionInput = { ...input, messageLimit };
-    if (
-      !force
-      && previous
-      && previous.input.messageLimit === messageLimit
-    ) {
+    if (!force && previous && previous.input.messageLimit === messageLimit) {
       return previous.projection;
     }
     let generation = previous?.generation ?? `unresolved:${input.agent}`;
@@ -726,38 +718,28 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         return null;
       }
       const providerCacheKey = `${input.environmentId}\0${input.agent}`;
-      generation = this.providerConnections.get(providerCacheKey)
-        ?? `in-process:${input.agent}`;
+      generation = this.providerConnections.get(providerCacheKey) ?? `in-process:${input.agent}`;
       const capabilities = nativeCapabilities(input.agent);
       // These reads describe independent parts of one projection. Keeping
       // them serial made a transcript wait for every approval, queue and slash
       // command round trip in turn, even though none produces message text.
-      const snapshotPromise: Promise<ProviderInteractiveSnapshot> = resolved.provider.interactiveSnapshot
-        ? resolved.provider.interactiveSnapshot(
-            resolved.session.providerSessionId,
-          )
+      const snapshotPromise: Promise<ProviderInteractiveSnapshot> = resolved.provider
+        .interactiveSnapshot
+        ? resolved.provider.interactiveSnapshot(resolved.session.providerSessionId)
         : (async () => ({
             // A terminal turn error belongs in the projection as `error` plus
             // its detail, not as a thrown read that would report the whole
             // runtime as unreachable.
-            ...await readProviderStatus(
-              resolved.provider,
-              resolved.session.providerSessionId,
-            ),
+            ...(await readProviderStatus(resolved.provider, resolved.session.providerSessionId)),
             messages: await resolved.provider.messages(resolved.session.providerSessionId),
           }))();
       const interactionSnapshotPromise = resolved.provider.interactions
-        ? resolved.provider.interactions.listPendingInteractions(
-            resolved.session.providerSessionId,
-          )
+        ? resolved.provider.interactions.listPendingInteractions(resolved.session.providerSessionId)
         : Promise.resolve({ requests: [], revision: 0 });
       const queuePromise = capabilities.queue
         ? this.storage.getPromptQueue(`${input.agent}\0${input.logicalSessionKey}`)
         : Promise.resolve(null);
-      const slashCommandsPromise = this.projectionSlashCommands(
-        input,
-        resolved.provider,
-      );
+      const slashCommandsPromise = this.projectionSlashCommands(input, resolved.provider);
       const [snapshot, interactionSnapshot, queue, slashCommands] = await Promise.all([
         snapshotPromise,
         interactionSnapshotPromise,
@@ -777,25 +759,25 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         snapshot.composer,
         snapshot.controls,
       );
-      const selectedModel = composer.models.find(
-        (model) => model.id === composer.selectedModelId,
-      );
+      const selectedModel = composer.models.find((model) => model.id === composer.selectedModelId);
       const contextUsage = snapshot.contextUsage
         ? {
             ...snapshot.contextUsage,
-            ...(snapshot.contextUsage.maximumTokens === undefined
-              && selectedModel?.contextWindow
+            ...(snapshot.contextUsage.maximumTokens === undefined && selectedModel?.contextWindow
               ? { maximumTokens: selectedModel.contextWindow }
               : {}),
-            ...(snapshot.contextUsage.percentage === undefined
-              && (snapshot.contextUsage.maximumTokens ?? selectedModel?.contextWindow)
+            ...(snapshot.contextUsage.percentage === undefined &&
+            (snapshot.contextUsage.maximumTokens ?? selectedModel?.contextWindow)
               ? {
-                  percentage: Math.max(0, Math.min(
-                    100,
-                    snapshot.contextUsage.usedTokens
-                      / (snapshot.contextUsage.maximumTokens ?? selectedModel!.contextWindow!)
-                      * 100,
-                  )),
+                  percentage: Math.max(
+                    0,
+                    Math.min(
+                      100,
+                      (snapshot.contextUsage.usedTokens /
+                        (snapshot.contextUsage.maximumTokens ?? selectedModel!.contextWindow!)) *
+                        100,
+                    ),
+                  ),
                 }
               : {}),
           }
@@ -805,9 +787,12 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         ...(snapshot.notices ?? []).filter(
           (notice) => notice.kind === "error" || notice.kind === "stopped",
         ),
-        ...(snapshot.error && !(snapshot.notices ?? []).some(
+        ...(snapshot.error &&
+        !(snapshot.notices ?? []).some(
           (notice) => notice.kind === "error" && notice.message === snapshot.error,
-        ) ? [{ kind: "error" as const, message: snapshot.error }] : []),
+        )
+          ? [{ kind: "error" as const, message: snapshot.error }]
+          : []),
       ];
       const messages = [
         ...transcript.messages,
@@ -845,17 +830,20 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         ...(snapshot.shareUrl === undefined ? {} : { shareUrl: snapshot.shareUrl }),
         connection: "connected",
         turn: {
-          phase: snapshot.phase === "cancelling"
-            || snapshot.phase === "recovering"
-            || snapshot.phase === "error"
-            ? snapshot.phase
-            : blocked
-              ? "blocked"
-              : snapshot.phase ?? (snapshot.status === "error"
-                ? "error"
-                : snapshot.status === "running" ? "running" : "idle"),
-          ...(snapshot.turnStartedAt === undefined
-            ? {} : { startedAt: snapshot.turnStartedAt }),
+          phase:
+            snapshot.phase === "cancelling" ||
+            snapshot.phase === "recovering" ||
+            snapshot.phase === "error"
+              ? snapshot.phase
+              : blocked
+                ? "blocked"
+                : (snapshot.phase ??
+                  (snapshot.status === "error"
+                    ? "error"
+                    : snapshot.status === "running"
+                      ? "running"
+                      : "idle")),
+          ...(snapshot.turnStartedAt === undefined ? {} : { startedAt: snapshot.turnStartedAt }),
           ...(snapshot.error ? { error: snapshot.error } : {}),
         },
         messages,
@@ -868,74 +856,84 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         composer,
         capabilities,
         ...(slashCommands.length > 0 ? { slashCommands } : {}),
-        ...(queue ? {
-          queue: {
-            items: queue.messages,
-            ...(queue.inFlight ? { inFlightRequestId: queue.inFlight.requestId } : {}),
-            ...(queue.dispatchError ? {
-              blocked: {
-                messageId: queue.dispatchError.messageId,
-                error: queue.dispatchError.message,
+        ...(queue
+          ? {
+              queue: {
+                items: queue.messages,
+                ...(queue.inFlight ? { inFlightRequestId: queue.inFlight.requestId } : {}),
+                ...(queue.dispatchError
+                  ? {
+                      blocked: {
+                        messageId: queue.dispatchError.messageId,
+                        error: queue.dispatchError.message,
+                      },
+                    }
+                  : {}),
               },
-            } : {}),
-          },
-        } : {}),
+            }
+          : {}),
         ...(contextUsage ? { contextUsage } : {}),
         ...(snapshot.rateLimits ? { rateLimits: snapshot.rateLimits } : {}),
         ...(snapshot.runtime ? { runtime: snapshot.runtime } : {}),
         ...((snapshot.notices ?? []).some(
           (notice) => notice.kind !== "error" && notice.kind !== "stopped",
-        ) ? {
-          notices: snapshot.notices!.filter(
-            (notice) => notice.kind !== "error" && notice.kind !== "stopped",
-          ),
-        } : {}),
-        ...(resolved.session.pendingDispatch ? {
-          recoverableDispatch: {
-            requestId: resolved.session.pendingDispatch.requestId,
-            createdAt: resolved.session.pendingDispatch.createdAt,
-          },
-        } : {}),
-        ...(snapshot.backgroundTasks
-          ? { backgroundTasks: snapshot.backgroundTasks }
+        )
+          ? {
+              notices: snapshot.notices!.filter(
+                (notice) => notice.kind !== "error" && notice.kind !== "stopped",
+              ),
+            }
           : {}),
-        ...(snapshot.suggestedPrompt
-          ? { suggestedPrompt: snapshot.suggestedPrompt }
+        ...(resolved.session.pendingDispatch
+          ? {
+              recoverableDispatch: {
+                requestId: resolved.session.pendingDispatch.requestId,
+                createdAt: resolved.session.pendingDispatch.createdAt,
+              },
+            }
           : {}),
+        ...(snapshot.backgroundTasks ? { backgroundTasks: snapshot.backgroundTasks } : {}),
+        ...(snapshot.suggestedPrompt ? { suggestedPrompt: snapshot.suggestedPrompt } : {}),
         ...(snapshot.completionBlockedByBackgroundTasks === undefined
           ? {}
           : {
-              completionBlockedByBackgroundTasks:
-                snapshot.completionBlockedByBackgroundTasks,
+              completionBlockedByBackgroundTasks: snapshot.completionBlockedByBackgroundTasks,
             }),
-        ...(capabilities.fork ? {
-          turnBoundaries: messages.flatMap((candidate) => {
-            const message = candidate as Record<string, unknown>;
-            return typeof message.id === "string"
-              ? [{
-                  turnId: typeof message.turnId === "string"
-                    ? message.turnId
-                    : message.id,
-                  messageId: message.id,
-                  resumable: capabilities.resume,
-                  forkable: true,
-                }]
-              : [];
-          }),
-        } : {}),
-        ...(resolved.session.openCodeIncompleteTurnNotice ? {
-          notices: [...(snapshot.notices ?? []), {
-            kind: "incomplete-turn" as const,
-            message: resolved.session.openCodeIncompleteTurnNotice.kind === "failed"
-              ? "The previous OpenCode turn ended before completion."
-              : "OpenCode could not complete the previous turn after recovery.",
-          }],
-        } : {}),
+        ...(capabilities.fork
+          ? {
+              turnBoundaries: messages.flatMap((candidate) => {
+                const message = candidate as Record<string, unknown>;
+                return typeof message.id === "string"
+                  ? [
+                      {
+                        turnId: typeof message.turnId === "string" ? message.turnId : message.id,
+                        messageId: message.id,
+                        resumable: capabilities.resume,
+                        forkable: true,
+                      },
+                    ]
+                  : [];
+              }),
+            }
+          : {}),
+        ...(resolved.session.openCodeIncompleteTurnNotice
+          ? {
+              notices: [
+                ...(snapshot.notices ?? []),
+                {
+                  kind: "incomplete-turn" as const,
+                  message:
+                    resolved.session.openCodeIncompleteTurnNotice.kind === "failed"
+                      ? "The previous OpenCode turn ended before completion."
+                      : "OpenCode could not complete the previous turn after recovery.",
+                },
+              ],
+            }
+          : {}),
         revision: 0,
         generation,
-        cursor: snapshot.providerRevision === undefined
-          ? undefined
-          : String(snapshot.providerRevision),
+        cursor:
+          snapshot.providerRevision === undefined ? undefined : String(snapshot.providerRevision),
       };
       return this.commitProjection(key, windowed, projection, generation, epoch);
     } catch (error) {
@@ -955,10 +953,12 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           phase: "recovering",
           error: error instanceof Error ? error.message : "Native agent is unavailable",
         },
-        notices: [{
-          kind: "recovery",
-          message: "Reconnecting to the native agent runtime…",
-        }],
+        notices: [
+          {
+            kind: "recovery",
+            message: "Reconnecting to the native agent runtime…",
+          },
+        ],
         revision: 0,
         generation,
       };
@@ -983,8 +983,14 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
        * fence reads itself. Hand back the newest committed projection, or the
        * uncommitted candidate at revision 0 when nothing is cached yet.
        */
-      return this.projectionCache.get(key)?.projection
-        ?? { ...candidate, revision: 0, generation, cursor: `${generation}:0` };
+      return (
+        this.projectionCache.get(key)?.projection ?? {
+          ...candidate,
+          revision: 0,
+          generation,
+          cursor: `${generation}:0`,
+        }
+      );
     }
     const previous = this.projectionCache.get(key);
     const fingerprint = JSON.stringify({
@@ -992,16 +998,10 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       revision: 0,
       cursor: candidate.cursor,
     });
-    if (
-      previous
-      && previous.generation === generation
-      && previous.fingerprint === fingerprint
-    ) {
+    if (previous && previous.generation === generation && previous.fingerprint === fingerprint) {
       return previous.projection;
     }
-    const revision = previous?.generation === generation
-      ? previous.projection.revision + 1
-      : 1;
+    const revision = previous?.generation === generation ? previous.projection.revision + 1 : 1;
     const projection = {
       ...candidate,
       revision,
@@ -1030,6 +1030,4 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     this.storage.announceNativeAgentSessionProjection(input.environmentId);
     return projection;
   }
-
-
 }

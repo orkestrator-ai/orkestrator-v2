@@ -1,37 +1,26 @@
-import { afterEach,describe,expect,mock,test } from "bun:test";
-
+import { afterEach, describe, expect, mock, test } from "bun:test";
 
 import {
-abortSession,
-checkClientHealth,
-checkHealth,
-createClient,
-createSession,
-deleteSession,
-getAvailableSlashCommands,
-getModelsWithDefaults,
-getSessionMessages,
-getSessionStatus,
-listSessions,
-lookupSessionStatus,
-type OpencodeClient
+  abortSession,
+  checkClientHealth,
+  checkHealth,
+  createClient,
+  createSession,
+  deleteSession,
+  getAvailableSlashCommands,
+  getModelsWithDefaults,
+  getSessionMessages,
+  getSessionStatus,
+  listSessions,
+  lookupSessionStatus,
+  type OpencodeClient,
 } from "./opencode-client";
 
-
-
-
-
-
-
 const originalFetch = globalThis.fetch;
-
-
 
 function setTestUrl(url: string): void {
   (window as unknown as Window & { happyDOM: { setURL(url: string): void } }).happyDOM.setURL(url);
 }
-
-
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
@@ -40,8 +29,6 @@ afterEach(() => {
   mock.restore();
 });
 
-
-
 const noProviderCatalog = {
   provider: {
     list: async () => {
@@ -49,8 +36,6 @@ const noProviderCatalog = {
     },
   },
 };
-
-
 
 describe("opencode-client createClient", () => {
   test("returns false when the health endpoint rejects or reports a non-success status", async () => {
@@ -79,19 +64,13 @@ describe("opencode-client createClient", () => {
       });
     }) as unknown as typeof fetch;
 
-    const client = createClient(
-      "http://127.0.0.1:7777",
-      undefined,
-      "opencode-secret",
-    );
+    const client = createClient("http://127.0.0.1:7777", undefined, "opencode-secret");
     await client.session.list();
 
     expect(requests).toEqual([
       `${window.location.origin}/__orkestrator/proxy/loopback/7777/session`,
     ]);
-    expect(headers[0]?.get("authorization")).toBe(
-      `Basic ${btoa("opencode:opencode-secret")}`,
-    );
+    expect(headers[0]?.get("authorization")).toBe(`Basic ${btoa("opencode:opencode-secret")}`);
     expect(headers[0]?.get("x-orkestrator-opencode-token")).toBe("opencode-secret");
   });
 
@@ -105,11 +84,7 @@ describe("opencode-client createClient", () => {
       return new Response("ok");
     }) as unknown as typeof fetch;
 
-    const client = createClient(
-      "http://127.0.0.1:7777",
-      undefined,
-      "cached-secret",
-    );
+    const client = createClient("http://127.0.0.1:7777", undefined, "cached-secret");
 
     await expect(checkClientHealth(client)).resolves.toBe(true);
     expect(requests).toHaveLength(1);
@@ -117,16 +92,13 @@ describe("opencode-client createClient", () => {
     expect(requests[0]?.headers.get("authorization")).toBe(
       `Basic ${btoa("opencode:cached-secret")}`,
     );
-    expect(requests[0]?.headers.get("x-orkestrator-opencode-token"))
-      .toBe("cached-secret");
+    expect(requests[0]?.headers.get("x-orkestrator-opencode-token")).toBe("cached-secret");
   });
 
   test("fails closed for a client not created by this wrapper", async () => {
     await expect(checkClientHealth({} as OpencodeClient)).resolves.toBe(false);
   });
 });
-
-
 
 describe("opencode-client listSessions", () => {
   test("maps SDK sessions into UI session shape", async () => {
@@ -212,8 +184,6 @@ describe("opencode-client listSessions", () => {
   });
 });
 
-
-
 describe("opencode-client getModelsWithDefaults", () => {
   test("prefers provider catalog so unconfigured models still appear", async () => {
     const client = {
@@ -287,15 +257,17 @@ describe("opencode-client getModelsWithDefaults", () => {
       provider: {
         list: async () => ({
           data: {
-            all: [{
-              id: "opencode-go",
-              models: {
-                "deepseek-v4-flash": {
-                  id: "deepseek-v4-flash",
-                  name: "opencode-go/deepseek-v4-flash",
+            all: [
+              {
+                id: "opencode-go",
+                models: {
+                  "deepseek-v4-flash": {
+                    id: "deepseek-v4-flash",
+                    name: "opencode-go/deepseek-v4-flash",
+                  },
                 },
               },
-            }],
+            ],
           },
         }),
       },
@@ -303,11 +275,13 @@ describe("opencode-client getModelsWithDefaults", () => {
 
     const result = await getModelsWithDefaults(client);
 
-    expect(result.models).toEqual([{
-      id: "opencode-go/deepseek-v4-flash",
-      name: "deepseek-v4-flash",
-      provider: "opencode-go",
-    }]);
+    expect(result.models).toEqual([
+      {
+        id: "opencode-go/deepseek-v4-flash",
+        name: "deepseek-v4-flash",
+        provider: "opencode-go",
+      },
+    ]);
   });
 
   test("maps default model and variant from direct default config", async () => {
@@ -434,19 +408,16 @@ describe("opencode-client getModelsWithDefaults", () => {
     { all: "not-a-provider-list" },
     { providers: "not-a-provider-map" },
     { all: [{ id: "broken", models: "not-a-model-list" }] },
-  ])(
-    "returns an empty result for malformed nested provider catalog data %#",
-    async (data) => {
-      const client = {
-        provider: { list: async () => ({ data }) },
-      } as unknown as OpencodeClient;
+  ])("returns an empty result for malformed nested provider catalog data %#", async (data) => {
+    const client = {
+      provider: { list: async () => ({ data }) },
+    } as unknown as OpencodeClient;
 
-      await expect(getModelsWithDefaults(client)).resolves.toEqual({
-        models: [],
-        defaults: {},
-      });
-    },
-  );
+    await expect(getModelsWithDefaults(client)).resolves.toEqual({
+      models: [],
+      defaults: {},
+    });
+  });
 
   test("accepts provider models returned as an array", async () => {
     const client = {
@@ -660,7 +631,11 @@ describe("opencode-client getModelsWithDefaults", () => {
     // Missing field, empty input map, and a non-boolean value all stay
     // `undefined` so the compose bar lets the attach through rather than
     // blocking on data the server did not actually report.
-    for (const id of ["deepseek/deepseek-v4-flash", "deepseek/deepseek-v4", "deepseek/deepseek-v3"]) {
+    for (const id of [
+      "deepseek/deepseek-v4-flash",
+      "deepseek/deepseek-v4",
+      "deepseek/deepseek-v3",
+    ]) {
       expect(byId.get(id)?.supportsImageInput).toBeUndefined();
     }
   });
@@ -947,8 +922,6 @@ describe("opencode-client getModelsWithDefaults", () => {
   });
 });
 
-
-
 describe("opencode-client getAvailableSlashCommands", () => {
   test("normalizes, deduplicates, and sorts commands", async () => {
     const client = {
@@ -1133,8 +1106,6 @@ describe("opencode-client getAvailableSlashCommands", () => {
   });
 });
 
-
-
 describe("opencode-client getSessionMessages", () => {
   test("serializes non-string tool output and error values", async () => {
     const createdMs = 1739232000000;
@@ -1197,28 +1168,29 @@ describe("opencode-client getSessionMessages", () => {
     const client = {
       session: {
         messages: async () => ({
-          data: [{
-            info: { id: "msg-circular", role: "assistant", time: { created: 1 } },
-            parts: [{
-              type: "tool",
-              tool: "bash",
-              state: {
-                status: "error",
-                input: {},
-                output: circularOutput,
-                error: circularError,
-              },
-            }],
-          }],
+          data: [
+            {
+              info: { id: "msg-circular", role: "assistant", time: { created: 1 } },
+              parts: [
+                {
+                  type: "tool",
+                  tool: "bash",
+                  state: {
+                    status: "error",
+                    input: {},
+                    output: circularOutput,
+                    error: circularError,
+                  },
+                },
+              ],
+            },
+          ],
         }),
       },
     } as unknown as OpencodeClient;
 
-    const part = (await getSessionMessages(
-      client,
-      "session-1",
-      { includeSubagents: false },
-    ))[0]?.parts[0];
+    const part = (await getSessionMessages(client, "session-1", { includeSubagents: false }))[0]
+      ?.parts[0];
     expect(part?.toolOutput).toBe("[object Object]");
     expect(part?.toolError).toBe("[object Object]");
   });
@@ -1230,38 +1202,45 @@ describe("opencode-client getSessionMessages", () => {
    * so nothing later can clear it.
    */
   test("does not mark an intentionally aborted subagent transcript as failed", async () => {
-    const buildClient = (childError: unknown) => ({
-      session: {
-        messages: async ({ sessionID }: { sessionID: string }) =>
-          sessionID === "parent"
-            ? {
-                data: [{
-                  info: { id: "msg-parent", role: "assistant", time: { created: 1 } },
-                  parts: [{
-                    type: "tool",
-                    tool: "task",
-                    state: {
-                      status: "running",
-                      input: { agent: "explore", prompt: "Look" },
-                      metadata: { sessionID: "child" },
+    const buildClient = (childError: unknown) =>
+      ({
+        session: {
+          messages: async ({ sessionID }: { sessionID: string }) =>
+            sessionID === "parent"
+              ? {
+                  data: [
+                    {
+                      info: { id: "msg-parent", role: "assistant", time: { created: 1 } },
+                      parts: [
+                        {
+                          type: "tool",
+                          tool: "task",
+                          state: {
+                            status: "running",
+                            input: { agent: "explore", prompt: "Look" },
+                            metadata: { sessionID: "child" },
+                          },
+                        },
+                      ],
                     },
-                  }],
-                }],
-              }
-            : {
-                data: [{
-                  info: {
-                    id: "msg-child",
-                    role: "assistant",
-                    time: { created: 2 },
-                    error: childError,
-                  },
-                  parts: [{ type: "text", text: "partial work" }],
-                }],
-              },
-        status: async () => ({ data: { child: { type: "idle" } } }),
-      },
-    } as unknown as OpencodeClient);
+                  ],
+                }
+              : {
+                  data: [
+                    {
+                      info: {
+                        id: "msg-child",
+                        role: "assistant",
+                        time: { created: 2 },
+                        error: childError,
+                      },
+                      parts: [{ type: "text", text: "partial work" }],
+                    },
+                  ],
+                },
+          status: async () => ({ data: { child: { type: "idle" } } }),
+        },
+      }) as unknown as OpencodeClient;
 
     const findSubagent = (messages: Awaited<ReturnType<typeof getSessionMessages>>) =>
       messages[0]?.parts.find((part) => part.type === "subagent");
@@ -1289,9 +1268,9 @@ describe("opencode-client getSessionMessages", () => {
       },
     } as unknown as OpencodeClient;
 
-    await expect(
-      getSessionMessages(client, "session-1", { throwOnError: true }),
-    ).rejects.toThrow("Failed to get OpenCode session messages");
+    await expect(getSessionMessages(client, "session-1", { throwOnError: true })).rejects.toThrow(
+      "Failed to get OpenCode session messages",
+    );
   });
 
   test("throws when a strict refresh cannot fetch messages", async () => {
@@ -1303,31 +1282,27 @@ describe("opencode-client getSessionMessages", () => {
       },
     } as unknown as OpencodeClient;
 
-    expect(
-      getSessionMessages(client, "session-1", { throwOnError: true }),
-    ).rejects.toThrow("offline");
+    expect(getSessionMessages(client, "session-1", { throwOnError: true })).rejects.toThrow(
+      "offline",
+    );
   });
 
   test("treats resolved SDK error responses as failures for strict callers", async () => {
-    const messages = mock(
-      async (_input: unknown, _options?: { throwOnError?: boolean }) => ({
-        data: undefined,
-        error: { message: "bridge offline" },
-      }),
-    );
+    const messages = mock(async (_input: unknown, _options?: { throwOnError?: boolean }) => ({
+      data: undefined,
+      error: { message: "bridge offline" },
+    }));
     const client = {
       session: { messages },
     } as unknown as OpencodeClient;
 
     expect(await getSessionMessages(client, "session-1")).toEqual([]);
-    await expect(
-      getSessionMessages(client, "session-1", { throwOnError: true }),
-    ).rejects.toThrow("bridge offline");
+    await expect(getSessionMessages(client, "session-1", { throwOnError: true })).rejects.toThrow(
+      "bridge offline",
+    );
     expect(messages.mock.calls[1]?.[1]).toEqual({ throwOnError: true });
   });
 });
-
-
 
 describe("opencode-client getSessionStatus", () => {
   test("selects one session from the v2 status map", async () => {
@@ -1383,8 +1358,9 @@ describe("opencode-client getSessionStatus", () => {
     if (unavailableEmpty.kind === "unavailable") {
       expect(unavailableEmpty.error.message).toBe("Failed to get OpenCode session status");
     }
-    await expect(getSessionStatus(emptyEnvelope, "session-1", { throwOnError: true }))
-      .rejects.toThrow("Failed to get OpenCode session status");
+    await expect(
+      getSessionStatus(emptyEnvelope, "session-1", { throwOnError: true }),
+    ).rejects.toThrow("Failed to get OpenCode session status");
 
     const thrownFailure = {
       session: {
@@ -1439,12 +1415,14 @@ describe("opencode-client getSessionStatus", () => {
   });
 });
 
-
-
 describe("opencode-client session lifecycle", () => {
   test("creates sessions and normalizes numeric and string timestamps", async () => {
     const create = mock(async ({ title }: { title?: string }) => ({
-      data: { id: `session-${title}`, title, time: { created: title === "numeric" ? 1_700_000_000_000 : "2026-01-02T03:04:05.000Z" } },
+      data: {
+        id: `session-${title}`,
+        title,
+        time: { created: title === "numeric" ? 1_700_000_000_000 : "2026-01-02T03:04:05.000Z" },
+      },
     }));
     const client = { session: { create } } as unknown as OpencodeClient;
 
@@ -1458,13 +1436,23 @@ describe("opencode-client session lifecycle", () => {
   });
 
   test("rejects an empty create response", async () => {
-    const client = { session: { create: async () => ({ data: undefined }) } } as unknown as OpencodeClient;
+    const client = {
+      session: { create: async () => ({ data: undefined }) },
+    } as unknown as OpencodeClient;
     await expect(createSession(client)).rejects.toThrow("empty session response");
   });
 
   test("returns empty messages for empty responses and transport failures", async () => {
-    const empty = { session: { messages: async () => ({ data: undefined }) } } as unknown as OpencodeClient;
-    const failed = { session: { messages: async () => { throw new Error("offline"); } } } as unknown as OpencodeClient;
+    const empty = {
+      session: { messages: async () => ({ data: undefined }) },
+    } as unknown as OpencodeClient;
+    const failed = {
+      session: {
+        messages: async () => {
+          throw new Error("offline");
+        },
+      },
+    } as unknown as OpencodeClient;
 
     expect(await getSessionMessages(empty, "session-1")).toEqual([]);
     expect(await getSessionMessages(failed, "session-1")).toEqual([]);
@@ -1473,23 +1461,23 @@ describe("opencode-client session lifecycle", () => {
   test("deletes and aborts sessions on success and reports failures", async () => {
     const deleteCall = mock(async () => ({}));
     const abortCall = mock(async () => ({}));
-    const client = { session: { delete: deleteCall, abort: abortCall } } as unknown as OpencodeClient;
+    const client = {
+      session: { delete: deleteCall, abort: abortCall },
+    } as unknown as OpencodeClient;
 
     expect(await deleteSession(client, "session-1")).toBe(true);
     expect(await abortSession(client, "session-1")).toBe(true);
-    expect(deleteCall).toHaveBeenCalledWith(
-      { sessionID: "session-1" },
-      { throwOnError: false },
-    );
-    expect(abortCall).toHaveBeenCalledWith(
-      { sessionID: "session-1" },
-      { throwOnError: false },
-    );
+    expect(deleteCall).toHaveBeenCalledWith({ sessionID: "session-1" }, { throwOnError: false });
+    expect(abortCall).toHaveBeenCalledWith({ sessionID: "session-1" }, { throwOnError: false });
 
     const failed = {
       session: {
-        delete: async () => { throw new Error("delete failed"); },
-        abort: async () => { throw new Error("abort failed"); },
+        delete: async () => {
+          throw new Error("delete failed");
+        },
+        abort: async () => {
+          throw new Error("abort failed");
+        },
       },
     } as unknown as OpencodeClient;
     expect(await deleteSession(failed, "session-1")).toBe(false);
@@ -1538,15 +1526,19 @@ describe("opencode-client session lifecycle", () => {
   });
 
   test("lists empty sessions and normalizes string and missing timestamps", async () => {
-    const empty = { session: { list: async () => ({ data: undefined }) } } as unknown as OpencodeClient;
+    const empty = {
+      session: { list: async () => ({ data: undefined }) },
+    } as unknown as OpencodeClient;
     expect(await listSessions(empty)).toEqual([]);
 
     const client = {
       session: {
-        list: async () => ({ data: [
-          { id: "string", title: "String", time: { created: "2026-02-03T04:05:06.000Z" } },
-          { id: "missing", title: "Missing", time: {} },
-        ] }),
+        list: async () => ({
+          data: [
+            { id: "string", title: "String", time: { created: "2026-02-03T04:05:06.000Z" } },
+            { id: "missing", title: "Missing", time: {} },
+          ],
+        }),
       },
     } as unknown as OpencodeClient;
     const sessions = await listSessions(client);

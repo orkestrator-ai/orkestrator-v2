@@ -63,10 +63,7 @@ export type SpawnServer = (
   options: { cwd: string; env: Record<string, string | undefined> },
 ) => ServerHandle;
 
-export type ProbeFetch = (
-  input: string | URL | Request,
-  init?: RequestInit,
-) => Promise<Response>;
+export type ProbeFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 export type Sleep = (milliseconds: number) => Promise<void>;
 
@@ -312,8 +309,8 @@ async function probeOpenCode(
   const cliVersion = await readCliVersion(cliPath, runCli);
   if (cliVersion !== expectedVersion) {
     throw new Error(
-      `${cliPath} reports ${cliVersion || "an unknown version"}, but `
-      + `@opencode-ai/sdk pins ${expectedVersion}`,
+      `${cliPath} reports ${cliVersion || "an unknown version"}, but ` +
+        `@opencode-ai/sdk pins ${expectedVersion}`,
     );
   }
 
@@ -337,19 +334,16 @@ async function probeOpenCode(
     );
     const port = await allocatePort();
     const baseUrl = `http://127.0.0.1:${port}`;
-    server = spawnServer(
-      [cliPath, "serve", "--hostname", "127.0.0.1", "--port", String(port)],
-      {
-        cwd: isolatedRoot,
-        env: {
-          ...process.env,
-          XDG_CONFIG_HOME: configRoot,
-          XDG_DATA_HOME: dataRoot,
-          XDG_STATE_HOME: stateRoot,
-          XDG_CACHE_HOME: cacheRoot,
-        },
+    server = spawnServer([cliPath, "serve", "--hostname", "127.0.0.1", "--port", String(port)], {
+      cwd: isolatedRoot,
+      env: {
+        ...process.env,
+        XDG_CONFIG_HOME: configRoot,
+        XDG_DATA_HOME: dataRoot,
+        XDG_STATE_HOME: stateRoot,
+        XDG_CACHE_HOME: cacheRoot,
       },
-    );
+    });
 
     const health = await waitForHealth(baseUrl, server, {
       fetchImpl,
@@ -419,7 +413,9 @@ export function installProbeTerminationHandlers(
         runtime.exit(1);
         return;
       }
-      void teardown().catch(() => {}).finally(() => runtime.exit(1));
+      void teardown()
+        .catch(() => {})
+        .finally(() => runtime.exit(1));
     });
   }
 }

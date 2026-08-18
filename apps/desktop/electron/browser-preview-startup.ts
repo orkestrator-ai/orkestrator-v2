@@ -73,23 +73,16 @@ export function initializeBrowserPreviews({
     focusAddressBar,
   });
   browserSession.setPermissionCheckHandler(() => false);
-  browserSession.setPermissionRequestHandler(
-    (webContents, permission, callback, details) => {
-      callback(
-        permission === CLIPBOARD_WRITE_PERMISSION
-          && details.isMainFrame
-          && manager.consumeClipboardWriteUserActivation(
-            webContents,
-            details.requestingUrl,
-          ),
-      );
-    },
-  );
-  installRemoteGatewayRequestAuth(
-    browserSession.webRequest,
-    getAuthorization,
-    { browserPreviewOnly: true },
-  );
+  browserSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+    callback(
+      permission === CLIPBOARD_WRITE_PERMISSION &&
+        details.isMainFrame &&
+        manager.consumeClipboardWriteUserActivation(webContents, details.requestingUrl),
+    );
+  });
+  installRemoteGatewayRequestAuth(browserSession.webRequest, getAuthorization, {
+    browserPreviewOnly: true,
+  });
   return { manager, browserSession };
 }
 
@@ -133,10 +126,8 @@ export function registerBrowserPreviewWindowActivation({
     if (getWindowCount() !== 0 || windowCreation) return;
     const attempt = Promise.resolve().then(createWindow);
     windowCreation = attempt;
-    void attempt
-      .catch(onCreateError)
-      .finally(() => {
-        if (windowCreation === attempt) windowCreation = null;
-      });
+    void attempt.catch(onCreateError).finally(() => {
+      if (windowCreation === attempt) windowCreation = null;
+    });
   });
 }

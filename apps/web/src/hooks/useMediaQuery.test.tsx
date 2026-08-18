@@ -11,9 +11,15 @@ class MatchMediaController {
   }
 
   asMediaQueryList(query: string): MediaQueryList {
+    // The getter below sits on the returned object literal, where `this` is
+    // that literal rather than the controller, so the alias is the only way to
+    // read the live value.
+    // oxlint-disable-next-line typescript/no-this-alias
     const controller = this;
     return {
-      get matches() { return controller.matches; },
+      get matches() {
+        return controller.matches;
+      },
       media: query,
       onchange: null,
       addEventListener: (_type: "change", listener: EventListenerOrEventListenerObject) =>
@@ -62,10 +68,9 @@ describe("useMediaQuery", () => {
     const first = new MatchMediaController(false);
     const second = new MatchMediaController(true);
     window.matchMedia = (query) => (query.includes("767") ? first : second).asMediaQueryList(query);
-    const { result, rerender, unmount } = renderHook(
-      ({ query }) => useMediaQuery(query),
-      { initialProps: { query: "(max-width: 767px)" } },
-    );
+    const { result, rerender, unmount } = renderHook(({ query }) => useMediaQuery(query), {
+      initialProps: { query: "(max-width: 767px)" },
+    });
 
     expect(first.listeners.size).toBe(1);
     rerender({ query: "(max-width: 1024px)" });

@@ -16,10 +16,12 @@ function createChild(pid = 100): ChildProcessWithoutNullStreams {
   } as unknown as ChildProcessWithoutNullStreams;
 }
 
-function createRuntime(options: {
-  descendants?: number[];
-  exitOn?: ProcessTreeSignal;
-} = {}): {
+function createRuntime(
+  options: {
+    descendants?: number[];
+    exitOn?: ProcessTreeSignal;
+  } = {},
+): {
   runtime: ProcessTreeRuntime;
   signals: Array<[target: string | number, signal: ProcessTreeSignal]>;
 } {
@@ -52,26 +54,33 @@ function createRuntime(options: {
 
 describe("process-tree termination", () => {
   test("parses every recursive descendant and ignores malformed process rows", () => {
-    expect(parseProcessTable(`
+    expect(
+      parseProcessTable(
+        `
       10 1
       11 10
       malformed
       12 11
       13 10
       14 999
-    `, 10)).toEqual([11, 13, 12]);
+    `,
+        10,
+      ),
+    ).toEqual([11, 13, 12]);
   });
 
   test("stops the direct child, its process group, and detached descendants with SIGTERM", async () => {
     const child = createChild();
     const { runtime, signals } = createRuntime({ exitOn: "SIGTERM" });
 
-    await expect(terminateProcessTree(child, {
-      graceMs: 10,
-      killWaitMs: 10,
-      pollIntervalMs: 1,
-      runtime,
-    })).resolves.toBe(true);
+    await expect(
+      terminateProcessTree(child, {
+        graceMs: 10,
+        killWaitMs: 10,
+        pollIntervalMs: 1,
+        runtime,
+      }),
+    ).resolves.toBe(true);
 
     expect(signals).toContainEqual(["group:100", "SIGTERM"]);
     expect(signals).toContainEqual([101, "SIGTERM"]);
@@ -84,12 +93,14 @@ describe("process-tree termination", () => {
     const child = createChild();
     const { runtime, signals } = createRuntime({ exitOn: "SIGKILL" });
 
-    await expect(terminateProcessTree(child, {
-      graceMs: 2,
-      killWaitMs: 2,
-      pollIntervalMs: 1,
-      runtime,
-    })).resolves.toBe(true);
+    await expect(
+      terminateProcessTree(child, {
+        graceMs: 2,
+        killWaitMs: 2,
+        pollIntervalMs: 1,
+        runtime,
+      }),
+    ).resolves.toBe(true);
 
     expect(runtime.listDescendants).toHaveBeenCalledTimes(2);
     expect(signals).toContainEqual(["group:100", "SIGKILL"]);
@@ -102,12 +113,14 @@ describe("process-tree termination", () => {
     const child = createChild();
     const { runtime } = createRuntime();
 
-    await expect(terminateProcessTree(child, {
-      graceMs: 1,
-      killWaitMs: 1,
-      pollIntervalMs: 1,
-      runtime,
-    })).resolves.toBe(false);
+    await expect(
+      terminateProcessTree(child, {
+        graceMs: 1,
+        killWaitMs: 1,
+        pollIntervalMs: 1,
+        runtime,
+      }),
+    ).resolves.toBe(false);
   });
 
   test("treats an already-exited child with no descendants as drained", async () => {
@@ -115,11 +128,13 @@ describe("process-tree termination", () => {
     child.exitCode = 0;
     const { runtime, signals } = createRuntime({ descendants: [] });
 
-    await expect(terminateProcessTree(child, {
-      graceMs: 1,
-      killWaitMs: 1,
-      runtime,
-    })).resolves.toBe(true);
+    await expect(
+      terminateProcessTree(child, {
+        graceMs: 1,
+        killWaitMs: 1,
+        runtime,
+      }),
+    ).resolves.toBe(true);
     expect(signals).toEqual([]);
   });
 });

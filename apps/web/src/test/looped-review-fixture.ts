@@ -24,13 +24,15 @@ export function loopedReviewFixture(
     currentRound: 1,
     currentPass: 0,
     phase: "preparing",
-    rounds: [{
-      round: 1,
-      allowance,
-      status: "preparing",
-      passes: [],
-      startedAt: timestamp,
-    }],
+    rounds: [
+      {
+        round: 1,
+        allowance,
+        status: "preparing",
+        passes: [],
+        startedAt: timestamp,
+      },
+    ],
     activePool: { issues: [], coverageGaps: [] },
     archivedPools: [],
     sessions: [],

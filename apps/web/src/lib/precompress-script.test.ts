@@ -1,14 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import {
-  chmod,
-  mkdtemp,
-  mkdir,
-  readFile,
-  readdir,
-  rm,
-  stat,
-  writeFile,
-} from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
@@ -41,9 +32,7 @@ async function writeFixture(
 
 afterEach(async () => {
   await Promise.all(
-    tempDirectories.splice(0).map((directory) =>
-      rm(directory, { recursive: true, force: true })
-    ),
+    tempDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })),
   );
 });
 
@@ -64,13 +53,7 @@ describe("precompress asset selection", () => {
       expect(shouldPrecompress(filePath)).toBe(true);
     }
 
-    for (const filePath of [
-      "font.woff2",
-      "photo.png",
-      "archive.bin",
-      "app.js.br",
-      "app.js.gz",
-    ]) {
+    for (const filePath of ["font.woff2", "photo.png", "archive.bin", "app.js.br", "app.js.gz"]) {
       expect(shouldPrecompress(filePath)).toBe(false);
     }
 
@@ -106,7 +89,7 @@ describe("precompressDirectory", () => {
       expect(gunzipSync(gzip).toString("utf8")).toBe(source);
     }
 
-    const walked = [...await Array.fromAsync(walk(root))]
+    const walked = [...(await Array.fromAsync(walk(root)))]
       .map((filePath) => path.relative(root, filePath))
       .sort();
     expect(walked).toContain("nested/styles/app.css");
@@ -144,10 +127,8 @@ describe("precompressDirectory", () => {
       processedFileCount: 0,
     });
     expect(await readFile(path.join(root, "assets/font.woff2"))).toEqual(font);
-    expect(await readFile(path.join(root, "assets/orphan.js.br"), "utf8"))
-      .toBe("existing Brotli");
-    expect(await readFile(path.join(root, "assets/orphan.js.gz"), "utf8"))
-      .toBe("existing gzip");
+    expect(await readFile(path.join(root, "assets/orphan.js.br"), "utf8")).toBe("existing Brotli");
+    expect(await readFile(path.join(root, "assets/orphan.js.gz"), "utf8")).toBe("existing gzip");
     expect((await readdir(path.join(root, "assets"))).sort()).toEqual([
       "font.woff2",
       "orphan.js.br",
@@ -170,9 +151,7 @@ describe("precompressDirectory failure handling", () => {
     const root = await createTempDirectory();
     const notADirectory = await writeFixture(root, "dist", "not a directory");
 
-    await expect(precompressDirectory(notADirectory)).rejects.toThrow(
-      /is not a directory/,
-    );
+    await expect(precompressDirectory(notADirectory)).rejects.toThrow(/is not a directory/);
   });
 
   test("surfaces an unreadable asset instead of silently skipping it", async () => {
@@ -212,9 +191,7 @@ describe("main", () => {
       console.log = originalLog;
     }
 
-    expect(logged).toEqual([
-      `[precompress] Wrote 2 compressed asset variants in ${root}`,
-    ]);
+    expect(logged).toEqual([`[precompress] Wrote 2 compressed asset variants in ${root}`]);
   });
 
   test("does not compress anything when the module is merely imported", () => {
@@ -222,10 +199,10 @@ describe("main", () => {
     // the module for its helpers would compress the real dist/ as a side
     // effect — or throw when dist/ does not exist yet.
     const scriptPath = path.resolve(import.meta.dir, "../../scripts/precompress.ts");
-    const imported = Bun.spawnSync(
-      ["bun", "-e", `await import(${JSON.stringify(scriptPath)})`],
-      { stdout: "pipe", stderr: "pipe" },
-    );
+    const imported = Bun.spawnSync(["bun", "-e", `await import(${JSON.stringify(scriptPath)})`], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
 
     expect(imported.exitCode).toBe(0);
     expect(new TextDecoder().decode(imported.stdout)).toBe("");
@@ -235,9 +212,9 @@ describe("main", () => {
 describe("web build asset contract", () => {
   test("runs precompression after Vite and references bundled WOFF2 fonts", async () => {
     const webRoot = path.resolve(import.meta.dir, "../..");
-    const packageJson = JSON.parse(
-      await readFile(path.join(webRoot, "package.json"), "utf8"),
-    ) as { scripts?: { build?: string } };
+    const packageJson = JSON.parse(await readFile(path.join(webRoot, "package.json"), "utf8")) as {
+      scripts?: { build?: string };
+    };
     expect(packageJson.scripts?.build).toBe(
       "bunx tsc && bunx vite build && bun run scripts/precompress.ts",
     );

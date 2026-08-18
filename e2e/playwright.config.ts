@@ -16,7 +16,8 @@ export default defineConfig({
   reporter: "line",
   outputDir: path.join(repositoryRoot, "output/playwright/test-results"),
   webServer: {
-    command: "bunx vite ../../e2e/fixture --config vite.config.ts --host 127.0.0.1 --port 1422 --strictPort",
+    command:
+      "bunx vite ../../e2e/fixture --config vite.config.ts --host 127.0.0.1 --port 1422 --strictPort",
     cwd: path.join(repositoryRoot, "apps/web"),
     url: baseURL,
     reuseExistingServer: !process.env.CI,

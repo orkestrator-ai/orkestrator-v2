@@ -94,11 +94,8 @@ describe("TaskRegistry", () => {
     create(registry, "1", "Probe A");
 
     expect(
-      registry.apply(
-        "TaskUpdate",
-        { taskId: "1", owner: "probe-agent" },
-        "Updated task #1 owner",
-      )?.items,
+      registry.apply("TaskUpdate", { taskId: "1", owner: "probe-agent" }, "Updated task #1 owner")
+        ?.items,
     ).toEqual([{ id: "1", subject: "Probe A", status: "pending" }]);
   });
 
@@ -168,8 +165,7 @@ describe("TaskRegistry", () => {
     const registry = new TaskRegistry();
 
     expect(
-      registry.apply("TaskList", {}, "#1 [in progress] Spaced\n#2 [in-progress] Hyphenated")
-        ?.items,
+      registry.apply("TaskList", {}, "#1 [in progress] Spaced\n#2 [in-progress] Hyphenated")?.items,
     ).toEqual([
       { id: "1", subject: "Spaced", status: "in_progress" },
       { id: "2", subject: "Hyphenated", status: "in_progress" },
@@ -182,9 +178,9 @@ describe("TaskRegistry", () => {
     // from TaskList's owner suffix, so the created subject must win.
     create(registry, "1", "Fix parser (edge cases)");
 
-    expect(registry.apply("TaskList", {}, "#1 [pending] Fix parser (edge cases)")?.items).toEqual(
-      [{ id: "1", subject: "Fix parser (edge cases)", status: "pending" }],
-    );
+    expect(registry.apply("TaskList", {}, "#1 [pending] Fix parser (edge cases)")?.items).toEqual([
+      { id: "1", subject: "Fix parser (edge cases)", status: "pending" },
+    ]);
   });
 
   test("drops tasks that TaskList no longer reports", () => {
@@ -229,9 +225,7 @@ describe("TaskRegistry", () => {
     // fall back to the raw output rather than render a list as fact.
     expect(registry.apply("TaskList", {}, "Something unexpected")).toBeUndefined();
     // ...and the state it already had survives untouched.
-    expect(registry.snapshot().items).toEqual([
-      { id: "1", subject: "Keep me", status: "pending" },
-    ]);
+    expect(registry.snapshot().items).toEqual([{ id: "1", subject: "Keep me", status: "pending" }]);
   });
 
   test("reconciles a single task from TaskGet", () => {
@@ -244,9 +238,7 @@ describe("TaskRegistry", () => {
       "Task #3: Probe B\nStatus: in_progress\nDescription: Second probe task\nBlocked by: #2",
     );
 
-    expect(snapshot?.items).toEqual([
-      { id: "3", subject: "Probe B", status: "in_progress" },
-    ]);
+    expect(snapshot?.items).toEqual([{ id: "3", subject: "Probe B", status: "in_progress" }]);
     // A read changes nothing, so no row is highlighted as changed.
     expect(snapshot?.changedTaskId).toBeUndefined();
   });
@@ -255,9 +247,9 @@ describe("TaskRegistry", () => {
     const registry = new TaskRegistry();
     create(registry, "3", "Known subject");
 
-    expect(
-      registry.apply("TaskGet", { taskId: "3" }, "Status: completed")?.items,
-    ).toEqual([{ id: "3", subject: "Known subject", status: "completed" }]);
+    expect(registry.apply("TaskGet", { taskId: "3" }, "Status: completed")?.items).toEqual([
+      { id: "3", subject: "Known subject", status: "completed" },
+    ]);
   });
 
   test("reports no snapshot for a TaskGet that yields nothing usable", () => {
@@ -286,23 +278,23 @@ describe("TaskRegistry", () => {
         "Updated task #7 status",
       );
 
-      expect(snapshot?.items).toEqual([
-        { id: "7", subject: "Task #7", status: "in_progress" },
-      ]);
+      expect(snapshot?.items).toEqual([{ id: "7", subject: "Task #7", status: "in_progress" }]);
       expect(snapshot?.complete).toBe(false);
     });
 
     test("a TaskGet for an unknown task marks the list incomplete", () => {
       const registry = new TaskRegistry();
 
-      expect(
-        registry.apply("TaskGet", { taskId: "7" }, "Status: pending")?.complete,
-      ).toBe(false);
+      expect(registry.apply("TaskGet", { taskId: "7" }, "Status: pending")?.complete).toBe(false);
     });
 
     test("a later TaskList repairs both the subject and the completeness", () => {
       const registry = new TaskRegistry();
-      registry.apply("TaskUpdate", { taskId: "7", status: "in_progress" }, "Updated task #7 status");
+      registry.apply(
+        "TaskUpdate",
+        { taskId: "7", status: "in_progress" },
+        "Updated task #7 status",
+      );
 
       const snapshot = registry.apply("TaskList", {}, "#7 [in_progress] Real subject");
 
@@ -362,7 +354,11 @@ describe("TaskRegistry", () => {
       for (const registry of [once, twice, twice]) {
         create(registry, "1", "Alpha");
         create(registry, "2", "Beta");
-        registry.apply("TaskUpdate", { taskId: "1", status: "completed" }, "Updated task #1 status");
+        registry.apply(
+          "TaskUpdate",
+          { taskId: "1", status: "completed" },
+          "Updated task #1 status",
+        );
       }
 
       expect(twice.snapshot()).toEqual(once.snapshot());
@@ -463,9 +459,11 @@ describe("TASK_SNAPSHOT_STATUSES", () => {
       }
     };
 
-    expect(["pending", "in_progress", "completed"].every(
-      (status) => witness(status as TaskSnapshotStatus),
-    )).toBe(true);
+    expect(
+      ["pending", "in_progress", "completed"].every((status) =>
+        witness(status as TaskSnapshotStatus),
+      ),
+    ).toBe(true);
     expect(TASK_SNAPSHOT_STATUSES).toHaveLength(seen.size);
     expect(seen.size).toBe(3);
   });

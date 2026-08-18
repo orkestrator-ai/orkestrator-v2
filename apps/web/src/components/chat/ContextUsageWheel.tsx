@@ -8,9 +8,7 @@ interface ContextUsageWheelProps {
 }
 
 export function ContextUsageWheel({ usage, className }: ContextUsageWheelProps) {
-  const percentRounded = usage
-    ? Math.max(0, Math.min(100, Math.round(usage.percentUsed)))
-    : 0;
+  const percentRounded = usage ? Math.max(0, Math.min(100, Math.round(usage.percentUsed))) : 0;
   const percentLeft = Math.max(0, 100 - percentRounded);
 
   return (
@@ -23,15 +21,11 @@ export function ContextUsageWheel({ usage, className }: ContextUsageWheelProps) 
             usage ? "text-foreground" : "text-muted-foreground/50",
             className,
           )}
-          aria-label={usage
-            ? `Context window ${percentRounded}% used`
-            : "Context window usage unavailable"}
+          aria-label={
+            usage ? `Context window ${percentRounded}% used` : "Context window usage unavailable"
+          }
         >
-          <svg
-            aria-hidden="true"
-            className="h-5 w-5 -rotate-90"
-            viewBox="0 0 20 20"
-          >
+          <svg aria-hidden="true" className="h-5 w-5 -rotate-90" viewBox="0 0 20 20">
             <circle
               cx="10"
               cy="10"
@@ -65,14 +59,13 @@ export function ContextUsageWheel({ usage, className }: ContextUsageWheelProps) 
               {percentRounded}% used ({percentLeft}% left)
             </div>
             <div>
-              {formatTokenCount(usage.usedTokens)} / {formatTokenCount(usage.totalTokens)} tokens used
+              {formatTokenCount(usage.usedTokens)} / {formatTokenCount(usage.totalTokens)} tokens
+              used
             </div>
             {usage.modelId && <div className="text-muted-foreground">Model: {usage.modelId}</div>}
           </>
         ) : (
-          <div className="text-muted-foreground">
-            Usage is not available yet.
-          </div>
+          <div className="text-muted-foreground">Usage is not available yet.</div>
         )}
       </TooltipContent>
     </Tooltip>

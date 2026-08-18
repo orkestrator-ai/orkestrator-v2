@@ -159,9 +159,9 @@ export function syncCursorChildTranscriptParts(
   // leave with it rather than sit alongside the real ones forever.
   const existing = owner.parts.filter((part) => isCursorJsonlChildPart(part, child.toolUseId));
   if (!cursorJsonlPartsEqual(existing, next)) {
-    owner.parts = [
-      ...owner.parts.filter((candidate) => !isCursorJsonlChildPart(candidate, child.toolUseId)),
-    ];
+    owner.parts = owner.parts.filter(
+      (candidate) => !isCursorJsonlChildPart(candidate, child.toolUseId),
+    );
     const parentIndex = owner.parts.indexOf(parent);
     const insertAt = parentIndex >= 0 ? parentIndex + 1 : owner.parts.length;
     owner.parts.splice(insertAt, 0, ...next);
@@ -176,16 +176,17 @@ export function syncCursorChildTranscriptParts(
 
 function isCursorJsonlChildPart(part: BridgeMessagePart, parentToolUseId: string): boolean {
   // A projection is only ever a text or tool part; `file` has no parent link.
-  return part.type !== "file"
-    && isCursorJsonlPart(part)
-    && part.parentTaskUseId === parentToolUseId;
+  return (
+    part.type !== "file" && isCursorJsonlPart(part) && part.parentTaskUseId === parentToolUseId
+  );
 }
 
 function hasNativeNestedChildren(owner: BridgeMessage, parentToolUseId: string): boolean {
-  return owner.parts.some((part) =>
-    part.type === "tool-invocation"
-    && part.parentTaskUseId === parentToolUseId
-    && !isCursorJsonlPart(part),
+  return owner.parts.some(
+    (part) =>
+      part.type === "tool-invocation" &&
+      part.parentTaskUseId === parentToolUseId &&
+      !isCursorJsonlPart(part),
   );
 }
 
@@ -233,13 +234,14 @@ export function cursorChildTranscriptPrompt(contents: string): string | undefine
 }
 
 function userRecordText(content: unknown): string | undefined {
-  const raw = typeof content === "string"
-    ? content
-    : Array.isArray(content)
+  const raw =
+    typeof content === "string"
       ? content
-        .map((part) => (isObject(part) && typeof part.text === "string" ? part.text : ""))
-        .join("")
-      : "";
+      : Array.isArray(content)
+        ? content
+            .map((part) => (isObject(part) && typeof part.text === "string" ? part.text : ""))
+            .join("")
+        : "";
   // Cursor wraps the spawn prompt in `<user_query>` and prefixes a
   // `<timestamp>` envelope. Neither belongs on a card.
   const query = /<user_query>([\s\S]*?)<\/user_query>/.exec(raw)?.[1];
@@ -255,15 +257,19 @@ function cursorJsonlPartsEqual(
   return left.every((part, index) => {
     const other = right[index];
     if (!other) return false;
-    if (part.type !== other.type
-      || part.sourcePartId !== other.sourcePartId
-      || part.content !== other.content) {
+    if (
+      part.type !== other.type ||
+      part.sourcePartId !== other.sourcePartId ||
+      part.content !== other.content
+    ) {
       return false;
     }
     if (part.type === "tool-invocation" && other.type === "tool-invocation") {
-      return part.toolState === other.toolState
-        && part.toolName === other.toolName
-        && part.toolError === other.toolError;
+      return (
+        part.toolState === other.toolState &&
+        part.toolName === other.toolName &&
+        part.toolError === other.toolError
+      );
     }
     return true;
   });

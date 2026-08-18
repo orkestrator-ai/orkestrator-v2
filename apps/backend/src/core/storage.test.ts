@@ -8,11 +8,7 @@ import {
   defaultRepositoryConfig,
   StorageService,
 } from "./storage.js";
-import type {
-  AppConfig,
-  ClaudeModelCatalogEntry,
-  CodexModelCatalogEntry,
-} from "./models.js";
+import type { AppConfig, ClaudeModelCatalogEntry, CodexModelCatalogEntry } from "./models.js";
 import { MAX_CODEX_CONCURRENT_THREADS } from "./constants.js";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import type { PaneLayoutMergeInput } from "@orkestrator/protocol/pane-layout-merge";
@@ -53,8 +49,9 @@ describe("defaultConfig", () => {
 
   test("uses host GitHub CLI credentials by default", () => {
     expect(defaultConfig().global.useHostGitHubCredentials).toBe(true);
-    expectTypeOf<AppConfig["global"]["useHostGitHubCredentials"]>()
-      .toEqualTypeOf<boolean | undefined>();
+    expectTypeOf<AppConfig["global"]["useHostGitHubCredentials"]>().toEqualTypeOf<
+      boolean | undefined
+    >();
   });
 
   test("allows five concurrent Codex subagent threads by default", () => {
@@ -68,21 +65,13 @@ describe("defaultConfig", () => {
   });
 
   test("keeps legacy agent systems enabled for an existing unconfigured installation", () => {
-    expect(defaultConfig().global.enabledAgentPlatforms).toEqual([
-      "claude",
-      "codex",
-      "opencode",
-    ]);
+    expect(defaultConfig().global.enabledAgentPlatforms).toEqual(["claude", "codex", "opencode"]);
   });
 
   test("does not point defaults at any retired model id", () => {
     const { global } = defaultConfig();
     const selected = [global.opencodeModel, global.claudeModel, global.codexModel];
-    for (const retired of [
-      "opencode/grok-code",
-      "claude-sonnet-4-6",
-      "gpt-5.3-codex",
-    ]) {
+    for (const retired of ["opencode/grok-code", "claude-sonnet-4-6", "gpt-5.3-codex"]) {
       expect(selected).not.toContain(retired);
     }
   });
@@ -121,10 +110,12 @@ describe("first-run agent platform selection", () => {
 
   test("rejects an empty platform update and corrects a disabled default", async () => {
     await withTemporaryStorage(async (storage) => {
-      await expect(storage.updateGlobalConfig({
-        ...defaultConfig().global,
-        enabledAgentPlatforms: [],
-      })).rejects.toThrow("Select at least one agent platform");
+      await expect(
+        storage.updateGlobalConfig({
+          ...defaultConfig().global,
+          enabledAgentPlatforms: [],
+        }),
+      ).rejects.toThrow("Select at least one agent platform");
 
       const updated = await storage.updateGlobalConfig({
         ...defaultConfig().global,
@@ -309,12 +300,7 @@ describe("OpenCode model provider allowlist config", () => {
       );
 
       const providers = (await storage.loadConfig()).global.openCodeModelProviders;
-      expect(providers).toEqual([
-        "opencode",
-        "opencode-go",
-        "hpc-ai",
-        "openrouter",
-      ]);
+      expect(providers).toEqual(["opencode", "opencode-go", "hpc-ai", "openrouter"]);
     });
   });
 
@@ -338,9 +324,7 @@ describe("OpenCode model provider allowlist config", () => {
         openCodeModelProviders: ["opencode"],
       });
 
-      expect((await storage.loadConfig()).global.openCodeModelProviders).toEqual([
-        "opencode",
-      ]);
+      expect((await storage.loadConfig()).global.openCodeModelProviders).toEqual(["opencode"]);
     });
   });
 
@@ -360,8 +344,9 @@ describe("OpenCode model provider allowlist config", () => {
       });
 
       // Their own favourite, not an invented model.
-      expect((await storage.loadConfig()).global.opencodeModel)
-        .toBe("opencode-go/deepseek-v4-flash");
+      expect((await storage.loadConfig()).global.opencodeModel).toBe(
+        "opencode-go/deepseek-v4-flash",
+      );
     });
   });
 
@@ -373,8 +358,7 @@ describe("OpenCode model provider allowlist config", () => {
         favoriteModels: [{ platform: "opencode", modelId: "openrouter/kimi-k2.5" }],
       });
 
-      expect((await storage.loadConfig()).global.opencodeModel)
-        .toBe("opencode/claude-sonnet-5");
+      expect((await storage.loadConfig()).global.opencodeModel).toBe("opencode/claude-sonnet-5");
     });
   });
 
@@ -389,8 +373,9 @@ describe("OpenCode model provider allowlist config", () => {
         ],
       });
 
-      expect((await storage.loadConfig()).global.opencodeModel)
-        .toBe("opencode-go/deepseek-v4-flash");
+      expect((await storage.loadConfig()).global.opencodeModel).toBe(
+        "opencode-go/deepseek-v4-flash",
+      );
     });
   });
 
@@ -404,9 +389,7 @@ describe("OpenCode model provider allowlist config", () => {
         {
           opencodeModel: "opencode/claude-sonnet-5",
           openCodeModelProviders: ["opencode", "opencode-go"],
-          favoriteModels: [
-            { platform: "opencode", modelId: "opencode-go/deepseek-v4-flash" },
-          ],
+          favoriteModels: [{ platform: "opencode", modelId: "opencode-go/deepseek-v4-flash" }],
         },
         {
           "repo-explicit": {
@@ -419,8 +402,9 @@ describe("OpenCode model provider allowlist config", () => {
       );
 
       const config = await storage.loadConfig();
-      expect(config.repositories["repo-explicit"]?.defaultModel)
-        .toBe("opencode-go/deepseek-v4-flash");
+      expect(config.repositories["repo-explicit"]?.defaultModel).toBe(
+        "opencode-go/deepseek-v4-flash",
+      );
       // The rest of the repository record survives the rewrite.
       expect(config.repositories["repo-explicit"]?.defaultBranch).toBe("main");
     });
@@ -447,8 +431,9 @@ describe("OpenCode model provider allowlist config", () => {
       );
 
       // No selectable favourite, so it lands on the shipped default.
-      expect((await storage.loadConfig()).repositories["repo-inherited"]?.defaultModel)
-        .toBe("opencode/claude-sonnet-5");
+      expect((await storage.loadConfig()).repositories["repo-inherited"]?.defaultModel).toBe(
+        "opencode/claude-sonnet-5",
+      );
     });
   });
 
@@ -459,9 +444,7 @@ describe("OpenCode model provider allowlist config", () => {
         {
           opencodeModel: "opencode/claude-sonnet-5",
           openCodeModelProviders: ["opencode", "opencode-go"],
-          favoriteModels: [
-            { platform: "opencode", modelId: "opencode-go/deepseek-v4-flash" },
-          ],
+          favoriteModels: [{ platform: "opencode", modelId: "opencode-go/deepseek-v4-flash" }],
         },
         {
           // The field holds one id shared by every agent. A Claude repository's
@@ -483,8 +466,7 @@ describe("OpenCode model provider allowlist config", () => {
       );
 
       const config = await storage.loadConfig();
-      expect(config.repositories["repo-claude"]?.defaultModel)
-        .toBe("vendor/claude-sonnet-5");
+      expect(config.repositories["repo-claude"]?.defaultModel).toBe("vendor/claude-sonnet-5");
       expect(config.repositories["repo-sentinel"]?.defaultModel).toBe("default");
     });
   });
@@ -499,8 +481,9 @@ describe("OpenCode model provider allowlist config", () => {
 
       // Inventing a model the user never picked would be worse than leaving the
       // one they can still see in settings.
-      expect((await storage.loadConfig()).global.opencodeModel)
-        .toBe("hpc-ai/deepseek/deepseek-v4-flash");
+      expect((await storage.loadConfig()).global.opencodeModel).toBe(
+        "hpc-ai/deepseek/deepseek-v4-flash",
+      );
     });
   });
 
@@ -513,8 +496,9 @@ describe("OpenCode model provider allowlist config", () => {
         favoriteModels: [{ platform: "opencode", modelId: "opencode-go/deepseek-v4-flash" }],
       });
 
-      expect((await storage.loadConfig()).global.opencodeModel)
-        .toBe("hpc-ai/deepseek/deepseek-v4-flash");
+      expect((await storage.loadConfig()).global.opencodeModel).toBe(
+        "hpc-ai/deepseek/deepseek-v4-flash",
+      );
     });
   });
 
@@ -595,10 +579,7 @@ describe("backend-owned setup and build surfaces", () => {
         delete record.setupOverride;
         return record;
       });
-      await fs.writeFile(
-        path.join(dataDir, "environments.json"),
-        `${JSON.stringify(legacy)}\n`,
-      );
+      await fs.writeFile(path.join(dataDir, "environments.json"), `${JSON.stringify(legacy)}\n`);
 
       const restarted = new StorageService(dataDir);
       await restarted.init();
@@ -623,10 +604,12 @@ describe("backend-owned setup and build surfaces", () => {
       expect(first.root).toMatchObject({
         kind: "leaf",
         activeTabId: "build-pipeline-1",
-        tabs: [{
-          type: "claude-build",
-          buildTabData: { pipelineId: "pipeline-1", taskId: "task-1" },
-        }],
+        tabs: [
+          {
+            type: "claude-build",
+            buildTabData: { pipelineId: "pipeline-1", taskId: "task-1" },
+          },
+        ],
       });
 
       const second = await storage.ensureBuildPipelineTab({
@@ -698,28 +681,32 @@ describe("backend-owned setup and build surfaces", () => {
         environmentId: environment.id,
         agent: "codex",
       });
-      await storage.savePaneLayout(environment.id, {
-        version: PANE_LAYOUT_VERSION,
-        containerId: null,
-        activePaneId: "default",
-        root: {
-          kind: "leaf",
-          id: "default",
-          tabs: [
-            { id: "default", type: "plain", isSetupTab: true },
-            {
-              id: "startup-agent",
-              type: "agent-native",
-              nativeAgentData: {
-                platform: "codex",
-                environmentId: environment.id,
-                isLocal: true,
+      await storage.savePaneLayout(
+        environment.id,
+        {
+          version: PANE_LAYOUT_VERSION,
+          containerId: null,
+          activePaneId: "default",
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [
+              { id: "default", type: "plain", isSetupTab: true },
+              {
+                id: "startup-agent",
+                type: "agent-native",
+                nativeAgentData: {
+                  platform: "codex",
+                  environmentId: environment.id,
+                  isLocal: true,
+                },
               },
-            },
-          ],
-          activeTabId: "default",
+            ],
+            activeTabId: "default",
+          },
         },
-      }, 1);
+        1,
+      );
 
       const republished = await storage.ensureStartupNativeAgentTab({
         environmentId: environment.id,
@@ -752,28 +739,32 @@ describe("backend-owned setup and build surfaces", () => {
         environmentId: environment.id,
         agent: "codex",
       });
-      await storage.savePaneLayout(environment.id, {
-        version: PANE_LAYOUT_VERSION,
-        containerId: null,
-        activePaneId: "default",
-        root: {
-          kind: "leaf",
-          id: "default",
-          tabs: [
-            { id: "default", type: "plain", isSetupTab: true },
-            {
-              id: "startup-agent",
-              type: "agent-native",
-              nativeAgentData: {
-                platform: "codex",
-                environmentId: environment.id,
-                isLocal: true,
+      await storage.savePaneLayout(
+        environment.id,
+        {
+          version: PANE_LAYOUT_VERSION,
+          containerId: null,
+          activePaneId: "default",
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [
+              { id: "default", type: "plain", isSetupTab: true },
+              {
+                id: "startup-agent",
+                type: "agent-native",
+                nativeAgentData: {
+                  platform: "codex",
+                  environmentId: environment.id,
+                  isLocal: true,
+                },
               },
-            },
-          ],
-          activeTabId: "default",
+            ],
+            activeTabId: "default",
+          },
         },
-      }, 1);
+        1,
+      );
       await storage.updateEnvironment(environment.id, {
         setupPhase: "ready",
         setupScriptsComplete: true,
@@ -804,29 +795,33 @@ describe("backend-owned setup and build surfaces", () => {
       environment.setupPhase = "ready";
       environment.setupScriptsComplete = true;
       await storage.addEnvironment(environment);
-      await storage.savePaneLayout(environment.id, {
-        version: PANE_LAYOUT_VERSION,
-        containerId: null,
-        activePaneId: "default",
-        root: {
-          kind: "leaf",
-          id: "default",
-          tabs: [
-            { id: "default", type: "plain", isSetupTab: true },
-            { id: "notes", type: "file" },
-            {
-              id: "startup-agent",
-              type: "agent-native",
-              nativeAgentData: {
-                platform: "codex",
-                environmentId: environment.id,
-                isLocal: true,
+      await storage.savePaneLayout(
+        environment.id,
+        {
+          version: PANE_LAYOUT_VERSION,
+          containerId: null,
+          activePaneId: "default",
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [
+              { id: "default", type: "plain", isSetupTab: true },
+              { id: "notes", type: "file" },
+              {
+                id: "startup-agent",
+                type: "agent-native",
+                nativeAgentData: {
+                  platform: "codex",
+                  environmentId: environment.id,
+                  isLocal: true,
+                },
               },
-            },
-          ],
-          activeTabId: "notes",
+            ],
+            activeTabId: "notes",
+          },
         },
-      }, 0);
+        0,
+      );
 
       const republished = await storage.ensureStartupNativeAgentTab({
         environmentId: environment.id,
@@ -850,29 +845,33 @@ describe("backend-owned setup and build surfaces", () => {
       // The state a launch retry loop republishes against: the handoff already
       // happened, the user has since gone back to the setup terminal, and the
       // tab already carries this provider session.
-      await storage.savePaneLayout(environment.id, {
-        version: PANE_LAYOUT_VERSION,
-        containerId: null,
-        activePaneId: "default",
-        root: {
-          kind: "leaf",
-          id: "default",
-          tabs: [
-            { id: "default", type: "plain", isSetupTab: true },
-            {
-              id: "startup-agent",
-              type: "agent-native",
-              nativeAgentData: {
-                platform: "codex",
-                environmentId: environment.id,
-                isLocal: true,
-                sessionId: "codex-session-1",
+      await storage.savePaneLayout(
+        environment.id,
+        {
+          version: PANE_LAYOUT_VERSION,
+          containerId: null,
+          activePaneId: "default",
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [
+              { id: "default", type: "plain", isSetupTab: true },
+              {
+                id: "startup-agent",
+                type: "agent-native",
+                nativeAgentData: {
+                  platform: "codex",
+                  environmentId: environment.id,
+                  isLocal: true,
+                  sessionId: "codex-session-1",
+                },
               },
-            },
-          ],
-          activeTabId: "default",
+            ],
+            activeTabId: "default",
+          },
         },
-      }, 0);
+        0,
+      );
 
       const before = await storage.getPaneLayout(environment.id);
 
@@ -907,42 +906,46 @@ describe("backend-owned setup and build surfaces", () => {
       environment.setupPhase = "ready";
       environment.setupScriptsComplete = true;
       await storage.addEnvironment(environment);
-      await storage.savePaneLayout(environment.id, {
-        version: PANE_LAYOUT_VERSION,
-        containerId: null,
-        activePaneId: "left",
-        root: {
-          kind: "split",
-          id: "split-1",
-          direction: "horizontal",
-          sizes: [0.5, 0.5],
-          children: [
-            {
-              kind: "leaf",
-              id: "left",
-              tabs: [{ id: "default", type: "plain", isSetupTab: true }],
-              activeTabId: "default",
-            },
-            {
-              kind: "leaf",
-              id: "right",
-              tabs: [
-                { id: "notes", type: "plain" },
-                {
-                  id: "startup-agent",
-                  type: "agent-native",
-                  nativeAgentData: {
-                    platform: "codex",
-                    environmentId: environment.id,
-                    isLocal: true,
+      await storage.savePaneLayout(
+        environment.id,
+        {
+          version: PANE_LAYOUT_VERSION,
+          containerId: null,
+          activePaneId: "left",
+          root: {
+            kind: "split",
+            id: "split-1",
+            direction: "horizontal",
+            sizes: [0.5, 0.5],
+            children: [
+              {
+                kind: "leaf",
+                id: "left",
+                tabs: [{ id: "default", type: "plain", isSetupTab: true }],
+                activeTabId: "default",
+              },
+              {
+                kind: "leaf",
+                id: "right",
+                tabs: [
+                  { id: "notes", type: "plain" },
+                  {
+                    id: "startup-agent",
+                    type: "agent-native",
+                    nativeAgentData: {
+                      platform: "codex",
+                      environmentId: environment.id,
+                      isLocal: true,
+                    },
                   },
-                },
-              ],
-              activeTabId: "notes",
-            },
-          ],
+                ],
+                activeTabId: "notes",
+              },
+            ],
+          },
         },
-      }, 0);
+        0,
+      );
 
       const republished = await storage.ensureStartupNativeAgentTab({
         environmentId: environment.id,
@@ -972,28 +975,32 @@ describe("backend-owned setup and build surfaces", () => {
       environment.setupScriptsComplete = false;
       environment.setupOverride = true;
       await storage.addEnvironment(environment);
-      await storage.savePaneLayout(environment.id, {
-        version: PANE_LAYOUT_VERSION,
-        containerId: null,
-        activePaneId: "default",
-        root: {
-          kind: "leaf",
-          id: "default",
-          tabs: [
-            { id: "default", type: "plain", isSetupTab: true },
-            {
-              id: "startup-agent",
-              type: "agent-native",
-              nativeAgentData: {
-                platform: "codex",
-                environmentId: environment.id,
-                isLocal: true,
+      await storage.savePaneLayout(
+        environment.id,
+        {
+          version: PANE_LAYOUT_VERSION,
+          containerId: null,
+          activePaneId: "default",
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [
+              { id: "default", type: "plain", isSetupTab: true },
+              {
+                id: "startup-agent",
+                type: "agent-native",
+                nativeAgentData: {
+                  platform: "codex",
+                  environmentId: environment.id,
+                  isLocal: true,
+                },
               },
-            },
-          ],
-          activeTabId: "default",
+            ],
+            activeTabId: "default",
+          },
         },
-      }, 0);
+        0,
+      );
 
       const handedOff = await storage.ensureStartupNativeAgentTab({
         environmentId: environment.id,
@@ -1012,20 +1019,24 @@ describe("backend-owned setup and build surfaces", () => {
       environment.environmentType = "local";
       environment.containerId = null;
       await storage.addEnvironment(environment);
-      await storage.savePaneLayout(environment.id, {
-        version: PANE_LAYOUT_VERSION,
-        containerId: null,
-        activePaneId: "default",
-        root: {
-          kind: "leaf",
-          id: "default",
-          tabs: [
-            { id: "default", type: "plain", isSetupTab: true },
-            { id: "startup-agent", type: "cursor" },
-          ],
-          activeTabId: "startup-agent",
+      await storage.savePaneLayout(
+        environment.id,
+        {
+          version: PANE_LAYOUT_VERSION,
+          containerId: null,
+          activePaneId: "default",
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [
+              { id: "default", type: "plain", isSetupTab: true },
+              { id: "startup-agent", type: "cursor" },
+            ],
+            activeTabId: "startup-agent",
+          },
         },
-      }, 0);
+        0,
+      );
 
       const repaired = await storage.ensureStartupNativeAgentTab({
         environmentId: environment.id,
@@ -1050,23 +1061,29 @@ describe("backend-owned setup and build surfaces", () => {
       withoutStartup.environmentType = "local";
       withoutStartup.containerId = null;
       await storage.addEnvironment(withoutStartup);
-      await storage.savePaneLayout(withoutStartup.id, {
-        version: PANE_LAYOUT_VERSION,
-        containerId: null,
-        activePaneId: "default",
-        root: {
-          kind: "leaf",
-          id: "default",
-          tabs: [{ id: "default", type: "plain" }],
-          activeTabId: "default",
+      await storage.savePaneLayout(
+        withoutStartup.id,
+        {
+          version: PANE_LAYOUT_VERSION,
+          containerId: null,
+          activePaneId: "default",
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [{ id: "default", type: "plain" }],
+            activeTabId: "default",
+          },
         },
-      }, 0);
-      await expect(storage.ensureStartupNativeAgentTab({
-        environmentId: withoutStartup.id,
-        agent: "cursor",
-        providerSessionId: "closed-session",
-        existingOnly: true,
-      })).resolves.toBeNull();
+        0,
+      );
+      await expect(
+        storage.ensureStartupNativeAgentTab({
+          environmentId: withoutStartup.id,
+          agent: "cursor",
+          providerSessionId: "closed-session",
+          existingOnly: true,
+        }),
+      ).resolves.toBeNull();
       expect((await storage.getPaneLayout(withoutStartup.id))?.revision).toBe(1);
     });
   });
@@ -1078,38 +1095,42 @@ describe("backend-owned setup and build surfaces", () => {
       environment.environmentType = "local";
       environment.containerId = null;
       await storage.addEnvironment(environment);
-      await storage.savePaneLayout(environment.id, {
-        version: PANE_LAYOUT_VERSION,
-        containerId: null,
-        activePaneId: "default",
-        root: {
-          kind: "leaf",
-          id: "default",
-          tabs: [
-            { id: "default", type: "plain", isSetupTab: true },
-            {
-              id: "startup-agent",
-              type: "cursor",
-              displayTitle: "Reviewer",
-              agentHandoffId: "handoff-1",
-              consumedAgentHandoffId: "handoff-0",
-              initialAgentModel: "chosen-model",
-              initialReasoningEffort: "high",
-              initialConversationMode: "plan",
-              initialFastMode: true,
-              isReviewTab: true,
-              // Payload for a tab kind this tab definitively is not.
-              initialCommands: ["echo stale"],
-              nativeAgentData: {
-                platform: "cursor",
-                environmentId: environment.id,
-                hostPort: 4321,
+      await storage.savePaneLayout(
+        environment.id,
+        {
+          version: PANE_LAYOUT_VERSION,
+          containerId: null,
+          activePaneId: "default",
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [
+              { id: "default", type: "plain", isSetupTab: true },
+              {
+                id: "startup-agent",
+                type: "cursor",
+                displayTitle: "Reviewer",
+                agentHandoffId: "handoff-1",
+                consumedAgentHandoffId: "handoff-0",
+                initialAgentModel: "chosen-model",
+                initialReasoningEffort: "high",
+                initialConversationMode: "plan",
+                initialFastMode: true,
+                isReviewTab: true,
+                // Payload for a tab kind this tab definitively is not.
+                initialCommands: ["echo stale"],
+                nativeAgentData: {
+                  platform: "cursor",
+                  environmentId: environment.id,
+                  hostPort: 4321,
+                },
               },
-            },
-          ],
-          activeTabId: "startup-agent",
+            ],
+            activeTabId: "startup-agent",
+          },
         },
-      }, 0);
+        0,
+      );
 
       const published = await storage.ensureStartupNativeAgentTab({
         environmentId: environment.id,
@@ -1117,9 +1138,11 @@ describe("backend-owned setup and build surfaces", () => {
         providerSessionId: "cursor-session-1",
       });
 
-      const startupTab = (published?.root as {
-        tabs: Array<Record<string, unknown>>;
-      }).tabs[1]!;
+      const startupTab = (
+        published!.root as {
+          tabs: Array<Record<string, unknown>>;
+        }
+      ).tabs[1]!;
       // Everything the backend does not own survives; only the native identity
       // is authored here. A wholesale rewrite silently dropped all of this.
       expect(startupTab).toMatchObject({
@@ -1152,30 +1175,34 @@ describe("backend-owned setup and build surfaces", () => {
       environment.environmentType = "local";
       environment.containerId = null;
       await storage.addEnvironment(environment);
-      await storage.savePaneLayout(environment.id, {
-        version: PANE_LAYOUT_VERSION,
-        containerId: null,
-        activePaneId: "default",
-        root: {
-          kind: "leaf",
-          id: "default",
-          tabs: [
-            { id: "default", type: "plain", isSetupTab: true },
-            {
-              id: "startup-agent",
-              type: "agent-native",
-              displayTitle: "Renamed by the user",
-              nativeAgentData: {
-                platform: "cursor",
-                environmentId: environment.id,
-                sessionId: "resumed-elsewhere",
-                isLocal: true,
+      await storage.savePaneLayout(
+        environment.id,
+        {
+          version: PANE_LAYOUT_VERSION,
+          containerId: null,
+          activePaneId: "default",
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [
+              { id: "default", type: "plain", isSetupTab: true },
+              {
+                id: "startup-agent",
+                type: "agent-native",
+                displayTitle: "Renamed by the user",
+                nativeAgentData: {
+                  platform: "cursor",
+                  environmentId: environment.id,
+                  sessionId: "resumed-elsewhere",
+                  isLocal: true,
+                },
               },
-            },
-          ],
-          activeTabId: "startup-agent",
+            ],
+            activeTabId: "startup-agent",
+          },
         },
-      }, 0);
+        0,
+      );
 
       // The repair runs on every backend start, so a tab that already holds the
       // native identity must not be rewritten toward a different session.
@@ -1234,31 +1261,35 @@ describe("backend-owned setup and build surfaces", () => {
       environment.environmentType = "local";
       environment.containerId = null;
       await storage.addEnvironment(environment);
-      await storage.savePaneLayout(environment.id, {
-        version: PANE_LAYOUT_VERSION,
-        containerId: null,
-        activePaneId: "left",
-        root: {
-          kind: "split",
-          id: "split-1",
-          direction: "horizontal",
-          sizes: [0.5, 0.5],
-          children: [
-            {
-              kind: "leaf",
-              id: "left",
-              tabs: [{ id: "default", type: "plain", isSetupTab: true }],
-              activeTabId: "default",
-            },
-            {
-              kind: "leaf",
-              id: "right",
-              tabs: [{ id: "startup-agent", type: "cursor" }],
-              activeTabId: "startup-agent",
-            },
-          ],
+      await storage.savePaneLayout(
+        environment.id,
+        {
+          version: PANE_LAYOUT_VERSION,
+          containerId: null,
+          activePaneId: "left",
+          root: {
+            kind: "split",
+            id: "split-1",
+            direction: "horizontal",
+            sizes: [0.5, 0.5],
+            children: [
+              {
+                kind: "leaf",
+                id: "left",
+                tabs: [{ id: "default", type: "plain", isSetupTab: true }],
+                activeTabId: "default",
+              },
+              {
+                kind: "leaf",
+                id: "right",
+                tabs: [{ id: "startup-agent", type: "cursor" }],
+                activeTabId: "startup-agent",
+              },
+            ],
+          },
         },
-      }, 0);
+        0,
+      );
 
       const published = await storage.ensureStartupNativeAgentTab({
         environmentId: environment.id,
@@ -1274,11 +1305,13 @@ describe("backend-owned setup and build surfaces", () => {
           { id: "left", tabs: [{ id: "default" }] },
           {
             id: "right",
-            tabs: [{
-              id: "startup-agent",
-              type: "agent-native",
-              nativeAgentData: { sessionId: "cursor-session-1" },
-            }],
+            tabs: [
+              {
+                id: "startup-agent",
+                type: "agent-native",
+                nativeAgentData: { sessionId: "cursor-session-1" },
+              },
+            ],
           },
         ],
       });
@@ -1299,9 +1332,11 @@ describe("backend-owned setup and build surfaces", () => {
         environmentId: environment.id,
         agent: "codex",
       });
-      const startupTab = (published?.root as {
-        tabs: Array<Record<string, unknown>>;
-      }).tabs[1]!;
+      const startupTab = (
+        published!.root as {
+          tabs: Array<Record<string, unknown>>;
+        }
+      ).tabs[1]!;
       expect(startupTab.nativeAgentData).toEqual({
         platform: "codex",
         environmentId: environment.id,
@@ -1314,9 +1349,13 @@ describe("backend-owned setup and build surfaces", () => {
         agent: "codex",
         providerSessionId: "codex-session-1",
       });
-      expect((rebound?.root as {
-        tabs: Array<Record<string, unknown>>;
-      }).tabs[1]!.nativeAgentData).toEqual({
+      expect(
+        (
+          rebound!.root as {
+            tabs: Array<Record<string, unknown>>;
+          }
+        ).tabs[1]!.nativeAgentData,
+      ).toEqual({
         platform: "codex",
         environmentId: environment.id,
         isLocal: false,
@@ -1340,19 +1379,25 @@ describe("backend-owned setup and build surfaces", () => {
       };
       const baseBytes = Buffer.byteLength(JSON.stringify(root), "utf8");
       root.padding = "x".repeat(256 * 1024 - baseBytes - 32);
-      await storage.savePaneLayout(environment.id, {
-        version: PANE_LAYOUT_VERSION,
-        containerId: null,
-        activePaneId: "default",
-        root,
-      }, 0);
+      await storage.savePaneLayout(
+        environment.id,
+        {
+          version: PANE_LAYOUT_VERSION,
+          containerId: null,
+          activePaneId: "default",
+          root,
+        },
+        0,
+      );
 
-      await expect(storage.ensureBuildPipelineTab({
-        pipelineId: "pipeline-overflow",
-        taskId: "task-overflow",
-        environmentId: environment.id,
-        isLocal: true,
-      })).rejects.toThrow("Pane layout root exceeds the 256 KB limit");
+      await expect(
+        storage.ensureBuildPipelineTab({
+          pipelineId: "pipeline-overflow",
+          taskId: "task-overflow",
+          environmentId: environment.id,
+          isLocal: true,
+        }),
+      ).rejects.toThrow("Pane layout root exceeds the 256 KB limit");
       expect((await storage.getPaneLayout(environment.id))?.revision).toBe(1);
     });
   });
@@ -1376,12 +1421,16 @@ describe("backend-owned setup and build surfaces", () => {
       const environment = createEnvironment("project-1");
       environment.id = "env-layout-backup";
       await storage.addEnvironment(environment);
-      const saved = await storage.savePaneLayout(environment.id, {
-        version: PANE_LAYOUT_VERSION,
-        containerId: null,
-        activePaneId: "default",
-        root: { kind: "leaf", id: "default", tabs: [], activeTabId: null },
-      }, 0);
+      const saved = await storage.savePaneLayout(
+        environment.id,
+        {
+          version: PANE_LAYOUT_VERSION,
+          containerId: null,
+          activePaneId: "default",
+          root: { kind: "leaf", id: "default", tabs: [], activeTabId: null },
+        },
+        0,
+      );
       const filePath = path.join(dataDir, "pane-layouts.json");
       await fs.writeFile(
         `${filePath}.bak.1`,
@@ -1399,10 +1448,7 @@ describe("backend-owned setup and build surfaces", () => {
 });
 
 describe("pane layout intent persistence", () => {
-  const layout = (
-    activeTabId: string | null,
-    tabs = ["tab-a", "tab-b"],
-  ): PaneLayoutMergeInput => ({
+  const layout = (activeTabId: string | null, tabs = ["tab-a", "tab-b"]): PaneLayoutMergeInput => ({
     version: PANE_LAYOUT_VERSION,
     containerId: null,
     activePaneId: "pane-1",
@@ -1433,11 +1479,7 @@ describe("pane layout intent persistence", () => {
       await storage.addEnvironment(environment);
       const base = layout("tab-a");
 
-      const initial = await storage.applyPaneLayoutIntent(
-        environment.id,
-        base,
-        base,
-      );
+      const initial = await storage.applyPaneLayoutIntent(environment.id, base, base);
       expect(initial).toMatchObject({
         environmentId: environment.id,
         containerId: null,
@@ -1445,12 +1487,10 @@ describe("pane layout intent persistence", () => {
         root: base.root,
       });
 
-      const selected = await storage.applyPaneLayoutIntent(
-        environment.id,
-        base,
-        base,
-        { activePaneId: "pane-1", activeTabIds: { "pane-1": "tab-b" } },
-      );
+      const selected = await storage.applyPaneLayoutIntent(environment.id, base, base, {
+        activePaneId: "pane-1",
+        activeTabIds: { "pane-1": "tab-b" },
+      });
       expect(selected.revision).toBe(2);
       expect((selected.root as { activeTabId: string }).activeTabId).toBe("tab-b");
     });
@@ -1488,23 +1528,19 @@ describe("pane layout intent persistence", () => {
         environmentId: environment.id,
         isLocal: true,
       });
-      const saved = await storage.applyPaneLayoutIntent(
-        environment.id,
-        staleBase,
-        staleDesired,
-        {
-          activePaneId: "default",
-          activeTabIds: { default: "setup-terminal" },
-        },
-      );
+      const saved = await storage.applyPaneLayoutIntent(environment.id, staleBase, staleDesired, {
+        activePaneId: "default",
+        activeTabIds: { default: "setup-terminal" },
+      });
 
       expect(saved.revision).toBe(buildSelected.revision + 1);
       expect(saved.root).toMatchObject({
         kind: "leaf",
         activeTabId: "build-pipeline-1",
       });
-      expect((saved.root as { tabs: Array<{ id: string }> }).tabs)
-        .not.toContainEqual(expect.objectContaining({ id: "setup-terminal" }));
+      expect((saved.root as { tabs: Array<{ id: string }> }).tabs).not.toContainEqual(
+        expect.objectContaining({ id: "setup-terminal" }),
+      );
     });
   });
 
@@ -1529,12 +1565,9 @@ describe("pane layout intent persistence", () => {
       };
       withSetup.root.tabs.push(setupTab);
       withSetup.root.activeTabId = "setup-terminal";
-      await storage.applyPaneLayoutIntent(
-        environment.id,
-        beforeSetup,
-        withSetup,
-        { activeTabIds: { default: "setup-terminal" } },
-      );
+      await storage.applyPaneLayoutIntent(environment.id, beforeSetup, withSetup, {
+        activeTabIds: { default: "setup-terminal" },
+      });
 
       await storage.updateEnvironment(environment.id, {
         setupScriptsComplete: true,
@@ -1694,33 +1727,31 @@ describe("pane layout intent persistence", () => {
       };
       await storage.savePaneLayout(environment.id, current, 0);
       const stale = { ...current, containerId: "container-old" };
-      await expect(storage.applyPaneLayoutIntent(environment.id, stale, stale))
-        .rejects.toThrow("stale environment generation");
+      await expect(storage.applyPaneLayoutIntent(environment.id, stale, stale)).rejects.toThrow(
+        "stale environment generation",
+      );
 
       const cyclicRoot: Record<string, unknown> = { kind: "leaf" };
       cyclicRoot.self = cyclicRoot;
-      await expect(storage.applyPaneLayoutIntent(
-        environment.id,
-        current,
-        { ...current, root: cyclicRoot } as unknown as PaneLayoutMergeInput,
-      )).rejects.toThrow("JSON serializable");
+      await expect(
+        storage.applyPaneLayoutIntent(environment.id, current, {
+          ...current,
+          root: cyclicRoot,
+        } as unknown as PaneLayoutMergeInput),
+      ).rejects.toThrow("JSON serializable");
 
-      await expect(storage.applyPaneLayoutIntent(
-        environment.id,
-        current,
-        current,
-        {
+      await expect(
+        storage.applyPaneLayoutIntent(environment.id, current, current, {
           activeTabIds: Object.fromEntries(
             Array.from({ length: 1_025 }, (_, index) => [`pane-${index}`, null]),
           ),
-        },
-      )).rejects.toThrow("1024 entry limit");
-      await expect(storage.applyPaneLayoutIntent(
-        environment.id,
-        current,
-        current,
-        { activePaneId: "p".repeat(64 * 1024) },
-      )).rejects.toThrow("64 KB limit");
+        }),
+      ).rejects.toThrow("1024 entry limit");
+      await expect(
+        storage.applyPaneLayoutIntent(environment.id, current, current, {
+          activePaneId: "p".repeat(64 * 1024),
+        }),
+      ).rejects.toThrow("64 KB limit");
       expect((await storage.getPaneLayout(environment.id))?.revision).toBe(1);
     });
   });
@@ -1736,11 +1767,13 @@ describe("pane layout intent persistence", () => {
 
       // Both sides of the merge come from the renderer. A dead ancestor still
       // merges against the durable tree, which resurrects the tabs it carried.
-      await expect(storage.applyPaneLayoutIntent(
-        environment.id,
-        { ...current, containerId: "container-old" },
-        current,
-      )).rejects.toThrow("stale environment generation");
+      await expect(
+        storage.applyPaneLayoutIntent(
+          environment.id,
+          { ...current, containerId: "container-old" },
+          current,
+        ),
+      ).rejects.toThrow("stale environment generation");
       expect((await storage.getPaneLayout(environment.id))?.revision).toBe(1);
     });
   });
@@ -1751,14 +1784,11 @@ describe("pane layout intent persistence", () => {
       environment.id = "env-layout-guarded-delete";
       await storage.addEnvironment(environment);
       await storage.savePaneLayout(environment.id, layout("tab-a"), 0);
-      const newer = await storage.savePaneLayout(
-        environment.id,
-        layout("tab-b"),
-        1,
-      );
+      const newer = await storage.savePaneLayout(environment.id, layout("tab-b"), 1);
 
-      await expect(storage.deletePaneLayout(environment.id, 1))
-        .rejects.toThrow("expected 1, current 2");
+      await expect(storage.deletePaneLayout(environment.id, 1)).rejects.toThrow(
+        "expected 1, current 2",
+      );
       expect(await storage.getPaneLayout(environment.id)).toEqual(newer);
 
       await storage.deletePaneLayout(environment.id, 2);
@@ -1776,17 +1806,17 @@ describe("pane layout intent persistence", () => {
       await storage.addEnvironment(environment);
       const containerLayout = { ...layout("tab-a"), containerId: "container-ghost" };
 
-      await expect(storage.savePaneLayout(environment.id, containerLayout, 0))
-        .rejects.toThrow("stale environment generation");
-      await expect(storage.applyPaneLayoutIntent(
-        environment.id,
-        containerLayout,
-        containerLayout,
-      )).rejects.toThrow("stale environment generation");
+      await expect(storage.savePaneLayout(environment.id, containerLayout, 0)).rejects.toThrow(
+        "stale environment generation",
+      );
+      await expect(
+        storage.applyPaneLayoutIntent(environment.id, containerLayout, containerLayout),
+      ).rejects.toThrow("stale environment generation");
       expect(await storage.getPaneLayout(environment.id)).toBeNull();
 
-      await expect(storage.savePaneLayout(environment.id, layout("tab-a"), 0))
-        .resolves.toMatchObject({ revision: 1, containerId: null });
+      await expect(
+        storage.savePaneLayout(environment.id, layout("tab-a"), 0),
+      ).resolves.toMatchObject({ revision: 1, containerId: null });
     });
   });
 
@@ -1821,17 +1851,13 @@ describe("pane layout intent persistence", () => {
       const filePath = path.join(dataDir, "pane-layouts.json");
       await fs.mkdir(filePath);
 
-      await expect(storage.applyPaneLayoutIntent(
-        environment.id,
-        layout("tab-a"),
-        layout("tab-a"),
-      )).rejects.toThrow();
+      await expect(
+        storage.applyPaneLayoutIntent(environment.id, layout("tab-a"), layout("tab-a")),
+      ).rejects.toThrow();
       await fs.rm(filePath, { recursive: true, force: true });
-      await expect(storage.applyPaneLayoutIntent(
-        environment.id,
-        layout("tab-a"),
-        layout("tab-b"),
-      )).resolves.toMatchObject({ revision: 1 });
+      await expect(
+        storage.applyPaneLayoutIntent(environment.id, layout("tab-a"), layout("tab-b")),
+      ).resolves.toMatchObject({ revision: 1 });
     });
   });
 });
@@ -1857,16 +1883,20 @@ describe("durable tab teardown intents", () => {
         storage.setTabTeardownIntent(environment.id, first),
         storage.setTabTeardownIntent(environment.id, second),
       ]);
-      expect((await storage.getEnvironment(environment.id))?.tabTeardownIntents)
-        .toEqual({ "tab-1": first, "tab-2": second });
+      expect((await storage.getEnvironment(environment.id))?.tabTeardownIntents).toEqual({
+        "tab-1": first,
+        "tab-2": second,
+      });
 
       await storage.setTabTeardownIntent(environment.id, {
         ...first,
         createdAt: "2026-08-04T10:00:02.000Z",
       });
       await storage.clearTabTeardownIntent(environment.id, first.tabId, first.createdAt);
-      expect((await storage.getEnvironment(environment.id))?.tabTeardownIntents)
-        .toHaveProperty("tab-1.createdAt", "2026-08-04T10:00:02.000Z");
+      expect((await storage.getEnvironment(environment.id))?.tabTeardownIntents).toHaveProperty(
+        "tab-1.createdAt",
+        "2026-08-04T10:00:02.000Z",
+      );
     });
   });
 });
@@ -1874,19 +1904,33 @@ describe("durable tab teardown intents", () => {
 describe("PR completion refresh intent", () => {
   test("rejects missing environments and ignores every ineligible PR state", async () => {
     await withTemporaryStorage(async (storage) => {
-      await expect(storage.armPrRecheckAfterAgentCompletion("missing"))
-        .rejects.toThrow("Environment not found: missing");
+      await expect(storage.armPrRecheckAfterAgentCompletion("missing")).rejects.toThrow(
+        "Environment not found: missing",
+      );
 
-      for (const [index, metadata] of ([
-        { prUrl: null, prState: null, hasMergeConflicts: null },
-        { prUrl: "https://github.com/acme/repo/pull/1", prState: "closed", hasMergeConflicts: true },
-        { prUrl: "https://github.com/acme/repo/pull/1", prState: "open", hasMergeConflicts: false },
-        { prUrl: "https://github.com/acme/repo/pull/1", prState: "open", hasMergeConflicts: null },
-      ] as const).entries()) {
+      for (const [index, metadata] of (
+        [
+          { prUrl: null, prState: null, hasMergeConflicts: null },
+          {
+            prUrl: "https://github.com/acme/repo/pull/1",
+            prState: "closed",
+            hasMergeConflicts: true,
+          },
+          {
+            prUrl: "https://github.com/acme/repo/pull/1",
+            prState: "open",
+            hasMergeConflicts: false,
+          },
+          {
+            prUrl: "https://github.com/acme/repo/pull/1",
+            prState: "open",
+            hasMergeConflicts: null,
+          },
+        ] as const
+      ).entries()) {
         const environment = { ...createEnvironment("project-1"), id: `env-${index}`, ...metadata };
         await storage.addEnvironment(environment);
-        expect((await storage.armPrRecheckAfterAgentCompletion(environment.id)).armedAt)
-          .toBeNull();
+        expect((await storage.armPrRecheckAfterAgentCompletion(environment.id)).armedAt).toBeNull();
       }
     });
   });
@@ -1905,17 +1949,23 @@ describe("PR completion refresh intent", () => {
 
       const restarted = new StorageService(dataDir);
       await restarted.init();
-      expect((await restarted.getEnvironment(environment.id))
-        ?.prRecheckAfterAgentCompletionArmedAt).toBe(first);
+      expect(
+        (await restarted.getEnvironment(environment.id))?.prRecheckAfterAgentCompletionArmedAt,
+      ).toBe(first);
 
       const second = (await restarted.armPrRecheckAfterAgentCompletion(environment.id)).armedAt!;
       expect(second).not.toBe(first);
-      expect((await restarted.disarmPrRecheckAfterAgentCompletion(environment.id, first))
-        .prRecheckAfterAgentCompletionArmedAt).toBe(second);
-      expect((await restarted.disarmPrRecheckAfterAgentCompletion(environment.id, second))
-        .prRecheckAfterAgentCompletionArmedAt).toBeUndefined();
-      await expect(restarted.disarmPrRecheckAfterAgentCompletion("missing", second))
-        .rejects.toThrow("Environment not found: missing");
+      expect(
+        (await restarted.disarmPrRecheckAfterAgentCompletion(environment.id, first))
+          .prRecheckAfterAgentCompletionArmedAt,
+      ).toBe(second);
+      expect(
+        (await restarted.disarmPrRecheckAfterAgentCompletion(environment.id, second))
+          .prRecheckAfterAgentCompletionArmedAt,
+      ).toBeUndefined();
+      await expect(
+        restarted.disarmPrRecheckAfterAgentCompletion("missing", second),
+      ).rejects.toThrow("Environment not found: missing");
     });
   });
 
@@ -2005,8 +2055,9 @@ describe("PR completion refresh intent", () => {
       expect(await storage.getEnvironment(environment.id)).toMatchObject({
         hasMergeConflicts: false,
       });
-      expect((await storage.getEnvironment(environment.id))
-        ?.prRecheckAfterAgentCompletionArmedAt).toBeUndefined();
+      expect(
+        (await storage.getEnvironment(environment.id))?.prRecheckAfterAgentCompletionArmedAt,
+      ).toBeUndefined();
     });
   });
 });
@@ -2018,33 +2069,26 @@ describe("GitHub credential source config migration", () => {
     ["missing source with a legacy PAT", undefined, "legacy-pat", false],
     ["explicit host source with a legacy PAT", true, "legacy-pat", true],
     ["explicit PAT source without a PAT", false, undefined, false],
-  ] as const)(
-    "%s",
-    async (_label, source, githubToken, expected) => {
-      await withTemporaryStorage(async (storage, dataDir) => {
-        const config = defaultConfig();
-        if (source === undefined) {
-          delete config.global.useHostGitHubCredentials;
-        } else {
-          config.global.useHostGitHubCredentials = source;
-        }
-        if (githubToken === undefined) {
-          delete config.global.githubToken;
-        } else {
-          config.global.githubToken = githubToken;
-        }
-        await fs.writeFile(
-          path.join(dataDir, "config.json"),
-          `${JSON.stringify(config)}\n`,
-          "utf8",
-        );
+  ] as const)("%s", async (_label, source, githubToken, expected) => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const config = defaultConfig();
+      if (source === undefined) {
+        delete config.global.useHostGitHubCredentials;
+      } else {
+        config.global.useHostGitHubCredentials = source;
+      }
+      if (githubToken === undefined) {
+        delete config.global.githubToken;
+      } else {
+        config.global.githubToken = githubToken;
+      }
+      await fs.writeFile(path.join(dataDir, "config.json"), `${JSON.stringify(config)}\n`, "utf8");
 
-        const loaded = await storage.loadConfig();
-        expect(loaded.global.useHostGitHubCredentials).toBe(expected);
-        expect(loaded.global.githubToken).toBe(githubToken);
-      });
-    },
-  );
+      const loaded = await storage.loadConfig();
+      expect(loaded.global.useHostGitHubCredentials).toBe(expected);
+      expect(loaded.global.githubToken).toBe(githubToken);
+    });
+  });
 });
 
 describe("Codex max concurrent thread config storage", () => {
@@ -2178,8 +2222,7 @@ describe("hot store read caching", () => {
         // Mutating a returned value must not poison the cache: reads hand
         // out clones precisely because every mutation path edits in place.
         (await storage.loadEnvironments())[0]!.name = "mutated-by-caller";
-        expect((await storage.getEnvironment(environment.id))!.name)
-          .toBe(environment.name);
+        expect((await storage.getEnvironment(environment.id))!.name).toBe(environment.name);
 
         // A save through this process invalidates the cached parse.
         await storage.updateEnvironment(environment.id, { name: "renamed" });
@@ -2187,13 +2230,12 @@ describe("hot store read caching", () => {
 
         // A foreign in-place write (another backend process) is observed via
         // the stat fingerprint even though this process never wrote.
-        const foreign = JSON.parse(
-          await fs.readFile(environmentsPath, "utf8"),
-        ) as Array<Record<string, unknown>>;
+        const foreign = JSON.parse(await fs.readFile(environmentsPath, "utf8")) as Array<
+          Record<string, unknown>
+        >;
         foreign[0]!.name = "foreign-writer";
         await fs.writeFile(environmentsPath, JSON.stringify(foreign));
-        expect((await storage.getEnvironment(environment.id))!.name)
-          .toBe("foreign-writer");
+        expect((await storage.getEnvironment(environment.id))!.name).toBe("foreign-writer");
       } finally {
         readSpy.mockRestore();
       }
@@ -2219,8 +2261,7 @@ describe("hot store read caching", () => {
       // Activity-only writes keep one current recovery point without shifting
       // five timestamp-only copies through the historical backup chain.
       await fs.access(backupPath);
-      await expect(fs.access(path.join(dataDir, "environments.json.bak.2")))
-        .rejects.toThrow();
+      await expect(fs.access(path.join(dataDir, "environments.json.bak.2"))).rejects.toThrow();
 
       // A structural mutation still pays for the rotation.
       await storage.updateEnvironment(environment.id, { name: "renamed" });
@@ -2295,8 +2336,7 @@ describe("hot store read caching", () => {
         return realStat(target);
       }) as typeof fs.stat);
       try {
-        expect((await storage.loadEnvironments()).map((item) => item.id))
-          .toEqual([environment.id]);
+        expect((await storage.loadEnvironments()).map((item) => item.id)).toEqual([environment.id]);
       } finally {
         statSpy.mockRestore();
       }
@@ -2324,8 +2364,7 @@ describe("hot store read caching", () => {
         // The empty view was never the real damage: the next mutation would
         // have appended to that empty list and written it back over the
         // user's intact data.
-        await expect(storage.addEnvironment(createEnvironment("project-1")))
-          .rejects.toThrow("EIO");
+        await expect(storage.addEnvironment(createEnvironment("project-1"))).rejects.toThrow("EIO");
       } finally {
         statSpy.mockRestore();
       }
@@ -2356,10 +2395,7 @@ describe("environment completion and unread state", () => {
       const environment = await storage.addEnvironment(createEnvironment("project-1"));
       const collision = environment.lastActivityAt!;
 
-      const completed = await storage.recordEnvironmentSessionCompletion(
-        environment.id,
-        collision,
-      );
+      const completed = await storage.recordEnvironmentSessionCompletion(environment.id, collision);
 
       expect(completed.hasUnreadWork).toBe(true);
       expect(Date.parse(completed.lastActivityAt!)).toBe(Date.parse(collision) + 1);
@@ -2395,9 +2431,7 @@ describe("environment completion and unread state", () => {
     await withTemporaryStorage(async (storage) => {
       const environment = await storage.addEnvironment(createEnvironment("project-1"));
       const previousActivityAt = environment.lastActivityAt!;
-      const newer = new Date(
-        new Date(previousActivityAt).getTime() + 1,
-      ).toISOString();
+      const newer = new Date(new Date(previousActivityAt).getTime() + 1).toISOString();
       const completed = await storage.recordEnvironmentCompletion(environment.id, newer);
       expect(completed).toMatchObject({
         lastActivityAt: newer,
@@ -2405,16 +2439,14 @@ describe("environment completion and unread state", () => {
       });
 
       await storage.setEnvironmentUnread(environment.id, false, newer);
-      const stale = await storage.recordEnvironmentCompletion(
-        environment.id,
-        previousActivityAt,
-      );
+      const stale = await storage.recordEnvironmentCompletion(environment.id, previousActivityAt);
       expect(stale).toMatchObject({
         lastActivityAt: newer,
         hasUnreadWork: false,
       });
-      await expect(storage.recordEnvironmentCompletion(environment.id, "invalid"))
-        .rejects.toThrow("occurredAt must be a valid ISO timestamp");
+      await expect(storage.recordEnvironmentCompletion(environment.id, "invalid")).rejects.toThrow(
+        "occurredAt must be a valid ISO timestamp",
+      );
     });
   });
 
@@ -2422,9 +2454,7 @@ describe("environment completion and unread state", () => {
     await withTemporaryStorage(async (storage) => {
       const environment = await storage.addEnvironment(createEnvironment("project-1"));
       const previousActivityAt = environment.lastActivityAt!;
-      const activityAt = new Date(
-        new Date(previousActivityAt).getTime() + 1,
-      ).toISOString();
+      const activityAt = new Date(new Date(previousActivityAt).getTime() + 1).toISOString();
       await storage.recordEnvironmentCompletion(environment.id, activityAt);
 
       const staleClear = await storage.setEnvironmentUnread(
@@ -2434,11 +2464,7 @@ describe("environment completion and unread state", () => {
       );
       expect(staleClear.hasUnreadWork).toBe(true);
 
-      const cleared = await storage.setEnvironmentUnread(
-        environment.id,
-        false,
-        activityAt,
-      );
+      const cleared = await storage.setEnvironmentUnread(environment.id, false, activityAt);
       expect(cleared.hasUnreadWork).toBe(false);
       expect((await storage.getEnvironment(environment.id))!.hasUnreadWork).toBe(false);
       await expect(
@@ -2464,9 +2490,7 @@ describe("session buffer deletion", () => {
   test("removes an existing buffer and is idempotent when it is already absent", async () => {
     await withTemporaryStorage(async (storage) => {
       await storage.saveSessionBuffer("session-delete", "sensitive terminal output");
-      expect(await storage.loadSessionBuffer("session-delete")).toBe(
-        "sensitive terminal output",
-      );
+      expect(await storage.loadSessionBuffer("session-delete")).toBe("sensitive terminal output");
 
       await storage.deleteSessionBuffer("session-delete");
       await storage.deleteSessionBuffer("session-delete");
@@ -2505,12 +2529,7 @@ describe("OpenCode model catalogue cache", () => {
       ]);
       expect(await storage.getOpenCodeModelCatalog(projectId)).toEqual(snapshot);
       expect(
-        JSON.parse(
-          await fs.readFile(
-            path.join(dataDir, "opencode-model-catalog.json"),
-            "utf8",
-          ),
-        ),
+        JSON.parse(await fs.readFile(path.join(dataDir, "opencode-model-catalog.json"), "utf8")),
       ).toEqual({
         schemaVersion: 2,
         catalogs: { [projectId]: snapshot },
@@ -2521,23 +2540,17 @@ describe("OpenCode model catalogue cache", () => {
   test("keeps cache versions stable per project until its discovered models change", async () => {
     await withTemporaryStorage(async (storage) => {
       const initial = await storage.cacheOpenCodeModelCatalog(projectId, models);
-      const unchanged = await storage.cacheOpenCodeModelCatalog(
-        projectId,
-        [...models].reverse(),
-      );
+      const unchanged = await storage.cacheOpenCodeModelCatalog(projectId, [...models].reverse());
       expect(unchanged).toEqual(initial);
 
-      const updated = await storage.cacheOpenCodeModelCatalog(
-        projectId,
-        [
-          ...models,
-          {
-            id: "openrouter/google/gemini",
-            name: "Gemini",
-            provider: "openrouter",
-          },
-        ],
-      );
+      const updated = await storage.cacheOpenCodeModelCatalog(projectId, [
+        ...models,
+        {
+          id: "openrouter/google/gemini",
+          name: "Gemini",
+          provider: "openrouter",
+        },
+      ]);
       expect(updated.catalogVersion).not.toBe(initial.catalogVersion);
       expect(updated.models).toHaveLength(3);
     });
@@ -2546,23 +2559,20 @@ describe("OpenCode model catalogue cache", () => {
   test("isolates project catalogues in one scoped store", async () => {
     await withTemporaryStorage(async (storage) => {
       const first = await storage.cacheOpenCodeModelCatalog("project-a", models);
-      const second = await storage.cacheOpenCodeModelCatalog("project-b", [{
-        id: "local/model",
-        name: "Local",
-        provider: "local",
-      }]);
+      const second = await storage.cacheOpenCodeModelCatalog("project-b", [
+        {
+          id: "local/model",
+          name: "Local",
+          provider: "local",
+        },
+      ]);
 
       expect(await storage.getOpenCodeModelCatalog("project-a")).toEqual(first);
       expect(await storage.getOpenCodeModelCatalog("project-b")).toEqual(second);
       expect(await storage.getOpenCodeModelCatalog("project-c")).toBeNull();
 
-      const prototypeNamed = await storage.cacheOpenCodeModelCatalog(
-        "constructor",
-        models,
-      );
-      expect(await storage.getOpenCodeModelCatalog("constructor")).toEqual(
-        prototypeNamed,
-      );
+      const prototypeNamed = await storage.cacheOpenCodeModelCatalog("constructor", models);
+      expect(await storage.getOpenCodeModelCatalog("constructor")).toEqual(prototypeNamed);
     });
   });
 
@@ -2627,17 +2637,14 @@ describe("OpenCode model catalogue cache", () => {
       await expect(storage.getOpenCodeModelCatalog(" \t")).rejects.toThrow(
         "projectId must be a non-blank string",
       );
+      await expect(storage.cacheOpenCodeModelCatalog("", models)).rejects.toThrow(
+        "projectId must be a non-blank string",
+      );
+      await expect(storage.cacheOpenCodeModelCatalog(projectId, [])).rejects.toThrow(
+        "must contain at least one model",
+      );
       await expect(
-        storage.cacheOpenCodeModelCatalog("", models),
-      ).rejects.toThrow("projectId must be a non-blank string");
-      await expect(
-        storage.cacheOpenCodeModelCatalog(projectId, []),
-      ).rejects.toThrow("must contain at least one model");
-      await expect(
-        storage.cacheOpenCodeModelCatalog(
-          projectId,
-          [{ id: "", name: "", provider: "" }],
-        ),
+        storage.cacheOpenCodeModelCatalog(projectId, [{ id: "", name: "", provider: "" }]),
       ).rejects.toThrow("must contain at least one model");
     });
   });
@@ -2654,12 +2661,14 @@ describe("OpenCode model catalogue cache", () => {
               projectId: "wrong-project",
               catalogVersion: "not-the-content-digest",
               updatedAt: "not-a-date",
-              models: [{
-                id: " provider/model ",
-                name: " Model ",
-                provider: " provider ",
-                variants: ["z", "a", "z"],
-              }],
+              models: [
+                {
+                  id: " provider/model ",
+                  name: " Model ",
+                  provider: " provider ",
+                  variants: ["z", "a", "z"],
+                },
+              ],
             },
             malformed: { models: [{ id: "missing-fields" }] },
           },
@@ -2673,12 +2682,14 @@ describe("OpenCode model catalogue cache", () => {
       expect(snapshot?.updatedAt).toBe(new Date(0).toISOString());
       expect(snapshot?.catalogVersion).toHaveLength(64);
       expect(snapshot?.catalogVersion).not.toBe("not-the-content-digest");
-      expect(snapshot?.models).toEqual([{
-        id: "provider/model",
-        name: "Model",
-        provider: "provider",
-        variants: ["a", "z"],
-      }]);
+      expect(snapshot?.models).toEqual([
+        {
+          id: "provider/model",
+          name: "Model",
+          provider: "provider",
+          variants: ["a", "z"],
+        },
+      ]);
       expect(await storage.getOpenCodeModelCatalog("malformed")).toBeNull();
     });
   });
@@ -2710,18 +2721,20 @@ describe("OpenCode model catalogue cache", () => {
     await withTemporaryStorage(async (storage) => {
       await Promise.all(
         Array.from({ length: 12 }, (_, index) =>
-          storage.cacheOpenCodeModelCatalog(`project-${index}`, [{
-            id: `provider/model-${index}`,
-            name: `Model ${index}`,
-            provider: "provider",
-          }])
+          storage.cacheOpenCodeModelCatalog(`project-${index}`, [
+            {
+              id: `provider/model-${index}`,
+              name: `Model ${index}`,
+              provider: "provider",
+            },
+          ]),
         ),
       );
 
       for (let index = 0; index < 12; index += 1) {
-        expect(
-          (await storage.getOpenCodeModelCatalog(`project-${index}`))?.models[0]?.id,
-        ).toBe(`provider/model-${index}`);
+        expect((await storage.getOpenCodeModelCatalog(`project-${index}`))?.models[0]?.id).toBe(
+          `provider/model-${index}`,
+        );
       }
     });
   });
@@ -2741,13 +2754,10 @@ describe("OpenCode model catalogue cache", () => {
         await saveJson(filePath, value);
       };
 
-      await expect(
-        storage.cacheOpenCodeModelCatalog("project-failed", models),
-      ).rejects.toThrow("injected cache write failure");
-      const recovered = await storage.cacheOpenCodeModelCatalog(
-        "project-recovered",
-        models,
+      await expect(storage.cacheOpenCodeModelCatalog("project-failed", models)).rejects.toThrow(
+        "injected cache write failure",
       );
+      const recovered = await storage.cacheOpenCodeModelCatalog("project-recovered", models);
       expect(recovered.projectId).toBe("project-recovered");
       expect(await storage.getOpenCodeModelCatalog("project-failed")).toBeNull();
     });
@@ -2765,22 +2775,16 @@ describe("OpenCode model catalogue cache", () => {
           ...models,
           { id: "provider/added", name: "Added", provider: "provider" },
         ]),
-        ...Array.from({ length: 24 }, () =>
-          storage.getOpenCodeModelCatalog(projectId)
-        ),
+        ...Array.from({ length: 24 }, () => storage.getOpenCodeModelCatalog(projectId)),
       ]);
 
       const second = await storage.getOpenCodeModelCatalog(projectId);
       expect(second?.models).toHaveLength(3);
       for (const read of reads) {
         expect(read).not.toBeNull();
-        expect([first.catalogVersion, second?.catalogVersion]).toContain(
-          read?.catalogVersion,
-        );
+        expect([first.catalogVersion, second?.catalogVersion]).toContain(read?.catalogVersion);
         expect(read?.models).toEqual(
-          read?.catalogVersion === first.catalogVersion
-            ? first.models
-            : second!.models,
+          read?.catalogVersion === first.catalogVersion ? first.models : second!.models,
         );
       }
     });
@@ -2792,11 +2796,13 @@ describe("OpenCode model catalogue cache", () => {
       await second.init();
       await Promise.all([
         first.cacheOpenCodeModelCatalog("project-a", models),
-        second.cacheOpenCodeModelCatalog("project-b", [{
-          id: "provider/second",
-          name: "Second",
-          provider: "provider",
-        }]),
+        second.cacheOpenCodeModelCatalog("project-b", [
+          {
+            id: "provider/second",
+            name: "Second",
+            provider: "provider",
+          },
+        ]),
       ]);
 
       expect(await first.getOpenCodeModelCatalog("project-a")).not.toBeNull();
@@ -2808,37 +2814,45 @@ describe("OpenCode model catalogue cache", () => {
 describe("host agent model catalogue cache", () => {
   test("round-trips host agent catalogues across storage instances", async () => {
     await withTemporaryStorage(async (storage, dataDir) => {
-      const claudeModels: ClaudeModelCatalogEntry[] = [{
-        id: "claude-opus-latest",
-        name: "Claude Opus Latest",
-        description: "Most capable",
-        supportsEffort: true,
-        supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
-      }];
-      const codexModels: CodexModelCatalogEntry[] = [{
-        id: "gpt-latest",
-        name: "GPT Latest",
-        description: "Latest coding model",
-        reasoningEfforts: ["low", "medium", "high", "xhigh", "ultra"],
-        defaultReasoningEffort: "medium",
-      }];
-      const cursorModels: AgentModel[] = [{
-        platform: "cursor",
-        id: "composer-latest",
-        label: "Composer Latest",
-        providerLabel: "Cursor",
-        reasoning: [{ id: "high", label: "High", annotation: "Slower" }],
-        defaultReasoningId: "high",
-        supportsSpeed: true,
-        supportsMode: true,
-      }];
-      const grokModels: AgentModel[] = [{
-        platform: "grok",
-        id: "grok-code-latest",
-        label: "Grok Code Latest",
-        providerLabel: "Grok",
-        supportsMode: true,
-      }];
+      const claudeModels: ClaudeModelCatalogEntry[] = [
+        {
+          id: "claude-opus-latest",
+          name: "Claude Opus Latest",
+          description: "Most capable",
+          supportsEffort: true,
+          supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+        },
+      ];
+      const codexModels: CodexModelCatalogEntry[] = [
+        {
+          id: "gpt-latest",
+          name: "GPT Latest",
+          description: "Latest coding model",
+          reasoningEfforts: ["low", "medium", "high", "xhigh", "ultra"],
+          defaultReasoningEffort: "medium",
+        },
+      ];
+      const cursorModels: AgentModel[] = [
+        {
+          platform: "cursor",
+          id: "composer-latest",
+          label: "Composer Latest",
+          providerLabel: "Cursor",
+          reasoning: [{ id: "high", label: "High", annotation: "Slower" }],
+          defaultReasoningId: "high",
+          supportsSpeed: true,
+          supportsMode: true,
+        },
+      ];
+      const grokModels: AgentModel[] = [
+        {
+          platform: "grok",
+          id: "grok-code-latest",
+          label: "Grok Code Latest",
+          providerLabel: "Grok",
+          supportsMode: true,
+        },
+      ];
 
       await storage.cacheAgentModelCatalog("claude", claudeModels);
       await storage.cacheAgentModelCatalog("codex", codexModels);
@@ -2927,11 +2941,13 @@ describe("host agent model catalogue cache", () => {
           name: "  GPT Latest  ",
           description: "  Coding model  ",
           reasoningEfforts: ["minimal", "medium", "ultra"],
-          reasoningOptions: [{
-            effort: "medium",
-            label: "  Balanced  ",
-            description: "  Default choice  ",
-          }],
+          reasoningOptions: [
+            {
+              effort: "medium",
+              label: "  Balanced  ",
+              description: "  Default choice  ",
+            },
+          ],
           defaultReasoningEffort: "medium",
         },
         { id: "gpt-latest", name: "Duplicate" },
@@ -2954,28 +2970,34 @@ describe("host agent model catalogue cache", () => {
 
       expect(await storage.getAgentModelCatalogCache()).toMatchObject({
         claude: {
-          models: [{
-            id: "claude-opus-latest",
-            resolvedModel: "claude-opus-20260701",
-            name: "Claude Opus Latest",
-            description: "Most capable",
-            supportsEffort: true,
-            supportedEffortLevels: ["low", "high"],
-          }],
+          models: [
+            {
+              id: "claude-opus-latest",
+              resolvedModel: "claude-opus-20260701",
+              name: "Claude Opus Latest",
+              description: "Most capable",
+              supportsEffort: true,
+              supportedEffortLevels: ["low", "high"],
+            },
+          ],
         },
         codex: {
-          models: [{
-            id: "gpt-latest",
-            name: "GPT Latest",
-            description: "Coding model",
-            reasoningEfforts: ["minimal", "medium", "ultra"],
-            reasoningOptions: [{
-              effort: "medium",
-              label: "Balanced",
-              description: "Default choice",
-            }],
-            defaultReasoningEffort: "medium",
-          }],
+          models: [
+            {
+              id: "gpt-latest",
+              name: "GPT Latest",
+              description: "Coding model",
+              reasoningEfforts: ["minimal", "medium", "ultra"],
+              reasoningOptions: [
+                {
+                  effort: "medium",
+                  label: "Balanced",
+                  description: "Default choice",
+                },
+              ],
+              defaultReasoningEffort: "medium",
+            },
+          ],
         },
       });
     });
@@ -2989,11 +3011,13 @@ describe("host agent model catalogue cache", () => {
           schemaVersion: 1,
           codex: {
             updatedAt: "not-a-date",
-            models: [{
-              id: "gpt-valid",
-              name: "GPT Valid",
-              reasoningEfforts: ["medium"],
-            }],
+            models: [
+              {
+                id: "gpt-valid",
+                name: "GPT Valid",
+                reasoningEfforts: ["medium"],
+              },
+            ],
           },
         }),
       );
@@ -3002,11 +3026,13 @@ describe("host agent model catalogue cache", () => {
         schemaVersion: 1,
         codex: {
           updatedAt: new Date(0).toISOString(),
-          models: [{
-            id: "gpt-valid",
-            name: "GPT Valid",
-            reasoningEfforts: ["medium"],
-          }],
+          models: [
+            {
+              id: "gpt-valid",
+              name: "GPT Valid",
+              reasoningEfforts: ["medium"],
+            },
+          ],
         },
       });
     });
@@ -3015,27 +3041,25 @@ describe("host agent model catalogue cache", () => {
   test("rejects catalogues without any valid model", async () => {
     await withTemporaryStorage(async (storage) => {
       await expect(
-        storage.cacheAgentModelCatalog(
-          "claude",
-          [{ id: "", name: "Invalid" }],
-        ),
+        storage.cacheAgentModelCatalog("claude", [{ id: "", name: "Invalid" }]),
       ).rejects.toThrow("at least one valid model");
       await expect(
-        storage.cacheAgentModelCatalog(
-          "codex",
-          [{
+        storage.cacheAgentModelCatalog("codex", [
+          {
             id: "gpt-invalid",
             name: "Invalid",
             defaultReasoningEffort: "impossible",
-          }] as unknown as CodexModelCatalogEntry[],
-        ),
+          },
+        ] as unknown as CodexModelCatalogEntry[]),
       ).rejects.toThrow("at least one valid model");
       await expect(
-        storage.cacheAgentModelCatalog("cursor", [{
-          platform: "grok",
-          id: "wrong-provider",
-          label: "Wrong provider",
-        }] as AgentModel[]),
+        storage.cacheAgentModelCatalog("cursor", [
+          {
+            platform: "grok",
+            id: "wrong-provider",
+            label: "Wrong provider",
+          },
+        ] as AgentModel[]),
       ).rejects.toThrow("at least one valid model");
     });
   });
@@ -3045,14 +3069,18 @@ describe("host agent model catalogue cache", () => {
       const second = new StorageService(dataDir);
       await second.init();
       await Promise.all([
-        first.cacheAgentModelCatalog("claude", [{
-          id: "claude-opus-latest",
-          name: "Claude Opus Latest",
-        }]),
-        second.cacheAgentModelCatalog("codex", [{
-          id: "gpt-latest",
-          name: "GPT Latest",
-        }]),
+        first.cacheAgentModelCatalog("claude", [
+          {
+            id: "claude-opus-latest",
+            name: "Claude Opus Latest",
+          },
+        ]),
+        second.cacheAgentModelCatalog("codex", [
+          {
+            id: "gpt-latest",
+            name: "GPT Latest",
+          },
+        ]),
       ]);
 
       expect(await first.getAgentModelCatalogCache()).toMatchObject({
@@ -3078,16 +3106,20 @@ describe("host agent model catalogue cache", () => {
       };
 
       await expect(
-        storage.cacheAgentModelCatalog("claude", [{
-          id: "claude-failed",
-          name: "Claude Failed",
-        }]),
+        storage.cacheAgentModelCatalog("claude", [
+          {
+            id: "claude-failed",
+            name: "Claude Failed",
+          },
+        ]),
       ).rejects.toThrow("injected agent cache write failure");
       await expect(
-        storage.cacheAgentModelCatalog("codex", [{
-          id: "gpt-recovered",
-          name: "GPT Recovered",
-        }]),
+        storage.cacheAgentModelCatalog("codex", [
+          {
+            id: "gpt-recovered",
+            name: "GPT Recovered",
+          },
+        ]),
       ).resolves.toMatchObject({
         codex: { models: [{ id: "gpt-recovered" }] },
       });
@@ -3102,25 +3134,29 @@ describe("host agent model catalogue cache", () => {
 
   test("a read concurrent with a write sees one coherent snapshot", async () => {
     await withTemporaryStorage(async (storage) => {
-      await storage.cacheAgentModelCatalog("codex", [{
-        id: "gpt-first",
-        name: "GPT First",
-      }]);
+      await storage.cacheAgentModelCatalog("codex", [
+        {
+          id: "gpt-first",
+          name: "GPT First",
+        },
+      ]);
 
       const [, ...reads] = await Promise.all([
-        storage.cacheAgentModelCatalog("codex", [{
-          id: "gpt-second",
-          name: "GPT Second",
-        }]),
-        ...Array.from({ length: 24 }, () =>
-          storage.getAgentModelCatalogCache()
-        ),
+        storage.cacheAgentModelCatalog("codex", [
+          {
+            id: "gpt-second",
+            name: "GPT Second",
+          },
+        ]),
+        ...Array.from({ length: 24 }, () => storage.getAgentModelCatalogCache()),
       ]);
       const final = await storage.getAgentModelCatalogCache();
-      expect(final.codex?.models).toEqual([{
-        id: "gpt-second",
-        name: "GPT Second",
-      }]);
+      expect(final.codex?.models).toEqual([
+        {
+          id: "gpt-second",
+          name: "GPT Second",
+        },
+      ]);
       const coherentSnapshots: CodexModelCatalogEntry[][] = [
         [{ id: "gpt-first", name: "GPT First" }],
         [{ id: "gpt-second", name: "GPT Second" }],

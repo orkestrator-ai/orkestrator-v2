@@ -13,11 +13,7 @@ import type {
   TmuxAgentObservation,
   TmuxSelectionPrompt,
 } from "@orkestrator/protocol/tmux-observation";
-import type {
-  HookEventKind,
-  TranscriptLine,
-  TranscriptContent,
-} from "@/lib/claude-tmux-client";
+import type { HookEventKind, TranscriptLine, TranscriptContent } from "@/lib/claude-tmux-client";
 import {
   ERROR_MESSAGE_PREFIX,
   type ClaudeEffortLevel,
@@ -27,14 +23,8 @@ import {
   type ToolDiffMetadata,
 } from "@/lib/claude-client";
 import type { FileMention } from "@/types";
-import {
-  isRootAssistantRecord,
-  normalizeBackendModelId,
-} from "@orkestrator/protocol/model-id";
-import {
-  filePathFromToolInput,
-  toolDiffFromToolInput,
-} from "@orkestrator/protocol/tool-diff";
+import { isRootAssistantRecord, normalizeBackendModelId } from "@orkestrator/protocol/model-id";
+import { filePathFromToolInput, toolDiffFromToolInput } from "@orkestrator/protocol/tool-diff";
 import {
   tmuxElicitationDraftKey,
   tmuxPlanDraftKey,
@@ -51,18 +41,12 @@ export function getEnvironmentIdFromClaudeTmuxStateKey(stateKey: string): string
   return match?.[1] ?? null;
 }
 
-function findScopedTabState(
-  tabs: Map<string, TmuxTabState>,
-  tabId: string,
-): TmuxTabState | null {
+function findScopedTabState(tabs: Map<string, TmuxTabState>, tabId: string): TmuxTabState | null {
   const key = findScopedTabStateKey(tabs, tabId);
-  return key ? tabs.get(key) ?? null : null;
+  return key ? (tabs.get(key) ?? null) : null;
 }
 
-function findScopedTabStateKey(
-  tabs: Map<string, TmuxTabState>,
-  tabId: string,
-): string | null {
+function findScopedTabStateKey(tabs: Map<string, TmuxTabState>, tabId: string): string | null {
   const suffix = `:tab:${tabId}`;
   let found: string | null = null;
   for (const key of tabs.keys()) {
@@ -73,10 +57,7 @@ function findScopedTabStateKey(
   return found;
 }
 
-function resolveStateKey(
-  tabs: Map<string, TmuxTabState>,
-  tabId: string,
-): string {
+function resolveStateKey(tabs: Map<string, TmuxTabState>, tabId: string): string {
   if (tabs.has(tabId) || getEnvironmentIdFromClaudeTmuxStateKey(tabId)) {
     return tabId;
   }
@@ -347,31 +328,34 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
   setRunning: (tabId, running, info) =>
     set((state) =>
       patchTab(state, tabId, (s) => {
-        const generationChanged = info?.observationGeneration !== undefined
-          && info.observationGeneration !== s.observation.generation;
+        const generationChanged =
+          info?.observationGeneration !== undefined &&
+          info.observationGeneration !== s.observation.generation;
         const stopped = !running && info?.observation === undefined;
-        return ({
-        ...s,
-        running,
-        environmentId: info?.environmentId ?? s.environmentId,
-        sessionId:
-          info?.sessionId === undefined ? s.sessionId : info.sessionId,
-        resumed: info?.resumed ?? s.resumed,
-        busy: info?.busy ?? s.busy,
-        busyStartedAt: info?.busy === undefined
-          ? s.busyStartedAt
-          : info.busy
-            ? info.busyStartedAt ?? null
-            : null,
-        observation: info?.observation ?? (generationChanged || stopped
-          ? {
-              ...emptyTabState().observation,
-              ...(info?.observationGeneration
-                ? { generation: info.observationGeneration }
-                : {}),
-            }
-          : s.observation),
-        });
+        return {
+          ...s,
+          running,
+          environmentId: info?.environmentId ?? s.environmentId,
+          sessionId: info?.sessionId === undefined ? s.sessionId : info.sessionId,
+          resumed: info?.resumed ?? s.resumed,
+          busy: info?.busy ?? s.busy,
+          busyStartedAt:
+            info?.busy === undefined
+              ? s.busyStartedAt
+              : info.busy
+                ? (info.busyStartedAt ?? null)
+                : null,
+          observation:
+            info?.observation ??
+            (generationChanged || stopped
+              ? {
+                  ...emptyTabState().observation,
+                  ...(info?.observationGeneration
+                    ? { generation: info.observationGeneration }
+                    : {}),
+                }
+              : s.observation),
+        };
       }),
     ),
 
@@ -401,15 +385,11 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
   },
 
   applyTranscriptLine: (tabId, line) =>
-    set((state) =>
-      patchTab(state, tabId, (s) => applyLine(s, line)),
-    ),
+    set((state) => patchTab(state, tabId, (s) => applyLine(s, line))),
 
   replaceTranscript: (tabId, lines) =>
     set((state) =>
-      patchTab(state, tabId, (current) =>
-        lines.reduce(applyLine, { ...current, messages: [] }),
-      ),
+      patchTab(state, tabId, (current) => lines.reduce(applyLine, { ...current, messages: [] })),
     ),
 
   addPendingApproval: (tabId, approval) =>
@@ -426,9 +406,7 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
     set((state) =>
       patchTab(state, tabId, (s) => ({
         ...s,
-        pendingApprovals: s.pendingApprovals.filter(
-          (a) => a.eventId !== eventId,
-        ),
+        pendingApprovals: s.pendingApprovals.filter((a) => a.eventId !== eventId),
       })),
     ),
 
@@ -451,9 +429,7 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
     // The question is resolved (answered, rejected, or withdrawn), so its
     // in-progress answer draft goes with it.
     const stateKey = resolveStateKey(get().tabs, tabId);
-    usePromptDraftStore.getState().clearDraft(
-      tmuxQuestionDraftKey(stateKey, eventId),
-    );
+    usePromptDraftStore.getState().clearDraft(tmuxQuestionDraftKey(stateKey, eventId));
   },
 
   addPendingPlan: (tabId, plan) =>
@@ -474,9 +450,7 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
     );
     // The plan request is resolved, so its feedback draft goes with it.
     const stateKey = resolveStateKey(get().tabs, tabId);
-    usePromptDraftStore.getState().clearDraft(
-      tmuxPlanDraftKey(stateKey, eventId),
-    );
+    usePromptDraftStore.getState().clearDraft(tmuxPlanDraftKey(stateKey, eventId));
   },
 
   addPendingPermission: (tabId, permission) =>
@@ -492,9 +466,7 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
     set((state) =>
       patchTab(state, tabId, (s) => ({
         ...s,
-        pendingPermissions: s.pendingPermissions.filter(
-          (p) => p.eventId !== eventId,
-        ),
+        pendingPermissions: s.pendingPermissions.filter((p) => p.eventId !== eventId),
       })),
     ),
 
@@ -511,16 +483,12 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
     set((state) =>
       patchTab(state, tabId, (s) => ({
         ...s,
-        pendingElicitations: s.pendingElicitations.filter(
-          (e) => e.eventId !== eventId,
-        ),
+        pendingElicitations: s.pendingElicitations.filter((e) => e.eventId !== eventId),
       })),
     );
     // The elicitation is resolved, so its typed field values go with it.
     const stateKey = resolveStateKey(get().tabs, tabId);
-    usePromptDraftStore.getState().clearDraft(
-      tmuxElicitationDraftKey(stateKey, eventId),
-    );
+    usePromptDraftStore.getState().clearDraft(tmuxElicitationDraftKey(stateKey, eventId));
   },
 
   replacePendingHooks: (tabId, pending) => {
@@ -528,12 +496,15 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
     // snapshot was resolved while this tab was not listening, so its draft is
     // dropped. Prompts still present keep theirs.
     const keptKeys = new Set(
-      tabPromptDraftKeys({
-        ...emptyTabState(),
-        pendingQuestions: pending.questions,
-        pendingPlans: pending.plans,
-        pendingElicitations: pending.elicitations,
-      }, resolveStateKey(get().tabs, tabId)),
+      tabPromptDraftKeys(
+        {
+          ...emptyTabState(),
+          pendingQuestions: pending.questions,
+          pendingPlans: pending.plans,
+          pendingElicitations: pending.elicitations,
+        },
+        resolveStateKey(get().tabs, tabId),
+      ),
     );
     const stateKey = resolveStateKey(get().tabs, tabId);
     const withdrawnDraftKeys = tabPromptDraftKeys(get().tabs.get(stateKey), stateKey).filter(
@@ -567,9 +538,7 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
     set((state) =>
       patchTab(state, tabId, (s) => {
         if (s.dismissedInfoEventIds.includes(event.id)) return s;
-        const existing = s.infoEvents.findIndex(
-          (e) => e.id === event.id && e.kind === event.kind,
-        );
+        const existing = s.infoEvents.findIndex((e) => e.id === event.id && e.kind === event.kind);
         if (existing >= 0) {
           const infoEvents = [...s.infoEvents];
           infoEvents[existing] = event;
@@ -586,10 +555,7 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
         infoEvents: s.infoEvents.filter((e) => e.id !== id),
         // Bounded to the same window as the events themselves: the backend
         // retains 20, so an id that has aged out cannot be re-delivered.
-        dismissedInfoEventIds: [
-          ...s.dismissedInfoEventIds.filter((e) => e !== id).slice(-19),
-          id,
-        ],
+        dismissedInfoEventIds: [...s.dismissedInfoEventIds.filter((e) => e !== id).slice(-19), id],
       })),
     ),
 
@@ -600,7 +566,7 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
         return {
           ...s,
           busy,
-          busyStartedAt: busy ? startedAt ?? null : null,
+          busyStartedAt: busy ? (startedAt ?? null) : null,
         };
       }),
     ),
@@ -723,9 +689,7 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
   },
 
   getTab: (tabId) =>
-    findScopedTabState(get().tabs, tabId) ??
-    get().tabs.get(tabId) ??
-    emptyTabState(),
+    findScopedTabState(get().tabs, tabId) ?? get().tabs.get(tabId) ?? emptyTabState(),
 }));
 
 /**
@@ -748,10 +712,7 @@ export function migrateLegacyClaudeTmuxState(
   let migrated = false;
   useClaudeTmuxStore.setState((state) => {
     const legacyTab = state.tabs.get(legacyTabId);
-    if (
-      !legacyTab ||
-      (legacyTab.environmentId && legacyTab.environmentId !== environmentId)
-    ) {
+    if (!legacyTab || (legacyTab.environmentId && legacyTab.environmentId !== environmentId)) {
       return state;
     }
 
@@ -805,10 +766,8 @@ function applyLine(state: TmuxTabState, line: TranscriptLine): TmuxTabState {
 
   const id = lineId(line);
   const role = (line.message?.role ?? line.type) as ClaudeMessage["role"];
-  const content =
-    (line.message?.content as TranscriptLine["content"]) ?? line.content;
-  const timestamp =
-    typeof line.timestamp === "string" ? line.timestamp : new Date().toISOString();
+  const content = (line.message?.content as TranscriptLine["content"]) ?? line.content;
+  const timestamp = typeof line.timestamp === "string" ? line.timestamp : new Date().toISOString();
   /*
    * The record's own clock, or nothing.
    *
@@ -826,9 +785,7 @@ function applyLine(state: TmuxTabState, line: TranscriptLine): TmuxTabState {
   const parts = contentToParts(content, line.taskSnapshots);
 
   const allToolResults =
-    role === "user" &&
-    parts.length > 0 &&
-    parts.every((p) => p.type === "tool-result");
+    role === "user" && parts.length > 0 && parts.every((p) => p.type === "tool-result");
   if (allToolResults) {
     const merged = mergeToolResultsIntoPrior(state.messages, parts, recordTimestamp);
     if (merged) return { ...state, messages: merged };
@@ -840,11 +797,8 @@ function applyLine(state: TmuxTabState, line: TranscriptLine): TmuxTabState {
 
   const parentToolUseId = line.parent_tool_use_id;
   const isRootAssistant =
-    role === "assistant"
-    && isRootAssistantRecord(parentToolUseId, line.isSidechain);
-  const modelId = isRootAssistant
-    ? normalizeBackendModelId(line.message?.model)
-    : undefined;
+    role === "assistant" && isRootAssistantRecord(parentToolUseId, line.isSidechain);
+  const modelId = isRootAssistant ? normalizeBackendModelId(line.message?.model) : undefined;
   const newMessage: ClaudeMessage = {
     id,
     role,
@@ -904,7 +858,8 @@ function contentToParts(
       case "tool_use": {
         const toolArgs = (c.input ?? {}) as Record<string, unknown>;
         parts.push({
-          type: "tool-invocation", content: "",
+          type: "tool-invocation",
+          content: "",
           toolName: c.name,
           toolUseId: c.id,
           toolArgs,
@@ -917,7 +872,8 @@ function contentToParts(
       case "tool_result": {
         const txt = toolResultText(c.content);
         parts.push({
-          type: "tool-result", content: "",
+          type: "tool-result",
+          content: "",
           toolUseId: c.tool_use_id,
           toolState: c.is_error ? "failure" : "success",
           toolOutput: c.is_error ? undefined : txt,
@@ -981,9 +937,7 @@ function buildToolDiff(
   return filePath ? { filePath } : undefined;
 }
 
-function toolResultText(
-  raw: string | Array<{ type: string; text?: string }> | undefined,
-): string {
+function toolResultText(raw: string | Array<{ type: string; text?: string }> | undefined): string {
   if (!raw) return "";
   if (typeof raw === "string") return raw;
   return raw
@@ -999,9 +953,7 @@ function textOfParts(parts: ClaudeMessagePart[]): string {
     .join("\n");
 }
 
-export function compactConsecutiveAssistantMessages(
-  messages: ClaudeMessage[],
-): ClaudeMessage[] {
+export function compactConsecutiveAssistantMessages(messages: ClaudeMessage[]): ClaudeMessage[] {
   const compacted: ClaudeMessage[] = [];
 
   for (const message of messages) {
@@ -1022,10 +974,7 @@ export function compactConsecutiveAssistantMessages(
   return compacted;
 }
 
-function canCompactAssistantMessages(
-  previous: ClaudeMessage,
-  next: ClaudeMessage,
-): boolean {
+function canCompactAssistantMessages(previous: ClaudeMessage, next: ClaudeMessage): boolean {
   return (
     previous.role === "assistant" &&
     next.role === "assistant" &&
@@ -1050,9 +999,7 @@ function mergeToolResultsIntoPrior(
   settledAt: string | undefined,
 ): ClaudeMessage[] | null {
   const resultIds = new Set(
-    resultParts
-      .map((p) => p.toolUseId)
-      .filter((x): x is string => typeof x === "string"),
+    resultParts.map((p) => p.toolUseId).filter((x): x is string => typeof x === "string"),
   );
   if (resultIds.size === 0) return null;
 
@@ -1127,14 +1074,12 @@ function stableHash(line: TranscriptLine): string {
   return `h${(h >>> 0).toString(36)}`;
 }
 
-function promptTimingFields(timing: {
+function promptTimingFields(timing: { requestedAt?: number; expiresAt?: number }): {
   requestedAt?: number;
   expiresAt?: number;
-}): { requestedAt?: number; expiresAt?: number } {
+} {
   return {
-    ...(timing.requestedAt !== undefined
-      ? { requestedAt: timing.requestedAt }
-      : {}),
+    ...(timing.requestedAt !== undefined ? { requestedAt: timing.requestedAt } : {}),
     ...(timing.expiresAt !== undefined ? { expiresAt: timing.expiresAt } : {}),
   };
 }

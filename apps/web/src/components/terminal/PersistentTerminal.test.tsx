@@ -25,9 +25,10 @@ const connectMock = mock(async () => {});
 const writeMock = mock(async (_data: string) => {});
 const markBootstrappedMock = mock((_sessionId: string) => true);
 const invokeMock = invoke as ReturnType<typeof mock>;
-const bootstrapWrites = (): string[] => invokeMock.mock.calls
-  .filter(([command]) => command === "bootstrap_terminal_session")
-  .map(([, args]) => (args as { data: string }).data);
+const bootstrapWrites = (): string[] =>
+  invokeMock.mock.calls
+    .filter(([command]) => command === "bootstrap_terminal_session")
+    .map(([, args]) => (args as { data: string }).data);
 let terminalOnData: ((data: Uint8Array) => void) | undefined;
 let terminalInputHandler: ((data: string) => void) | undefined;
 let terminalOscHandler: ((data: string) => boolean) | undefined;
@@ -55,31 +56,33 @@ let useTerminalOptionsHistory: MockUseTerminalOptions[] = [];
 let useTerminalSessionId: string | null = "session-1";
 let useTerminalIsConnected = true;
 let useTerminalBootstrapped = false;
-let clipboardImagePasteOptions: {
-  onImageSaved: (filePath: string) => Promise<void>;
-  onError: (message: string) => void;
-} | undefined;
-const composeBarPropsMock = mock((_props: {
-  environmentId?: string;
-  sessionKey: string;
-  className?: string;
-}) => {});
-let composeBarOptions: {
-  isOpen: boolean;
-  onSend: (
-    images: Array<{
-      id: string;
-      dataUrl: string;
-      base64Data: string;
-      width: number;
-      height: number;
-    }>,
-    text: string,
-  ) => Promise<void>;
-  showAddressAll?: boolean;
-  onAddressAll?: () => void;
-  className?: string;
-} | undefined;
+let clipboardImagePasteOptions:
+  | {
+      onImageSaved: (filePath: string) => Promise<void>;
+      onError: (message: string) => void;
+    }
+  | undefined;
+const composeBarPropsMock = mock(
+  (_props: { environmentId?: string; sessionKey: string; className?: string }) => {},
+);
+let composeBarOptions:
+  | {
+      isOpen: boolean;
+      onSend: (
+        images: Array<{
+          id: string;
+          dataUrl: string;
+          base64Data: string;
+          width: number;
+          height: number;
+        }>,
+        text: string,
+      ) => Promise<void>;
+      showAddressAll?: boolean;
+      onAddressAll?: () => void;
+      className?: string;
+    }
+  | undefined;
 
 mock.module("@/hooks/useTerminal", () => ({
   useTerminal: (options: MockUseTerminalOptions) => {
@@ -174,13 +177,11 @@ const portalStoreActions = {
   markTerminalOpened: mock(() => {
     portalTerminalIsOpened = true;
   }),
-  setTerminalContainer: mock((
-    _environmentId: string,
-    _tabId: string,
-    containerElement: HTMLDivElement,
-  ) => {
-    storedContainerElement = containerElement;
-  }),
+  setTerminalContainer: mock(
+    (_environmentId: string, _tabId: string, containerElement: HTMLDivElement) => {
+      storedContainerElement = containerElement;
+    },
+  ),
   setTerminalPane: mock(() => {}),
   recreateTerminal: mock(() => null),
   clearTerminalsForEnvironment: mock(() => {}),
@@ -204,12 +205,12 @@ const portalStoreState = () => ({
 const useTerminalPortalStoreMock = (<T,>(
   selector?: (state: ReturnType<typeof portalStoreState>) => T,
 ) => {
-    if (!selector) {
-      return portalStoreActions;
-    }
+  if (!selector) {
+    return portalStoreActions;
+  }
 
-    return selector(portalStoreState());
-  }) as any;
+  return selector(portalStoreState());
+}) as any;
 
 useTerminalPortalStoreMock.getState = () => ({
   ...portalStoreActions,
@@ -389,7 +390,7 @@ describe("PersistentTerminal", () => {
     invokeMock.mockImplementation(async (command: string) =>
       command === "bootstrap_terminal_session"
         ? { bootstrapped: true, delivered: true, duplicate: false }
-        : undefined
+        : undefined,
     );
     terminalOnData = undefined;
     terminalInputHandler = undefined;
@@ -415,7 +416,9 @@ describe("PersistentTerminal", () => {
     persistentSessionStore.updateSessionStatus.mockClear();
     persistentSessionStore.loadSessionsForEnvironment.mockClear();
     persistentSessionStore.saveSessionBuffer.mockClear();
-    persistentSessionStore.loadSessionBuffer.mockImplementation(async (): Promise<string | null> => null);
+    persistentSessionStore.loadSessionBuffer.mockImplementation(
+      async (): Promise<string | null> => null,
+    );
     persistentSessionStore.getSessionsByEnvironment = () => [];
 
     // Reset real stores to controlled state
@@ -476,26 +479,32 @@ describe("PersistentTerminal", () => {
 
     usePaneLayoutStore.setState({
       environments: new Map([
-        ["env-1", {
-          root: {
-            kind: "leaf",
-            id: "pane-1",
-            tabs: [{ id: "tab-1", type: "claude" }],
-            activeTabId: "tab-1",
+        [
+          "env-1",
+          {
+            root: {
+              kind: "leaf",
+              id: "pane-1",
+              tabs: [{ id: "tab-1", type: "claude" }],
+              activeTabId: "tab-1",
+            },
+            activePaneId: "stale-pane",
+            containerId: "container-1",
           },
-          activePaneId: "stale-pane",
-          containerId: "container-1",
-        }],
-        ["env-2", {
-          root: {
-            kind: "leaf",
-            id: "pane-2",
-            tabs: [{ id: "tab-2", type: "plain" }],
-            activeTabId: "tab-2",
+        ],
+        [
+          "env-2",
+          {
+            root: {
+              kind: "leaf",
+              id: "pane-2",
+              tabs: [{ id: "tab-2", type: "plain" }],
+              activeTabId: "tab-2",
+            },
+            activePaneId: "pane-2",
+            containerId: "container-2",
           },
-          activePaneId: "pane-2",
-          containerId: "container-2",
-        }],
+        ],
       ]),
       activeEnvironmentId: "env-2",
     });
@@ -518,7 +527,7 @@ describe("PersistentTerminal", () => {
         isFocused={true}
         isFirstTab={false}
         paneId="pane-1"
-      />
+      />,
     );
 
     await waitFor(() => {
@@ -550,14 +559,17 @@ describe("PersistentTerminal", () => {
     await waitFor(() => {
       expect(terminal.open).toHaveBeenCalledTimes(1);
       expect(portalStoreActions.markTerminalOpened).toHaveBeenCalledWith("env-1", "tab-1");
-      expect(portalStoreActions.setTerminalContainer)
-        .toHaveBeenCalledWith("env-1", "tab-1", expect.any(HTMLDivElement));
+      expect(portalStoreActions.setTerminalContainer).toHaveBeenCalledWith(
+        "env-1",
+        "tab-1",
+        expect.any(HTMLDivElement),
+      );
       expect(connectMock).toHaveBeenCalledTimes(1);
     });
     const openedContainer = terminal.open.mock.calls[0]?.[0] as HTMLElement;
     expect(openedContainer.parentElement).toBe(
       Array.from(view.container.querySelectorAll("div")).find((element) =>
-        element.className.includes("absolute inset-x-0 top-0")
+        element.className.includes("absolute inset-x-0 top-0"),
       ) ?? null,
     );
   });
@@ -803,14 +815,10 @@ describe("PersistentTerminal", () => {
     );
 
     const terminalHost = Array.from(view.container.querySelectorAll("div")).find((element) =>
-      element.className.includes("absolute inset-x-0 top-0")
+      element.className.includes("absolute inset-x-0 top-0"),
     );
-    expect(terminalHost?.className).toContain(
-      "bottom-[calc(3rem+env(safe-area-inset-bottom))]",
-    );
-    expect(composeBarOptions?.className).toBe(
-      "bottom-[calc(3.5rem+env(safe-area-inset-bottom))]",
-    );
+    expect(terminalHost?.className).toContain("bottom-[calc(3rem+env(safe-area-inset-bottom))]");
+    expect(composeBarOptions?.className).toBe("bottom-[calc(3.5rem+env(safe-area-inset-bottom))]");
   });
 
   it("records mobile-key activity once within the throttle window", async () => {
@@ -842,15 +850,14 @@ describe("PersistentTerminal", () => {
       />,
     );
 
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Up arrow" })).toBeTruthy()
-    );
+    await waitFor(() => expect(screen.getByRole("button", { name: "Up arrow" })).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "Up arrow" }));
     fireEvent.click(screen.getByRole("button", { name: "Down arrow" }));
 
     await waitFor(() =>
-      expect(persistentSessionStore.updateSessionActivity)
-        .toHaveBeenCalledWith("connected-session")
+      expect(persistentSessionStore.updateSessionActivity).toHaveBeenCalledWith(
+        "connected-session",
+      ),
     );
     expect(persistentSessionStore.updateSessionActivity).toHaveBeenCalledTimes(1);
   });
@@ -965,7 +972,7 @@ describe("PersistentTerminal", () => {
         isFocused={true}
         isFirstTab={false}
         paneId="pane-1"
-      />
+      />,
     );
 
     await waitFor(() => {
@@ -986,7 +993,7 @@ describe("PersistentTerminal", () => {
         isFocused={true}
         isFirstTab={false}
         paneId="pane-1"
-      />
+      />,
     );
 
     await waitFor(() => {
@@ -1008,7 +1015,7 @@ describe("PersistentTerminal", () => {
         isFocused={true}
         isFirstTab={false}
         paneId="pane-1"
-      />
+      />,
     );
 
     fireEvent.click(container.querySelector("div[style]") as HTMLElement);
@@ -1046,7 +1053,7 @@ describe("PersistentTerminal", () => {
           isFirstTab={false}
           paneId="pane-1"
         />
-      </>
+      </>,
     );
 
     await waitFor(() => {
@@ -1078,7 +1085,7 @@ describe("PersistentTerminal", () => {
         isFocused={true}
         isFirstTab={false}
         paneId="pane-1"
-      />
+      />,
     );
 
     await waitFor(() => {
@@ -1092,28 +1099,31 @@ describe("PersistentTerminal", () => {
     ["codex", true],
     ["plain", false],
     ["root", false],
-  ] as const)("sets environment activity tracking for %s terminal tabs", async (tabType, expected) => {
-    render(
-      <PersistentTerminal
-        terminalData={createTerminalData()}
-        tabId="tab-1"
-        tabType={tabType}
-        containerId="container-1"
-        environmentId="env-1"
-        isEnvironmentVisible={true}
-        isActive={true}
-        isFocused={true}
-        isFirstTab={false}
-        paneId="pane-1"
-      />
-    );
+  ] as const)(
+    "sets environment activity tracking for %s terminal tabs",
+    async (tabType, expected) => {
+      render(
+        <PersistentTerminal
+          terminalData={createTerminalData()}
+          tabId="tab-1"
+          tabType={tabType}
+          containerId="container-1"
+          environmentId="env-1"
+          isEnvironmentVisible={true}
+          isActive={true}
+          isFocused={true}
+          isFirstTab={false}
+          paneId="pane-1"
+        />,
+      );
 
-    await waitFor(() => {
-      expect(lastUseTerminalOptions?.trackEnvironmentActivity).toBe(expected);
-      expect(lastUseTerminalOptions?.terminalKey).toBe("tab-1");
-      expect(lastUseTerminalOptions?.replayOutputBuffer).toBe(true);
-    });
-  });
+      await waitFor(() => {
+        expect(lastUseTerminalOptions?.trackEnvironmentActivity).toBe(expected);
+        expect(lastUseTerminalOptions?.terminalKey).toBe("tab-1");
+        expect(lastUseTerminalOptions?.replayOutputBuffer).toBe(true);
+      });
+    },
+  );
 
   it("replays backend setup output even when a setup tab has a serialized xterm buffer", async () => {
     const setupSessionKey = createSessionKey(null, "tab-1", "env-1");
@@ -1147,7 +1157,7 @@ describe("PersistentTerminal", () => {
         isFirstTab={true}
         isSetupTab
         paneId="pane-1"
-      />
+      />,
     );
 
     await waitFor(() => {
@@ -1260,10 +1270,9 @@ describe("PersistentTerminal", () => {
     await waitFor(() => expect(lastUseTerminalOptions?.onReplay).toBeDefined());
 
     act(() => {
-      lastUseTerminalOptions!.onReplay!(
-        new TextEncoder().encode("replacement output\r\n"),
-        { preserveExisting: true },
-      );
+      lastUseTerminalOptions!.onReplay!(new TextEncoder().encode("replacement output\r\n"), {
+        preserveExisting: true,
+      });
     });
 
     const replayData = terminal.write.mock.calls.at(-1)?.[0];
@@ -1279,9 +1288,10 @@ describe("PersistentTerminal", () => {
   it("prepends late durable history without losing interim live output", async () => {
     let resolvePersistentBuffer: ((buffer: string | null) => void) | undefined;
     persistentSessionStore.loadSessionBuffer.mockImplementation(
-      () => new Promise<string | null>((resolve) => {
-        resolvePersistentBuffer = resolve;
-      }),
+      () =>
+        new Promise<string | null>((resolve) => {
+          resolvePersistentBuffer = resolve;
+        }),
     );
     persistentSessionStore.getSessionsByEnvironment = () => [
       {
@@ -1320,21 +1330,20 @@ describe("PersistentTerminal", () => {
       expect(resolvePersistentBuffer).toBeDefined();
     });
     act(() => {
-      lastUseTerminalOptions!.onReplay!(
-        new TextEncoder().encode("replacement output\r\n"),
-        { preserveExisting: true },
-      );
+      lastUseTerminalOptions!.onReplay!(new TextEncoder().encode("replacement output\r\n"), {
+        preserveExisting: true,
+      });
     });
-    expect(
-      new TextDecoder().decode(terminal.write.mock.calls.at(-1)?.[0] as Uint8Array),
-    ).toBe("replacement output\r\n");
+    expect(new TextDecoder().decode(terminal.write.mock.calls.at(-1)?.[0] as Uint8Array)).toBe(
+      "replacement output\r\n",
+    );
 
     act(() => {
       terminalOnData?.(new TextEncoder().encode("interim live output\r\n"));
     });
-    expect(
-      new TextDecoder().decode(terminal.write.mock.calls.at(-1)?.[0] as Uint8Array),
-    ).toBe("interim live output\r\n");
+    expect(new TextDecoder().decode(terminal.write.mock.calls.at(-1)?.[0] as Uint8Array)).toBe(
+      "interim live output\r\n",
+    );
 
     await act(async () => {
       resolvePersistentBuffer!("late durable history\r\n");
@@ -1384,8 +1393,9 @@ describe("PersistentTerminal", () => {
 
     expect(terminal.clear).toHaveBeenCalledTimes(1);
     expect(terminal.reset).toHaveBeenCalledTimes(1);
-    expect(new TextDecoder().decode(terminal.write.mock.calls.at(-1)?.[0] as Uint8Array))
-      .toBe("\u001b[32mdurable terminal view\u001b[0m\r\n");
+    expect(new TextDecoder().decode(terminal.write.mock.calls.at(-1)?.[0] as Uint8Array)).toBe(
+      "\u001b[32mdurable terminal view\u001b[0m\r\n",
+    );
     expect(screen.getByRole("status").textContent).toContain(
       "Terminal history could not be synchronized",
     );
@@ -1484,9 +1494,7 @@ describe("PersistentTerminal", () => {
     });
     const terminalData = createTerminalData();
     const terminal = terminalData.terminal as unknown as MockTerminal;
-    const arbitraryTail = new Uint8Array([
-      0x9b, 0x33, 0x31, 0x6d, 0xf0, 0x9f, 0x99,
-    ]);
+    const arbitraryTail = new Uint8Array([0x9b, 0x33, 0x31, 0x6d, 0xf0, 0x9f, 0x99]);
 
     render(
       <PersistentTerminal
@@ -1513,12 +1521,11 @@ describe("PersistentTerminal", () => {
 
     expect(terminal.clear).toHaveBeenCalledTimes(1);
     expect(terminal.reset).toHaveBeenCalledTimes(1);
-    expect(new TextDecoder().decode(terminal.write.mock.calls.at(-1)?.[0] as Uint8Array))
-      .toBe("\u001b[?25hvalid \u{1F642} checkpoint\r\n");
-    expect(terminal.write).not.toHaveBeenCalledWith(arbitraryTail);
-    expect(screen.getByRole("status").textContent).toContain(
-      "Terminal history was truncated",
+    expect(new TextDecoder().decode(terminal.write.mock.calls.at(-1)?.[0] as Uint8Array)).toBe(
+      "\u001b[?25hvalid \u{1F642} checkpoint\r\n",
     );
+    expect(terminal.write).not.toHaveBeenCalledWith(arbitraryTail);
+    expect(screen.getByRole("status").textContent).toContain("Terminal history was truncated");
   });
 
   it("preserves xterm parser state and discards a truncated tail when no durable history exists", async () => {
@@ -1553,17 +1560,16 @@ describe("PersistentTerminal", () => {
     expect(terminal.reset).not.toHaveBeenCalled();
     expect(terminal.write).not.toHaveBeenCalled();
     expect(terminal.write).not.toHaveBeenCalledWith(arbitraryTail);
-    expect(screen.getByRole("status").textContent).toContain(
-      "Earlier output may be unavailable",
-    );
+    expect(screen.getByRole("status").textContent).toContain("Earlier output may be unavailable");
   });
 
   it("replaces a truncated tail with late durable history plus post-snapshot live output", async () => {
     let resolvePersistentBuffer: ((buffer: string | null) => void) | undefined;
     persistentSessionStore.loadSessionBuffer.mockImplementation(
-      () => new Promise<string | null>((resolve) => {
-        resolvePersistentBuffer = resolve;
-      }),
+      () =>
+        new Promise<string | null>((resolve) => {
+          resolvePersistentBuffer = resolve;
+        }),
     );
     persistentSessionStore.getSessionsByEnvironment = () => [
       {
@@ -1614,12 +1620,11 @@ describe("PersistentTerminal", () => {
     });
 
     await waitFor(() => {
-      expect(new TextDecoder().decode(terminal.write.mock.calls.at(-1)?.[0] as Uint8Array))
-        .toBe("durable checkpoint\r\nlive after snapshot\r\n");
+      expect(new TextDecoder().decode(terminal.write.mock.calls.at(-1)?.[0] as Uint8Array)).toBe(
+        "durable checkpoint\r\nlive after snapshot\r\n",
+      );
     });
-    expect(screen.getByRole("status").textContent).toContain(
-      "Terminal history was truncated",
-    );
+    expect(screen.getByRole("status").textContent).toContain("Terminal history was truncated");
   });
 
   it.each(["null", "reject"] as const)(
@@ -1628,10 +1633,11 @@ describe("PersistentTerminal", () => {
       let resolvePersistentBuffer: ((buffer: string | null) => void) | undefined;
       let rejectPersistentBuffer: ((error: Error) => void) | undefined;
       persistentSessionStore.loadSessionBuffer.mockImplementation(
-        () => new Promise<string | null>((resolve, reject) => {
-          resolvePersistentBuffer = resolve;
-          rejectPersistentBuffer = reject;
-        }),
+        () =>
+          new Promise<string | null>((resolve, reject) => {
+            resolvePersistentBuffer = resolve;
+            rejectPersistentBuffer = reject;
+          }),
       );
       persistentSessionStore.getSessionsByEnvironment = () => [
         {
@@ -1697,9 +1703,10 @@ describe("PersistentTerminal", () => {
   it("bounds output retained while a durable buffer load is hung", async () => {
     let resolvePersistentBuffer: ((buffer: string | null) => void) | undefined;
     persistentSessionStore.loadSessionBuffer.mockImplementation(
-      () => new Promise<string | null>((resolve) => {
-        resolvePersistentBuffer = resolve;
-      }),
+      () =>
+        new Promise<string | null>((resolve) => {
+          resolvePersistentBuffer = resolve;
+        }),
     );
     persistentSessionStore.getSessionsByEnvironment = () => [
       {
@@ -1740,9 +1747,7 @@ describe("PersistentTerminal", () => {
       terminalOnData?.(new Uint8Array(600 * 1024));
     });
 
-    expect(screen.getByRole("status").textContent).toContain(
-      "Current output was retained",
-    );
+    expect(screen.getByRole("status").textContent).toContain("Current output was retained");
     const resetCountBeforeResolution = terminal.reset.mock.calls.length;
 
     await act(async () => {
@@ -1751,8 +1756,9 @@ describe("PersistentTerminal", () => {
     });
 
     await waitFor(() => {
-      expect(useTerminalSessionStore.getState().sessions.get("container-1:tab-1")?.serializedBuffer)
-        .toBe("late history");
+      expect(
+        useTerminalSessionStore.getState().sessions.get("container-1:tab-1")?.serializedBuffer,
+      ).toBe("late history");
     });
     expect(terminal.reset).toHaveBeenCalledTimes(resetCountBeforeResolution);
   });
@@ -1792,10 +1798,9 @@ describe("PersistentTerminal", () => {
 
     await waitFor(() => expect(lastUseTerminalOptions?.onReplay).toBeDefined());
     act(() => {
-      lastUseTerminalOptions!.onReplay!(
-        new TextEncoder().encode("$ "),
-        { preserveExisting: false },
-      );
+      lastUseTerminalOptions!.onReplay!(new TextEncoder().encode("$ "), {
+        preserveExisting: false,
+      });
     });
 
     await waitFor(() => {
@@ -1982,21 +1987,21 @@ describe("PersistentTerminal", () => {
         isFocused={true}
         isFirstTab={false}
         paneId="pane-1"
-      />
+      />,
     );
 
     await waitFor(() => expect(terminalKeyHandler).toBeDefined());
 
-    expect(terminalKeyHandler!(
-      new KeyboardEvent("keydown", { key: "c", metaKey: true })
-    )).toBe(false);
+    expect(terminalKeyHandler!(new KeyboardEvent("keydown", { key: "c", metaKey: true }))).toBe(
+      false,
+    );
     await waitFor(() => {
       expect(mockWriteText).toHaveBeenCalledWith("selected text");
     });
 
-    expect(terminalKeyHandler!(
-      new KeyboardEvent("keydown", { key: "a", metaKey: true })
-    )).toBe(false);
+    expect(terminalKeyHandler!(new KeyboardEvent("keydown", { key: "a", metaKey: true }))).toBe(
+      false,
+    );
     expect(terminal.selectAll).toHaveBeenCalled();
 
     const pasteEvent = new KeyboardEvent("keydown", { key: "v", metaKey: true });
@@ -2071,14 +2076,14 @@ describe("PersistentTerminal", () => {
       );
 
       await waitFor(() => expect(terminalKeyHandler).toBeDefined());
-      expect(terminalKeyHandler!(
-        new KeyboardEvent("keydown", { key: "c", metaKey: true }),
-      )).toBe(false);
+      expect(terminalKeyHandler!(new KeyboardEvent("keydown", { key: "c", metaKey: true }))).toBe(
+        false,
+      );
       await waitFor(() =>
         expect(consoleError).toHaveBeenCalledWith(
           "[PersistentTerminal] Failed to copy selection:",
           expect.objectContaining({ message: "clipboard unavailable" }),
-        )
+        ),
       );
     } finally {
       console.error = originalError;
@@ -2141,28 +2146,31 @@ describe("PersistentTerminal", () => {
       expect(composeBarOptions).toBeDefined();
     });
 
-    expect(terminalKeyHandler!(new KeyboardEvent("keyup", { key: "v", metaKey: true })))
-      .toBe(true);
-    expect(terminalKeyHandler!(
-      new KeyboardEvent("keydown", { key: "w", metaKey: true }),
-    )).toBe(false);
-    expect(terminalKeyHandler!(
-      new KeyboardEvent("keydown", { key: "2", code: "Digit2", ctrlKey: true }),
-    )).toBe(false);
-    expect(terminalKeyHandler!(
-      new KeyboardEvent("keydown", { key: "c", ctrlKey: true }),
-    )).toBe(true);
-    expect(terminalKeyHandler!(
-      new KeyboardEvent("keydown", { key: "c", ctrlKey: true, shiftKey: true }),
-    )).toBe(true);
-    expect(terminalKeyHandler!(
-      new KeyboardEvent("keydown", { key: "c", metaKey: true, altKey: true }),
-    )).toBe(true);
+    expect(terminalKeyHandler!(new KeyboardEvent("keyup", { key: "v", metaKey: true }))).toBe(true);
+    expect(terminalKeyHandler!(new KeyboardEvent("keydown", { key: "w", metaKey: true }))).toBe(
+      false,
+    );
+    expect(
+      terminalKeyHandler!(
+        new KeyboardEvent("keydown", { key: "2", code: "Digit2", ctrlKey: true }),
+      ),
+    ).toBe(false);
+    expect(terminalKeyHandler!(new KeyboardEvent("keydown", { key: "c", ctrlKey: true }))).toBe(
+      true,
+    );
+    expect(
+      terminalKeyHandler!(
+        new KeyboardEvent("keydown", { key: "c", ctrlKey: true, shiftKey: true }),
+      ),
+    ).toBe(true);
+    expect(
+      terminalKeyHandler!(new KeyboardEvent("keydown", { key: "c", metaKey: true, altKey: true })),
+    ).toBe(true);
 
     act(() => {
-      expect(terminalKeyHandler!(
-        new KeyboardEvent("keydown", { key: "i", metaKey: true }),
-      )).toBe(false);
+      expect(terminalKeyHandler!(new KeyboardEvent("keydown", { key: "i", metaKey: true }))).toBe(
+        false,
+      );
     });
     await waitFor(() => expect(composeBarOptions?.isOpen).toBe(true));
 
@@ -2193,10 +2201,7 @@ describe("PersistentTerminal", () => {
 
     await waitFor(() => expect(terminalOnData).toBeDefined());
     act(() => terminalOnData?.(new TextEncoder().encode("workspace $ ")));
-    await waitFor(
-      () => expect(bootstrapWrites()).toContain("echo ready\n"),
-      { timeout: 1_000 },
-    );
+    await waitFor(() => expect(bootstrapWrites()).toContain("echo ready\n"), { timeout: 1_000 });
 
     writeMock.mockClear();
     view.rerender(
@@ -2216,10 +2221,7 @@ describe("PersistentTerminal", () => {
     );
 
     act(() => terminalOnData?.(new TextEncoder().encode("replacement $ ")));
-    await waitFor(
-      () => expect(bootstrapWrites()).toContain("echo ready\n"),
-      { timeout: 1_000 },
-    );
+    await waitFor(() => expect(bootstrapWrites()).toContain("echo ready\n"), { timeout: 1_000 });
   });
 
   it("sends compose images sequentially before normalized single-line text", async () => {
@@ -2302,7 +2304,7 @@ describe("PersistentTerminal", () => {
         isFocused={true}
         isFirstTab={false}
         paneId="pane-1"
-      />
+      />,
     );
 
     await waitFor(() => expect(clipboardImagePasteOptions).toBeDefined());
@@ -2328,7 +2330,7 @@ describe("PersistentTerminal", () => {
         isFocused={true}
         isFirstTab={false}
         paneId="pane-1"
-      />
+      />,
     );
 
     view.rerender(
@@ -2343,7 +2345,7 @@ describe("PersistentTerminal", () => {
         isFocused={true}
         isFirstTab={false}
         paneId="pane-2"
-      />
+      />,
     );
 
     await waitFor(() => {
@@ -2422,7 +2424,7 @@ describe("PersistentTerminal", () => {
         isFocused={true}
         isFirstTab={false}
         paneId="pane-1"
-      />
+      />,
     );
 
     await waitFor(() => {
@@ -2464,7 +2466,7 @@ describe("PersistentTerminal", () => {
         isFocused={true}
         isFirstTab={false}
         paneId="pane-1"
-      />
+      />,
     );
 
     await waitFor(() => {
@@ -2517,7 +2519,7 @@ describe("PersistentTerminal", () => {
         isFocused={true}
         isFirstTab={true}
         paneId="pane-1"
-      />
+      />,
     );
 
     // A first container tab with no prior session waits for the setup marker
@@ -2571,16 +2573,19 @@ describe("PersistentTerminal", () => {
 
     usePaneLayoutStore.setState({
       environments: new Map([
-        ["env-1", {
-          root: {
-            kind: "leaf",
-            id: "pane-1",
-            tabs: [{ id: "tab-1", type: "claude" }],
-            activeTabId: "tab-1",
+        [
+          "env-1",
+          {
+            root: {
+              kind: "leaf",
+              id: "pane-1",
+              tabs: [{ id: "tab-1", type: "claude" }],
+              activeTabId: "tab-1",
+            },
+            activePaneId: "pane-1",
+            containerId: null,
           },
-          activePaneId: "pane-1",
-          containerId: null,
-        }],
+        ],
       ]),
       activeEnvironmentId: "env-1",
     });
@@ -2597,7 +2602,7 @@ describe("PersistentTerminal", () => {
         isFocused={true}
         isFirstTab={false}
         paneId="pane-1"
-      />
+      />,
     );
 
     await waitFor(() => {
@@ -2612,7 +2617,7 @@ describe("PersistentTerminal", () => {
 
   it("marks a reused container as ready when setup reports it is already set up", async () => {
     const onReady = mock(
-      (_payload: { persistSetupComplete: boolean; workspaceReady?: boolean }) => {}
+      (_payload: { persistSetupComplete: boolean; workspaceReady?: boolean }) => {},
     );
 
     render(
@@ -2628,7 +2633,7 @@ describe("PersistentTerminal", () => {
         isFirstTab={true}
         paneId="pane-1"
         onReady={onReady}
-      />
+      />,
     );
 
     await act(async () => {
@@ -2647,7 +2652,7 @@ describe("PersistentTerminal", () => {
 
   it("does not persist completion when container setup fails", async () => {
     const onReady = mock(
-      (_payload: { persistSetupComplete: boolean; workspaceReady?: boolean }) => {}
+      (_payload: { persistSetupComplete: boolean; workspaceReady?: boolean }) => {},
     );
 
     render(
@@ -2663,11 +2668,13 @@ describe("PersistentTerminal", () => {
         isFirstTab={true}
         paneId="pane-1"
         onReady={onReady}
-      />
+      />,
     );
 
     await act(async () => {
-      terminalOnData?.(new TextEncoder().encode("=== Workspace Setup Failed ===\n=== Workspace Ready ===\n"));
+      terminalOnData?.(
+        new TextEncoder().encode("=== Workspace Setup Failed ===\n=== Workspace Ready ===\n"),
+      );
     });
 
     await waitFor(() => {
@@ -2680,7 +2687,7 @@ describe("PersistentTerminal", () => {
 
   it("marks workspace ready when a reconnected first tab buffer contains setup completion", async () => {
     const onReady = mock(
-      (_payload: { persistSetupComplete: boolean; workspaceReady?: boolean }) => {}
+      (_payload: { persistSetupComplete: boolean; workspaceReady?: boolean }) => {},
     );
     useTerminalSessionStore.setState({
       sessions: new Map([
@@ -2708,7 +2715,7 @@ describe("PersistentTerminal", () => {
         isFirstTab={true}
         paneId="pane-1"
         onReady={onReady}
-      />
+      />,
     );
 
     await waitFor(() => {
@@ -2727,7 +2734,7 @@ describe("PersistentTerminal", () => {
 
   it("keeps setup detection active when reconnecting an unfinished first tab", async () => {
     const onReady = mock(
-      (_payload: { persistSetupComplete: boolean; workspaceReady?: boolean }) => {}
+      (_payload: { persistSetupComplete: boolean; workspaceReady?: boolean }) => {},
     );
     useTerminalSessionStore.setState({
       sessions: new Map([
@@ -2755,7 +2762,7 @@ describe("PersistentTerminal", () => {
         isFirstTab={true}
         paneId="pane-1"
         onReady={onReady}
-      />
+      />,
     );
 
     await act(async () => {
@@ -2797,11 +2804,13 @@ describe("PersistentTerminal", () => {
         isFocused={true}
         isFirstTab={false}
         paneId="pane-1"
-      />
+      />,
     );
 
     await waitFor(() => {
-      expect(useTerminalSessionStore.getState().sessions.get("container-1:tab-1")?.sessionId).toBe("session-1");
+      expect(useTerminalSessionStore.getState().sessions.get("container-1:tab-1")?.sessionId).toBe(
+        "session-1",
+      );
     });
   });
 
@@ -2822,7 +2831,7 @@ describe("PersistentTerminal", () => {
         paneId="pane-1"
         isSetupTab={true}
         onSetupComplete={onSetupComplete}
-      />
+      />,
     );
 
     await act(async () => {
@@ -2853,7 +2862,7 @@ describe("PersistentTerminal", () => {
         paneId="pane-1"
         isSetupTab={true}
         onSetupComplete={onSetupComplete}
-      />
+      />,
     );
 
     await act(async () => {
@@ -2878,7 +2887,7 @@ describe("PersistentTerminal", () => {
         paneId="pane-1"
         isSetupTab={true}
         onSetupComplete={onSetupComplete}
-      />
+      />,
     );
 
     await act(async () => {
@@ -2896,9 +2905,7 @@ describe("PersistentTerminal", () => {
     useEnvironmentStore.setState((state) => ({
       ...state,
       environments: state.environments.map((environment) =>
-        environment.id === "env-1"
-          ? { ...environment, setupScriptsComplete: true }
-          : environment
+        environment.id === "env-1" ? { ...environment, setupScriptsComplete: true } : environment,
       ),
     }));
 
@@ -2916,7 +2923,7 @@ describe("PersistentTerminal", () => {
         paneId="pane-1"
         isSetupTab={true}
         onSetupComplete={mock(() => {})}
-      />
+      />,
     );
 
     await act(async () => {
@@ -2940,7 +2947,7 @@ describe("PersistentTerminal", () => {
         paneId="pane-1"
         isSetupTab={true}
         onSetupComplete={mock(() => {})}
-      />
+      />,
     );
 
     await act(async () => {
@@ -2964,14 +2971,15 @@ describe("PersistentTerminal", () => {
         isFirstTab={false}
         paneId="pane-1"
         isSetupTab={true}
-      />
+      />,
     );
 
     let setupWrite: string | undefined;
     await waitFor(() => {
       const writes = bootstrapWrites();
-      setupWrite = writes.find((entry: unknown) =>
-        typeof entry === "string" && entry.includes("(false && echo ok) && printf")
+      setupWrite = writes.find(
+        (entry: unknown) =>
+          typeof entry === "string" && entry.includes("(false && echo ok) && printf"),
       );
       expect(setupWrite).toBeDefined();
     });
@@ -2997,16 +3005,19 @@ describe("PersistentTerminal", () => {
         isFirstTab={true}
         paneId="pane-1"
         isSetupTab={true}
-      />
+      />,
     );
 
     await waitFor(() => {
       const writes = bootstrapWrites();
-      expect(writes.some((entry: unknown) =>
-        typeof entry === "string" &&
-        entry.includes("/usr/local/bin/workspace-setup.sh") &&
-        entry.includes("setup_done")
-      )).toBe(true);
+      expect(
+        writes.some(
+          (entry: unknown) =>
+            typeof entry === "string" &&
+            entry.includes("/usr/local/bin/workspace-setup.sh") &&
+            entry.includes("setup_done"),
+        ),
+      ).toBe(true);
     });
   });
 
@@ -3023,7 +3034,7 @@ describe("PersistentTerminal", () => {
         isFocused={true}
         isFirstTab={false}
         paneId="pane-1"
-      />
+      />,
     );
 
     await waitFor(() => {
@@ -3112,9 +3123,9 @@ describe("PersistentTerminal", () => {
     await waitFor(() => expect(persistentSessionStore.createSession).toHaveBeenCalled());
     view.unmount();
 
-    expect(
-      useTerminalSessionStore.getState().sessions.get(sessionKey)?.serializedBuffer,
-    ).toBe(durableBuffer);
+    expect(useTerminalSessionStore.getState().sessions.get(sessionKey)?.serializedBuffer).toBe(
+      durableBuffer,
+    );
     expect(persistentSessionStore.saveSessionBuffer).not.toHaveBeenCalled();
   });
 
@@ -3146,7 +3157,7 @@ describe("PersistentTerminal", () => {
         isFocused={true}
         isFirstTab={false}
         paneId="pane-1"
-      />
+      />,
     );
 
     await waitFor(() => {
@@ -3164,10 +3175,10 @@ describe("PersistentTerminal", () => {
 
   it("marks workspace ready when an asynchronously restored first-tab buffer contains setup completion", async () => {
     const onReady = mock(
-      (_payload: { persistSetupComplete: boolean; workspaceReady?: boolean }) => {}
+      (_payload: { persistSetupComplete: boolean; workspaceReady?: boolean }) => {},
     );
-    persistentSessionStore.loadSessionBuffer.mockImplementation(async () =>
-      "Container setup completed successfully!\n=== Workspace Ready ===\n"
+    persistentSessionStore.loadSessionBuffer.mockImplementation(
+      async () => "Container setup completed successfully!\n=== Workspace Ready ===\n",
     );
     persistentSessionStore.getSessionsByEnvironment = () => [
       {
@@ -3197,7 +3208,7 @@ describe("PersistentTerminal", () => {
         isFirstTab={true}
         paneId="pane-1"
         onReady={onReady}
-      />
+      />,
     );
 
     await waitFor(() => {
@@ -3210,10 +3221,10 @@ describe("PersistentTerminal", () => {
 
   it("does not persist completion when an asynchronously restored first-tab buffer contains setup failure", async () => {
     const onReady = mock(
-      (_payload: { persistSetupComplete: boolean; workspaceReady?: boolean }) => {}
+      (_payload: { persistSetupComplete: boolean; workspaceReady?: boolean }) => {},
     );
-    persistentSessionStore.loadSessionBuffer.mockImplementation(async () =>
-      "=== Workspace Setup Failed ===\n=== Workspace Ready ===\n"
+    persistentSessionStore.loadSessionBuffer.mockImplementation(
+      async () => "=== Workspace Setup Failed ===\n=== Workspace Ready ===\n",
     );
     persistentSessionStore.getSessionsByEnvironment = () => [
       {
@@ -3243,7 +3254,7 @@ describe("PersistentTerminal", () => {
         isFirstTab={true}
         paneId="pane-1"
         onReady={onReady}
-      />
+      />,
     );
 
     await waitFor(() => {
@@ -3282,7 +3293,7 @@ describe("PersistentTerminal", () => {
         isFocused={true}
         isFirstTab={false}
         paneId="pane-1"
-      />
+      />,
     );
 
     await waitFor(() => {
@@ -3321,7 +3332,7 @@ describe("PersistentTerminal", () => {
         isFocused={true}
         isFirstTab={false}
         paneId="pane-1"
-      />
+      />,
     );
 
     // Wait for session creation effect to settle
@@ -3418,8 +3429,10 @@ describe("PersistentTerminal", () => {
     );
 
     await waitFor(() => {
-      expect(persistentSessionStore.updateSessionStatus)
-        .toHaveBeenCalledWith("disconnected-session", "connected");
+      expect(persistentSessionStore.updateSessionStatus).toHaveBeenCalledWith(
+        "disconnected-session",
+        "connected",
+      );
     });
     await act(async () => {
       await Promise.resolve();
@@ -3460,8 +3473,9 @@ describe("PersistentTerminal", () => {
     await waitFor(() => expect(terminalInputHandler).toBeDefined());
     act(() => terminalInputHandler?.("input"));
     await waitFor(() => {
-      expect(persistentSessionStore.updateSessionActivity)
-        .toHaveBeenCalledWith("connected-session");
+      expect(persistentSessionStore.updateSessionActivity).toHaveBeenCalledWith(
+        "connected-session",
+      );
     });
   });
 
@@ -3493,7 +3507,7 @@ describe("PersistentTerminal", () => {
         isFocused={true}
         isFirstTab={false}
         paneId="pane-1"
-      />
+      />,
     );
 
     await waitFor(() => {
@@ -3506,9 +3520,7 @@ describe("PersistentTerminal", () => {
   it("shows Address all for launched review tabs and writes the shared prompt", async () => {
     useTerminalBootstrapped = true;
     useTerminalSessionStore.setState({
-      sessions: new Map([
-        ["container-1:tab-1", { sessionId: "session-1" }],
-      ]),
+      sessions: new Map([["container-1:tab-1", { sessionId: "session-1" }]]),
       composeDraftText: new Map(),
       composeDraftImages: new Map(),
     });
@@ -3526,7 +3538,7 @@ describe("PersistentTerminal", () => {
         isFirstTab={false}
         isReviewTab
         paneId="pane-1"
-      />
+      />,
     );
 
     fireEvent.click(await screen.findByRole("button", { name: "Address all" }));
@@ -3560,18 +3572,16 @@ describe("PersistentTerminal", () => {
         isFirstTab={false}
         isReviewTab
         paneId="pane-1"
-      />
+      />,
     );
 
     act(() => {
       terminalOnData?.(new TextEncoder().encode("shell output ".repeat(12)));
     });
 
-    expect(await screen.findByRole(
-      "button",
-      { name: "Address all" },
-      { timeout: 2_000 },
-    )).toBeTruthy();
+    expect(
+      await screen.findByRole("button", { name: "Address all" }, { timeout: 2_000 }),
+    ).toBeTruthy();
     expect(attempts).toBe(2);
     expect(markBootstrappedMock).toHaveBeenCalledWith("session-1");
   });
@@ -3598,7 +3608,7 @@ describe("PersistentTerminal", () => {
         isFirstTab={false}
         isReviewTab
         paneId="pane-1"
-      />
+      />,
     );
     act(() => {
       terminalOnData?.(new TextEncoder().encode("shell output ".repeat(12)));
@@ -3613,7 +3623,7 @@ describe("PersistentTerminal", () => {
     invokeMock.mockImplementation(async (command: string) =>
       command === "bootstrap_terminal_session"
         ? { bootstrapped: false, delivered: false, duplicate: false }
-        : undefined
+        : undefined,
     );
 
     render(
@@ -3628,7 +3638,7 @@ describe("PersistentTerminal", () => {
         isFocused={true}
         isFirstTab={false}
         paneId="pane-1"
-      />
+      />,
     );
 
     act(() => {
@@ -3645,7 +3655,7 @@ describe("PersistentTerminal", () => {
     invokeMock.mockImplementation(async (command: string) =>
       command === "bootstrap_terminal_session"
         ? { bootstrapped: false, delivered: false, duplicate: false }
-        : undefined
+        : undefined,
     );
 
     const view = render(
@@ -3660,7 +3670,7 @@ describe("PersistentTerminal", () => {
         isFocused={true}
         isFirstTab={false}
         paneId="pane-1"
-      />
+      />,
     );
 
     act(() => {
@@ -3716,10 +3726,9 @@ describe("PersistentTerminal", () => {
       resolveFirst({ bootstrapped: true, delivered: true, duplicate: false });
     });
 
-    await waitFor(
-      () => expect(markBootstrappedMock).toHaveBeenCalledWith("session-2"),
-      { timeout: 2_000 },
-    );
+    await waitFor(() => expect(markBootstrappedMock).toHaveBeenCalledWith("session-2"), {
+      timeout: 2_000,
+    });
     expect(markBootstrappedMock).not.toHaveBeenCalledWith("session-1");
   });
 
@@ -3782,7 +3791,7 @@ describe("PersistentTerminal", () => {
     invokeMock.mockImplementation(async (command: string) =>
       command === "bootstrap_terminal_session"
         ? { bootstrapped: true, delivered: false, duplicate: true }
-        : undefined
+        : undefined,
     );
 
     render(
@@ -3797,16 +3806,15 @@ describe("PersistentTerminal", () => {
         isFocused={true}
         isFirstTab={false}
         paneId="pane-1"
-      />
+      />,
     );
     act(() => {
       terminalOnData?.(new TextEncoder().encode("shell output ".repeat(12)));
     });
 
-    await waitFor(
-      () => expect(markBootstrappedMock).toHaveBeenCalledWith("session-1"),
-      { timeout: 2_000 },
-    );
+    await waitFor(() => expect(markBootstrappedMock).toHaveBeenCalledWith("session-1"), {
+      timeout: 2_000,
+    });
     await new Promise((resolve) => setTimeout(resolve, 400));
     expect(bootstrapWrites()).toHaveLength(1);
     expect(screen.queryByRole("status") === null).toBe(true);
@@ -3834,16 +3842,15 @@ describe("PersistentTerminal", () => {
         isFocused={true}
         isFirstTab={false}
         paneId="pane-1"
-      />
+      />,
     );
     act(() => {
       terminalOnData?.(new TextEncoder().encode("shell output ".repeat(12)));
     });
 
-    await waitFor(
-      () => expect(markBootstrappedMock).toHaveBeenCalledWith("session-1"),
-      { timeout: 2_000 },
-    );
+    await waitFor(() => expect(markBootstrappedMock).toHaveBeenCalledWith("session-1"), {
+      timeout: 2_000,
+    });
     // The bound is three attempts; without a stop the chain would reach it.
     await new Promise((resolve) => setTimeout(resolve, 800));
     expect(attempts).toBe(2);
@@ -3862,7 +3869,7 @@ describe("PersistentTerminal", () => {
     invokeMock.mockImplementation(async (command: string) =>
       command === "bootstrap_terminal_session"
         ? { bootstrapped: true, delivered: true, duplicate: false }
-        : undefined
+        : undefined,
     );
 
     const props = {
@@ -3882,10 +3889,9 @@ describe("PersistentTerminal", () => {
       terminalOnData?.(new TextEncoder().encode("shell output ".repeat(12)));
     });
 
-    await waitFor(
-      () => expect(markBootstrappedMock).toHaveBeenCalledWith("session-1"),
-      { timeout: 2_000 },
-    );
+    await waitFor(() => expect(markBootstrappedMock).toHaveBeenCalledWith("session-1"), {
+      timeout: 2_000,
+    });
     await new Promise((resolve) => setTimeout(resolve, 800));
     expect(screen.queryByRole("status") === null).toBe(true);
     expect(bootstrapWrites()).toHaveLength(1);
@@ -3903,7 +3909,7 @@ describe("PersistentTerminal", () => {
     invokeMock.mockImplementation(async (command: string) =>
       command === "bootstrap_terminal_session"
         ? { bootstrapped: false, delivered: false, duplicate: false }
-        : undefined
+        : undefined,
     );
 
     const props = {
@@ -3946,7 +3952,7 @@ describe("PersistentTerminal", () => {
         isFocused={true}
         isFirstTab={false}
         paneId="pane-1"
-      />
+      />,
     );
 
     await waitFor(() => {
@@ -3968,7 +3974,7 @@ describe("PersistentTerminal", () => {
         isFocused={true}
         isFirstTab={false}
         paneId="pane-1"
-      />
+      />,
     );
 
     await waitFor(() => {
@@ -3990,7 +3996,7 @@ describe("PersistentTerminal", () => {
         isFocused={true}
         isFirstTab={false}
         paneId="pane-1"
-      />
+      />,
     );
 
     await waitFor(() => {

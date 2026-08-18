@@ -1,4 +1,17 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, net, safeStorage, session, shell, WebContentsView } from "electron";
+import {
+  app,
+  BrowserWindow,
+  clipboard,
+  dialog,
+  ipcMain,
+  Menu,
+  nativeImage,
+  net,
+  safeStorage,
+  session,
+  shell,
+  WebContentsView,
+} from "electron";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { BackendProcess, type BackendHttpClient } from "./backend-process.js";
@@ -56,10 +69,11 @@ let connectionManager: ConnectionManager | null = null;
 let browserPreviewManager: BrowserPreviewManager | null = null;
 const backendProcess = new BackendProcess();
 const toolchainProgress = createToolchainProgressController({
-  createWindow: () => createToolchainBootstrapWindow({
-    BrowserWindowCtor: BrowserWindow,
-    dirname: __dirname,
-  }),
+  createWindow: () =>
+    createToolchainBootstrapWindow({
+      BrowserWindowCtor: BrowserWindow,
+      dirname: __dirname,
+    }),
   reportProgress: (window, progress) => reportToolchainProgress(window as BrowserWindow, progress),
   logError: (error) => console.error("[Toolchains] Failed to show bootstrap progress:", error),
 });
@@ -129,7 +143,7 @@ function registerIpc(): void {
     },
     browserPreviews: browserPreviewManager ?? undefined,
     trustedRendererUrl: isDev
-      ? process.env.VITE_DEV_SERVER_URL ?? "http://127.0.0.1:1420"
+      ? (process.env.VITE_DEV_SERVER_URL ?? "http://127.0.0.1:1420")
       : pathToFileURL(path.join(process.resourcesPath, "web", "index.html")).href,
     ...webClientControls,
   });
@@ -234,8 +248,7 @@ async function startApplication(): Promise<void> {
     ...browserPreviewMainAdapters,
     focusAddressBar: createBrowserPreviewAddressFocusHandler({
       getWindow: () => mainWindow,
-      emitFocus: (tabId) =>
-        emitToRenderers("browser-preview-focus-address", tabId),
+      emitFocus: (tabId) => emitToRenderers("browser-preview-focus-address", tabId),
     }),
     getAuthorization: (url) => connectionManager?.getRendererRequestAuthorization(url) ?? null,
   });
@@ -252,14 +265,16 @@ async function startApplication(): Promise<void> {
 
   if (runtimeProfile) {
     const info = backendProcess.getInfo();
-    process.stdout.write(`${JSON.stringify({
-      type: "orkestrator-electron-ready",
-      profile: runtimeProfile.id,
-      electronPid: process.pid,
-      backendPid: backendProcess.getPid(),
-      authFile: info?.authFile,
-      browserUrl: info?.browserUrl,
-    })}\n`);
+    process.stdout.write(
+      `${JSON.stringify({
+        type: "orkestrator-electron-ready",
+        profile: runtimeProfile.id,
+        electronPid: process.pid,
+        backendPid: backendProcess.getPid(),
+        authFile: info?.authFile,
+        browserUrl: info?.browserUrl,
+      })}\n`,
+    );
   }
 
   registerBrowserPreviewWindowActivation({
@@ -273,14 +288,17 @@ async function startApplication(): Promise<void> {
 if (isPrimaryInstance) {
   registerSecondInstanceFocus(app, () => mainWindow);
 
-  void app.whenReady().then(startApplication).catch((error: unknown) => {
-    console.error("[Desktop] Startup failed:", error);
-    dialog.showErrorBox(
-      `${productName} failed to start`,
-      error instanceof Error ? error.message : String(error),
-    );
-    app.quit();
-  });
+  void app
+    .whenReady()
+    .then(startApplication)
+    .catch((error: unknown) => {
+      console.error("[Desktop] Startup failed:", error);
+      dialog.showErrorBox(
+        `${productName} failed to start`,
+        error instanceof Error ? error.message : String(error),
+      );
+      app.quit();
+    });
 } else {
   console.error(
     `[Desktop] Another ${productName} instance is already using ${app.getPath("userData")}. Quit it and try again.`,

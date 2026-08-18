@@ -16,18 +16,14 @@ export class DraftRevisionConflictError extends Error {
     readonly currentRevision: number,
     options: { cause?: unknown } = {},
   ) {
-    super(
-      "This draft changed in another window. Your local input has been preserved.",
-      options,
-    );
+    super("This draft changed in another window. Your local input has been preserved.", options);
     this.name = "DraftRevisionConflictError";
   }
 }
 
 export function isDraftRevisionConflict(error: unknown): boolean {
-  return error instanceof DraftRevisionConflictError
-    || (
-      error instanceof Error
-      && error.message.toLowerCase().includes("revision conflict")
-    );
+  return (
+    error instanceof DraftRevisionConflictError ||
+    (error instanceof Error && error.message.toLowerCase().includes("revision conflict"))
+  );
 }

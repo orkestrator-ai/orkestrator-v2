@@ -11,7 +11,8 @@ const server = Bun.serve({
       clicks += 1;
       return Response.json({ clicks });
     }
-    return new Response(`<!doctype html>
+    return new Response(
+      `<!doctype html>
       <html><body><main><h1>Orkestrator test project</h1>
       <p data-testid="version">${version}</p>
       <button id="increment">Clicks: <span>0</span></button>
@@ -20,7 +21,9 @@ const server = Bun.serve({
           const result = await fetch('/click', { method: 'POST' }).then(r => r.json());
           document.querySelector('#increment span').textContent = String(result.clicks);
         });
-      </script></main></body></html>`, { headers: { "content-type": "text/html; charset=utf-8" } });
+      </script></main></body></html>`,
+      { headers: { "content-type": "text/html; charset=utf-8" } },
+    );
   },
 });
 

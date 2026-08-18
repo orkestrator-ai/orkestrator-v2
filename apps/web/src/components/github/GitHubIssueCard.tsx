@@ -1,10 +1,5 @@
 import { useDraggable } from "@dnd-kit/core";
-import {
-  CircleDot,
-  GripVertical,
-  MessageSquare,
-  UserRound,
-} from "lucide-react";
+import { CircleDot, GripVertical, MessageSquare, UserRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -71,13 +66,7 @@ export function GitHubIssueCard({
   statusPending,
   isOverlay,
 }: GitHubIssueCardProps) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    isDragging,
-  } = useDraggable({
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: `github-issue:${issue.number}`,
     data: { type: "github-issue", issueNumber: issue.number, status: issue.status },
     disabled: statusPending || isOverlay,
@@ -117,8 +106,7 @@ export function GitHubIssueCard({
           onClick={onOpen}
         >
           <span className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
-            <CircleDot className="h-3 w-3 text-green-500" />
-            #{issue.number}
+            <CircleDot className="h-3 w-3 text-green-500" />#{issue.number}
           </span>
           <span className="line-clamp-2 text-sm font-medium leading-snug text-foreground">
             {issue.title}

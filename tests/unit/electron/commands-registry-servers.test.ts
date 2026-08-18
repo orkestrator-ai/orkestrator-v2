@@ -108,9 +108,6 @@ import type {
 } from "./command-fixtures";
 
 describe("Electron backend command registry", () => {
-
-
-
   // The `security` stub only takes effect on darwin, where `getHostClaudeCredentials`
   // consults the Keychain; elsewhere resolution starts at the on-disk credential.
   // Seeding both with the same payload keeps these tests asserting the same thing
@@ -126,8 +123,6 @@ if [ "$1" = "exec" ]; then
 fi
 exit 1
 `;
-
-
 
   function claudeCredentialSyncContext(
     globalConfig: Record<string, unknown> = {},
@@ -147,14 +142,9 @@ exit 1
     return created;
   }
 
-
-
   test("discovers and persists the Claude model catalog from a containerized bridge", async () => {
     const hostPort = await reserveFreePort();
-    const pidFile = path.join(
-      await createTempDir("ork-claude-models-container-pid-"),
-      "pid",
-    );
+    const pidFile = path.join(await createTempDir("ork-claude-models-container-pid-"), "pid");
     const modelsJson = JSON.stringify({
       models: [
         {
@@ -264,8 +254,6 @@ exit 0
     }
   });
 
-
-
   test("starts the in-container Codex bridge with bun and its configured thread limit", async () => {
     const hostPort = await reserveFreePort();
     const pidFile = path.join(await createTempDir("ork-bridge-pid-"), "pid");
@@ -318,25 +306,17 @@ exit 0
 
     try {
       await withFakeDocker(dockerScript, async (logs) => {
-        const [first, second] = await Promise.all([
-          commands.get("start_codex_server")?.(
-            { containerId: "container-1" },
-            context,
-          ),
-          commands.get("start_codex_server")?.(
-            { containerId: "container-1" },
-            context,
-          ),
-        ]) as Array<{ hostPort: number; wasRunning: boolean; authToken: string }>;
+        const [first, second] = (await Promise.all([
+          commands.get("start_codex_server")?.({ containerId: "container-1" }, context),
+          commands.get("start_codex_server")?.({ containerId: "container-1" }, context),
+        ])) as Array<{ hostPort: number; wasRunning: boolean; authToken: string }>;
         expect(first).toMatchObject({ hostPort, wasRunning: false });
         expect(second).toMatchObject({ hostPort, wasRunning: true });
         expect(first.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
         expect(second.authToken).toBe(first.authToken);
 
         const execLog = await fs.readFile(logs.exec, "utf8");
-        expect(
-          execLog.split("\n").filter((line) => line.startsWith("exec -d ")),
-        ).toHaveLength(1);
+        expect(execLog.split("\n").filter((line) => line.startsWith("exec -d "))).toHaveLength(1);
         expect(execLog).toContain("/tmp/codex-bridge-token");
         expect(execLog).toContain("export CODEX_BRIDGE_TOKEN=");
         expect(execLog).toContain("export CODEX_MAX_CONCURRENT_THREADS_PER_SESSION=9");
@@ -362,8 +342,6 @@ exit 0
     }
   });
 
-
-
   test.each(["cursor", "grok"] as const)(
     "starts, inspects, and stops the in-container %s ACP bridge",
     async (provider) => {
@@ -376,9 +354,7 @@ exit 0
         status: "running",
       });
       const cursorApiKey = provider === "cursor" ? "configured-container-cursor-key" : undefined;
-      const globalConfig: { cursorApiKey?: string } = cursorApiKey
-        ? { cursorApiKey }
-        : {};
+      const globalConfig: { cursorApiKey?: string } = cursorApiKey ? { cursorApiKey } : {};
       const { context } = createContext(environment, {
         globalConfig,
       });
@@ -456,25 +432,33 @@ exit 0
       try {
         await withFakeDocker(dockerScript, async (logs) => {
           // Concurrent starts must be serialized into one bridge process.
-          const [first, second] = await Promise.all([
-            commands.get(`start_${provider}_server`)?.({ containerId: `container-${provider}` }, context),
-            commands.get(`start_${provider}_server`)?.({ containerId: `container-${provider}` }, context),
-          ]) as Array<{ hostPort: number; wasRunning: boolean; authToken: string }>;
+          const [first, second] = (await Promise.all([
+            commands.get(`start_${provider}_server`)?.(
+              { containerId: `container-${provider}` },
+              context,
+            ),
+            commands.get(`start_${provider}_server`)?.(
+              { containerId: `container-${provider}` },
+              context,
+            ),
+          ])) as Array<{ hostPort: number; wasRunning: boolean; authToken: string }>;
           expect(first).toMatchObject({ hostPort, wasRunning: false });
           expect(second).toMatchObject({ hostPort, wasRunning: true });
           expect(first.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
           expect(second.authToken).toBe(first.authToken);
 
-          const status = await commands.get(`get_${provider}_server_status`)?.(
+          const status = (await commands.get(`get_${provider}_server_status`)?.(
             { containerId: `container-${provider}` },
             context,
-          ) as { running: boolean; hostPort: number; authToken?: string };
+          )) as { running: boolean; hostPort: number; authToken?: string };
           expect(status).toEqual({ running: true, hostPort, authToken: first.authToken });
 
-          expect(await commands.get(`get_${provider}_server_log`)?.(
-            { containerId: `container-${provider}` },
-            context,
-          )).toBe(`${provider} acp log\n`);
+          expect(
+            await commands.get(`get_${provider}_server_log`)?.(
+              { containerId: `container-${provider}` },
+              context,
+            ),
+          ).toBe(`${provider} acp log\n`);
 
           const execLog = await fs.readFile(logs.exec, "utf8");
           expect(execLog.split("\n").filter((line) => line.startsWith("exec -d "))).toHaveLength(1);
@@ -482,7 +466,9 @@ exit 0
           expect(execLog).toContain("export ACP_BRIDGE_TOKEN=");
           expect(execLog).toContain(`export ACP_STATE_DIR=/tmp/orkestrator-acp-state/${provider}`);
           expect(execLog).toContain("export HOSTNAME=0.0.0.0");
-          expect(execLog).toContain(`setsid bun /opt/acp-bridge/dist/index.js --provider=${provider}`);
+          expect(execLog).toContain(
+            `setsid bun /opt/acp-bridge/dist/index.js --provider=${provider}`,
+          );
           if (provider === "cursor") {
             expect(execLog).toContain("export ACP_APPROVE_PROJECT_MCPS=1");
           } else {
@@ -512,7 +498,9 @@ exit 0
           if (provider === "cursor") {
             expect(await fs.readFile(cursorKeyCapture, "utf8")).toBe(cursorApiKey!);
             expect(execLog).toContain("exec -i container-cursor sh -c");
-            expect(execLog).toContain("export CURSOR_API_KEY=\"$(cat /tmp/orkestrator-ai/cursor-api-key)\"");
+            expect(execLog).toContain(
+              'export CURSOR_API_KEY="$(cat /tmp/orkestrator-ai/cursor-api-key)"',
+            );
             // Nothing in the image guarantees the credential directory, and the
             // fingerprint write is not allowed to fail: an unreadable
             // fingerprint reads as "changed" and restarts a healthy bridge.
@@ -521,35 +509,37 @@ exit 0
             // An unchanged credential must reuse the running bridge. Restarting
             // here would kill the agent's in-flight turn on every start
             // request, and one is issued per prompt dispatch.
-            const unchanged = await commands.get("start_cursor_server")?.(
+            const unchanged = (await commands.get("start_cursor_server")?.(
               { containerId: "container-cursor" },
               context,
-            ) as { hostPort: number; wasRunning: boolean; authToken: string };
+            )) as { hostPort: number; wasRunning: boolean; authToken: string };
             expect(unchanged).toMatchObject({ hostPort, wasRunning: true });
             expect(unchanged.authToken).toBe(first.authToken);
             expect(
               (await fs.readFile(logs.exec, "utf8"))
-                .split("\n").filter((line) => line.startsWith("exec -d ")),
+                .split("\n")
+                .filter((line) => line.startsWith("exec -d ")),
             ).toHaveLength(1);
 
             globalConfig.cursorApiKey = "rotated-container-cursor-key";
-            const rotated = await commands.get("start_cursor_server")?.(
+            const rotated = (await commands.get("start_cursor_server")?.(
               { containerId: "container-cursor" },
               context,
-            ) as { hostPort: number; wasRunning: boolean; authToken: string };
+            )) as { hostPort: number; wasRunning: boolean; authToken: string };
             expect(rotated).toMatchObject({ hostPort, wasRunning: false });
             expect(rotated.authToken).not.toBe(first.authToken);
-            expect(await fs.readFile(cursorKeyCapture, "utf8"))
-              .toBe("rotated-container-cursor-key");
+            expect(await fs.readFile(cursorKeyCapture, "utf8")).toBe(
+              "rotated-container-cursor-key",
+            );
             expect(await fs.readFile(cursorFingerprintFile, "utf8")).toBe(
               createHash("sha256").update("rotated-container-cursor-key").digest("hex"),
             );
 
             delete globalConfig.cursorApiKey;
-            const cleared = await commands.get("start_cursor_server")?.(
+            const cleared = (await commands.get("start_cursor_server")?.(
               { containerId: "container-cursor" },
               context,
-            ) as { hostPort: number; wasRunning: boolean; authToken: string };
+            )) as { hostPort: number; wasRunning: boolean; authToken: string };
             expect(cleared).toMatchObject({ hostPort, wasRunning: false });
             expect(cleared.authToken).not.toBe(rotated.authToken);
             await expect(fs.readFile(cursorKeyCapture, "utf8")).rejects.toThrow();
@@ -557,8 +547,9 @@ exit 0
               createHash("sha256").update("").digest("hex"),
             );
             const rotatedExecLog = await fs.readFile(logs.exec, "utf8");
-            expect(rotatedExecLog.split("\n").filter((line) => line.startsWith("exec -d ")))
-              .toHaveLength(3);
+            expect(
+              rotatedExecLog.split("\n").filter((line) => line.startsWith("exec -d ")),
+            ).toHaveLength(3);
 
             // "No key" is a credential state like any other. This is also the
             // path where nothing writes the credential directory for us: the
@@ -566,15 +557,16 @@ exit 0
             // mkdir is the only thing that lets its fingerprint land. Without
             // it the fingerprint reads back empty and this reuse becomes a
             // fourth restart.
-            const stillCleared = await commands.get("start_cursor_server")?.(
+            const stillCleared = (await commands.get("start_cursor_server")?.(
               { containerId: "container-cursor" },
               context,
-            ) as { hostPort: number; wasRunning: boolean; authToken: string };
+            )) as { hostPort: number; wasRunning: boolean; authToken: string };
             expect(stillCleared).toMatchObject({ hostPort, wasRunning: true });
             expect(stillCleared.authToken).toBe(cleared.authToken);
             expect(
               (await fs.readFile(logs.exec, "utf8"))
-                .split("\n").filter((line) => line.startsWith("exec -d ")),
+                .split("\n")
+                .filter((line) => line.startsWith("exec -d ")),
             ).toHaveLength(3);
           }
 
@@ -583,7 +575,9 @@ exit 0
             context,
           );
           const afterStop = await fs.readFile(logs.exec, "utf8");
-          expect(afterStop).toContain(`pkill -f '[a]cp-bridge/dist/index.js --provider=${provider}'`);
+          expect(afterStop).toContain(
+            `pkill -f '[a]cp-bridge/dist/index.js --provider=${provider}'`,
+          );
           expect(afterStop).toContain(`rm -f /tmp/${provider}-acp-bridge-token`);
         });
       } finally {
@@ -601,7 +595,8 @@ exit 0
         else process.env.FAKE_BRIDGE_PID_FILE = previousPidFile;
         if (previousTokenFile === undefined) delete process.env.FAKE_BRIDGE_TOKEN_FILE;
         else process.env.FAKE_BRIDGE_TOKEN_FILE = previousTokenFile;
-        if (previousCursorFingerprintFile === undefined) delete process.env.FAKE_CURSOR_FINGERPRINT_FILE;
+        if (previousCursorFingerprintFile === undefined)
+          delete process.env.FAKE_CURSOR_FINGERPRINT_FILE;
         else process.env.FAKE_CURSOR_FINGERPRINT_FILE = previousCursorFingerprintFile;
         if (previousCursorKeyCapture === undefined) delete process.env.FAKE_CURSOR_KEY_CAPTURE;
         else process.env.FAKE_CURSOR_KEY_CAPTURE = previousCursorKeyCapture;
@@ -610,8 +605,6 @@ exit 0
       }
     },
   );
-
-
 
   test("persists the container Cursor fingerprint when no API key was ever configured", async () => {
     // The cold-start path nothing else covers: with no key, the credential
@@ -694,28 +687,29 @@ exit 0
 
     try {
       await withFakeDocker(dockerScript, async (logs) => {
-        const started = await commands.get("start_cursor_server")?.(
+        const started = (await commands.get("start_cursor_server")?.(
           { containerId: "container-cursor-coldstart" },
           context,
-        ) as { hostPort: number; wasRunning: boolean; authToken: string };
+        )) as { hostPort: number; wasRunning: boolean; authToken: string };
         expect(started).toMatchObject({ hostPort, wasRunning: false });
 
         // The bridge ran without a key, and still recorded sha256("").
-        expect(
-          await fs.readFile(process.env.FAKE_CURSOR_FINGERPRINT_FILE!, "utf8"),
-        ).toBe(createHash("sha256").update("").digest("hex"));
+        expect(await fs.readFile(process.env.FAKE_CURSOR_FINGERPRINT_FILE!, "utf8")).toBe(
+          createHash("sha256").update("").digest("hex"),
+        );
         const execLog = await fs.readFile(logs.exec, "utf8");
         expect(execLog).toContain("unset CURSOR_API_KEY");
 
-        const second = await commands.get("start_cursor_server")?.(
+        const second = (await commands.get("start_cursor_server")?.(
           { containerId: "container-cursor-coldstart" },
           context,
-        ) as { hostPort: number; wasRunning: boolean; authToken: string };
+        )) as { hostPort: number; wasRunning: boolean; authToken: string };
         expect(second).toMatchObject({ hostPort, wasRunning: true });
         expect(second.authToken).toBe(started.authToken);
         expect(
           (await fs.readFile(logs.exec, "utf8"))
-            .split("\n").filter((line) => line.startsWith("exec -d ")),
+            .split("\n")
+            .filter((line) => line.startsWith("exec -d ")),
         ).toHaveLength(1);
       });
     } finally {
@@ -740,8 +734,6 @@ exit 0
       }
     }
   });
-
-
 
   test("keeps the in-container Claude bridge on its bun entrypoint", async () => {
     const hostPort = await reserveFreePort();
@@ -775,10 +767,10 @@ exit 0
 
     try {
       await withFakeDocker(dockerScript, async (logs) => {
-        const result = await commands.get("start_claude_server")?.(
+        const result = (await commands.get("start_claude_server")?.(
           { containerId: "container-claude" },
           context,
-        ) as { hostPort: number; wasRunning: boolean; authToken: string };
+        )) as { hostPort: number; wasRunning: boolean; authToken: string };
         expect(result).toMatchObject({ hostPort, wasRunning: false });
         expect(result.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
 
@@ -807,8 +799,6 @@ exit 0
       else process.env.FAKE_BRIDGE_PID_FILE = previousPidFile;
     }
   });
-
-
 
   test("starts, replaces, and reuses an authenticated container OpenCode server", async () => {
     const hostPort = await reserveFreePort();
@@ -844,9 +834,8 @@ exit 0
     const bridge = await startAuthenticatedContainerServer(hostPort, {
       isHealthy: () => existsSync(healthyFile),
       isAuthorized: (request) =>
-        request.headers.authorization === `Basic ${
-          Buffer.from(`opencode:${readTestCredential(liveTokenFile)}`).toString("base64")
-        }`,
+        request.headers.authorization ===
+        `Basic ${Buffer.from(`opencode:${readTestCredential(liveTokenFile)}`).toString("base64")}`,
     });
     const dockerScript = `#!/bin/sh
 case "$1" in
@@ -877,40 +866,40 @@ exit 0
 
     try {
       await withFakeDocker(dockerScript, async (logs) => {
-        const first = await commands.get("start_opencode_server")?.(
+        const first = (await commands.get("start_opencode_server")?.(
           { containerId: "container-opencode-auth" },
           context,
-        ) as { hostPort: number; wasRunning: boolean; authToken: string };
+        )) as { hostPort: number; wasRunning: boolean; authToken: string };
         expect(first).toMatchObject({ hostPort, wasRunning: false });
         expect(first.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
 
         // An authenticated server from a build before the GitHub environment
         // hook existed must also restart instead of being reused indefinitely.
         await fs.rm(pluginFingerprintFile);
-        const capabilityReplacement = await commands.get("start_opencode_server")?.(
+        const capabilityReplacement = (await commands.get("start_opencode_server")?.(
           { containerId: "container-opencode-auth" },
           context,
-        ) as { hostPort: number; wasRunning: boolean; authToken: string };
+        )) as { hostPort: number; wasRunning: boolean; authToken: string };
         expect(capabilityReplacement).toMatchObject({ hostPort, wasRunning: false });
         expect(capabilityReplacement.authToken).not.toBe(first.authToken);
 
         // A reachable legacy process without a readable password is replaced,
         // rather than being handed to the renderer unauthenticated.
         await fs.rm(tokenFile);
-        const legacyReplacement = await commands.get("start_opencode_server")?.(
+        const legacyReplacement = (await commands.get("start_opencode_server")?.(
           { containerId: "container-opencode-auth" },
           context,
-        ) as { hostPort: number; wasRunning: boolean; authToken: string };
+        )) as { hostPort: number; wasRunning: boolean; authToken: string };
         expect(legacyReplacement).toMatchObject({ hostPort, wasRunning: false });
         expect(legacyReplacement.authToken).not.toBe(first.authToken);
 
         const stalePassword = "S".repeat(43);
         await fs.writeFile(tokenFile, stalePassword);
         await fs.writeFile(liveTokenFile, "L".repeat(43));
-        const replacement = await commands.get("start_opencode_server")?.(
+        const replacement = (await commands.get("start_opencode_server")?.(
           { containerId: "container-opencode-auth" },
           context,
-        ) as { hostPort: number; wasRunning: boolean; authToken: string };
+        )) as { hostPort: number; wasRunning: boolean; authToken: string };
         expect(replacement).toMatchObject({ hostPort, wasRunning: false });
         expect(replacement.authToken).not.toBe(stalePassword);
 
@@ -926,13 +915,9 @@ exit 0
         });
 
         const execLog = await fs.readFile(logs.exec, "utf8");
-        expect(
-          execLog.split("\n").filter((line) => line.startsWith("exec -d ")),
-        ).toHaveLength(4);
+        expect(execLog.split("\n").filter((line) => line.startsWith("exec -d "))).toHaveLength(4);
         expect(execLog).toContain("pkill -f '[o]pencode serve'");
-        expect(execLog).toContain(
-          "/home/node/.config/opencode/plugins/orkestrator-github-env.js",
-        );
+        expect(execLog).toContain("/home/node/.config/opencode/plugins/orkestrator-github-env.js");
         expect(execLog).not.toContain("OPENCODE_CONFIG_CONTENT");
         expect(execLog).toContain("unset GITHUB_TOKEN GH_TOKEN");
       });
@@ -952,8 +937,6 @@ exit 0
       }
     }
   });
-
-
 
   test("replaces a healthy Claude bridge when its persisted token does not authenticate", async () => {
     const hostPort = await reserveFreePort();
@@ -988,8 +971,7 @@ exit 0
     const bridge = await startAuthenticatedContainerServer(hostPort, {
       isHealthy: () => existsSync(healthyFile),
       isAuthorized: (request) =>
-        request.headers["x-orkestrator-claude-token"]
-          === readTestCredential(liveTokenFile),
+        request.headers["x-orkestrator-claude-token"] === readTestCredential(liveTokenFile),
     });
     const dockerScript = `#!/bin/sh
 case "$1" in
@@ -1023,10 +1005,10 @@ exit 0
           ),
         ).resolves.toEqual({ running: true, hostPort });
 
-        const result = await commands.get("start_claude_server")?.(
+        const result = (await commands.get("start_claude_server")?.(
           { containerId: "container-claude-stale" },
           context,
-        ) as { hostPort: number; wasRunning: boolean; authToken: string };
+        )) as { hostPort: number; wasRunning: boolean; authToken: string };
 
         expect(result).toMatchObject({ hostPort, wasRunning: false });
         expect(result.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
@@ -1051,14 +1033,9 @@ exit 0
     }
   });
 
-
-
   test("authenticates the persisted Claude token when a bridge arrives between health checks", async () => {
     const hostPort = await reserveFreePort();
-    const tokenFile = path.join(
-      await createTempDir("ork-claude-late-identity-"),
-      "token",
-    );
+    const tokenFile = path.join(await createTempDir("ork-claude-late-identity-"), "token");
     const persistedToken = "P".repeat(43);
     await fs.writeFile(tokenFile, persistedToken);
     const environment = createEnvironment({
@@ -1077,8 +1054,7 @@ exit 0
     let healthChecks = 0;
     const bridge = await startAuthenticatedContainerServer(hostPort, {
       isHealthy: () => (healthChecks += 1) > 1,
-      isAuthorized: (request) =>
-        request.headers["x-orkestrator-claude-token"] === persistedToken,
+      isAuthorized: (request) => request.headers["x-orkestrator-claude-token"] === persistedToken,
     });
     const dockerScript = `#!/bin/sh
 case "$1" in
@@ -1102,10 +1078,7 @@ exit 0
     try {
       await withFakeDocker(dockerScript, async (logs) => {
         await expect(
-          commands.get("start_claude_server")?.(
-            { containerId: "container-claude-late" },
-            context,
-          ),
+          commands.get("start_claude_server")?.({ containerId: "container-claude-late" }, context),
         ).resolves.toEqual({
           hostPort,
           wasRunning: true,
@@ -1121,8 +1094,6 @@ exit 0
       else process.env.FAKE_BRIDGE_TOKEN_FILE = previousTokenFile;
     }
   });
-
-
 
   test("defaults a malformed in-container Codex thread limit before shell interpolation", async () => {
     const hostPort = await reserveFreePort();
@@ -1182,8 +1153,6 @@ exit 0
     }
   });
 
-
-
   test("replaces an in-container Codex bridge that has no usable persisted token", async () => {
     const hostPort = await reserveFreePort();
     const stateDir = await createTempDir("ork-codex-legacy-bridge-");
@@ -1237,10 +1206,10 @@ exit 0
 
     try {
       await withFakeDocker(dockerScript, async (logs) => {
-        const result = await commands.get("start_codex_server")?.(
+        const result = (await commands.get("start_codex_server")?.(
           { containerId: "container-codex-legacy" },
           context,
-        ) as { hostPort: number; wasRunning: boolean; authToken: string };
+        )) as { hostPort: number; wasRunning: boolean; authToken: string };
 
         expect(result).toMatchObject({ hostPort, wasRunning: false });
         expect(result.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
@@ -1248,9 +1217,7 @@ exit 0
 
         const execLog = await fs.readFile(logs.exec, "utf8");
         expect(execLog).toContain("pkill -f '[c]odex-bridge/dist/index.js'");
-        expect(
-          execLog.split("\n").filter((line) => line.startsWith("exec -d ")),
-        ).toHaveLength(1);
+        expect(execLog.split("\n").filter((line) => line.startsWith("exec -d "))).toHaveLength(1);
       });
     } finally {
       await bridge.close();
@@ -1262,8 +1229,6 @@ exit 0
       else process.env.FAKE_BRIDGE_KILLED_FILE = previousKilledFile;
     }
   });
-
-
 
   test("returns the container's persisted token when a bridge arrives after the health check", async () => {
     const hostPort = await reserveFreePort();
@@ -1310,10 +1275,10 @@ exit 0
 
     try {
       await withFakeDocker(dockerScript, async (logs) => {
-        const result = await commands.get("start_codex_server")?.(
+        const result = (await commands.get("start_codex_server")?.(
           { containerId: "container-codex-late" },
           context,
-        ) as { hostPort: number; wasRunning: boolean; authToken: string };
+        )) as { hostPort: number; wasRunning: boolean; authToken: string };
 
         expect(result).toEqual({ hostPort, wasRunning: true, authToken: persistedToken });
         expect(await fs.readFile(tokenFile, "utf8")).toBe(persistedToken);
@@ -1329,8 +1294,6 @@ exit 0
       else process.env.FAKE_BRIDGE_TOKEN_FILE = previousTokenFile;
     }
   });
-
-
 
   test("keeps the Codex bridge token out of a failed docker exec error", async () => {
     const hostPort = await reserveFreePort();
@@ -1364,10 +1327,12 @@ exit 0
 
     try {
       await withFakeDocker(dockerScript, async (logs) => {
-        const failure = await commands.get("start_codex_server")?.(
-          { containerId: "container-codex-redaction" },
-          context,
-        ).then(() => null, (error: unknown) => error as Error);
+        const failure = await commands
+          .get("start_codex_server")?.({ containerId: "container-codex-redaction" }, context)
+          .then(
+            () => null,
+            (error: unknown) => error as Error,
+          );
 
         expect(failure).toBeInstanceOf(Error);
         const execLog = await fs.readFile(logs.exec, "utf8");
@@ -1381,5 +1346,4 @@ exit 0
       else process.env.FAKE_BRIDGE_HOST_PORT = previousHostPort;
     }
   });
-
 });

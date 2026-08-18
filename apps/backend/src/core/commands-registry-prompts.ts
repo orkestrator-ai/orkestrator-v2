@@ -11,7 +11,7 @@ export function registerPromptCommands(
   );
   register("list_prompt_queues", (args, { storage }) =>
     conditionalManifestSnapshot(args, storage, "prompt-queue", () =>
-      storage.listPromptQueues(asString(args.environmentId, "environmentId"))
+      storage.listPromptQueues(asString(args.environmentId, "environmentId")),
     ),
   );
   register(
@@ -30,23 +30,19 @@ export function registerPromptCommands(
       return queue;
     },
   );
-  register(
-    "requeue_prompt_queue_message",
-    ({ queueKey, environmentId, message }, { storage }) =>
-      storage.requeuePromptQueueMessage(
-        asString(queueKey, "queueKey"),
-        asString(environmentId, "environmentId"),
-        message,
-      ),
+  register("requeue_prompt_queue_message", ({ queueKey, environmentId, message }, { storage }) =>
+    storage.requeuePromptQueueMessage(
+      asString(queueKey, "queueKey"),
+      asString(environmentId, "environmentId"),
+      message,
+    ),
   );
-  register(
-    "remove_prompt_queue_message",
-    ({ queueKey, environmentId, messageId }, { storage }) =>
-      storage.removePromptQueueMessage(
-        asString(queueKey, "queueKey"),
-        asString(environmentId, "environmentId"),
-        asString(messageId, "messageId"),
-      ),
+  register("remove_prompt_queue_message", ({ queueKey, environmentId, messageId }, { storage }) =>
+    storage.removePromptQueueMessage(
+      asString(queueKey, "queueKey"),
+      asString(environmentId, "environmentId"),
+      asString(messageId, "messageId"),
+    ),
   );
   register(
     "move_prompt_queue_message",
@@ -76,27 +72,17 @@ export function registerPromptCommands(
         asString(claimToken, "claimToken"),
       ),
   );
-  register(
-    "reject_prompt_queue_claim",
-    ({ queueKey, environmentId, claimToken }, { storage }) =>
-      storage.rejectPromptQueueClaim(
-        asString(queueKey, "queueKey"),
-        asString(environmentId, "environmentId"),
-        asString(claimToken, "claimToken"),
-      ),
+  register("reject_prompt_queue_claim", ({ queueKey, environmentId, claimToken }, { storage }) =>
+    storage.rejectPromptQueueClaim(
+      asString(queueKey, "queueKey"),
+      asString(environmentId, "environmentId"),
+      asString(claimToken, "claimToken"),
+    ),
   );
   register(
     "transfer_prompt_queue_message_to_compose_draft",
     (
-      {
-        queueKey,
-        environmentId,
-        messageId,
-        draftKey,
-        ownerType,
-        ownerId,
-        expectedDraftRevision,
-      },
+      { queueKey, environmentId, messageId, draftKey, ownerType, ownerId, expectedDraftRevision },
       { storage },
     ) =>
       storage.transferPromptQueueMessageToComposeDraft(
@@ -131,17 +117,13 @@ export function registerPromptCommands(
         asString(ownerType, "ownerType") as "environment" | "project",
         asString(ownerId, "ownerId"),
         value,
-        expectedRevision === undefined
-          ? undefined
-          : asNumber(expectedRevision, "expectedRevision"),
+        expectedRevision === undefined ? undefined : asNumber(expectedRevision, "expectedRevision"),
       ),
   );
   register("delete_compose_draft", ({ draftKey, expectedRevision }, { storage }) =>
     storage.deleteComposeDraft(
       asString(draftKey, "draftKey"),
-      expectedRevision === undefined
-        ? undefined
-        : asNumber(expectedRevision, "expectedRevision"),
+      expectedRevision === undefined ? undefined : asNumber(expectedRevision, "expectedRevision"),
     ),
   );
   register("get_file_draft", ({ draftKey }, { storage }) =>
@@ -150,14 +132,7 @@ export function registerPromptCommands(
   register(
     "save_file_draft",
     (
-      {
-        draftKey,
-        environmentId,
-        filePath,
-        content,
-        originalContent,
-        expectedRevision,
-      },
+      { draftKey, environmentId, filePath, content, originalContent, expectedRevision },
       { storage },
     ) =>
       storage.saveFileDraft(
@@ -166,58 +141,45 @@ export function registerPromptCommands(
         asString(filePath, "filePath"),
         asString(content, "content"),
         asString(originalContent, "originalContent"),
-        expectedRevision === undefined
-          ? undefined
-          : asNumber(expectedRevision, "expectedRevision"),
+        expectedRevision === undefined ? undefined : asNumber(expectedRevision, "expectedRevision"),
       ),
   );
   register("delete_file_draft", ({ draftKey, expectedRevision }, { storage }) =>
     storage.deleteFileDraft(
       asString(draftKey, "draftKey"),
-      expectedRevision === undefined
-        ? undefined
-        : asNumber(expectedRevision, "expectedRevision"),
+      expectedRevision === undefined ? undefined : asNumber(expectedRevision, "expectedRevision"),
     ),
   );
   register("get_agent_handoff", ({ handoffId }, { storage }) =>
     storage.getAgentHandoff(asString(handoffId, "handoffId")),
   );
-  register(
-    "save_agent_handoff",
-    ({ handoffId, environmentId, version, snapshot }, { storage }) =>
-      storage.saveAgentHandoff(
-        asString(handoffId, "handoffId"),
-        asString(environmentId, "environmentId"),
-        asNumber(version, "version"),
-        snapshot,
-      ),
+  register("save_agent_handoff", ({ handoffId, environmentId, version, snapshot }, { storage }) =>
+    storage.saveAgentHandoff(
+      asString(handoffId, "handoffId"),
+      asString(environmentId, "environmentId"),
+      asNumber(version, "version"),
+      snapshot,
+    ),
   );
-  register(
-    "delete_agent_handoff",
-    ({ handoffId, environmentId }, { storage }) =>
-      storage.deleteAgentHandoff(
-        asString(handoffId, "handoffId"),
-        asString(environmentId, "environmentId"),
-      ),
+  register("delete_agent_handoff", ({ handoffId, environmentId }, { storage }) =>
+    storage.deleteAgentHandoff(
+      asString(handoffId, "handoffId"),
+      asString(environmentId, "environmentId"),
+    ),
   );
-  register(
-    "prune_agent_handoffs",
-    ({ environmentId, referencedHandoffIds }, { storage }) => {
-      // Deliberately strict rather than `asStringArray`, which coerces a
-      // non-array to `[]`. Here that would mean "nothing is referenced" and
-      // delete every transcript in the environment.
-      if (!Array.isArray(referencedHandoffIds)) {
-        throw new Error("Expected referencedHandoffIds to be an array");
-      }
-      if (referencedHandoffIds.some((id) => typeof id !== "string")) {
-        throw new Error("Expected referencedHandoffIds to contain only strings");
-      }
-      return storage.pruneAgentHandoffs(
-        asString(environmentId, "environmentId"),
-        referencedHandoffIds as string[],
-      );
-    },
-  );
-
-
+  register("prune_agent_handoffs", ({ environmentId, referencedHandoffIds }, { storage }) => {
+    // Deliberately strict rather than `asStringArray`, which coerces a
+    // non-array to `[]`. Here that would mean "nothing is referenced" and
+    // delete every transcript in the environment.
+    if (!Array.isArray(referencedHandoffIds)) {
+      throw new Error("Expected referencedHandoffIds to be an array");
+    }
+    if (referencedHandoffIds.some((id) => typeof id !== "string")) {
+      throw new Error("Expected referencedHandoffIds to contain only strings");
+    }
+    return storage.pruneAgentHandoffs(
+      asString(environmentId, "environmentId"),
+      referencedHandoffIds as string[],
+    );
+  });
 }

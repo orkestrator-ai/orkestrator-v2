@@ -78,68 +78,68 @@ type PersistedOpenCodeModelCatalogStore = shared.PersistedOpenCodeModelCatalogSt
 type ResourceChangeListener = shared.ResourceChangeListener;
 export type StorageLayerTypes = [
   AgentInteractionOrigin,
-    AgentInteractionPolicy,
-    AgentInteractionResolutionJournal,
-    StoredDesktopConnections,
-    FeaturePlanningRecord,
-    BuildPipelineAgent,
-    PaneLayoutMergeInput,
-    PaneLayoutSelectionIntent,
-    ConditionalResourceSnapshot<unknown>,
-    ResourceChange,
-    ResourceKind,
-    ResourceManifestKind,
-    ResourceRevisionManifest,
-    ResourceRevisionMap,
-    ResourceSnapshotRevision,
-    AgentModel,
-    AgentActivityState,
-    AgentActivitySource,
-    AgentModelCatalogCache,
-    AgentModelConfigKey,
-    AppConfig,
-    ClaudeModelCatalogSnapshot,
-    ClaudeModelCatalogEntry,
-    CodexModelCatalogEntry,
-    CodexReasoningEffort,
-    Environment,
-    EnvironmentStatus,
-    EnvironmentType,
-    OpenCodeModelCatalogEntry,
-    OpenCodeModelCatalogSnapshot,
-    PortMapping,
-    PrState,
-    Project,
-    PersistedPaneLayout,
-    PersistedLoopedReviewWorkflow,
-    PersistedMultiReviewWorkflow,
-    PersistedBuildPipeline,
-    PersistedNativeAgentSession,
-    PersistedNativeAgentPendingDispatch,
-    PersistedComposeDraft,
-    PersistedFileDraft,
-    PersistedPromptQueue,
-    PersistedAgentHandoff,
-    RepositoryConfig,
-    Session,
-    SessionType,
-    JsonRecord,
-    KanbanComment,
-    KanbanImage,
-    KanbanStatus,
-    MutablePaneLayoutLeaf,
-    KanbanTask,
-    ProjectNotes,
-    FeaturePlanStatus,
-    FeaturePlanMessage,
-    FeatureStoryCard,
-    FeaturePlan,
-    LinearAuth,
-    LinearCompletionComment,
-    GitHubCompletionComment,
-    LoadedNativeAgentSessions,
-    PersistedOpenCodeModelCatalogStore,
-    ResourceChangeListener
+  AgentInteractionPolicy,
+  AgentInteractionResolutionJournal,
+  StoredDesktopConnections,
+  FeaturePlanningRecord,
+  BuildPipelineAgent,
+  PaneLayoutMergeInput,
+  PaneLayoutSelectionIntent,
+  ConditionalResourceSnapshot<unknown>,
+  ResourceChange,
+  ResourceKind,
+  ResourceManifestKind,
+  ResourceRevisionManifest,
+  ResourceRevisionMap,
+  ResourceSnapshotRevision,
+  AgentModel,
+  AgentActivityState,
+  AgentActivitySource,
+  AgentModelCatalogCache,
+  AgentModelConfigKey,
+  AppConfig,
+  ClaudeModelCatalogSnapshot,
+  ClaudeModelCatalogEntry,
+  CodexModelCatalogEntry,
+  CodexReasoningEffort,
+  Environment,
+  EnvironmentStatus,
+  EnvironmentType,
+  OpenCodeModelCatalogEntry,
+  OpenCodeModelCatalogSnapshot,
+  PortMapping,
+  PrState,
+  Project,
+  PersistedPaneLayout,
+  PersistedLoopedReviewWorkflow,
+  PersistedMultiReviewWorkflow,
+  PersistedBuildPipeline,
+  PersistedNativeAgentSession,
+  PersistedNativeAgentPendingDispatch,
+  PersistedComposeDraft,
+  PersistedFileDraft,
+  PersistedPromptQueue,
+  PersistedAgentHandoff,
+  RepositoryConfig,
+  Session,
+  SessionType,
+  JsonRecord,
+  KanbanComment,
+  KanbanImage,
+  KanbanStatus,
+  MutablePaneLayoutLeaf,
+  KanbanTask,
+  ProjectNotes,
+  FeaturePlanStatus,
+  FeaturePlanMessage,
+  FeatureStoryCard,
+  FeaturePlan,
+  LinearAuth,
+  LinearCompletionComment,
+  GitHubCompletionComment,
+  LoadedNativeAgentSessions,
+  PersistedOpenCodeModelCatalogStore,
+  ResourceChangeListener,
 ];
 
 export abstract class StorageBase {
@@ -187,17 +187,10 @@ export abstract class StorageBase {
   protected readonly jsonReadCache = new Map<string, { fingerprint: string; value: unknown }>();
   protected readonly promptQueueClaimLeaseMs: number;
 
-  constructor(
-    dataDir: string,
-    options: { promptQueueClaimLeaseMs?: number } = {},
-  ) {
+  constructor(dataDir: string, options: { promptQueueClaimLeaseMs?: number } = {}) {
     this.dataDir = dataDir;
-    this.promptQueueClaimLeaseMs =
-      options.promptQueueClaimLeaseMs ?? PROMPT_QUEUE_CLAIM_LEASE_MS;
-    if (
-      !Number.isFinite(this.promptQueueClaimLeaseMs)
-      || this.promptQueueClaimLeaseMs <= 0
-    ) {
+    this.promptQueueClaimLeaseMs = options.promptQueueClaimLeaseMs ?? PROMPT_QUEUE_CLAIM_LEASE_MS;
+    if (!Number.isFinite(this.promptQueueClaimLeaseMs) || this.promptQueueClaimLeaseMs <= 0) {
       throw new Error("Prompt queue claim lease must be positive");
     }
   }
@@ -222,7 +215,12 @@ export abstract class StorageBase {
     if (!listener) return;
     this.changeRevision += 1;
     try {
-      listener({ resource, id, revision: this.changeRevision, ...(projectId ? { projectId } : {}) });
+      listener({
+        resource,
+        id,
+        revision: this.changeRevision,
+        ...(projectId ? { projectId } : {}),
+      });
     } catch (error) {
       // A broken client transport must never fail the mutation that succeeded.
       console.error("[Storage] Resource change listener threw:", error);
@@ -335,18 +333,30 @@ export abstract class StorageBase {
 
   protected resourceManifestFile(resource: ResourceManifestKind): string {
     switch (resource) {
-      case "project": return this.projectsFile();
-      case "environment": return this.environmentsFile();
-      case "session": return this.sessionsFile();
-      case "config": return this.configFile();
-      case "kanban": return this.kanbanFile();
-      case "project-notes": return this.projectNotesFile();
-      case "feature-plan": return this.featurePlansFile();
-      case "pane-layout": return this.paneLayoutsFile();
-      case "looped-review": return this.loopedReviewsFile();
-      case "multi-review": return this.multiReviewsFile();
-      case "build-pipeline": return this.buildPipelinesFile();
-      case "prompt-queue": return this.promptQueuesFile();
+      case "project":
+        return this.projectsFile();
+      case "environment":
+        return this.environmentsFile();
+      case "session":
+        return this.sessionsFile();
+      case "config":
+        return this.configFile();
+      case "kanban":
+        return this.kanbanFile();
+      case "project-notes":
+        return this.projectNotesFile();
+      case "feature-plan":
+        return this.featurePlansFile();
+      case "pane-layout":
+        return this.paneLayoutsFile();
+      case "looped-review":
+        return this.loopedReviewsFile();
+      case "multi-review":
+        return this.multiReviewsFile();
+      case "build-pipeline":
+        return this.buildPipelinesFile();
+      case "prompt-queue":
+        return this.promptQueuesFile();
     }
   }
 
@@ -365,13 +375,7 @@ export abstract class StorageBase {
     let fingerprint: string;
     try {
       const stat = await fs.stat(filePath, { bigint: true });
-      fingerprint = [
-        resource,
-        stat.ino,
-        stat.size,
-        stat.mtimeNs,
-        stat.ctimeNs,
-      ].join(":");
+      fingerprint = [resource, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       fingerprint = `${resource}:missing`;
@@ -388,10 +392,9 @@ export abstract class StorageBase {
     knownRevisions: Partial<ResourceRevisionMap> = {},
   ): Promise<ResourceRevisionManifest> {
     const entries = await Promise.all(
-      RESOURCE_MANIFEST_KINDS.map(async (resource) => [
-        resource,
-        await this.getResourceSnapshotRevision(resource),
-      ] as const),
+      RESOURCE_MANIFEST_KINDS.map(
+        async (resource) => [resource, await this.getResourceSnapshotRevision(resource)] as const,
+      ),
     );
     const current = Object.fromEntries(entries) as ResourceRevisionMap;
     const reset = knownGeneration !== this.resourceGeneration;
@@ -415,10 +418,7 @@ export abstract class StorageBase {
     load: () => Promise<T> | T,
   ): Promise<ConditionalResourceSnapshot<T>> {
     const revision = await this.getResourceSnapshotRevision(resource);
-    if (
-      knownGeneration === this.resourceGeneration
-      && knownRevision === revision
-    ) {
+    if (knownGeneration === this.resourceGeneration && knownRevision === revision) {
       return {
         status: "unchanged",
         generation: this.resourceGeneration,
@@ -486,12 +486,15 @@ export abstract class StorageBase {
     refreshRecoveryBackup = false,
   ): Promise<void> {
     await fs.mkdir(path.dirname(filePath), { recursive: true });
-    const tempPath = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${randomUUID()}.tmp`);
+    const tempPath = path.join(
+      path.dirname(filePath),
+      `.${path.basename(filePath)}.${randomUUID()}.tmp`,
+    );
     const recoveryTempPath = refreshRecoveryBackup
       ? path.join(
-        path.dirname(filePath),
-        `.${path.basename(filePath)}.recovery.${randomUUID()}.tmp`,
-      )
+          path.dirname(filePath),
+          `.${path.basename(filePath)}.recovery.${randomUUID()}.tmp`,
+        )
       : null;
 
     await this.enqueueWrite(async () => {
@@ -501,20 +504,16 @@ export abstract class StorageBase {
         // historical backups, but they still need one current, valid recovery
         // point. Write the same validated snapshot to .bak.1 before publishing
         // the primary so corruption cannot roll structural fields back.
-        await fs.writeFile(
-          recoveryTempPath,
-          contents,
-          mode === undefined ? undefined : { mode },
-        );
+        await fs.writeFile(recoveryTempPath, contents, mode === undefined ? undefined : { mode });
       }
       if (mode !== undefined) {
         await fs.chmod(tempPath, mode);
       }
-      if (mode !== undefined && await exists(filePath)) {
+      if (mode !== undefined && (await exists(filePath))) {
         // Backups of sensitive files must inherit the restricted mode too.
         await fs.chmod(filePath, mode);
       }
-      if (makeBackup && await exists(filePath)) {
+      if (makeBackup && (await exists(filePath))) {
         await this.rotateBackups(filePath, mode);
       }
       if (recoveryTempPath) {
@@ -537,7 +536,10 @@ export abstract class StorageBase {
 
   protected enqueueWrite<T>(operation: () => Promise<T>): Promise<T> {
     const next = this.writeQueue.then(operation, operation);
-    this.writeQueue = next.then(() => undefined, () => undefined);
+    this.writeQueue = next.then(
+      () => undefined,
+      () => undefined,
+    );
     return next;
   }
 
@@ -551,7 +553,10 @@ export abstract class StorageBase {
       }
     };
     const next = this.environmentMutationQueue.then(run, run);
-    this.environmentMutationQueue = next.then(() => undefined, () => undefined);
+    this.environmentMutationQueue = next.then(
+      () => undefined,
+      () => undefined,
+    );
     return next;
   }
 
@@ -561,10 +566,7 @@ export abstract class StorageBase {
    */
   protected enqueueProjectMutation<T>(operation: () => Promise<T>): Promise<T> {
     const run = async () => {
-      const release = await this.acquireMutationLock(
-        this.projectsFile(),
-        "project storage",
-      );
+      const release = await this.acquireMutationLock(this.projectsFile(), "project storage");
       try {
         return await operation();
       } finally {
@@ -572,7 +574,10 @@ export abstract class StorageBase {
       }
     };
     const next = this.projectMutationQueue.then(run, run);
-    this.projectMutationQueue = next.then(() => undefined, () => undefined);
+    this.projectMutationQueue = next.then(
+      () => undefined,
+      () => undefined,
+    );
     return next;
   }
 
@@ -609,7 +614,10 @@ export abstract class StorageBase {
       }
     };
     const next = previous.then(run, run);
-    const settled = next.then(() => undefined, () => undefined);
+    const settled = next.then(
+      () => undefined,
+      () => undefined,
+    );
     this.projectCreationMutationQueues.set(key, settled);
     void settled.finally(() => {
       if (this.projectCreationMutationQueues.get(key) === settled) {
@@ -629,7 +637,10 @@ export abstract class StorageBase {
       }
     };
     const next = this.configMutationQueue.then(run, run);
-    this.configMutationQueue = next.then(() => undefined, () => undefined);
+    this.configMutationQueue = next.then(
+      () => undefined,
+      () => undefined,
+    );
     return next;
   }
 
@@ -646,7 +657,10 @@ export abstract class StorageBase {
       }
     };
     const next = this.githubCompletionCommentMutationQueue.then(run, run);
-    this.githubCompletionCommentMutationQueue = next.then(() => undefined, () => undefined);
+    this.githubCompletionCommentMutationQueue = next.then(
+      () => undefined,
+      () => undefined,
+    );
     return next;
   }
 
@@ -663,7 +677,10 @@ export abstract class StorageBase {
       }
     };
     const next = this.loopedReviewMutation.then(run, run);
-    this.loopedReviewMutation = next.then(() => undefined, () => undefined);
+    this.loopedReviewMutation = next.then(
+      () => undefined,
+      () => undefined,
+    );
     return next;
   }
 
@@ -680,7 +697,10 @@ export abstract class StorageBase {
       }
     };
     const next = this.multiReviewMutation.then(run, run);
-    this.multiReviewMutation = next.then(() => undefined, () => undefined);
+    this.multiReviewMutation = next.then(
+      () => undefined,
+      () => undefined,
+    );
     return next;
   }
 
@@ -704,7 +724,10 @@ export abstract class StorageBase {
       }
     };
     const next = this.buildPipelineMutation.then(run, run);
-    this.buildPipelineMutation = next.then(() => undefined, () => undefined);
+    this.buildPipelineMutation = next.then(
+      () => undefined,
+      () => undefined,
+    );
     return next;
   }
 
@@ -730,9 +753,7 @@ export abstract class StorageBase {
    */
   protected static readonly NATIVE_AGENT_SESSION_LOCK_TIMEOUT_MS = 180_000;
 
-  protected enqueueNativeAgentSessionMutation<T>(
-    operation: () => Promise<T>,
-  ): Promise<T> {
+  protected enqueueNativeAgentSessionMutation<T>(operation: () => Promise<T>): Promise<T> {
     const run = async () => {
       const release = await this.acquireMutationLock(
         this.nativeAgentSessionsFile(),
@@ -755,9 +776,7 @@ export abstract class StorageBase {
     return next;
   }
 
-  protected enqueueAgentInteractionJournalMutation<T>(
-    operation: () => Promise<T>,
-  ): Promise<T> {
+  protected enqueueAgentInteractionJournalMutation<T>(operation: () => Promise<T>): Promise<T> {
     const run = async () => {
       const release = await this.acquireMutationLock(
         this.agentInteractionJournalFile(),
@@ -779,10 +798,7 @@ export abstract class StorageBase {
 
   protected enqueuePaneLayoutMutation<T>(operation: () => Promise<T>): Promise<T> {
     const run = async () => {
-      const release = await this.acquireMutationLock(
-        this.paneLayoutsFile(),
-        "pane layout storage",
-      );
+      const release = await this.acquireMutationLock(this.paneLayoutsFile(), "pane layout storage");
       try {
         return await operation();
       } finally {
@@ -790,7 +806,10 @@ export abstract class StorageBase {
       }
     };
     const next = this.paneLayoutMutation.then(run, run);
-    this.paneLayoutMutation = next.then(() => undefined, () => undefined);
+    this.paneLayoutMutation = next.then(
+      () => undefined,
+      () => undefined,
+    );
     return next;
   }
 
@@ -855,10 +874,7 @@ export abstract class StorageBase {
   }
 
   protected async acquireEnvironmentMutationLock(): Promise<() => Promise<void>> {
-    return this.acquireMutationLock(
-      this.environmentsFile(),
-      "environment storage",
-    );
+    return this.acquireMutationLock(this.environmentsFile(), "environment storage");
   }
 
   protected backupPath(filePath: string, index: number): string {
@@ -890,7 +906,7 @@ export abstract class StorageBase {
   protected async recoverJsonFromBackups<T>(filePath: string): Promise<{ value: T } | null> {
     for (let index = 1; index <= MAX_JSON_BACKUPS; index += 1) {
       const backup = this.backupPath(filePath, index);
-      if (!await exists(backup)) continue;
+      if (!(await exists(backup))) continue;
       try {
         return { value: JSON.parse(await fs.readFile(backup, "utf8")) as T };
       } catch {
@@ -901,7 +917,7 @@ export abstract class StorageBase {
   }
 
   protected async loadJson<T>(filePath: string, fallback: () => T): Promise<T> {
-    if (!await exists(filePath)) return fallback();
+    if (!(await exists(filePath))) return fallback();
 
     try {
       const raw = await fs.readFile(filePath, "utf8");
@@ -1004,9 +1020,11 @@ export abstract class StorageBase {
     filePath: string,
     keep: (storedId: string, record: unknown) => boolean,
   ): Promise<void> {
-    await this.transformSensitiveJsonBackups(filePath, (parsed) => Object.fromEntries(
-      Object.entries(parsed).filter(([storedId, record]) => keep(storedId, record)),
-    ));
+    await this.transformSensitiveJsonBackups(filePath, (parsed) =>
+      Object.fromEntries(
+        Object.entries(parsed).filter(([storedId, record]) => keep(storedId, record)),
+      ),
+    );
   }
 
   /** Rewrites every retained sensitive backup while preserving its record shape. */
@@ -1016,17 +1034,12 @@ export abstract class StorageBase {
   ): Promise<void> {
     for (let index = 1; index <= MAX_JSON_BACKUPS; index += 1) {
       const backup = this.backupPath(filePath, index);
-      if (!await exists(backup)) continue;
+      if (!(await exists(backup))) continue;
       try {
         const parsed = JSON.parse(await fs.readFile(backup, "utf8")) as Record<string, unknown>;
         if (!isRecord(parsed)) throw new Error("Backup is not a record");
         const sanitized = transform(parsed);
-        await this.writeAtomic(
-          backup,
-          `${JSON.stringify(sanitized, null, 2)}\n`,
-          false,
-          0o600,
-        );
+        await this.writeAtomic(backup, `${JSON.stringify(sanitized, null, 2)}\n`, false, 0o600);
       } catch {
         // A corrupt backup cannot be proven free of the deleted records.
         await fs.rm(backup, { force: true });
@@ -1049,5 +1062,4 @@ export abstract class StorageBase {
       };
     });
   }
-
 }

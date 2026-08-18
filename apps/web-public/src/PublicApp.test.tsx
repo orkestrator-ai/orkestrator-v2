@@ -42,7 +42,9 @@ afterEach(() => {
 
 describe("PublicApp connection form", () => {
   test("submits credentials and restores the form after a rejected token", async () => {
-    globalThis.fetch = mock(async () => new Response("{}", { status: 401 })) as unknown as typeof fetch;
+    globalThis.fetch = mock(
+      async () => new Response("{}", { status: 401 }),
+    ) as unknown as typeof fetch;
     render(<PublicApp />);
 
     fireEvent.change(screen.getByLabelText("Backend address"), {
@@ -52,13 +54,15 @@ describe("PublicApp connection form", () => {
     fireEvent.click(screen.getByRole("button", { name: "Connect directly" }));
 
     expect((await screen.findByRole("alert")).textContent).toContain("token was rejected");
-    expect((screen.getByRole("button", { name: "Connect directly" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(
+      (screen.getByRole("button", { name: "Connect directly" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
     expect(loadSavedConnection().address).toBe("");
   });
 
   test("connects, installs the direct gateway, and exposes connection switching", async () => {
-    globalThis.fetch = mock(async () =>
-      new Response(JSON.stringify({ ok: true }), { status: 200 })
+    globalThis.fetch = mock(
+      async () => new Response(JSON.stringify({ ok: true }), { status: 200 }),
     ) as unknown as typeof fetch;
     const reload = mock(() => undefined);
     window.location.reload = reload as unknown as typeof window.location.reload;
@@ -119,12 +123,19 @@ describe("PublicApp connection form", () => {
   test("aborts an automatic connection check when unmounted", async () => {
     saveConnection({ address: "https://workstation.example", token });
     let aborted = false;
-    globalThis.fetch = mock((_input, init) => new Promise<Response>((_resolve, reject) => {
-      init?.signal?.addEventListener("abort", () => {
-        aborted = true;
-        reject(init.signal?.reason);
-      }, { once: true });
-    })) as unknown as typeof fetch;
+    globalThis.fetch = mock(
+      (_input, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => {
+              aborted = true;
+              reject(init.signal?.reason);
+            },
+            { once: true },
+          );
+        }),
+    ) as unknown as typeof fetch;
 
     const view = render(<PublicApp />);
     await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
@@ -135,17 +146,26 @@ describe("PublicApp connection form", () => {
   test("switches and forgets saved servers through the mounted browser connection API", async () => {
     saveConnection({ address: "https://one.example", token: "gateway-token-one-123456" });
     saveConnection({ address: "https://two.example", token: "gateway-token-two-123456" });
-    globalThis.fetch = mock(async () => new Response(JSON.stringify({ ok: true }), { status: 200 })) as unknown as typeof fetch;
+    globalThis.fetch = mock(
+      async () => new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    ) as unknown as typeof fetch;
     render(<PublicApp />);
     await screen.findByText("Main app stub");
 
     const api = window.orkestrator?.connections;
-    const one = (await api?.list())?.connections.find((connection) => connection.address === "https://one.example");
+    const one = (await api?.list())?.connections.find(
+      (connection) => connection.address === "https://one.example",
+    );
     expect(one).toBeTruthy();
     await api?.use(one?.id ?? "missing");
-    expect(loadSavedConnection()).toEqual({ address: "https://one.example", token: "gateway-token-one-123456" });
+    expect(loadSavedConnection()).toEqual({
+      address: "https://one.example",
+      token: "gateway-token-one-123456",
+    });
     const afterForget = await api?.forget(one?.id ?? "missing");
-    expect(afterForget?.connections.some((connection) => connection.address === "https://one.example")).toBe(false);
+    expect(
+      afterForget?.connections.some((connection) => connection.address === "https://one.example"),
+    ).toBe(false);
     expect(loadSavedConnection()).toEqual({ address: "", token: "" });
   });
 });

@@ -1,8 +1,4 @@
-import {
-  acpToolSourceStates,
-  type BridgeToolPart,
-  type SessionState,
-} from "./acp-context.js";
+import { acpToolSourceStates, type BridgeToolPart, type SessionState } from "./acp-context.js";
 import { isCursorJsonlPart } from "./acp-cursor-transcript-parts.js";
 import {
   failAllActiveSubagents,
@@ -10,10 +6,7 @@ import {
   syncActiveSubagentTool,
 } from "./acp-tools.js";
 
-export function reconcileStaleToolParts(
-  state: SessionState,
-  failActiveSubagents = false,
-): void {
+export function reconcileStaleToolParts(state: SessionState, failActiveSubagents = false): void {
   for (const message of state.messages) {
     for (const part of message.parts) {
       if (part.type !== "tool-invocation") continue;
@@ -55,4 +48,3 @@ export function reconcileStaleToolParts(
     }
   }
 }
-

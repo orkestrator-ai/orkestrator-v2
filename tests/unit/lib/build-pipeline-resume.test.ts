@@ -1,9 +1,6 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { invoke } from "@/lib/native/backend";
-import {
-  getBuildPipeline,
-  resumeBuildPipeline,
-} from "../../../apps/web/src/lib/backend";
+import { getBuildPipeline, resumeBuildPipeline } from "../../../apps/web/src/lib/backend";
 
 const invokeMock = invoke as ReturnType<typeof mock>;
 
@@ -30,9 +27,7 @@ describe("backend-owned build pipeline resume", () => {
   test("does not synthesize a client resume snapshot when the backend rejects", async () => {
     invokeMock.mockRejectedValueOnce(new Error("Pipeline is not paused"));
 
-    await expect(resumeBuildPipeline("pipeline-1")).rejects.toThrow(
-      "Pipeline is not paused",
-    );
+    await expect(resumeBuildPipeline("pipeline-1")).rejects.toThrow("Pipeline is not paused");
     expect(invokeMock).toHaveBeenCalledTimes(1);
   });
 

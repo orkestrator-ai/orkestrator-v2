@@ -1,0 +1,12 @@
+# Revisions listed here are skipped by `git blame`.
+#
+# GitHub honours this file automatically. To use it locally, run once:
+#
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# Only add commits that are purely mechanical reformatting. A commit with any
+# semantic change in it does not belong here — blame would then hide a real
+# edit rather than a whitespace one.
+
+# style: format the repository with oxfmt
+0b5cbd4a5db9cd3c5804bac5a6441cac74dc1ddc

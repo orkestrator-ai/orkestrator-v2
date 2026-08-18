@@ -1,8 +1,5 @@
 import { createContext, useContext, useState } from "react";
-import type {
-  ReviewIssue,
-  StructuredReviewReport,
-} from "@orkestrator/protocol/structured-review";
+import type { ReviewIssue, StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import {
   Braces,
   CheckCircle2,
@@ -13,11 +10,7 @@ import {
   ShieldCheck,
   TestTube2,
 } from "lucide-react";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
 import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
 import { structuredReviewVerdictSummary } from "@/lib/review/structured-review-summary";
@@ -69,15 +62,10 @@ function CollapsibleSectionFrame({
     >
       <CollapsibleTrigger className="flex w-full cursor-pointer items-center gap-2 py-2.5 text-left text-muted-foreground transition-colors hover:text-foreground">
         <ChevronRight
-          className={cn(
-            "size-3.5 shrink-0 transition-transform",
-            isOpen && "rotate-90",
-          )}
+          className={cn("size-3.5 shrink-0 transition-transform", isOpen && "rotate-90")}
         />
         {icon}
-        <h3 className="text-sm font-medium tracking-tight text-foreground">
-          {title}
-        </h3>
+        <h3 className="text-sm font-medium tracking-tight text-foreground">{title}</h3>
       </CollapsibleTrigger>
       <CollapsibleContent className="pb-4 pl-5.5">{children}</CollapsibleContent>
     </Collapsible>
@@ -85,38 +73,20 @@ function CollapsibleSectionFrame({
 }
 
 function LocalCollapsibleSection(
-  props: Omit<
-    React.ComponentProps<typeof CollapsibleSectionFrame>,
-    "isOpen" | "setIsOpen"
-  >,
+  props: Omit<React.ComponentProps<typeof CollapsibleSectionFrame>, "isOpen" | "setIsOpen">,
 ) {
   const [isOpen, setIsOpen] = useState(false);
-  return (
-    <CollapsibleSectionFrame
-      {...props}
-      isOpen={isOpen}
-      setIsOpen={setIsOpen}
-    />
-  );
+  return <CollapsibleSectionFrame {...props} isOpen={isOpen} setIsOpen={setIsOpen} />;
 }
 
 function PersistedCollapsibleSection({
   expansionKey,
   ...props
-}: Omit<
-  React.ComponentProps<typeof CollapsibleSectionFrame>,
-  "isOpen" | "setIsOpen"
-> & {
+}: Omit<React.ComponentProps<typeof CollapsibleSectionFrame>, "isOpen" | "setIsOpen"> & {
   expansionKey: string;
 }) {
   const [isOpen, setIsOpen] = useMessagePartExpansion(expansionKey);
-  return (
-    <CollapsibleSectionFrame
-      {...props}
-      isOpen={isOpen}
-      setIsOpen={setIsOpen}
-    />
-  );
+  return <CollapsibleSectionFrame {...props} isOpen={isOpen} setIsOpen={setIsOpen} />;
 }
 
 /**
@@ -129,8 +99,9 @@ interface CollapsibleSectionsContextValue {
   sectionExpansionKey?: string;
 }
 
-const CollapsibleSectionsContext =
-  createContext<CollapsibleSectionsContextValue>({ collapsible: false });
+const CollapsibleSectionsContext = createContext<CollapsibleSectionsContextValue>({
+  collapsible: false,
+});
 
 function Section({
   title,
@@ -141,8 +112,7 @@ function Section({
   icon?: React.ReactNode;
   children: React.ReactNode;
 }) {
-  const { collapsible, sectionExpansionKey } =
-    useContext(CollapsibleSectionsContext);
+  const { collapsible, sectionExpansionKey } = useContext(CollapsibleSectionsContext);
 
   if (collapsible) {
     if (sectionExpansionKey) {
@@ -247,13 +217,9 @@ function ReportArticle({
   const [showRaw, setShowRaw] = useState(false);
   const scope = report.reviewScope;
   const changed = report.whatChanged;
-  const notRun = report.testResults.notRun
-    ?? Math.max(
-      0,
-      report.testResults.total
-        - report.testResults.passed
-        - report.testResults.failed,
-    );
+  const notRun =
+    report.testResults.notRun ??
+    Math.max(0, report.testResults.total - report.testResults.passed - report.testResults.failed);
 
   return (
     <article
@@ -279,10 +245,7 @@ function ReportArticle({
             {showHeading && (
               <>
                 <h2
-                  className={cn(
-                    "text-base font-semibold text-foreground",
-                    showRawJson && "mt-1",
-                  )}
+                  className={cn("text-base font-semibold text-foreground", showRawJson && "mt-1")}
                 >
                   {heading}
                 </h2>
@@ -305,9 +268,11 @@ function ReportArticle({
             >
               <Braces className="size-3.5" />
               {showRaw ? "Hide raw JSON" : "Inspect raw JSON"}
-              {showRaw
-                ? <ChevronDown className="size-3.5" />
-                : <ChevronRight className="size-3.5" />}
+              {showRaw ? (
+                <ChevronDown className="size-3.5" />
+              ) : (
+                <ChevronRight className="size-3.5" />
+              )}
             </Button>
           )}
         </div>
@@ -336,9 +301,13 @@ function ReportArticle({
           <div>
             <dt className="text-xs text-muted-foreground">Commit</dt>
             <dd className="text-xs">
-              {scope.commit
-                ? <><span className="font-mono">{scope.commit.sha}</span> — {scope.commit.subject}</>
-                : "No commit created"}
+              {scope.commit ? (
+                <>
+                  <span className="font-mono">{scope.commit.sha}</span> — {scope.commit.subject}
+                </>
+              ) : (
+                "No commit created"
+              )}
             </dd>
           </div>
           <div>
@@ -357,7 +326,9 @@ function ReportArticle({
                   <>
                     <code className="text-xs">{command.command}</code>
                     {" — "}
-                    <span className={command.result === "passed" ? "text-emerald-400" : "text-red-400"}>
+                    <span
+                      className={command.result === "passed" ? "text-emerald-400" : "text-red-400"}
+                    >
                       {command.result}
                     </span>
                     {command.summary ? ` (${command.summary})` : ""}
@@ -369,14 +340,18 @@ function ReportArticle({
               items={scope.commandsNotRun}
               render={(value) => {
                 const command = value as (typeof scope.commandsNotRun)[number];
-                return <><code className="text-xs">{command.command}</code> — {command.reason}</>;
+                return (
+                  <>
+                    <code className="text-xs">{command.command}</code> — {command.reason}
+                  </>
+                );
               }}
             />
           </div>
         )}
-        {(scope.filesSkipped.length > 0
-          || scope.filesLeftUncommitted.length > 0
-          || scope.limitations.length > 0) && (
+        {(scope.filesSkipped.length > 0 ||
+          scope.filesLeftUncommitted.length > 0 ||
+          scope.limitations.length > 0) && (
           <div className="mt-4 grid gap-3 @md:grid-cols-3">
             <div>
               <p className="mb-1 text-xs font-medium text-muted-foreground">Files skipped</p>
@@ -384,7 +359,11 @@ function ReportArticle({
                 items={scope.filesSkipped}
                 render={(value) => {
                   const file = value as (typeof scope.filesSkipped)[number];
-                  return <><code>{file.file}</code> — {file.reason}</>;
+                  return (
+                    <>
+                      <code>{file.file}</code> — {file.reason}
+                    </>
+                  );
                 }}
               />
             </div>
@@ -394,7 +373,11 @@ function ReportArticle({
                 items={scope.filesLeftUncommitted}
                 render={(value) => {
                   const file = value as (typeof scope.filesLeftUncommitted)[number];
-                  return <><code>{file.file}</code> — {file.reason}</>;
+                  return (
+                    <>
+                      <code>{file.file}</code> — {file.reason}
+                    </>
+                  );
                 }}
               />
             </div>
@@ -423,32 +406,46 @@ function ReportArticle({
             items={changed.keyCodeChanges}
             render={(value) => {
               const change = value as (typeof changed.keyCodeChanges)[number];
-              return <><code>{location(change.file, change.line)}</code> — {change.description}</>;
+              return (
+                <>
+                  <code>{location(change.file, change.line)}</code> — {change.description}
+                </>
+              );
             }}
           />
-          <p><span className="font-medium">User impact:</span> {changed.userImpact}</p>
+          <p>
+            <span className="font-medium">User impact:</span> {changed.userImpact}
+          </p>
         </div>
       </Section>
 
       <Section title="Risk Profile" icon={<ShieldCheck className="size-4 text-amber-400" />}>
         <div className="flex flex-wrap gap-2">
-          <span className={cn(
-            "rounded-full border px-2.5 py-1 text-xs font-medium capitalize",
-            report.riskProfile.overallRisk === "high"
-              ? "border-red-500/35 bg-red-500/8 text-red-300"
-              : report.riskProfile.overallRisk === "medium"
-                ? "border-amber-500/35 bg-amber-500/8 text-amber-300"
-                : "border-emerald-500/30 bg-emerald-500/8 text-emerald-300",
-          )}>
+          <span
+            className={cn(
+              "rounded-full border px-2.5 py-1 text-xs font-medium capitalize",
+              report.riskProfile.overallRisk === "high"
+                ? "border-red-500/35 bg-red-500/8 text-red-300"
+                : report.riskProfile.overallRisk === "medium"
+                  ? "border-amber-500/35 bg-amber-500/8 text-amber-300"
+                  : "border-emerald-500/30 bg-emerald-500/8 text-emerald-300",
+            )}
+          >
             {report.riskProfile.overallRisk} risk
           </span>
           {report.riskProfile.changeTypes.map((type) => (
-            <span key={type} className="rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground">
+            <span
+              key={type}
+              className="rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground"
+            >
               {type}
             </span>
           ))}
           {report.riskProfile.riskAreas.map((area) => (
-            <span key={area} className="rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground">
+            <span
+              key={area}
+              className="rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground"
+            >
               {area}
             </span>
           ))}
@@ -460,7 +457,9 @@ function ReportArticle({
         <div className="mb-3 flex flex-wrap gap-4 text-sm">
           <span>{report.testResults.total} total</span>
           <span className="text-emerald-400">{report.testResults.passed} passed</span>
-          <span className={report.testResults.failed > 0 ? "text-red-400" : "text-muted-foreground"}>
+          <span
+            className={report.testResults.failed > 0 ? "text-red-400" : "text-muted-foreground"}
+          >
             {report.testResults.failed} failed
           </span>
           <span className="text-muted-foreground">{notRun} not run</span>
@@ -469,7 +468,12 @@ function ReportArticle({
           items={report.testResults.failures}
           render={(value) => {
             const failure = value as (typeof report.testResults.failures)[number];
-            return <><strong>{failure.testName}</strong> · <code>{failure.file}</code> — {failure.errorMessage}</>;
+            return (
+              <>
+                <strong>{failure.testName}</strong> · <code>{failure.file}</code> —{" "}
+                {failure.errorMessage}
+              </>
+            );
           }}
         />
       </Section>
@@ -479,7 +483,14 @@ function ReportArticle({
           items={report.strengths}
           render={(value) => {
             const strength = value as (typeof report.strengths)[number];
-            return <>{strength.description} <code className="text-xs text-muted-foreground">{location(strength.file, strength.line)}</code></>;
+            return (
+              <>
+                {strength.description}{" "}
+                <code className="text-xs text-muted-foreground">
+                  {location(strength.file, strength.line)}
+                </code>
+              </>
+            );
           }}
         />
       </Section>
@@ -488,45 +499,57 @@ function ReportArticle({
         title={`Issues · ${report.issues.length}`}
         icon={<CircleAlert className="size-4 text-amber-400" />}
       >
-        {report.issues.length === 0
-          ? <EmptyLine>No high-confidence issues were found in the reviewed scope.</EmptyLine>
-          : (
-            <ol className="space-y-3">
-              {report.issues.map((issue, index) => (
-                <li
-                  key={`${issue.file}-${issue.line}-${issue.title}-${index}`}
-                  className={cn("rounded-lg border p-3.5", severityStyles[issue.severity])}
-                >
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="rounded bg-background/35 px-1.5 py-0.5 font-mono text-xs font-semibold">
-                      {issue.severity}
-                    </span>
-                    <span className="text-xs">{issue.confidence}% confidence</span>
-                    <span className="text-xs opacity-80">{issue.category}</span>
+        {report.issues.length === 0 ? (
+          <EmptyLine>No high-confidence issues were found in the reviewed scope.</EmptyLine>
+        ) : (
+          <ol className="space-y-3">
+            {report.issues.map((issue, index) => (
+              <li
+                key={`${issue.file}-${issue.line}-${issue.title}-${index}`}
+                className={cn("rounded-lg border p-3.5", severityStyles[issue.severity])}
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded bg-background/35 px-1.5 py-0.5 font-mono text-xs font-semibold">
+                    {issue.severity}
+                  </span>
+                  <span className="text-xs">{issue.confidence}% confidence</span>
+                  <span className="text-xs opacity-80">{issue.category}</span>
+                </div>
+                <h4 className="mt-2 text-sm font-semibold text-foreground">
+                  {index + 1}. {issue.title}
+                </h4>
+                <p className="mt-1 break-all font-mono text-xs text-foreground/65">
+                  {location(issue.file, issue.line)}
+                  {issue.symbol ? ` · ${issue.symbol}` : ""}
+                </p>
+                <dl className="mt-3 grid gap-2 text-sm text-foreground/85">
+                  <div>
+                    <dt className="inline font-medium text-foreground">Description: </dt>
+                    <dd className="inline">{issue.description}</dd>
                   </div>
-                  <h4 className="mt-2 text-sm font-semibold text-foreground">
-                    {index + 1}. {issue.title}
-                  </h4>
-                  <p className="mt-1 break-all font-mono text-xs text-foreground/65">
-                    {location(issue.file, issue.line)}
-                    {issue.symbol ? ` · ${issue.symbol}` : ""}
-                  </p>
-                  <dl className="mt-3 grid gap-2 text-sm text-foreground/85">
-                    <div><dt className="inline font-medium text-foreground">Description: </dt><dd className="inline">{issue.description}</dd></div>
-                    <div><dt className="inline font-medium text-foreground">Evidence: </dt><dd className="inline">{issue.evidence}</dd></div>
-                    <div><dt className="inline font-medium text-foreground">Suggestion: </dt><dd className="inline">{issue.suggestion}</dd></div>
-                    <div><dt className="inline font-medium text-foreground">Verification: </dt><dd className="inline">{issue.verification}</dd></div>
-                  </dl>
-                  {!!issue.alternativeFixes?.length && (
-                    <div className="mt-3 border-t border-current/15 pt-2">
-                      <p className="text-xs font-medium text-foreground">Alternative fixes</p>
-                      <List items={issue.alternativeFixes} render={(value) => String(value)} />
-                    </div>
-                  )}
-                </li>
-              ))}
-            </ol>
-          )}
+                  <div>
+                    <dt className="inline font-medium text-foreground">Evidence: </dt>
+                    <dd className="inline">{issue.evidence}</dd>
+                  </div>
+                  <div>
+                    <dt className="inline font-medium text-foreground">Suggestion: </dt>
+                    <dd className="inline">{issue.suggestion}</dd>
+                  </div>
+                  <div>
+                    <dt className="inline font-medium text-foreground">Verification: </dt>
+                    <dd className="inline">{issue.verification}</dd>
+                  </div>
+                </dl>
+                {!!issue.alternativeFixes?.length && (
+                  <div className="mt-3 border-t border-current/15 pt-2">
+                    <p className="text-xs font-medium text-foreground">Alternative fixes</p>
+                    <List items={issue.alternativeFixes} render={(value) => String(value)} />
+                  </div>
+                )}
+              </li>
+            ))}
+          </ol>
+        )}
       </Section>
 
       <Section
@@ -537,21 +560,27 @@ function ReportArticle({
           items={report.testCoverageGaps}
           render={(value) => {
             const gap = value as (typeof report.testCoverageGaps)[number];
-            return <><code>{gap.file}</code> — {gap.untestedBehavior}</>;
+            return (
+              <>
+                <code>{gap.file}</code> — {gap.untestedBehavior}
+              </>
+            );
           }}
         />
       </Section>
 
       <Section title="Verdict">
         <div className="flex items-start gap-3">
-          <span className={cn(
-            "shrink-0 rounded-full border px-2.5 py-1 text-xs font-semibold",
-            report.verdict.ready === "yes"
-              ? "border-emerald-500/35 bg-emerald-500/8 text-emerald-300"
-              : report.verdict.ready === "with-fixes"
-                ? "border-amber-500/35 bg-amber-500/8 text-amber-300"
-                : "border-red-500/35 bg-red-500/8 text-red-300",
-          )}>
+          <span
+            className={cn(
+              "shrink-0 rounded-full border px-2.5 py-1 text-xs font-semibold",
+              report.verdict.ready === "yes"
+                ? "border-emerald-500/35 bg-emerald-500/8 text-emerald-300"
+                : report.verdict.ready === "with-fixes"
+                  ? "border-amber-500/35 bg-amber-500/8 text-amber-300"
+                  : "border-red-500/35 bg-red-500/8 text-red-300",
+            )}
+          >
             {report.verdict.ready}
           </span>
           <p className="text-sm text-foreground/90">{report.verdict.reasoning}</p>

@@ -13,11 +13,13 @@ function isDomProducingQuery(expression: ts.LeftHandSideExpression): boolean {
     : ts.isIdentifier(expression)
       ? expression.text
       : "";
-  return name === "querySelector"
-    || name === "querySelectorAll"
-    || name === "closest"
-    || /^(?:query|get|find)(?:All)?By[A-Z]/.test(name)
-    || /^getElements?By[A-Z]/.test(name);
+  return (
+    name === "querySelector" ||
+    name === "querySelectorAll" ||
+    name === "closest" ||
+    /^(?:query|get|find)(?:All)?By[A-Z]/.test(name) ||
+    /^getElements?By[A-Z]/.test(name)
+  );
 }
 
 /**
@@ -61,10 +63,7 @@ function containsDomQuery(node: ts.Node): boolean {
   let found = false;
   const visit = (candidate: ts.Node): void => {
     if (found) return;
-    if (
-      ts.isCallExpression(candidate)
-      && isDomProducingQuery(candidate.expression)
-    ) {
+    if (ts.isCallExpression(candidate) && isDomProducingQuery(candidate.expression)) {
       found = true;
       return;
     }
@@ -76,12 +75,13 @@ function containsDomQuery(node: ts.Node): boolean {
 
 function unwrapExpression(expression: ts.Expression): ts.Expression {
   if (
-    ts.isParenthesizedExpression(expression)
-    || ts.isNonNullExpression(expression)
-    || ts.isAsExpression(expression)
-    || ts.isTypeAssertionExpression(expression)
-    || ts.isSatisfiesExpression(expression)
-  ) return unwrapExpression(expression.expression);
+    ts.isParenthesizedExpression(expression) ||
+    ts.isNonNullExpression(expression) ||
+    ts.isAsExpression(expression) ||
+    ts.isTypeAssertionExpression(expression) ||
+    ts.isSatisfiesExpression(expression)
+  )
+    return unwrapExpression(expression.expression);
   return expression;
 }
 
@@ -89,9 +89,10 @@ function unwrapExpression(expression: ts.Expression): ts.Expression {
 function projectedName(expression: ts.Expression): string | undefined {
   if (ts.isPropertyAccessExpression(expression)) return expression.name.text;
   if (
-    ts.isElementAccessExpression(expression)
-    && ts.isStringLiteralLike(expression.argumentExpression)
-  ) return expression.argumentExpression.text;
+    ts.isElementAccessExpression(expression) &&
+    ts.isStringLiteralLike(expression.argumentExpression)
+  )
+    return expression.argumentExpression.text;
   return undefined;
 }
 
@@ -113,24 +114,23 @@ function isKnownScalarDomProjection(expression: ts.Expression): boolean {
   return property !== undefined && DOM_SCALAR_PROPERTIES.has(property);
 }
 
-export function findUnsafeDomAbsenceAssertions(fileName: string, source: string): UnsafeDomAssertion[] {
+export function findUnsafeDomAbsenceAssertions(
+  fileName: string,
+  source: string,
+): UnsafeDomAssertion[] {
   const sourceFile = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true);
   const assertions: UnsafeDomAssertion[] = [];
   const visit = (node: ts.Node): void => {
     if (
-      ts.isCallExpression(node)
-      && ts.isPropertyAccessExpression(node.expression)
-      && node.expression.name.text === "toBeNull"
-      && ts.isCallExpression(node.expression.expression)
-      && ts.isIdentifier(node.expression.expression.expression)
-      && node.expression.expression.expression.text === "expect"
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.name.text === "toBeNull" &&
+      ts.isCallExpression(node.expression.expression) &&
+      ts.isIdentifier(node.expression.expression.expression) &&
+      node.expression.expression.expression.text === "expect"
     ) {
       const received = node.expression.expression.arguments[0];
-      if (
-        received
-        && containsDomQuery(received)
-        && !isKnownScalarDomProjection(received)
-      ) {
+      if (received && containsDomQuery(received) && !isKnownScalarDomProjection(received)) {
         assertions.push({
           start: node.getStart(sourceFile),
           end: node.getEnd(),

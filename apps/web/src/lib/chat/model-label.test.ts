@@ -13,15 +13,12 @@ describe("resolveCatalogModelLabel", () => {
   ];
 
   test("uses the friendly catalog name for a known id", () => {
-    expect(resolveCatalogModelLabel("sonnet", models))
-      .toBe("Claude Sonnet 4");
+    expect(resolveCatalogModelLabel("sonnet", models)).toBe("Claude Sonnet 4");
   });
 
   test("uses a unique resolved model or alias for provider-confirmed ids", () => {
-    expect(resolveCatalogModelLabel("anthropic/claude-sonnet-4", models))
-      .toBe("Claude Sonnet 4");
-    expect(resolveCatalogModelLabel("claude-sonnet-latest", models))
-      .toBe("Claude Sonnet 4");
+    expect(resolveCatalogModelLabel("anthropic/claude-sonnet-4", models)).toBe("Claude Sonnet 4");
+    expect(resolveCatalogModelLabel("claude-sonnet-latest", models)).toBe("Claude Sonnet 4");
   });
 
   test("prefers an exact catalog id over another entry's alias", () => {
@@ -50,13 +47,13 @@ describe("resolveCatalogModelLabel", () => {
       },
     ];
 
-    expect(resolveCatalogModelLabel("claude-opus-5[1m]", ambiguousModels))
-      .toBe("claude-opus-5[1m]");
+    expect(resolveCatalogModelLabel("claude-opus-5[1m]", ambiguousModels)).toBe(
+      "claude-opus-5[1m]",
+    );
   });
 
   test("preserves unknown ids and entries without a usable name", () => {
-    expect(resolveCatalogModelLabel("provider/new-model", models))
-      .toBe("provider/new-model");
+    expect(resolveCatalogModelLabel("provider/new-model", models)).toBe("provider/new-model");
     expect(resolveCatalogModelLabel("blank-name", models)).toBe("blank-name");
   });
 });

@@ -9,9 +9,10 @@ type FakePtyHarness = {
 
 const spawnSpies: Array<ReturnType<typeof spyOn>> = [];
 
-function spawnFakePty(
-  options: Parameters<typeof spawnPty>[2],
-): { process: ReturnType<typeof spawnPty>; harness: FakePtyHarness } {
+function spawnFakePty(options: Parameters<typeof spawnPty>[2]): {
+  process: ReturnType<typeof spawnPty>;
+  harness: FakePtyHarness;
+} {
   let onTerminalData: ((terminal: unknown, data: Uint8Array) => void) | undefined;
   let resolveExited!: (code: number) => void;
   const exited = new Promise<number>((resolve) => {
@@ -44,9 +45,7 @@ function spawnFakePty(
     process: spawnPty("/bin/sh", [], options),
     harness: {
       emit(data) {
-        const bytes = typeof data === "string"
-          ? new TextEncoder().encode(data)
-          : data;
+        const bytes = typeof data === "string" ? new TextEncoder().encode(data) : data;
         onTerminalData?.(fakeTerminal, bytes);
       },
       exit(code = 0) {
@@ -98,7 +97,9 @@ describe("Bun PTY adapter", () => {
 
     const exitCode = await Promise.race([
       exited,
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("PTY did not exit")), 3_000)),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("PTY did not exit")), 3_000),
+      ),
     ]);
 
     expect(exitCode).toBe(0);
@@ -178,11 +179,7 @@ describe("Bun PTY adapter", () => {
     harness.exit(7);
     await Bun.sleep(0);
 
-    expect(events).toEqual([
-      "data:leading",
-      "data:-pending�",
-      "exit:7",
-    ]);
+    expect(events).toEqual(["data:leading", "data:-pending�", "exit:7"]);
     expect(harness.close).toHaveBeenCalledTimes(1);
   });
 });

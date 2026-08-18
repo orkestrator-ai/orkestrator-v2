@@ -1,10 +1,6 @@
 // Hook for managing terminal sessions with Electron backend
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  listen,
-  NATIVE_EVENT_STREAM_CONNECTED_EVENT,
-  UnlistenFn,
-} from "@/lib/native/events";
+import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT, UnlistenFn } from "@/lib/native/events";
 import { toast } from "sonner";
 import * as backend from "@/lib/backend";
 
@@ -55,25 +51,26 @@ export function decodeTerminalOutputPayload(payload: TerminalOutputPayload): Uin
   return new Uint8Array(0);
 }
 
-function terminalOutputCursor(
-  payload: TerminalOutputPayload,
-): { revision: number | null; generation: number | null } {
+function terminalOutputCursor(payload: TerminalOutputPayload): {
+  revision: number | null;
+  generation: number | null;
+} {
   if (
-    !payload
-    || typeof payload !== "object"
-    || payload instanceof Uint8Array
-    || Array.isArray(payload)
+    !payload ||
+    typeof payload !== "object" ||
+    payload instanceof Uint8Array ||
+    Array.isArray(payload)
   ) {
     return { revision: null, generation: null };
   }
-  const revision = Number.isSafeInteger(payload.revision)
-    && (payload.revision ?? -1) >= 0
-    ? payload.revision!
-    : null;
-  const generation = Number.isSafeInteger(payload.generation)
-    && (payload.generation ?? -1) >= 0
-    ? payload.generation!
-    : null;
+  const revision =
+    Number.isSafeInteger(payload.revision) && (payload.revision ?? -1) >= 0
+      ? payload.revision!
+      : null;
+  const generation =
+    Number.isSafeInteger(payload.generation) && (payload.generation ?? -1) >= 0
+      ? payload.generation!
+      : null;
   return { revision, generation };
 }
 
@@ -225,10 +222,8 @@ export function useTerminal({
   // create, listener registration, snapshot, and start cannot publish stale state.
   useEffect(() => {
     const nextExistingSessionId = existingSessionId ?? null;
-    const targetChanged =
-      previousTerminalTargetIdentityRef.current !== terminalTargetIdentity;
-    const requestedSessionChanged =
-      previousExistingSessionIdRef.current !== nextExistingSessionId;
+    const targetChanged = previousTerminalTargetIdentityRef.current !== terminalTargetIdentity;
+    const requestedSessionChanged = previousExistingSessionIdRef.current !== nextExistingSessionId;
     if (!targetChanged && !requestedSessionChanged) return;
 
     previousTerminalTargetIdentityRef.current = terminalTargetIdentity;
@@ -272,7 +267,12 @@ export function useTerminal({
   // actions own backend process teardown.
   useEffect(() => {
     return () => {
-      console.log("[useTerminal] Cleanup on unmount, sessionId:", sessionIdRef.current, "persist:", persistSessionRef.current);
+      console.log(
+        "[useTerminal] Cleanup on unmount, sessionId:",
+        sessionIdRef.current,
+        "persist:",
+        persistSessionRef.current,
+      );
       connectGenerationRef.current += 1;
       if (unlistenRef.current) {
         console.log("[useTerminal] Unlistening from events");
@@ -284,16 +284,27 @@ export function useTerminal({
   }, [cleanupEventListener]);
 
   const connect = useCallback(async () => {
-    console.log("[useTerminal] connect called, containerId:", containerId, "environmentId:", environmentId, "isLocal:", isLocal, "existingSessionId:", existingSessionId, "attachExistingOnly:", attachExistingOnly);
+    console.log(
+      "[useTerminal] connect called, containerId:",
+      containerId,
+      "environmentId:",
+      environmentId,
+      "isLocal:",
+      isLocal,
+      "existingSessionId:",
+      existingSessionId,
+      "attachExistingOnly:",
+      attachExistingOnly,
+    );
 
     if (attachExistingOnly && !existingSessionId) {
       setError(null);
       return;
     }
     if (isLocal ? !environmentId : !containerId) {
-      setError(isLocal
-        ? "No environment ID provided for local environment"
-        : "No container ID provided");
+      setError(
+        isLocal ? "No environment ID provided for local environment" : "No container ID provided",
+      );
       return;
     }
     if (isConnectingRef.current || isConnectedRef.current) return;
@@ -301,8 +312,7 @@ export function useTerminal({
     isConnectingRef.current = true;
     const connectGeneration = connectGenerationRef.current + 1;
     connectGenerationRef.current = connectGeneration;
-    const isCurrentConnect = () =>
-      connectGenerationRef.current === connectGeneration;
+    const isCurrentConnect = () => connectGenerationRef.current === connectGeneration;
     setIsConnecting(true);
     setError(null);
 
@@ -315,12 +325,8 @@ export function useTerminal({
     // Stable/persistent sessions are backend-owned and may have been adopted by
     // another renderer after create returned. Only ephemeral renderer-owned
     // sessions can be destroyed by stale or failed connection work.
-    const releaseCreatedSession = async (
-      id: string | null,
-      created: boolean,
-    ): Promise<void> => {
-      const backendOwnsStableSession =
-        Boolean(terminalKey) && Boolean(environmentId);
+    const releaseCreatedSession = async (id: string | null, created: boolean): Promise<void> => {
+      const backendOwnsStableSession = Boolean(terminalKey) && Boolean(environmentId);
       if (!id || !created || backendOwnsStableSession) return;
       if (isLocal) {
         await backend.closeLocalTerminalSession(id).catch(() => {});
@@ -398,31 +404,29 @@ export function useTerminal({
       const reconcileOnce = async (): Promise<void> => {
         snapshotPending = true;
         try {
-          const requestedCursor = activeGeneration === null
-            ? undefined
-            : { revision: lastAppliedRevision, generation: activeGeneration };
+          const requestedCursor =
+            activeGeneration === null
+              ? undefined
+              : { revision: lastAppliedRevision, generation: activeGeneration };
           const snapshot = requestedCursor
             ? await backend.getTerminalOutputSnapshot(id, requestedCursor)
             : await backend.getTerminalOutputSnapshot(id);
           if (disposed || !isCurrentConnect()) return;
 
           if (
-            snapshot.mode === "delta"
-            && requestedCursor
-            && snapshot.generation === requestedCursor.generation
+            snapshot.mode === "delta" &&
+            requestedCursor &&
+            snapshot.generation === requestedCursor.generation
           ) {
             if (snapshot.output) {
               onDataRef.current?.(new TextEncoder().encode(snapshot.output));
             }
           } else {
-            onReplayRef.current?.(
-              new TextEncoder().encode(snapshot.output),
-              {
-                // A reconciliation fallback replaces the local view exactly.
-                preserveExisting: requestedCursor ? false : preserveExisting,
-                degraded: snapshot.truncated ? "truncated" : undefined,
-              },
-            );
+            onReplayRef.current?.(new TextEncoder().encode(snapshot.output), {
+              // A reconciliation fallback replaces the local view exactly.
+              preserveExisting: requestedCursor ? false : preserveExisting,
+              degraded: snapshot.truncated ? "truncated" : undefined,
+            });
           }
           activeGeneration = snapshot.generation;
           lastAppliedRevision = snapshot.revision;
@@ -454,20 +458,19 @@ export function useTerminal({
           }
         } catch (snapshotError) {
           if (disposed || !isCurrentConnect()) return;
-          console.warn("[useTerminal] Failed to reconcile terminal output snapshot:", snapshotError);
-          snapshotErrorActive = true;
-          const message = snapshotError instanceof Error
-            ? snapshotError.message
-            : "Unknown snapshot error";
-          setError(`Failed to synchronize terminal output: ${message}`);
-          onReplayRef.current?.(
-            new Uint8Array(),
-            {
-              preserveExisting,
-              degraded: "snapshot-error",
-              error: message,
-            },
+          console.warn(
+            "[useTerminal] Failed to reconcile terminal output snapshot:",
+            snapshotError,
           );
+          snapshotErrorActive = true;
+          const message =
+            snapshotError instanceof Error ? snapshotError.message : "Unknown snapshot error";
+          setError(`Failed to synchronize terminal output: ${message}`);
+          onReplayRef.current?.(new Uint8Array(), {
+            preserveExisting,
+            degraded: "snapshot-error",
+            error: message,
+          });
 
           // Keep the existing view. Live output should continue even though
           // history cannot be made authoritative until a later reconnect.
@@ -490,24 +493,26 @@ export function useTerminal({
 
         // Deferring the runner one microtask ensures the promise is assigned
         // before a synchronously resolved snapshot can trigger more events.
-        reconciliationPromise = Promise.resolve().then(async () => {
-          let attempts = 0;
-          do {
-            reconciliationQueued = false;
-            await reconcileOnce();
-            attempts += 1;
-          } while (
-            reconciliationQueued &&
-            // One coalesced follow-up closes the normal event/snapshot race.
-            // If an inconsistent backend keeps returning an older generation,
-            // wait for the next live/reconnect trigger instead of tight-looping.
-            attempts < 2 &&
-            !disposed &&
-            isCurrentConnect()
-          );
-        }).finally(() => {
-          reconciliationPromise = null;
-        });
+        reconciliationPromise = Promise.resolve()
+          .then(async () => {
+            let attempts = 0;
+            do {
+              reconciliationQueued = false;
+              await reconcileOnce();
+              attempts += 1;
+            } while (
+              reconciliationQueued &&
+              // One coalesced follow-up closes the normal event/snapshot race.
+              // If an inconsistent backend keeps returning an older generation,
+              // wait for the next live/reconnect trigger instead of tight-looping.
+              attempts < 2 &&
+              !disposed &&
+              isCurrentConnect()
+            );
+          })
+          .finally(() => {
+            reconciliationPromise = null;
+          });
         return reconciliationPromise;
       };
 
@@ -617,9 +622,7 @@ export function useTerminal({
 
       return {
         dispose,
-        reconcileInitial: () => replayOutputBuffer
-          ? reconcileSnapshot()
-          : Promise.resolve(),
+        reconcileInitial: () => (replayOutputBuffer ? reconcileSnapshot() : Promise.resolve()),
       };
     };
 
@@ -695,11 +698,7 @@ export function useTerminal({
         return;
       }
 
-      await finishAttachment(
-        targetSessionId,
-        targetCreated,
-        targetShouldStart,
-      );
+      await finishAttachment(targetSessionId, targetCreated, targetShouldStart);
       if (!isCurrentConnect()) return;
 
       if (attachExistingOnly && existingSessionRunning === false) {
@@ -720,9 +719,7 @@ export function useTerminal({
         return;
       }
 
-      const message = err instanceof Error
-        ? err.message
-        : "Failed to connect to terminal";
+      const message = err instanceof Error ? err.message : "Failed to connect to terminal";
       if (attachExistingOnly) {
         setError(message);
         sessionIdRef.current = null;
@@ -754,11 +751,7 @@ export function useTerminal({
             await releaseCreatedSession(targetSessionId, targetCreated);
             return;
           }
-          await finishAttachment(
-            targetSessionId,
-            targetCreated,
-            targetShouldStart,
-          );
+          await finishAttachment(targetSessionId, targetCreated, targetShouldStart);
           if (!isCurrentConnect()) return;
           isConnectedRef.current = true;
           setBootstrapped(targetBootstrapped);
@@ -768,9 +761,10 @@ export function useTerminal({
           releaseTargetListener();
           await releaseCreatedSession(targetSessionId, targetCreated);
           if (!isCurrentConnect()) return;
-          const fallbackMessage = fallbackErr instanceof Error
-            ? fallbackErr.message
-            : "Failed to create terminal session";
+          const fallbackMessage =
+            fallbackErr instanceof Error
+              ? fallbackErr.message
+              : "Failed to create terminal session";
           setError(`Reconnect failed and new session creation failed: ${fallbackMessage}`);
           toast.error("Terminal connection failed", {
             description: fallbackMessage,
@@ -796,7 +790,20 @@ export function useTerminal({
         if (isMountedRef.current) setIsConnecting(false);
       }
     }
-  }, [containerId, environmentId, isLocal, cols, rows, existingSessionId, user, replayOutputBuffer, attachExistingOnly, trackEnvironmentActivity, terminalKey, cleanupEventListener]);
+  }, [
+    containerId,
+    environmentId,
+    isLocal,
+    cols,
+    rows,
+    existingSessionId,
+    user,
+    replayOutputBuffer,
+    attachExistingOnly,
+    trackEnvironmentActivity,
+    terminalKey,
+    cleanupEventListener,
+  ]);
 
   const disconnect = useCallback(async () => {
     connectGenerationRef.current += 1;
@@ -833,9 +840,9 @@ export function useTerminal({
 
   const markBootstrapped = useCallback((targetSessionId: string): boolean => {
     if (
-      !isMountedRef.current
-      || !isConnectedRef.current
-      || sessionIdRef.current !== targetSessionId
+      !isMountedRef.current ||
+      !isConnectedRef.current ||
+      sessionIdRef.current !== targetSessionId
     ) {
       return false;
     }
@@ -874,7 +881,7 @@ export function useTerminal({
         }
       }
     },
-    [sessionId]
+    [sessionId],
   );
 
   // Use ref-based write function to always have access to current sessionId
@@ -904,7 +911,7 @@ export function useTerminal({
         });
       }
     },
-    [] // No deps - uses refs for sessionId and isLocal
+    [], // No deps - uses refs for sessionId and isLocal
   );
 
   // Auto-connect when containerId changes

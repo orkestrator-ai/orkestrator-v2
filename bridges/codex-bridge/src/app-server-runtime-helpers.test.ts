@@ -1,15 +1,17 @@
 import { describe, expect, test } from "bun:test";
-import { estimateOrderedEventBytes, mergeRateLimitWindows, messageSnapshotIntervalMs, normalizedMessageSnapshotChars } from "./app-server-runtime.js";
+import {
+  estimateOrderedEventBytes,
+  mergeRateLimitWindows,
+  messageSnapshotIntervalMs,
+  normalizedMessageSnapshotChars,
+} from "./app-server-runtime.js";
 import type { EngineRateLimitWindow, EngineRateLimitWindowUpdate } from "./engine/types.js";
-
 
 test("large message snapshots use a progressively lower streaming cadence", () => {
   expect(messageSnapshotIntervalMs(255 * 1024)).toBe(100);
   expect(messageSnapshotIntervalMs(256 * 1024)).toBe(250);
   expect(messageSnapshotIntervalMs(1024 * 1024)).toBe(500);
 });
-
-
 
 test("snapshot sizing includes nested tool, reasoning, diff and subagent content", () => {
   const message = {
@@ -24,11 +26,13 @@ test("snapshot sizing includes nested tool, reasoning, diff and subagent content
   });
   const toolChars = normalizedMessageSnapshotChars({
     ...message,
-    parts: [{
-      type: "tool-result" as const,
-      content: "",
-      toolOutput: "o".repeat(300 * 1024),
-    }],
+    parts: [
+      {
+        type: "tool-result" as const,
+        content: "",
+        toolOutput: "o".repeat(300 * 1024),
+      },
+    ],
   });
   const nestedChars = normalizedMessageSnapshotChars({
     ...message,
@@ -43,11 +47,13 @@ test("snapshot sizing includes nested tool, reasoning, diff and subagent content
         type: "subagent" as const,
         content: "worker",
         subagentPrompt: "p".repeat(48 * 1024),
-        subagentActions: [{
-          type: "tool-result" as const,
-          content: "",
-          toolOutput: "o".repeat(48 * 1024),
-        }],
+        subagentActions: [
+          {
+            type: "tool-result" as const,
+            content: "",
+            toolOutput: "o".repeat(48 * 1024),
+          },
+        ],
       },
     ],
   });
@@ -56,8 +62,6 @@ test("snapshot sizing includes nested tool, reasoning, diff and subagent content
   expect(messageSnapshotIntervalMs(toolChars)).toBe(250);
   expect(messageSnapshotIntervalMs(nestedChars)).toBe(250);
 });
-
-
 
 test("snapshot sizing is bounded and tolerates cyclic metadata", () => {
   const cyclicMessage: Record<string, unknown> = {
@@ -74,16 +78,16 @@ test("snapshot sizing is bounded and tolerates cyclic metadata", () => {
       cyclicMessage as unknown as Parameters<typeof normalizedMessageSnapshotChars>[0],
     ),
   ).toBeGreaterThan(0);
-  expect(normalizedMessageSnapshotChars({
-    id: "bounded",
-    role: "assistant",
-    content: "x".repeat(2 * 1024 * 1024),
-    parts: [],
-    createdAt: "2026-01-01T00:00:00.000Z",
-  })).toBe(1024 * 1024);
+  expect(
+    normalizedMessageSnapshotChars({
+      id: "bounded",
+      role: "assistant",
+      content: "x".repeat(2 * 1024 * 1024),
+      parts: [],
+      createdAt: "2026-01-01T00:00:00.000Z",
+    }),
+  ).toBe(1024 * 1024);
 });
-
-
 
 describe("mergeRateLimitWindows", () => {
   const primary: EngineRateLimitWindow = {
@@ -107,10 +111,7 @@ describe("mergeRateLimitWindows", () => {
       usedPercent: 20,
     };
 
-    expect(mergeRateLimitWindows([secondary], [primary])).toEqual([
-      primary,
-      secondary,
-    ]);
+    expect(mergeRateLimitWindows([secondary], [primary])).toEqual([primary, secondary]);
   });
 
   test("preserves omitted fields while updating the fields that are present", () => {
@@ -119,10 +120,12 @@ describe("mergeRateLimitWindows", () => {
       usedPercent: 65,
     };
 
-    expect(mergeRateLimitWindows([primary], [sparseUpdate])).toEqual([{
-      ...primary,
-      usedPercent: 65,
-    }]);
+    expect(mergeRateLimitWindows([primary], [sparseUpdate])).toEqual([
+      {
+        ...primary,
+        usedPercent: 65,
+      },
+    ]);
   });
 
   test("uses a slot fallback only until an explicit provider label is observed", () => {
@@ -131,28 +134,39 @@ describe("mergeRateLimitWindows", () => {
       usedPercent: 10,
     };
     const initial = mergeRateLimitWindows([], [unlabeled]);
-    expect(initial).toEqual([{
-      slot: "primary",
-      label: "Primary",
-      usedPercent: 10,
-    }]);
+    expect(initial).toEqual([
+      {
+        slot: "primary",
+        label: "Primary",
+        usedPercent: 10,
+      },
+    ]);
 
-    expect(mergeRateLimitWindows([primary], [unlabeled])).toEqual([{
-      ...primary,
-      usedPercent: 10,
-    }]);
+    expect(mergeRateLimitWindows([primary], [unlabeled])).toEqual([
+      {
+        ...primary,
+        usedPercent: 10,
+      },
+    ]);
 
-    expect(mergeRateLimitWindows([primary], [{
-      slot: "primary",
-      label: "New plan name",
-    }])).toEqual([{
-      ...primary,
-      label: "New plan name",
-    }]);
+    expect(
+      mergeRateLimitWindows(
+        [primary],
+        [
+          {
+            slot: "primary",
+            label: "New plan name",
+          },
+        ],
+      ),
+    ).toEqual([
+      {
+        ...primary,
+        label: "New plan name",
+      },
+    ]);
   });
 });
-
-
 
 describe("estimateOrderedEventBytes", () => {
   test("charges strings by their UTF-16 storage and scalars a flat node cost", () => {
@@ -168,8 +182,7 @@ describe("estimateOrderedEventBytes", () => {
     const wide = estimateOrderedEventBytes({ aa: 1, bb: 2 });
     const narrow = estimateOrderedEventBytes({ a: 1, b: 2 });
     expect(wide).toBeGreaterThan(narrow);
-    expect(estimateOrderedEventBytes([1, 2, 3]))
-      .toBeGreaterThan(estimateOrderedEventBytes([1]));
+    expect(estimateOrderedEventBytes([1, 2, 3])).toBeGreaterThan(estimateOrderedEventBytes([1]));
   });
 
   /**

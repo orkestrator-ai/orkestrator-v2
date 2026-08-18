@@ -370,12 +370,14 @@ export function resolveGatewayCompressionMode(
   explicit: GatewayCompressionMode | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): GatewayCompressionMode {
-  return explicit
-    ?? parseGatewayCompressionMode(
+  return (
+    explicit ??
+    parseGatewayCompressionMode(
       env.ORKESTRATOR_GATEWAY_COMPRESSION,
       "ORKESTRATOR_GATEWAY_COMPRESSION",
-    )
-    ?? "body";
+    ) ??
+    "body"
+  );
 }
 
 export function compressionModeForListener(
@@ -385,7 +387,11 @@ export function compressionModeForListener(
   return listenerKind === "control" ? "off" : compression;
 }
 
-export function appendBoundedSample<T>(target: T[], sample: T, limit = GATEWAY_METRIC_SAMPLE_LIMIT): void {
+export function appendBoundedSample<T>(
+  target: T[],
+  sample: T,
+  limit = GATEWAY_METRIC_SAMPLE_LIMIT,
+): void {
   target.push(sample);
   if (target.length > limit) target.splice(0, target.length - limit);
 }
@@ -418,9 +424,9 @@ export class BoundedMetricMap<T> {
     const keyBytes = Buffer.byteLength(key);
     const overflowBytes = Buffer.byteLength(METRIC_OVERFLOW_KEY);
     if (
-      this.map.size < this.limit - 1
-      && keyBytes <= GATEWAY_METRIC_LABEL_BYTES
-      && this.labelBytes + keyBytes <= this.totalLabelBytes - overflowBytes
+      this.map.size < this.limit - 1 &&
+      keyBytes <= GATEWAY_METRIC_LABEL_BYTES &&
+      this.labelBytes + keyBytes <= this.totalLabelBytes - overflowBytes
     ) {
       return key;
     }
@@ -452,10 +458,8 @@ export class BoundedMetricMap<T> {
 export function normalizeMetricLabel(value: string): string {
   if (METRIC_RESERVED_KEYS.includes(value)) return value;
   const trimmed = value.trim();
-  return (
-    Buffer.byteLength(trimmed) <= GATEWAY_METRIC_LABEL_BYTES
-    && /^[A-Za-z][A-Za-z0-9_.:-]*$/.test(trimmed)
-  )
+  return Buffer.byteLength(trimmed) <= GATEWAY_METRIC_LABEL_BYTES &&
+    /^[A-Za-z][A-Za-z0-9_.:-]*$/.test(trimmed)
     ? trimmed
     : METRIC_INVALID_KEY;
 }
@@ -479,9 +483,16 @@ export function truncateUtf8(value: string, maxBytes: number): string {
   return buffer.subarray(0, end).toString("utf8");
 }
 
-export function normalizeContentEncoding(value: string | null): "identity" | "gzip" | "br" | "deflate" | "other" {
+export function normalizeContentEncoding(
+  value: string | null,
+): "identity" | "gzip" | "br" | "deflate" | "other" {
   const encoding = value?.trim().toLowerCase() || "identity";
-  if (encoding === "identity" || encoding === "gzip" || encoding === "br" || encoding === "deflate") {
+  if (
+    encoding === "identity" ||
+    encoding === "gzip" ||
+    encoding === "br" ||
+    encoding === "deflate"
+  ) {
     return encoding;
   }
   return "other";
@@ -489,15 +500,13 @@ export function normalizeContentEncoding(value: string | null): "identity" | "gz
 
 export function normalizeHttpMethod(value: string): string {
   const method = value.trim().toUpperCase();
-  return (
-    method === "DELETE"
-    || method === "GET"
-    || method === "HEAD"
-    || method === "OPTIONS"
-    || method === "PATCH"
-    || method === "POST"
-    || method === "PUT"
-  )
+  return method === "DELETE" ||
+    method === "GET" ||
+    method === "HEAD" ||
+    method === "OPTIONS" ||
+    method === "PATCH" ||
+    method === "POST" ||
+    method === "PUT"
     ? method
     : "OTHER";
 }
@@ -527,7 +536,12 @@ export function normalizeAcceptEncoding(value: string | null): string | null {
       return name?.trim() === "q" && Number.parseFloat(weight ?? "") === 0;
     });
     if (refused) continue;
-    if (encoding === "br" || encoding === "gzip" || encoding === "deflate" || encoding === "identity") {
+    if (
+      encoding === "br" ||
+      encoding === "gzip" ||
+      encoding === "deflate" ||
+      encoding === "identity"
+    ) {
       encodings.add(encoding);
     } else {
       encodings.add("other");
@@ -570,14 +584,14 @@ export function normalizeContentType(value: string | null): string | null {
   if (mimeType.startsWith("audio/")) return "audio";
   if (mimeType.startsWith("video/")) return "video";
   if (
-    mimeType === "application/javascript"
-    || mimeType === "application/json"
-    || mimeType === "application/octet-stream"
-    || mimeType === "text/css"
-    || mimeType === "text/event-stream"
-    || mimeType === "text/html"
-    || mimeType === "text/javascript"
-    || mimeType === "text/plain"
+    mimeType === "application/javascript" ||
+    mimeType === "application/json" ||
+    mimeType === "application/octet-stream" ||
+    mimeType === "text/css" ||
+    mimeType === "text/event-stream" ||
+    mimeType === "text/html" ||
+    mimeType === "text/javascript" ||
+    mimeType === "text/plain"
   ) {
     return mimeType;
   }
@@ -594,13 +608,13 @@ export function normalizeNextHopProtocol(value: unknown): string | null {
   const protocol = stringOrNull(value, 24)?.toLowerCase();
   if (!protocol) return null;
   if (
-    protocol === "h2"
-    || protocol === "h3"
-    || protocol === "http/1.0"
-    || protocol === "http/1.1"
-    || protocol === "http/2"
-    || protocol === "http/3"
-    || protocol === "quic"
+    protocol === "h2" ||
+    protocol === "h3" ||
+    protocol === "http/1.0" ||
+    protocol === "http/1.1" ||
+    protocol === "http/2" ||
+    protocol === "http/3" ||
+    protocol === "quic"
   ) {
     return protocol;
   }
@@ -695,23 +709,21 @@ export function sanitizeClientBootReport(
   httpVersion: string,
 ): GatewayClientBootReport {
   const platformValue = stringOrNull(input.platform, 32);
-  const platform = (
-    platformValue === "desktop-browser"
-    || platformValue === "ios-wkwebview"
-    || platformValue === "ipad-wkwebview"
-    || platformValue === "iphone-wkwebview"
-  )
-    ? platformValue
-    : "unknown";
+  const platform =
+    platformValue === "desktop-browser" ||
+    platformValue === "ios-wkwebview" ||
+    platformValue === "ipad-wkwebview" ||
+    platformValue === "iphone-wkwebview"
+      ? platformValue
+      : "unknown";
   const navigationTypeValue = stringOrNull(input.navigationType, 16);
-  const navigationType = (
-    navigationTypeValue === "navigate"
-    || navigationTypeValue === "reload"
-    || navigationTypeValue === "back_forward"
-    || navigationTypeValue === "prerender"
-  )
-    ? navigationTypeValue
-    : "unknown";
+  const navigationType =
+    navigationTypeValue === "navigate" ||
+    navigationTypeValue === "reload" ||
+    navigationTypeValue === "back_forward" ||
+    navigationTypeValue === "prerender"
+      ? navigationTypeValue
+      : "unknown";
   return {
     recordedAt: new Date().toISOString(),
     platform,
@@ -780,7 +792,18 @@ export class GatewayMetricsStore {
     this.compression.configuredMode = mode;
   }
 
-  beginRequest(meta: Omit<GatewayRouteSample, "recordedAt" | "statusCode" | "responseBytes" | "durationMs" | "contentEncoding" | "cacheControl" | "contentType">) {
+  beginRequest(
+    meta: Omit<
+      GatewayRouteSample,
+      | "recordedAt"
+      | "statusCode"
+      | "responseBytes"
+      | "durationMs"
+      | "contentEncoding"
+      | "cacheControl"
+      | "contentType"
+    >,
+  ) {
     const startedAt = Date.now();
     let requestBytes = meta.requestBytes;
     return {
@@ -802,8 +825,12 @@ export class GatewayMetricsStore {
           contentEncoding: normalizeContentEncoding(
             headerValueToString(response.getHeader("content-encoding")),
           ),
-          cacheControl: normalizeCacheControl(headerValueToString(response.getHeader("cache-control"))),
-          contentType: normalizeContentType(headerValueToString(response.getHeader("content-type"))),
+          cacheControl: normalizeCacheControl(
+            headerValueToString(response.getHeader("cache-control")),
+          ),
+          contentType: normalizeContentType(
+            headerValueToString(response.getHeader("content-type")),
+          ),
         };
         this.recordRoute(sample);
       },
@@ -962,9 +989,15 @@ export class GatewayMetricsStore {
 
   snapshot() {
     return {
-      routes: Object.fromEntries([...this.routes.entries()].sort(([left], [right]) => left.localeCompare(right))),
-      commands: Object.fromEntries([...this.commands.entries()].sort(([left], [right]) => left.localeCompare(right))),
-      events: Object.fromEntries([...this.events.entries()].sort(([left], [right]) => left.localeCompare(right))),
+      routes: Object.fromEntries(
+        [...this.routes.entries()].sort(([left], [right]) => left.localeCompare(right)),
+      ),
+      commands: Object.fromEntries(
+        [...this.commands.entries()].sort(([left], [right]) => left.localeCompare(right)),
+      ),
+      events: Object.fromEntries(
+        [...this.events.entries()].sort(([left], [right]) => left.localeCompare(right)),
+      ),
       stream: { ...this.stream },
       replay: { ...this.replay, reasons: { ...this.replay.reasons } },
       compression: { configuredMode: this.compression.configuredMode },
@@ -1022,8 +1055,7 @@ export function parsePort(value: string | undefined, fallback: number): number {
 }
 
 export function isAddressInUseError(error: unknown): boolean {
-  return error instanceof Error
-    && (error as NodeJS.ErrnoException).code === "EADDRINUSE";
+  return error instanceof Error && (error as NodeJS.ErrnoException).code === "EADDRINUSE";
 }
 
 export function parseIPv4(address: string): number[] | null {
@@ -1047,7 +1079,9 @@ export function isTailscaleAddress(address: string): boolean {
   return address.toLowerCase().startsWith("fd7a:115c:a1e0:");
 }
 
-export function selectTailscaleBindAddress(interfaces: NetworkInterfaceMap = networkInterfaces()): string | null {
+export function selectTailscaleBindAddress(
+  interfaces: NetworkInterfaceMap = networkInterfaces(),
+): string | null {
   const candidates: NetworkInterfaceInfo[] = [];
   for (const entries of Object.values(interfaces)) {
     for (const entry of entries ?? []) {
@@ -1058,9 +1092,7 @@ export function selectTailscaleBindAddress(interfaces: NetworkInterfaceMap = net
   }
 
   return (
-    candidates.find((entry) => entry.family === "IPv4")?.address ??
-    candidates[0]?.address ??
-    null
+    candidates.find((entry) => entry.family === "IPv4")?.address ?? candidates[0]?.address ?? null
   );
 }
 
@@ -1086,10 +1118,12 @@ export function originMatchesRule(origin: URL, rule: string): boolean {
   const wildcard = /^(https?):\/\/\*\.([^/:]+)(?::(\d+))?$/.exec(rule);
   if (!wildcard) return false;
   const [, protocol, hostname, port] = wildcard;
-  return origin.protocol === `${protocol}:`
-    && origin.hostname.endsWith(`.${hostname}`)
-    && origin.hostname !== hostname
-    && (port === undefined || origin.port === port);
+  return (
+    origin.protocol === `${protocol}:` &&
+    origin.hostname.endsWith(`.${hostname}`) &&
+    origin.hostname !== hostname &&
+    (port === undefined || origin.port === port)
+  );
 }
 
 export function mimeType(filePath: string): string {
@@ -1164,8 +1198,9 @@ export function negotiateEncoding(
   acceptEncoding: string | null,
   available: readonly ContentEncoding[] = ["br", "gzip", "identity"],
 ): ContentEncoding {
-  const encoded = preferredStaticCompressionEncodings(acceptEncoding)
-    .find((encoding) => available.includes(encoding));
+  const encoded = preferredStaticCompressionEncodings(acceptEncoding).find((encoding) =>
+    available.includes(encoding),
+  );
   if (encoded) return encoded;
   // RFC 9110 allows a server to use identity even when every advertised
   // representation was refused. Compression is an optimization here, and
@@ -1186,15 +1221,15 @@ export function isCompressibleContentType(contentType: string | null): boolean {
   if (!contentType) return false;
   const normalized = contentType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
   return (
-    normalized.startsWith("text/")
-    || normalized === "application/javascript"
-    || normalized === "application/json"
-    || normalized === "application/manifest+json"
-    || normalized === "application/wasm"
-    || normalized === "application/xml"
-    || normalized === "image/svg+xml"
-    || normalized.endsWith("+json")
-    || normalized.endsWith("+xml")
+    normalized.startsWith("text/") ||
+    normalized === "application/javascript" ||
+    normalized === "application/json" ||
+    normalized === "application/manifest+json" ||
+    normalized === "application/wasm" ||
+    normalized === "application/xml" ||
+    normalized === "image/svg+xml" ||
+    normalized.endsWith("+json") ||
+    normalized.endsWith("+xml")
   );
 }
 
@@ -1203,8 +1238,7 @@ export function isCompressibleStaticContentType(contentType: string): boolean {
 }
 
 export function isImmutableHashedAsset(pathname: string, filePath: string): boolean {
-  return pathname.startsWith("/assets/")
-    && /-[A-Za-z0-9_-]{8,}\./.test(path.basename(filePath));
+  return pathname.startsWith("/assets/") && /-[A-Za-z0-9_-]{8,}\./.test(path.basename(filePath));
 }
 
 export function httpDateFromMtimeMs(mtimeMs: number): string {
@@ -1257,23 +1291,22 @@ export function staticEncodingQuality(
 export function preferredStaticCompressionEncodings(
   acceptEncoding: string | null,
 ): StaticCompressionEncoding[] {
-  const explicitlyPreferredIdentity = acceptEncoding
-    && acceptEncoding
+  const explicitlyPreferredIdentity =
+    acceptEncoding &&
+    acceptEncoding
       .split(",")
       .some((entry) => entry.trim().toLowerCase().split(";", 1)[0] === "identity")
-    ? staticEncodingQuality(acceptEncoding, "identity")
-    : null;
+      ? staticEncodingQuality(acceptEncoding, "identity")
+      : null;
   const encodings = [
     { encoding: "br", quality: staticEncodingQuality(acceptEncoding, "br") },
     { encoding: "gzip", quality: staticEncodingQuality(acceptEncoding, "gzip") },
   ] satisfies Array<{ encoding: StaticCompressionEncoding; quality: number }>;
-  const acceptedEncodings = encodings.filter((candidate) => (
-    candidate.quality > 0
-    && (
-      explicitlyPreferredIdentity === null
-      || candidate.quality >= explicitlyPreferredIdentity
-    )
-  ));
+  const acceptedEncodings = encodings.filter(
+    (candidate) =>
+      candidate.quality > 0 &&
+      (explicitlyPreferredIdentity === null || candidate.quality >= explicitlyPreferredIdentity),
+  );
   acceptedEncodings.sort((left, right) => {
     if (right.quality !== left.quality) return right.quality - left.quality;
     return left.encoding === "br" ? -1 : 1;
@@ -1288,32 +1321,28 @@ export function compressedStaticSiblingPath(
   return `${filePath}.${encoding === "br" ? "br" : "gz"}`;
 }
 
-export function ifNoneMatchMatches(
-  header: string | string[] | undefined,
-  etag: string,
-): boolean {
+export function ifNoneMatchMatches(header: string | string[] | undefined, etag: string): boolean {
   const value = Array.isArray(header) ? header.join(",") : header;
   if (!value) return false;
-  const candidates = value
-    .split(",")
-    .map((entry) => entry.trim());
+  const candidates = value.split(",").map((entry) => entry.trim());
   if (candidates.includes("*")) return true;
   const currentOpaqueTag = weakEntityTagValue(etag);
   if (currentOpaqueTag === null) return false;
-  return candidates.some(
-    (candidate) => weakEntityTagValue(candidate) === currentOpaqueTag,
-  );
+  return candidates.some((candidate) => weakEntityTagValue(candidate) === currentOpaqueTag);
 }
 
 export function weakEntityTagValue(value: string): string | null {
   const candidate = value.startsWith("W/") ? value.slice(2) : value;
-  if (candidate.length < 2 || candidate[0] !== "\"" || candidate.at(-1) !== "\"") {
+  if (candidate.length < 2 || candidate[0] !== '"' || candidate.at(-1) !== '"') {
     return null;
   }
   return candidate;
 }
 
-export function ifModifiedSinceMatches(header: string | string[] | undefined, mtimeMs: number): boolean {
+export function ifModifiedSinceMatches(
+  header: string | string[] | undefined,
+  mtimeMs: number,
+): boolean {
   const value = Array.isArray(header) ? header[0] : header;
   if (!value) return false;
   const parsed = Date.parse(value);
@@ -1345,8 +1374,7 @@ export async function compressBody(
 ): Promise<Buffer> {
   const buffer = Buffer.isBuffer(source) ? source : Buffer.from(source);
   const maxOutputLength = Math.min(
-    MAX_DYNAMIC_COMPRESSION_SOURCE_BYTES
-      + MAX_DYNAMIC_COMPRESSION_OUTPUT_OVERHEAD_BYTES,
+    MAX_DYNAMIC_COMPRESSION_SOURCE_BYTES + MAX_DYNAMIC_COMPRESSION_OUTPUT_OVERHEAD_BYTES,
     buffer.byteLength + MAX_DYNAMIC_COMPRESSION_OUTPUT_OVERHEAD_BYTES,
   );
   if (encoding === "br") {
@@ -1370,9 +1398,11 @@ export function canStartDynamicCompression(activeCount: number): boolean {
 }
 
 export function isDynamicCompressionSizeEligible(byteLength: number): boolean {
-  return Number.isSafeInteger(byteLength)
-    && byteLength >= COMPRESSION_MIN_BYTES
-    && byteLength <= MAX_DYNAMIC_COMPRESSION_SOURCE_BYTES;
+  return (
+    Number.isSafeInteger(byteLength) &&
+    byteLength >= COMPRESSION_MIN_BYTES &&
+    byteLength <= MAX_DYNAMIC_COMPRESSION_SOURCE_BYTES
+  );
 }
 
 export function canBufferBodyChunk(
@@ -1381,16 +1411,18 @@ export function canBufferBodyChunk(
   nextChunkBytes: number,
   maxBytes: number,
 ): boolean {
-  return Number.isSafeInteger(currentBytes)
-    && currentBytes >= 0
-    && Number.isSafeInteger(currentChunks)
-    && currentChunks >= 0
-    && Number.isSafeInteger(nextChunkBytes)
-    && nextChunkBytes >= 0
-    && Number.isSafeInteger(maxBytes)
-    && maxBytes >= 0
-    && currentChunks < MAX_BUFFERED_BODY_CHUNKS
-    && currentBytes + nextChunkBytes <= maxBytes;
+  return (
+    Number.isSafeInteger(currentBytes) &&
+    currentBytes >= 0 &&
+    Number.isSafeInteger(currentChunks) &&
+    currentChunks >= 0 &&
+    Number.isSafeInteger(nextChunkBytes) &&
+    nextChunkBytes >= 0 &&
+    Number.isSafeInteger(maxBytes) &&
+    maxBytes >= 0 &&
+    currentChunks < MAX_BUFFERED_BODY_CHUNKS &&
+    currentBytes + nextChunkBytes <= maxBytes
+  );
 }
 
 export type DynamicCompressionBufferBudgetSnapshot = {
@@ -1415,10 +1447,10 @@ export class DynamicCompressionBufferBudget {
    */
   tryReserve(sourceBytes: number): (() => void) | null {
     if (
-      !Number.isSafeInteger(sourceBytes)
-      || sourceBytes < 0
-      || this.activeCount >= this.maxCount
-      || this.activeBytes + sourceBytes > this.maxBytes
+      !Number.isSafeInteger(sourceBytes) ||
+      sourceBytes < 0 ||
+      this.activeCount >= this.maxCount ||
+      this.activeBytes + sourceBytes > this.maxBytes
     ) {
       return null;
     }
@@ -1478,7 +1510,9 @@ export class AggregateByteBudget {
   }
 }
 
-export const browserPreviewDecodeBudget = new AggregateByteBudget(MAX_BROWSER_PREVIEW_DECODED_TOTAL_BYTES);
+export const browserPreviewDecodeBudget = new AggregateByteBudget(
+  MAX_BROWSER_PREVIEW_DECODED_TOTAL_BYTES,
+);
 
 export function browserPreviewDecodeSnapshot(): { activeBytes: number } {
   return browserPreviewDecodeBudget.snapshot();
@@ -1510,13 +1544,15 @@ export function canAppendToProxySourceBuffer(
   chunkBytes: number,
   capacity: number,
 ): boolean {
-  return Number.isSafeInteger(bufferedBytes)
-    && bufferedBytes >= 0
-    && Number.isSafeInteger(chunkBytes)
-    && chunkBytes >= 0
-    && Number.isSafeInteger(capacity)
-    && capacity >= 0
-    && bufferedBytes + chunkBytes <= capacity;
+  return (
+    Number.isSafeInteger(bufferedBytes) &&
+    bufferedBytes >= 0 &&
+    Number.isSafeInteger(chunkBytes) &&
+    chunkBytes >= 0 &&
+    Number.isSafeInteger(capacity) &&
+    capacity >= 0 &&
+    bufferedBytes + chunkBytes <= capacity
+  );
 }
 
 /**
@@ -1564,9 +1600,9 @@ export async function readStaticFileWithinLimit(
     try {
       const current = await handle.stat();
       if (
-        !current.isFile()
-        || current.size !== expectedSize
-        || current.mtimeMs !== expectedMtimeMs
+        !current.isFile() ||
+        current.size !== expectedSize ||
+        current.mtimeMs !== expectedMtimeMs
       ) {
         return null;
       }
@@ -1574,12 +1610,7 @@ export async function readStaticFileWithinLimit(
       const source = Buffer.allocUnsafe(expectedSize);
       let offset = 0;
       while (offset < source.byteLength) {
-        const { bytesRead } = await handle.read(
-          source,
-          offset,
-          source.byteLength - offset,
-          offset,
-        );
+        const { bytesRead } = await handle.read(source, offset, source.byteLength - offset, offset);
         if (bytesRead === 0) return null;
         offset += bytesRead;
       }
@@ -1587,12 +1618,7 @@ export async function readStaticFileWithinLimit(
       // Detect growth after fstat without ever allocating or reading more than
       // the configured source limit plus one probe byte.
       const probe = Buffer.allocUnsafe(1);
-      const { bytesRead: trailingBytes } = await handle.read(
-        probe,
-        0,
-        1,
-        expectedSize,
-      );
+      const { bytesRead: trailingBytes } = await handle.read(probe, 0, 1, expectedSize);
       return trailingBytes === 0 ? source : null;
     } finally {
       await handle.close().catch(() => {});
@@ -1667,8 +1693,7 @@ export async function compressStaticFileWithinLimits(
 }
 
 export function canStartStaticFallbackCompression(activeCount: number): boolean {
-  return activeCount >= 0
-    && activeCount < MAX_CONCURRENT_STATIC_FALLBACK_COMPRESSIONS;
+  return activeCount >= 0 && activeCount < MAX_CONCURRENT_STATIC_FALLBACK_COMPRESSIONS;
 }
 
 export type ResponseCompressionContext = {
@@ -1676,7 +1701,10 @@ export type ResponseCompressionContext = {
   acceptEncoding: string | null;
 };
 
-export const responseCompressionContexts = new WeakMap<ServerResponse, ResponseCompressionContext>();
+export const responseCompressionContexts = new WeakMap<
+  ServerResponse,
+  ResponseCompressionContext
+>();
 
 export type PreparedBody = {
   body: Buffer;
@@ -1697,14 +1725,12 @@ export async function prepareCompressedBody(
   compressor: DynamicBodyCompressor = compressBody,
 ): Promise<PreparedBody> {
   const body = Buffer.isBuffer(source) ? source : Buffer.from(source);
-  const canNegotiate = context?.mode !== undefined
-    && context.mode !== "off"
-    && isCompressibleContentType(contentType)
-    && normalizeContentEncoding(existingContentEncoding) === "identity";
-  if (
-    !canNegotiate
-    || !isDynamicCompressionSizeEligible(body.byteLength)
-  ) {
+  const canNegotiate =
+    context?.mode !== undefined &&
+    context.mode !== "off" &&
+    isCompressibleContentType(contentType) &&
+    normalizeContentEncoding(existingContentEncoding) === "identity";
+  if (!canNegotiate || !isDynamicCompressionSizeEligible(body.byteLength)) {
     return { body, encoding: "identity", variesByEncoding: canNegotiate };
   }
 
@@ -1822,23 +1848,27 @@ export function bodyResponse(
   body: Buffer | string,
   headers: OutgoingHttpHeaders,
 ): void {
-  const contentType = headerValueToString(headers["content-type"])
-    ?? headerValueToString(response.getHeader("content-type"));
-  const existingContentEncoding = headerValueToString(headers["content-encoding"])
-    ?? headerValueToString(response.getHeader("content-encoding"));
+  const contentType =
+    headerValueToString(headers["content-type"]) ??
+    headerValueToString(response.getHeader("content-type"));
+  const existingContentEncoding =
+    headerValueToString(headers["content-encoding"]) ??
+    headerValueToString(response.getHeader("content-encoding"));
   const context = responseCompressionContexts.get(response);
   const source = Buffer.isBuffer(body) ? body : Buffer.from(body);
-  const shouldCompress = context?.mode !== undefined
-    && context.mode !== "off"
-    && isDynamicCompressionSizeEligible(source.byteLength)
-    && isCompressibleContentType(contentType)
-    && normalizeContentEncoding(existingContentEncoding) === "identity";
+  const shouldCompress =
+    context?.mode !== undefined &&
+    context.mode !== "off" &&
+    isDynamicCompressionSizeEligible(source.byteLength) &&
+    isCompressibleContentType(contentType) &&
+    normalizeContentEncoding(existingContentEncoding) === "identity";
 
   if (!shouldCompress) {
-    const variesByEncoding = context?.mode !== undefined
-      && context.mode !== "off"
-      && isCompressibleContentType(contentType)
-      && normalizeContentEncoding(existingContentEncoding) === "identity";
+    const variesByEncoding =
+      context?.mode !== undefined &&
+      context.mode !== "off" &&
+      isCompressibleContentType(contentType) &&
+      normalizeContentEncoding(existingContentEncoding) === "identity";
     writePreparedBody(response, statusCode, headers, {
       body: source,
       encoding: "identity",
@@ -1878,13 +1908,17 @@ export function serializedJsonResponse(
   });
 }
 
-export function textResponse(response: ServerResponse, statusCode: number, text: string, contentType = "text/plain; charset=utf-8"): void {
+export function textResponse(
+  response: ServerResponse,
+  statusCode: number,
+  text: string,
+  contentType = "text/plain; charset=utf-8",
+): void {
   bodyResponse(response, statusCode, text, {
     "content-type": contentType,
     "cache-control": "no-store",
   });
 }
-
 
 export type GatewayReconcileReason =
   | "invalid-cursor"

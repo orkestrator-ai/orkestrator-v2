@@ -71,10 +71,7 @@ export function retainUtf8Tail(value: string, maximumBytes: number): string {
   const encoded = Buffer.from(value);
   if (encoded.length <= maximumBytes) return value;
   let start = encoded.length - maximumBytes;
-  while (
-    start < encoded.length
-    && (encoded[start]! & 0b1100_0000) === 0b1000_0000
-  ) start += 1;
+  while (start < encoded.length && (encoded[start]! & 0b1100_0000) === 0b1000_0000) start += 1;
   return encoded.subarray(start).toString("utf8");
 }
 
@@ -84,15 +81,16 @@ export function boundTranscriptResponse<TMessage extends BoundableMessage>(
   options: BoundTranscriptOptions = {},
 ): BoundedTranscript<TMessage> {
   const envelope = options.envelopeReserveBytes ?? DEFAULT_ENVELOPE_RESERVE_BYTES;
-  const contentFallbackBytes = options.contentFallbackBytes === undefined
-    ? DEFAULT_CONTENT_FALLBACK_BYTES
-    : options.contentFallbackBytes;
+  const contentFallbackBytes =
+    options.contentFallbackBytes === undefined
+      ? DEFAULT_CONTENT_FALLBACK_BYTES
+      : options.contentFallbackBytes;
 
   const selected = [...messages];
   const sizes = selected.map((message) => Buffer.byteLength(JSON.stringify(message)));
   // Array brackets plus one comma between each adjacent pair.
-  let bytes = envelope + 2 + sizes.reduce((total, size) => total + size, 0)
-    + Math.max(0, sizes.length - 1);
+  let bytes =
+    envelope + 2 + sizes.reduce((total, size) => total + size, 0) + Math.max(0, sizes.length - 1);
   let start = 0;
   while (bytes > maximumBytes && start < selected.length - 1) {
     bytes -= sizes[start]! + 1;

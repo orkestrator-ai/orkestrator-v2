@@ -1,9 +1,4 @@
-import {
-  Component,
-  Suspense,
-  type ErrorInfo,
-  type ReactNode,
-} from "react";
+import { Component, Suspense, type ErrorInfo, type ReactNode } from "react";
 import { AlertTriangle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -91,9 +86,8 @@ export function createLazyLoadFailureDiagnostic(
   // The sentinel is a fixed literal rather than attacker-influenced text, so
   // preserving it alongside the allowlist keeps "nobody threw an Error" visible
   // without letting a custom subclass name reach the log.
-  const errorType = rawName === NON_ERROR_THROW || SAFE_ERROR_TYPES.has(rawName)
-    ? rawName
-    : "Error";
+  const errorType =
+    rawName === NON_ERROR_THROW || SAFE_ERROR_TYPES.has(rawName) ? rawName : "Error";
   const componentStack = info?.componentStack ?? "";
   const componentChain = componentStack
     .split("\n")
@@ -102,8 +96,7 @@ export function createLazyLoadFailureDiagnostic(
       // chain: React writes `at Name (loc)` or `at Name`, so a line such as
       // `at https://host/assets/chunk.js:2:2` fails on the `:` and is dropped
       // rather than contributing a bare `https`.
-      const match = /^\s*at\s+([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)(?=\s|\(|$)/
-        .exec(line);
+      const match = /^\s*at\s+([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)(?=\s|\(|$)/.exec(line);
       return match?.[1] ? [match[1]] : [];
     })
     .slice(0, 12);
@@ -120,8 +113,10 @@ function resetKeysChanged(
   current: readonly unknown[] | undefined,
 ): boolean {
   if (!previous || !current) return previous !== current;
-  return previous.length !== current.length
-    || current.some((value, index) => !Object.is(value, previous[index]));
+  return (
+    previous.length !== current.length ||
+    current.some((value, index) => !Object.is(value, previous[index]))
+  );
 }
 
 interface LazyLoadErrorBoundaryProps {
@@ -172,10 +167,7 @@ class LazyLoadErrorBoundary extends Component<
   }
 
   componentDidUpdate(previousProps: LazyLoadErrorBoundaryProps): void {
-    if (
-      this.state.failed
-      && resetKeysChanged(previousProps.resetKeys, this.props.resetKeys)
-    ) {
+    if (this.state.failed && resetKeysChanged(previousProps.resetKeys, this.props.resetKeys)) {
       this.retry();
     }
   }
@@ -200,13 +192,13 @@ class LazyLoadErrorBoundary extends Component<
 function errorCopy(isModuleLoad: boolean): { title: string; detail: string } {
   return isModuleLoad
     ? {
-      title: "This part of the app failed to load",
-      detail: "Reload the application to fetch a fresh copy.",
-    }
+        title: "This part of the app failed to load",
+        detail: "Reload the application to fetch a fresh copy.",
+      }
     : {
-      title: "Something went wrong in this view",
-      detail: "Retry this view, or reload the application if it fails again.",
-    };
+        title: "Something went wrong in this view",
+        detail: "Retry this view, or reload the application if it fails again.",
+      };
 }
 
 /**
@@ -315,11 +307,7 @@ export function LazyLoadBoundary({
   );
 }
 
-export function LazyDialogLoadingFallback({
-  label = "Loading…",
-}: {
-  label?: string;
-}) {
+export function LazyDialogLoadingFallback({ label = "Loading…" }: { label?: string }) {
   return (
     <div
       role="status"

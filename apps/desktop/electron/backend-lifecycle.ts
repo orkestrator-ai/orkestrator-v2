@@ -2,7 +2,11 @@ import type { BackendHttpClient, BackendProcess } from "./backend-process.js";
 
 type WebClientBackend = Pick<
   BackendHttpClient,
-  "getWebClientStatus" | "setWebClientEnabled" | "resetWebClientServe" | "getTokenSettings" | "setToken"
+  | "getWebClientStatus"
+  | "setWebClientEnabled"
+  | "resetWebClientServe"
+  | "getTokenSettings"
+  | "setToken"
 >;
 
 export function createBackendWebClientControls(getBackend: () => WebClientBackend | null) {

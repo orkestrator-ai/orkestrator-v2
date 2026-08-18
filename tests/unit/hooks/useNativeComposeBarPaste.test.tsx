@@ -12,9 +12,8 @@ mock.module("@/lib/backend", () => ({
   writeLocalFile: mockWriteLocalFile,
 }));
 
-const { useNativeComposeBarPaste } = await import(
-  "../../../apps/web/src/hooks/useNativeComposeBarPaste"
-);
+const { useNativeComposeBarPaste } =
+  await import("../../../apps/web/src/hooks/useNativeComposeBarPaste");
 
 if (typeof globalThis.ImageData === "undefined") {
   (globalThis as Record<string, unknown>).ImageData = class ImageData {
@@ -56,11 +55,7 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
-function createImage(
-  rgba = new Uint8Array([255, 0, 0, 255]),
-  width = 1,
-  height = 1,
-) {
+function createImage(rgba = new Uint8Array([255, 0, 0, 255]), width = 1, height = 1) {
   return {
     rgba: async () => rgba,
     size: async () => ({ width, height }),
@@ -117,22 +112,19 @@ async function expectPendingPasteToFinish(
   const size = createDeferred<{ width: number; height: number }>();
   const write = createDeferred<void>();
   const rgbaFn = mock(async () =>
-    stage === "rgba" ? rgba.promise : new Uint8Array([255, 0, 0, 255]));
-  const sizeFn = mock(async () =>
-    stage === "size" ? size.promise : { width: 1, height: 1 });
+    stage === "rgba" ? rgba.promise : new Uint8Array([255, 0, 0, 255]),
+  );
+  const sizeFn = mock(async () => (stage === "size" ? size.promise : { width: 1, height: 1 }));
   const image = { rgba: rgbaFn, size: sizeFn };
 
-  mockReadImage.mockImplementation(async () =>
-    stage === "read" ? read.promise : image);
+  mockReadImage.mockImplementation(async () => (stage === "read" ? read.promise : image));
   if (stage === "write") {
     mockWriteContainerFile.mockImplementation(async () => write.promise);
   }
 
   const rendered = render(<HookHarness containerId="container-1" />);
   setActiveElement(rendered.getByTestId("compose-input"));
-  document.dispatchEvent(
-    new Event("paste", { bubbles: true, cancelable: true }),
-  );
+  document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
 
   if (stage === "read") {
     await waitFor(() => expect(mockReadImage).toHaveBeenCalledTimes(1));
@@ -162,11 +154,7 @@ async function expectPendingPasteToFinish(
   await waitFor(() => expect(onAttach).toHaveBeenCalledTimes(1));
   expect(rgbaFn).toHaveBeenCalledTimes(1);
   expect(sizeFn).toHaveBeenCalledTimes(1);
-  expect(mockWriteContainerFile).toHaveBeenCalledWith(
-    "container-1",
-    expect.any(String),
-    "QUJD",
-  );
+  expect(mockWriteContainerFile).toHaveBeenCalledWith("container-1", expect.any(String), "QUJD");
   expect(onAttach.mock.calls[0]?.[0]).toMatchObject({
     path: expect.stringContaining("/workspace/.orkestrator/clipboard/"),
   });
@@ -208,11 +196,7 @@ describe("useNativeComposeBarPaste", () => {
     window.orkestratorGateway = originalGateway;
     delete (document as { activeElement?: Element }).activeElement;
     if (originalActiveElementDescriptor) {
-      Object.defineProperty(
-        Document.prototype,
-        "activeElement",
-        originalActiveElementDescriptor,
-      );
+      Object.defineProperty(Document.prototype, "activeElement", originalActiveElementDescriptor);
     }
   });
 
@@ -327,7 +311,7 @@ describe("useNativeComposeBarPaste", () => {
       value: {
         items: [],
         files: [],
-        getData: (type: string) => type === "text/plain" ? " pasted " : "",
+        getData: (type: string) => (type === "text/plain" ? " pasted " : ""),
       },
     });
     document.dispatchEvent(pasteEvent);
@@ -345,9 +329,7 @@ describe("useNativeComposeBarPaste", () => {
       throw new Error("No image in clipboard");
     });
 
-    const { getByTestId } = render(
-      <HookHarness containerId="container-1" contentEditable />,
-    );
+    const { getByTestId } = render(<HookHarness containerId="container-1" contentEditable />);
     const input = getByTestId("compose-input") as HTMLDivElement;
     input.textContent = "helloworld";
     const textNode = input.firstChild!;
@@ -364,7 +346,7 @@ describe("useNativeComposeBarPaste", () => {
       value: {
         items: [],
         files: [],
-        getData: (type: string) => type === "text/plain" ? " pasted " : "",
+        getData: (type: string) => (type === "text/plain" ? " pasted " : ""),
       },
     });
     document.dispatchEvent(pasteEvent);
@@ -377,17 +359,12 @@ describe("useNativeComposeBarPaste", () => {
 
   test("writes pasted images to the local worktree when no container id is present", async () => {
     const { getByTestId } = render(
-      <HookHarness
-        containerId={null}
-        worktreePath="/tmp/worktrees/env"
-      />,
+      <HookHarness containerId={null} worktreePath="/tmp/worktrees/env" />,
     );
     const input = getByTestId("compose-input") as HTMLTextAreaElement;
     setActiveElement(input);
 
-    document.dispatchEvent(
-      new Event("paste", { bubbles: true, cancelable: true }),
-    );
+    document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(mockWriteLocalFile).toHaveBeenCalledWith(
@@ -415,12 +392,8 @@ describe("useNativeComposeBarPaste", () => {
     );
     setActiveElement(getByTestId("compose-input"));
 
-    document.dispatchEvent(
-      new Event("paste", { bubbles: true, cancelable: true }),
-    );
-    document.dispatchEvent(
-      new Event("paste", { bubbles: true, cancelable: true }),
-    );
+    document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
+    document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
 
     await waitFor(() => expect(mockWriteLocalFile).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(onAttach).toHaveBeenCalledTimes(1));
@@ -440,9 +413,7 @@ describe("useNativeComposeBarPaste", () => {
     const outside = document.querySelector('[data-testid="outside-input"]') as HTMLTextAreaElement;
     setActiveElement(outside);
 
-    document.dispatchEvent(
-      new Event("paste", { bubbles: true, cancelable: true }),
-    );
+    document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
     await Promise.resolve();
 
     expect(mockReadImage).not.toHaveBeenCalled();
@@ -450,16 +421,12 @@ describe("useNativeComposeBarPaste", () => {
   });
 
   test("removes its document paste listener after unmount", async () => {
-    const { getByTestId, unmount } = render(
-      <HookHarness containerId="container-1" />,
-    );
+    const { getByTestId, unmount } = render(<HookHarness containerId="container-1" />);
     const input = getByTestId("compose-input");
     setActiveElement(input);
     unmount();
 
-    document.dispatchEvent(
-      new Event("paste", { bubbles: true, cancelable: true }),
-    );
+    document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
     await Promise.resolve();
 
     expect(mockReadImage).not.toHaveBeenCalled();
@@ -480,9 +447,7 @@ describe("useNativeComposeBarPaste", () => {
     const { getByTestId } = render(<HookHarness containerId="container-1" />);
     setActiveElement(getByTestId("compose-input"));
 
-    document.dispatchEvent(
-      new Event("paste", { bubbles: true, cancelable: true }),
-    );
+    document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
     await waitFor(() => expect(mockReadImage).toHaveBeenCalledTimes(1));
 
     expect(mockWriteContainerFile).not.toHaveBeenCalled();
@@ -490,14 +455,10 @@ describe("useNativeComposeBarPaste", () => {
   });
 
   test("shows a configuration error when there is no save target", async () => {
-    const { getByTestId } = render(
-      <HookHarness containerId={null} worktreePath={null} />,
-    );
+    const { getByTestId } = render(<HookHarness containerId={null} worktreePath={null} />);
     setActiveElement(getByTestId("compose-input"));
 
-    document.dispatchEvent(
-      new Event("paste", { bubbles: true, cancelable: true }),
-    );
+    document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
 
     await waitFor(() => {
       expect(toastError).toHaveBeenCalledWith(
@@ -517,17 +478,13 @@ describe("useNativeComposeBarPaste", () => {
     ["empty", ""],
   ] as const) {
     test(`shows a configuration error when a local write returns ${description}`, async () => {
-      mockWriteLocalFile.mockImplementation(
-        async () => savedPath as unknown as string,
-      );
+      mockWriteLocalFile.mockImplementation(async () => savedPath as unknown as string);
 
       const { getByTestId } = render(
         <HookHarness containerId={null} worktreePath="/tmp/worktrees/env" />,
       );
       setActiveElement(getByTestId("compose-input"));
-      document.dispatchEvent(
-        new Event("paste", { bubbles: true, cancelable: true }),
-      );
+      document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
 
       await waitFor(() => {
         expect(toastError).toHaveBeenCalledWith(
@@ -542,17 +499,15 @@ describe("useNativeComposeBarPaste", () => {
   }
 
   test("shows an error toast when the encoded image exceeds the size limit", async () => {
-    const oversizedToDataURL = mock(() =>
-      `data:image/png;base64,${"A".repeat(12 * 1024 * 1024)}`);
-    HTMLCanvasElement.prototype.toDataURL = oversizedToDataURL as typeof HTMLCanvasElement.prototype.toDataURL;
+    const oversizedToDataURL = mock(() => `data:image/png;base64,${"A".repeat(12 * 1024 * 1024)}`);
+    HTMLCanvasElement.prototype.toDataURL =
+      oversizedToDataURL as typeof HTMLCanvasElement.prototype.toDataURL;
 
     const { getByTestId } = render(<HookHarness containerId="container-1" />);
     const input = getByTestId("compose-input") as HTMLTextAreaElement;
     setActiveElement(input);
 
-    document.dispatchEvent(
-      new Event("paste", { bubbles: true, cancelable: true }),
-    );
+    document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(oversizedToDataURL).toHaveBeenCalledTimes(1);
     expect(mockWriteContainerFile).not.toHaveBeenCalled();
@@ -586,20 +541,14 @@ describe("useNativeComposeBarPaste", () => {
     const { getByTestId } = render(<HookHarness containerId="container-1" />);
     setActiveElement(getByTestId("compose-input"));
 
-    document.dispatchEvent(
-      new Event("paste", { bubbles: true, cancelable: true }),
-    );
+    document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
 
     await waitFor(() => expect(onAttach).toHaveBeenCalledTimes(1));
     expect(drawImage).toHaveBeenCalled();
     expect(onAttach.mock.calls[0]?.[0]).toMatchObject({
       previewUrl: "data:image/png;base64,QUJD",
     });
-    expect(mockWriteContainerFile).toHaveBeenCalledWith(
-      "container-1",
-      expect.any(String),
-      "QUJD",
-    );
+    expect(mockWriteContainerFile).toHaveBeenCalledWith("container-1", expect.any(String), "QUJD");
     expect(toastError).not.toHaveBeenCalled();
   });
 
@@ -615,15 +564,10 @@ describe("useNativeComposeBarPaste", () => {
     const input = getByTestId("compose-input") as HTMLTextAreaElement;
     setActiveElement(input);
 
-    document.dispatchEvent(
-      new Event("paste", { bubbles: true, cancelable: true }),
-    );
+    document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
     await waitFor(() => expect(consoleError).toHaveBeenCalledTimes(1));
 
-    expect(consoleError).toHaveBeenCalledWith(
-      "[CustomPaste] Unexpected paste error:",
-      writeError,
-    );
+    expect(consoleError).toHaveBeenCalledWith("[CustomPaste] Unexpected paste error:", writeError);
     expect(onAttach).not.toHaveBeenCalled();
   });
 
@@ -634,9 +578,7 @@ describe("useNativeComposeBarPaste", () => {
 
     const { getByTestId } = render(<HookHarness containerId="container-1" />);
     setActiveElement(getByTestId("compose-input"));
-    document.dispatchEvent(
-      new Event("paste", { bubbles: true, cancelable: true }),
-    );
+    document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
 
     await waitFor(() => expect(consoleError).toHaveBeenCalledTimes(1));
     expect(consoleError).toHaveBeenCalledWith(
@@ -658,15 +600,10 @@ describe("useNativeComposeBarPaste", () => {
       <HookHarness containerId={null} worktreePath="/tmp/worktrees/env" />,
     );
     setActiveElement(getByTestId("compose-input"));
-    document.dispatchEvent(
-      new Event("paste", { bubbles: true, cancelable: true }),
-    );
+    document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
 
     await waitFor(() => expect(consoleError).toHaveBeenCalledTimes(1));
-    expect(consoleError).toHaveBeenCalledWith(
-      "[HookHarness] Unexpected paste error:",
-      writeError,
-    );
+    expect(consoleError).toHaveBeenCalledWith("[HookHarness] Unexpected paste error:", writeError);
     expect(onAttach).not.toHaveBeenCalled();
   });
 
@@ -696,9 +633,7 @@ describe("useNativeComposeBarPaste", () => {
 
       const { getByTestId } = render(<HookHarness containerId="container-1" />);
       setActiveElement(getByTestId("compose-input"));
-      document.dispatchEvent(
-        new Event("paste", { bubbles: true, cancelable: true }),
-      );
+      document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
 
       await waitFor(() => expect(mockReadImage).toHaveBeenCalledTimes(1));
       await Promise.resolve();
@@ -761,9 +696,7 @@ describe("useNativeComposeBarPaste", () => {
       );
       setActiveElement(getByTestId("compose-input"));
 
-      document.dispatchEvent(
-        new Event("paste", { bubbles: true, cancelable: true }),
-      );
+      document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
 
       await waitFor(() => expect(onImageRejected).toHaveBeenCalledTimes(1));
       expect(mockWriteContainerFile).not.toHaveBeenCalled();
@@ -785,9 +718,7 @@ describe("useNativeComposeBarPaste", () => {
       );
       setActiveElement(getByTestId("compose-input"));
 
-      document.dispatchEvent(
-        new Event("paste", { bubbles: true, cancelable: true }),
-      );
+      document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
 
       await waitFor(() => expect(onImageRejected).toHaveBeenCalledTimes(1));
       expect(mockWriteLocalFile).not.toHaveBeenCalled();
@@ -806,9 +737,7 @@ describe("useNativeComposeBarPaste", () => {
       );
       setActiveElement(getByTestId("compose-input"));
 
-      document.dispatchEvent(
-        new Event("paste", { bubbles: true, cancelable: true }),
-      );
+      document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
 
       await waitFor(() => expect(onAttach).toHaveBeenCalledTimes(1));
       expect(mockWriteContainerFile).toHaveBeenCalledTimes(1);
@@ -826,9 +755,7 @@ describe("useNativeComposeBarPaste", () => {
       );
       setActiveElement(getByTestId("compose-input"));
 
-      document.dispatchEvent(
-        new Event("paste", { bubbles: true, cancelable: true }),
-      );
+      document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
 
       await waitFor(() => expect(canAttachImage).toHaveBeenCalledTimes(1));
       const seen = canAttachImage.mock.calls[0]?.[0] as unknown as Record<string, unknown>;
@@ -847,9 +774,7 @@ describe("useNativeComposeBarPaste", () => {
       const { getByTestId } = render(<HookHarness containerId="container-1" />);
       setActiveElement(getByTestId("compose-input"));
 
-      document.dispatchEvent(
-        new Event("paste", { bubbles: true, cancelable: true }),
-      );
+      document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
 
       await waitFor(() => expect(onAttach).toHaveBeenCalledTimes(1));
       expect(mockWriteContainerFile).toHaveBeenCalledTimes(1);
@@ -861,9 +786,7 @@ describe("useNativeComposeBarPaste", () => {
       );
       setActiveElement(getByTestId("compose-input"));
 
-      document.dispatchEvent(
-        new Event("paste", { bubbles: true, cancelable: true }),
-      );
+      document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
 
       await waitFor(() => expect(mockReadImage).toHaveBeenCalledTimes(1));
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -905,9 +828,10 @@ describe("useNativeComposeBarPaste", () => {
   });
 
   describe("restores the Electron text fallback on every claimed bail-out", () => {
-    function renderElectronPaste(
-      props: Parameters<typeof HookHarness>[0],
-    ): { input: HTMLTextAreaElement; pasteEvent: Event } {
+    function renderElectronPaste(props: Parameters<typeof HookHarness>[0]): {
+      input: HTMLTextAreaElement;
+      pasteEvent: Event;
+    } {
       window.orkestratorGateway = { enabled: true, desktop: true };
       const pasteEvent = new Event("paste", { bubbles: true, cancelable: true });
       Object.defineProperty(pasteEvent, "clipboardData", {

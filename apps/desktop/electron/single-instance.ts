@@ -1,9 +1,6 @@
 import type { BrowserWindow } from "electron";
 
-type SingleInstanceApp = Pick<
-  Electron.App,
-  "requestSingleInstanceLock" | "quit" | "on"
->;
+type SingleInstanceApp = Pick<Electron.App, "requestSingleInstanceLock" | "quit" | "on">;
 
 type FocusableWindow = Pick<BrowserWindow, "isMinimized" | "restore" | "focus">;
 

@@ -1,17 +1,14 @@
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  mock,
-  test,
-} from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { FileNode } from "@/lib/backend";
 
 // Mock backend module BEFORE importing the hook
-const mockGetFileTree = mock<(containerId: string) => Promise<FileNode[]>>(() => Promise.resolve([]));
-const mockGetLocalFileTree = mock<(worktreePath: string) => Promise<FileNode[]>>(() => Promise.resolve([]));
+const mockGetFileTree = mock<(containerId: string) => Promise<FileNode[]>>(() =>
+  Promise.resolve([]),
+);
+const mockGetLocalFileTree = mock<(worktreePath: string) => Promise<FileNode[]>>(() =>
+  Promise.resolve([]),
+);
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -169,9 +166,7 @@ describe("useFileSearch", () => {
     test("coalesces refreshes while the same environment request is active", async () => {
       const load = deferred<FileNode[]>();
       mockGetFileTree.mockImplementation(() => load.promise);
-      const { result } = renderHook(() =>
-        useFileSearch("container-123", undefined),
-      );
+      const { result } = renderHook(() => useFileSearch("container-123", undefined));
 
       await waitFor(() => {
         expect(result.current.isLoading).toBe(true);
@@ -196,8 +191,7 @@ describe("useFileSearch", () => {
       const load = deferred<FileNode[]>();
       mockGetFileTree.mockImplementation(() => load.promise);
       const { result, rerender } = renderHook(
-        ({ enabled }) =>
-          useFileSearch("container-123", undefined, enabled),
+        ({ enabled }) => useFileSearch("container-123", undefined, enabled),
         { initialProps: { enabled: true } },
       );
 
@@ -227,8 +221,7 @@ describe("useFileSearch", () => {
       const load = deferred<FileNode[]>();
       mockGetFileTree.mockImplementation(() => load.promise);
       const { result, rerender } = renderHook(
-        ({ enabled }) =>
-          useFileSearch("container-123", undefined, enabled),
+        ({ enabled }) => useFileSearch("container-123", undefined, enabled),
         { initialProps: { enabled: true } },
       );
 
@@ -259,9 +252,7 @@ describe("useFileSearch", () => {
       mockGetFileTree.mockImplementation(() => load.promise);
 
       try {
-        const { result, unmount } = renderHook(() =>
-          useFileSearch("container-123", undefined),
-        );
+        const { result, unmount } = renderHook(() => useFileSearch("container-123", undefined));
 
         await waitFor(() => {
           expect(result.current.isLoading).toBe(true);
@@ -311,14 +302,10 @@ describe("useFileSearch", () => {
         ]);
         await secondLoad.promise;
       });
-      await waitFor(() =>
-        expect(result.current.flatFiles[0]?.filename).toBe("current.txt"),
-      );
+      await waitFor(() => expect(result.current.flatFiles[0]?.filename).toBe("current.txt"));
 
       await act(async () => {
-        firstLoad.resolve([
-          { name: "stale.txt", path: "stale.txt", isDirectory: false },
-        ]);
+        firstLoad.resolve([{ name: "stale.txt", path: "stale.txt", isDirectory: false }]);
         await firstLoad.promise;
       });
       expect(result.current.flatFiles[0]?.filename).toBe("current.txt");
@@ -531,26 +518,17 @@ describe("useFileSearch", () => {
           isDirectory: false,
         },
       ];
-      mockGetFileTree.mockImplementation(() =>
-        Promise.resolve(directoryHeavyTree),
-      );
-      const { result } = renderHook(() =>
-        useFileSearch("container-123", undefined),
-      );
+      mockGetFileTree.mockImplementation(() => Promise.resolve(directoryHeavyTree));
+      const { result } = renderHook(() => useFileSearch("container-123", undefined));
 
       await waitFor(() => {
         expect(result.current.flatFiles.length).toBe(directoryHeavyTree.length);
       });
 
       expect(
-        result.current.searchFiles("", 2, { filesOnly: true }).map(
-          (file) => file.filename,
-        ),
+        result.current.searchFiles("", 2, { filesOnly: true }).map((file) => file.filename),
       ).toEqual(["first.txt", "second.txt"]);
-      expect(
-        result.current.searchFiles("txt", 1, { filesOnly: true })[0]
-          ?.isDirectory,
-      ).toBe(false);
+      expect(result.current.searchFiles("txt", 1, { filesOnly: true })[0]?.isDirectory).toBe(false);
     });
 
     test("case-insensitive matching", async () => {
@@ -595,18 +573,14 @@ describe("useFileSearch", () => {
 
     test("uses a generic error for non-Error rejections and can refresh afterward", async () => {
       mockGetFileTree.mockImplementationOnce(() => Promise.reject("offline"));
-      const { result } = renderHook(() =>
-        useFileSearch("container-123", undefined),
-      );
+      const { result } = renderHook(() => useFileSearch("container-123", undefined));
 
       await waitFor(() => {
         expect(result.current.error).toBe("Failed to load files");
       });
       expect(result.current.isLoading).toBe(false);
 
-      mockGetFileTree.mockImplementationOnce(() =>
-        Promise.resolve(createMockFileTree()),
-      );
+      mockGetFileTree.mockImplementationOnce(() => Promise.resolve(createMockFileTree()));
       await act(async () => {
         await result.current.refresh();
       });

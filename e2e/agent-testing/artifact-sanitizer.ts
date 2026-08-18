@@ -8,7 +8,10 @@ export const MAX_ARTIFACT_TREE_BYTES = 256 * 1024 * 1024;
 export const MAX_ARTIFACT_FILES = 5_000;
 
 class ArtifactBoundError extends Error {
-  constructor(message: string, readonly artifactPath: string) {
+  constructor(
+    message: string,
+    readonly artifactPath: string,
+  ) {
     super(message);
     this.name = "ArtifactBoundError";
   }
@@ -95,7 +98,10 @@ async function sanitizeArtifactTree(
   return errors;
 }
 
-async function sanitizeTraceArchive(archivePath: string, secrets: readonly string[]): Promise<void> {
+async function sanitizeTraceArchive(
+  archivePath: string,
+  secrets: readonly string[],
+): Promise<void> {
   // Staged beside the archive rather than under os.tmpdir(): `rename` cannot
   // cross a filesystem boundary, and on Linux the temp directory is routinely a
   // separate tmpfs mount from the checkout. An EXDEV there would leave the

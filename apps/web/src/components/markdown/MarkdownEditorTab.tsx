@@ -5,10 +5,7 @@ import { useConfigStore, useFileDirtyStore } from "@/stores";
 import { DEFAULT_TERMINAL_APPEARANCE } from "@/constants/terminal";
 import type { SaveFile } from "@/hooks/useFileSave";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  TiptapMarkdownEditor,
-  type TiptapMarkdownEditorHandle,
-} from "./TiptapMarkdownEditor";
+import { TiptapMarkdownEditor, type TiptapMarkdownEditorHandle } from "./TiptapMarkdownEditor";
 import { assessMarkdownForRichEditing } from "./tiptap-extensions";
 import { LazyLoadBoundary } from "@/components/LazyLoadBoundary";
 
@@ -44,35 +41,32 @@ export function MarkdownEditorTab({
     (state) => state.dirtyFiles.get(tabId)?.content ?? initialContent,
   );
   const setContent = useFileDirtyStore((state) => state.setContent);
-  const [initialAssessment] = useState(() =>
-    assessMarkdownForRichEditing(markdown),
-  );
-  const [mode, setMode] = useState<MarkdownEditorMode>(
-    initialAssessment.safe ? "rendered" : "raw",
-  );
-  const [parseError, setParseError] = useState<string | null>(
-    initialAssessment.reason,
-  );
+  const [initialAssessment] = useState(() => assessMarkdownForRichEditing(markdown));
+  const [mode, setMode] = useState<MarkdownEditorMode>(initialAssessment.safe ? "rendered" : "raw");
+  const [parseError, setParseError] = useState<string | null>(initialAssessment.reason);
   const editorRef = useRef<TiptapMarkdownEditorHandle>(null);
 
-  const handleModeChange = useCallback((nextMode: string) => {
-    if (nextMode !== "rendered" && nextMode !== "raw") return;
+  const handleModeChange = useCallback(
+    (nextMode: string) => {
+      if (nextMode !== "rendered" && nextMode !== "raw") return;
 
-    if (mode === "rendered" && nextMode === "raw") {
-      editorRef.current?.flushPendingChanges();
-    }
-
-    if (mode === "raw" && nextMode === "rendered") {
-      const assessment = assessMarkdownForRichEditing(markdown);
-      if (!assessment.safe) {
-        setParseError(assessment.reason);
-        return;
+      if (mode === "rendered" && nextMode === "raw") {
+        editorRef.current?.flushPendingChanges();
       }
-      setParseError(null);
-    }
 
-    setMode(nextMode);
-  }, [markdown, mode]);
+      if (mode === "raw" && nextMode === "rendered") {
+        const assessment = assessMarkdownForRichEditing(markdown);
+        if (!assessment.safe) {
+          setParseError(assessment.reason);
+          return;
+        }
+        setParseError(null);
+      }
+
+      setMode(nextMode);
+    },
+    [markdown, mode],
+  );
 
   const handleParseError = useCallback((error: Error) => {
     setParseError(error.message || "This document could not be rendered safely.");
@@ -83,10 +77,7 @@ export function MarkdownEditorTab({
     <Tabs
       value={mode}
       onValueChange={handleModeChange}
-      className={cn(
-        "absolute inset-0 gap-0",
-        !isActive && "pointer-events-none opacity-0",
-      )}
+      className={cn("absolute inset-0 gap-0", !isActive && "pointer-events-none opacity-0")}
       style={{ backgroundColor: terminalAppearance.backgroundColor }}
     >
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-background px-4 text-xs text-muted-foreground">

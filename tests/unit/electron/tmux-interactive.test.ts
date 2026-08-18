@@ -1,13 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import type { CommandContext } from "../../../apps/backend/src/core/commands";
-import { buildTmuxPaneUpdate, INTERACTIVE_SNAPSHOT_MAX_MS, INTERACTIVE_SNAPSHOT_MIN_MS, InteractiveTmuxTerminalManager } from "../../../apps/backend/src/core/tmux";
+import {
+  buildTmuxPaneUpdate,
+  INTERACTIVE_SNAPSHOT_MAX_MS,
+  INTERACTIVE_SNAPSHOT_MIN_MS,
+  InteractiveTmuxTerminalManager,
+} from "../../../apps/backend/src/core/tmux";
 import { setTimeout as delay } from "node:timers/promises";
 
-import {
-  deferred,
-  waitFor,
-} from "./tmux-test-harness.js";
-
+import { deferred, waitFor } from "./tmux-test-harness.js";
 
 describe("interactive tmux terminal snapshots", () => {
   test("emits line patches and falls back for resize-shaped redraws", () => {
@@ -15,10 +16,7 @@ describe("interactive tmux terminal snapshots", () => {
       text: "\u001b[2;1H\u001b[2KTWO",
       full: false,
     });
-    expect(buildTmuxPaneUpdate(
-      "one\ntwo\nthree",
-      "one\n\u001b[31mTWO\u001b[0m\nthree",
-    )).toEqual({
+    expect(buildTmuxPaneUpdate("one\ntwo\nthree", "one\n\u001b[31mTWO\u001b[0m\nthree")).toEqual({
       text: "\u001b[2;1H\u001b[2K\u001b[31mTWO\u001b[0m",
       full: false,
     });
@@ -54,9 +52,7 @@ describe("interactive tmux terminal snapshots", () => {
     expect(repaint.full).toBe(true);
     // Six rows written with five separators: the cursor finishes on the last
     // row without ever scrolling, so row R keeps displaying capture line R.
-    expect(repaint.text).toBe(
-      "\u001b[H\u001b[2Jline1\r\nline2\r\n\r\n\r\n\r\n",
-    );
+    expect(repaint.text).toBe("\u001b[H\u001b[2Jline1\r\nline2\r\n\r\n\r\n\r\n");
     expect(repaint.text.split("\r\n")).toHaveLength(6);
 
     // `line2` is capture line 2, so it must be patched at row 2.
@@ -281,7 +277,10 @@ describe("interactive tmux terminal snapshots", () => {
     await waitFor(() => harness.emitted.length === 2);
     expect(harness.emitted[1]).toEqual({
       event: `terminal-output-${harness.id}`,
-      payload: expect.objectContaining({ text: expect.stringContaining("resized pane"), full: true }),
+      payload: expect.objectContaining({
+        text: expect.stringContaining("resized pane"),
+        full: true,
+      }),
     });
   });
 

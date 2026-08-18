@@ -402,7 +402,7 @@ export interface Session {
 // Configuration types
 export interface ContainerResources {
   cpuCores: number;
-  memoryGb: number;  // Note: lowercase 'b' to match Rust serde rename_all = "camelCase"
+  memoryGb: number; // Note: lowercase 'b' to match Rust serde rename_all = "camelCase"
 }
 
 /** Preferred editor for opening containers */

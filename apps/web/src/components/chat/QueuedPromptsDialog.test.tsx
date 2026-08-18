@@ -1,12 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueuedPromptsDialog } from "./QueuedPromptsDialog";
 import { PromptQueueActionError } from "@/lib/prompt-queue-errors";
 
@@ -133,9 +126,7 @@ describe("QueuedPromptsDialog", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "First prompt" }));
 
-    expect((await screen.findByRole("alert")).textContent).toBe(
-      "Clear the composer first.",
-    );
+    expect((await screen.findByRole("alert")).textContent).toBe("Clear the composer first.");
   });
 
   test("clears a stale error when the dialog is reopened", async () => {
@@ -179,9 +170,10 @@ describe("QueuedPromptsDialog", () => {
      */
     let releaseRemove: (() => void) | undefined;
     const onRemove = mock(
-      () => new Promise<void>((resolve) => {
-        releaseRemove = resolve;
-      }),
+      () =>
+        new Promise<void>((resolve) => {
+          releaseRemove = resolve;
+        }),
     );
     const onMove = mock(() => {});
     render(
@@ -248,15 +240,16 @@ describe("QueuedPromptsDialog", () => {
       />,
     );
 
-    expect(screen.getByRole("alert").textContent)
-      .toContain("Provider rejected this prompt.");
+    expect(screen.getByRole("alert").textContent).toContain("Provider rejected this prompt.");
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(onRetryDispatch).toHaveBeenCalledTimes(1));
   });
 
   test("labels the in-flight retry and refuses a second dispatch until it settles", async () => {
     let release!: () => void;
-    const inFlight = new Promise<void>((resolve) => { release = resolve; });
+    const inFlight = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     const onRetryDispatch = mock(() => inFlight);
     render(
       <QueuedPromptsDialog
@@ -328,8 +321,7 @@ describe("QueuedPromptsDialog", () => {
       />,
     );
 
-    expect(screen.getByRole("alert").textContent)
-      .toContain("Queued prompt was not sent");
+    expect(screen.getByRole("alert").textContent).toContain("Queued prompt was not sent");
     expect(screen.queryByRole("button", { name: "Retry" }) === null).toBe(true);
   });
 });

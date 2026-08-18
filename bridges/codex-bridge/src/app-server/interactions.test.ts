@@ -71,8 +71,7 @@ describe("describeInteraction: params coercion", () => {
 
   test("an empty-string turnId is treated as absent", () => {
     expect(
-      describeWith(QUESTION, { threadId: "thread-1", turnId: "", questions: [question()] })
-        ?.turnId,
+      describeWith(QUESTION, { threadId: "thread-1", turnId: "", questions: [question()] })?.turnId,
     ).toBeNull();
   });
 });
@@ -87,10 +86,7 @@ describe("describeInteraction: questions", () => {
         question({
           isOther: true,
           isSecret: true,
-          options: [
-            { label: "TypeScript", description: "Typed JavaScript" },
-            { label: "Rust" },
-          ],
+          options: [{ label: "TypeScript", description: "Typed JavaScript" }, { label: "Rust" }],
         }),
       ],
     });
@@ -113,10 +109,7 @@ describe("describeInteraction: questions", () => {
         question: "Which language?",
         isOther: true,
         isSecret: true,
-        options: [
-          { label: "TypeScript", description: "Typed JavaScript" },
-          { label: "Rust" },
-        ],
+        options: [{ label: "TypeScript", description: "Typed JavaScript" }, { label: "Rust" }],
       },
     ]);
   });
@@ -137,12 +130,7 @@ describe("describeInteraction: questions", () => {
     expect(
       describeWith(QUESTION, {
         threadId: "thread-1",
-        questions: [
-          { question: "No id" },
-          { id: "no-prompt" },
-          "not an object",
-          null,
-        ],
+        questions: [{ question: "No id" }, { id: "no-prompt" }, "not an object", null],
       }),
     ).toBeNull();
   });
@@ -150,16 +138,12 @@ describe("describeInteraction: questions", () => {
   test("individual unusable questions are dropped, keeping the rest", () => {
     const described = describeWith(QUESTION, {
       threadId: "thread-1",
-      questions: [
-        { question: "missing id" },
-        { id: "missing-question" },
-        question({ id: "kept" }),
-      ],
+      questions: [{ question: "missing id" }, { id: "missing-question" }, question({ id: "kept" })],
     });
     expect(described?.questions?.map((entry) => entry.id)).toEqual(["kept"]);
   });
 
-  test("header defaults to \"Question\" when absent or not a non-empty string", () => {
+  test('header defaults to "Question" when absent or not a non-empty string', () => {
     for (const header of [undefined, "", null, 7, {}]) {
       const described = describeWith(QUESTION, {
         threadId: "thread-1",
@@ -192,9 +176,11 @@ describe("describeInteraction: questions", () => {
   test("options without a usable label are dropped, and an all-bad list is omitted", () => {
     const partial = describeWith(QUESTION, {
       threadId: "thread-1",
-      questions: [question({
-        options: [{ label: "" }, { description: "no label" }, "nope", { label: "Kept" }],
-      })],
+      questions: [
+        question({
+          options: [{ label: "" }, { description: "no label" }, "nope", { label: "Kept" }],
+        }),
+      ],
     });
     expect(partial?.questions?.[0]?.options).toEqual([{ label: "Kept" }]);
 
@@ -213,7 +199,7 @@ describe("describeInteraction: questions", () => {
     expect(described?.questions?.[0]?.options).toBeUndefined();
   });
 
-  test("an empty option description is omitted rather than serialized as \"\"", () => {
+  test('an empty option description is omitted rather than serialized as ""', () => {
     const described = describeWith(QUESTION, {
       threadId: "thread-1",
       questions: [question({ options: [{ label: "Yes", description: "" }] })],
@@ -224,10 +210,11 @@ describe("describeInteraction: questions", () => {
 
 describe("describeInteraction: the autoResolutionMs clamp", () => {
   test("a shorter autoResolutionMs wins over the default expiry", () => {
-    const described = describeWith(
-      QUESTION,
-      { threadId: "thread-1", questions: [question()], autoResolutionMs: 60_000 },
-    );
+    const described = describeWith(QUESTION, {
+      threadId: "thread-1",
+      questions: [question()],
+      autoResolutionMs: 60_000,
+    });
     expect(described?.expiresAt).toBe(REQUESTED_AT + 60_000);
     expect(described?.autoResolutionMs).toBe(60_000);
   });
@@ -235,10 +222,11 @@ describe("describeInteraction: the autoResolutionMs clamp", () => {
   test("a longer autoResolutionMs never extends past the default expiry", () => {
     // The other direction of the clamp: Codex must not be able to pin a request
     // open for longer than the router's own approval window.
-    const described = describeWith(
-      QUESTION,
-      { threadId: "thread-1", questions: [question()], autoResolutionMs: 86_400_000 },
-    );
+    const described = describeWith(QUESTION, {
+      threadId: "thread-1",
+      questions: [question()],
+      autoResolutionMs: 86_400_000,
+    });
     expect(described?.expiresAt).toBe(DEFAULT_EXPIRES_AT);
     expect(described?.autoResolutionMs).toBe(86_400_000);
   });
@@ -353,9 +341,7 @@ describe("describeInteraction: MCP elicitation", () => {
   );
 
   test("questions on an elicitation are ignored; mode alone decides", () => {
-    expect(
-      describeWith(ELICITATION, { threadId: "thread-1", questions: [question()] }),
-    ).toBeNull();
+    expect(describeWith(ELICITATION, { threadId: "thread-1", questions: [question()] })).toBeNull();
   });
 
   test("elicitation never uses autoResolutionMs", () => {

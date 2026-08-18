@@ -19,7 +19,7 @@ let updateRepositoryConfigImpl = (_projectId: string, repoConfig: unknown) =>
   });
 
 const mockUpdateRepositoryConfig = mock((projectId: string, repoConfig: unknown) =>
-  updateRepositoryConfigImpl(projectId, repoConfig)
+  updateRepositoryConfigImpl(projectId, repoConfig),
 );
 const mockUpdateProject = mock(async (project: unknown) => project);
 const mockGetCachedOpenCodeModelCatalog = mock(
@@ -119,21 +119,14 @@ mock.module("@/components/ui/select", () => ({
     </select>
   ),
   SelectContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  SelectItem: ({
-    children,
-    value,
-  }: {
-    children: React.ReactNode;
-    value: string;
-  }) => <option value={value}>{children}</option>,
-  SelectTrigger: ({
-    children,
-  }: {
-    children: React.ReactNode;
-    id?: string;
-    className?: string;
-  }) => <>{children}</>,
-  SelectValue: ({ placeholder }: { placeholder?: string }) => placeholder ? <option value="">{placeholder}</option> : null,
+  SelectItem: ({ children, value }: { children: React.ReactNode; value: string }) => (
+    <option value={value}>{children}</option>
+  ),
+  SelectTrigger: ({ children }: { children: React.ReactNode; id?: string; className?: string }) => (
+    <>{children}</>
+  ),
+  SelectValue: ({ placeholder }: { placeholder?: string }) =>
+    placeholder ? <option value="">{placeholder}</option> : null,
 }));
 
 afterAll(() => {
@@ -236,7 +229,7 @@ function renderSettings({
         open={true}
         onOpenChange={handleOpenChange}
         onUpdateProject={onUpdateProject}
-      />
+      />,
     ),
     project: resolvedProject,
     onOpenChange: handleOpenChange,
@@ -309,12 +302,18 @@ describe("RepositorySettings", () => {
       expect(screen.getByText("Agent Style")).toBeTruthy();
 
       const group = getAgentGroup();
-      expect(within(group).getByRole("radio", { name: "Use App Default (Claude Code)" }).getAttribute("aria-checked")).toBe("true");
+      expect(
+        within(group)
+          .getByRole("radio", { name: "Use App Default (Claude Code)" })
+          .getAttribute("aria-checked"),
+      ).toBe("true");
       expect(within(group).getByRole("radio", { name: "Claude Code" })).toBeTruthy();
       expect(within(group).getByRole("radio", { name: "OpenCode" })).toBeTruthy();
       expect(within(group).getByRole("radio", { name: "Codex" })).toBeTruthy();
       expect(
-        within(group).getAllByRole("radio").map((radio) => radio.textContent?.trim()),
+        within(group)
+          .getAllByRole("radio")
+          .map((radio) => radio.textContent?.trim()),
       ).toEqual(["Use App Default (Claude Code)", "Claude Code", "Codex", "OpenCode"]);
 
       const [styleSelect] = getMockSelects();
@@ -337,7 +336,9 @@ describe("RepositorySettings", () => {
 
       expect(getAgentRadio("Use App Default (Claude Code)")).toBeTruthy();
       expect(getAgentRadio("OpenCode").getAttribute("aria-checked")).toBe("true");
-      expect(container.querySelector("span.text-xs.text-muted-foreground.bg-zinc-800")?.textContent).toBe("OpenCode");
+      expect(
+        container.querySelector("span.text-xs.text-muted-foreground.bg-zinc-800")?.textContent,
+      ).toBe("OpenCode");
     });
 
     test("clicking an agent tile updates the effective badge and clears model and effort on save", async () => {
@@ -355,7 +356,9 @@ describe("RepositorySettings", () => {
       });
 
       fireEvent.click(getAgentRadio("OpenCode"));
-      expect(container.querySelector("span.text-xs.text-muted-foreground.bg-zinc-800")?.textContent).toBe("OpenCode");
+      expect(
+        container.querySelector("span.text-xs.text-muted-foreground.bg-zinc-800")?.textContent,
+      ).toBe("OpenCode");
 
       fireEvent.click(getSaveButton());
 
@@ -416,12 +419,14 @@ describe("RepositorySettings", () => {
         projectId: "project-1",
         catalogVersion: "catalog-variants",
         updatedAt: "2026-08-07T12:00:00.000Z",
-        models: [{
-          id: "openai/gpt-5",
-          name: "GPT-5",
-          provider: "openai",
-          variants: ["low", "deep"],
-        }],
+        models: [
+          {
+            id: "openai/gpt-5",
+            name: "GPT-5",
+            provider: "openai",
+            variants: ["low", "deep"],
+          },
+        ],
       });
       renderSettings({
         config: {
@@ -452,12 +457,14 @@ describe("RepositorySettings", () => {
         projectId: "project-1",
         catalogVersion: "catalog-1",
         updatedAt: "2026-08-07T12:00:00.000Z",
-        models: [{
-          id: "openrouter/cached-model",
-          name: "Cached Model",
-          provider: "openrouter",
-          variants: ["fast", "deep"],
-        }],
+        models: [
+          {
+            id: "openrouter/cached-model",
+            name: "Cached Model",
+            provider: "openrouter",
+            variants: ["fast", "deep"],
+          },
+        ],
       });
       renderSettings({
         config: {
@@ -474,11 +481,14 @@ describe("RepositorySettings", () => {
 
       await waitFor(() => {
         expect(mockGetCachedOpenCodeModelCatalog).toHaveBeenCalledWith("project-1");
-        expect(screen.queryByText("Start an environment to load available models") === null).toBe(true);
+        expect(screen.queryByText("Start an environment to load available models") === null).toBe(
+          true,
+        );
       });
       const modelSelect = getMockSelects()[2]!;
-      expect(Array.from(modelSelect.options).map((option) => option.value))
-        .toContain("openrouter/cached-model");
+      expect(Array.from(modelSelect.options).map((option) => option.value)).toContain(
+        "openrouter/cached-model",
+      );
       expect(modelSelect.textContent).toContain("Cached Model");
     });
 
@@ -501,25 +511,29 @@ describe("RepositorySettings", () => {
             },
           },
           prepareStores: () => {
-            useAgentModelCatalogStore.getState().setAcpModels([{
-              id: `${platform}-cached-model`,
-              label: `${label} Cached Model`,
-              platform,
-              reasoning: [
-                { id: "default", label: "Default" },
-                { id: "high", label: "High" },
-              ],
-            }]);
+            useAgentModelCatalogStore.getState().setAcpModels([
+              {
+                id: `${platform}-cached-model`,
+                label: `${label} Cached Model`,
+                platform,
+                reasoning: [
+                  { id: "default", label: "Default" },
+                  { id: "high", label: "High" },
+                ],
+              },
+            ]);
           },
         });
 
-        expect(screen.queryByText("Start an environment to load available models") === null).toBe(true);
+        expect(screen.queryByText("Start an environment to load available models") === null).toBe(
+          true,
+        );
         const selects = getMockSelects();
-        expect(Array.from(selects[2]!.options).map((option) => option.value))
-          .toContain(`${platform}-cached-model`);
+        expect(Array.from(selects[2]!.options).map((option) => option.value)).toContain(
+          `${platform}-cached-model`,
+        );
         expect(selects[2]!.textContent).toContain(`${label} Cached Model`);
-        expect(Array.from(selects[3]!.options).map((option) => option.value))
-          .toContain("high");
+        expect(Array.from(selects[3]!.options).map((option) => option.value)).toContain("high");
       });
 
       test(`does not expose the synthetic ${label} fallback without a cached catalogue`, () => {
@@ -539,11 +553,11 @@ describe("RepositorySettings", () => {
           },
         });
 
-        expect(screen.getByText("Start an environment to load available models"))
-          .toBeTruthy();
-        expect(screen.queryByText(
-          platform === "cursor" ? "Cursor automatic" : "Grok Build default",
-        ) === null).toBe(true);
+        expect(screen.getByText("Start an environment to load available models")).toBeTruthy();
+        expect(
+          screen.queryByText(platform === "cursor" ? "Cursor automatic" : "Grok Build default") ===
+            null,
+        ).toBe(true);
       });
 
       test(`clears an incompatible ${label} effort when the model changes`, async () => {
@@ -589,8 +603,7 @@ describe("RepositorySettings", () => {
         await waitFor(() => {
           const effortSelect = getMockSelects()[3]!;
           expect(effortSelect.value).toBe("__app_default__");
-          expect(Array.from(effortSelect.options).map((option) => option.value))
-            .toContain("low");
+          expect(Array.from(effortSelect.options).map((option) => option.value)).toContain("low");
         });
 
         fireEvent.click(getSaveButton());
@@ -654,10 +667,12 @@ describe("RepositorySettings", () => {
       fireEvent.change(effortSelect, { target: { value: "ultra" } });
       fireEvent.click(getSaveButton());
       await waitFor(() => expect(mockUpdateRepositoryConfig).toHaveBeenCalledTimes(1));
-      expect(getSavedConfig()).toEqual(expect.objectContaining({
-        defaultModel: "gpt-5.6-sol",
-        defaultEffort: "ultra",
-      }));
+      expect(getSavedConfig()).toEqual(
+        expect.objectContaining({
+          defaultModel: "gpt-5.6-sol",
+          defaultEffort: "ultra",
+        }),
+      );
     });
 
     test("can reset repository model and effort overrides to the agent defaults", async () => {
@@ -726,8 +741,7 @@ describe("RepositorySettings", () => {
       });
 
       await waitFor(() => {
-        const effortValues = Array.from(getMockSelects()[3]!.options)
-          .map((option) => option.value);
+        const effortValues = Array.from(getMockSelects()[3]!.options).map((option) => option.value);
         expect(effortValues).toContain("deep");
       });
       fireEvent.change(getMockSelects()[2]!, {
@@ -759,11 +773,13 @@ describe("RepositorySettings", () => {
         },
         prepareStores: () => {
           useCodexStore.setState({
-            models: [{
-              id: "gpt-5.4",
-              name: "GPT-5.4",
-              reasoningEfforts: ["low", "medium", "high", "xhigh"],
-            }],
+            models: [
+              {
+                id: "gpt-5.4",
+                name: "GPT-5.4",
+                reasoningEfforts: ["low", "medium", "high", "xhigh"],
+              },
+            ],
           });
         },
       });
@@ -819,7 +835,9 @@ describe("RepositorySettings", () => {
       fireEvent.click(contentButtons[1]!);
 
       await waitFor(() => expect(mockOpenDialog).toHaveBeenCalledTimes(1));
-      expect((screen.getByLabelText("Local Path") as HTMLInputElement).value).toBe("/Users/test/repo");
+      expect((screen.getByLabelText("Local Path") as HTMLInputElement).value).toBe(
+        "/Users/test/repo",
+      );
     });
 
     test("save trims changed project fields and calls onUpdateProject", async () => {
@@ -841,7 +859,7 @@ describe("RepositorySettings", () => {
           id: "project-1",
           name: "renamed repo",
           localPath: "/tmp/repo",
-        })
+        }),
       );
     });
 
@@ -910,8 +928,7 @@ describe("RepositorySettings", () => {
       expect(getSavedConfig().lastEnvironmentType).toBeUndefined();
       await waitFor(() => {
         expect(
-          useConfigStore.getState().config.repositories["project-1"]
-            ?.lastEnvironmentType,
+          useConfigStore.getState().config.repositories["project-1"]?.lastEnvironmentType,
         ).toBe("local");
       });
     });
@@ -927,15 +944,15 @@ describe("RepositorySettings", () => {
               defaultBranch: "main",
               prBaseBranch: "main",
               entryPort: 3000,
-              defaultPortMappings: [
-                { containerPort: 3000, hostPort: 3001, protocol: "tcp" },
-              ],
+              defaultPortMappings: [{ containerPort: 3000, hostPort: 3001, protocol: "tcp" }],
             },
           },
         },
       });
 
-      fireEvent.change(screen.getByLabelText("Container Entry Port"), { target: { value: "8080" } });
+      fireEvent.change(screen.getByLabelText("Container Entry Port"), {
+        target: { value: "8080" },
+      });
       fireEvent.change(screen.getByPlaceholderText("Host"), { target: { value: "4000" } });
       fireEvent.change(getMockSelects()[0]!, { target: { value: "udp" } });
       fireEvent.click(getSaveButton());
@@ -977,9 +994,7 @@ describe("RepositorySettings", () => {
             "project-1": {
               defaultBranch: "main",
               prBaseBranch: "main",
-              defaultPortMappings: [
-                { containerPort: 0, hostPort: 4000, protocol: "tcp" },
-              ],
+              defaultPortMappings: [{ containerPort: 0, hostPort: 4000, protocol: "tcp" }],
             },
           },
         },
@@ -991,7 +1006,9 @@ describe("RepositorySettings", () => {
     test("omits an out-of-range entry port on save", async () => {
       renderSettings({ section: "ports" });
 
-      fireEvent.change(screen.getByLabelText("Container Entry Port"), { target: { value: "70000" } });
+      fireEvent.change(screen.getByLabelText("Container Entry Port"), {
+        target: { value: "70000" },
+      });
       fireEvent.click(getSaveButton());
 
       await waitFor(() => expect(mockUpdateRepositoryConfig).toHaveBeenCalledTimes(1));
@@ -1061,8 +1078,10 @@ describe("RepositorySettings", () => {
         },
       });
 
-      expect((within(getSettingsContent()).getByTitle("Set local path first") as HTMLButtonElement).disabled)
-        .toBe(true);
+      expect(
+        (within(getSettingsContent()).getByTitle("Set local path first") as HTMLButtonElement)
+          .disabled,
+      ).toBe(true);
     });
 
     test("browse file converts an absolute path under the repo to a relative path", async () => {
@@ -1085,7 +1104,9 @@ describe("RepositorySettings", () => {
       fireEvent.click(contentButtons[0]!);
 
       await waitFor(() =>
-        expect((within(getSettingsContent()).getByRole("textbox") as HTMLInputElement).value).toBe("config/.env")
+        expect((within(getSettingsContent()).getByRole("textbox") as HTMLInputElement).value).toBe(
+          "config/.env",
+        ),
       );
     });
 
@@ -1113,8 +1134,8 @@ describe("RepositorySettings", () => {
           "Invalid file location",
           expect.objectContaining({
             description: "The file must be inside the project's local path.",
-          })
-        )
+          }),
+        ),
       );
     });
   });
@@ -1131,8 +1152,8 @@ describe("RepositorySettings", () => {
       await waitFor(() =>
         expect(mockToastError).toHaveBeenCalledWith(
           "Failed to save settings",
-          expect.objectContaining({ description: "save failed" })
-        )
+          expect.objectContaining({ description: "save failed" }),
+        ),
       );
       expect((getSaveButton() as HTMLButtonElement).disabled).toBe(false);
     });

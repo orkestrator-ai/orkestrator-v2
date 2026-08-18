@@ -8,10 +8,16 @@ import { prepareFixtureRepository } from "./fixture.js";
 
 const directories: string[] = [];
 
-afterEach(async () => Promise.all(directories.splice(0).map((directory) => rm(directory, {
-  recursive: true,
-  force: true,
-}))));
+afterEach(async () =>
+  Promise.all(
+    directories.splice(0).map((directory) =>
+      rm(directory, {
+        recursive: true,
+        force: true,
+      }),
+    ),
+  ),
+);
 
 async function gitOutput(cwd: string, ...args: string[]): Promise<string> {
   const process = Bun.spawn(["git", "-C", cwd, ...args], { stdout: "pipe", stderr: "pipe" });

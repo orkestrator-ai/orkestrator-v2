@@ -22,8 +22,5 @@ export function seedQueuedPrompt<TQueued>(
   // Read through the action rather than a captured map: callers hold a state
   // snapshot from before earlier seeds, and zustand actions always see current
   // state.
-  state.setQueueProjection(sessionKey, [
-    ...state.getQueuedMessages(sessionKey),
-    message,
-  ]);
+  state.setQueueProjection(sessionKey, [...state.getQueuedMessages(sessionKey), message]);
 }

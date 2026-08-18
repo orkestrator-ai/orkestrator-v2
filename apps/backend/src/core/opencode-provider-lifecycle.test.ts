@@ -1,7 +1,20 @@
 import { describe, expect, test } from "bun:test";
-import { AGENT_INTERACTION_LIMITS, INTERACTIVE_AGENT_INTERACTION_POLICY, UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
-import { createNativeAgentProvider, ProviderUnavailableError, type ProviderSessionRegistration } from "./native-agent-provider.js";
-import { waitUntil, openCodeFake, openCodeProvider, openCodeActivityProvider } from "./agent-provider-test-support.js";
+import {
+  AGENT_INTERACTION_LIMITS,
+  INTERACTIVE_AGENT_INTERACTION_POLICY,
+  UNATTENDED_AGENT_INTERACTION_POLICY,
+} from "@orkestrator/protocol/agent-interactions";
+import {
+  createNativeAgentProvider,
+  ProviderUnavailableError,
+  type ProviderSessionRegistration,
+} from "./native-agent-provider.js";
+import {
+  waitUntil,
+  openCodeFake,
+  openCodeProvider,
+  openCodeActivityProvider,
+} from "./agent-provider-test-support.js";
 
 describe("OpenCode provider", () => {
   test("treats a status-map omission as idle when the session still exists", async () => {
@@ -15,10 +28,12 @@ describe("OpenCode provider", () => {
       await expect(provider.status("omitted-session")).resolves.toBe("idle");
       expect(fake.statusCallCount).toBe(1);
       expect(fake.sessionListCallCount).toBe(0);
-      expect(fake.sessionGetCalls).toEqual([{
-        sessionID: "omitted-session",
-        directory: "/workspace",
-      }]);
+      expect(fake.sessionGetCalls).toEqual([
+        {
+          sessionID: "omitted-session",
+          directory: "/workspace",
+        },
+      ]);
       expect(fake.statusOptions[0]?.signal).toBeInstanceOf(AbortSignal);
       expect(fake.sessionGetOptions[0]?.signal).toBeInstanceOf(AbortSignal);
     } finally {
@@ -32,14 +47,14 @@ describe("OpenCode provider", () => {
     fake.setSessionListResponse({ data: [{ id: "existing-session" }] });
     const provider = openCodeActivityProvider(fake);
     try {
-      await expect(provider.activityBatch?.([
-        "existing-session",
-        "deleted-session",
-        "existing-session",
-      ])).resolves.toEqual(new Map([
-        ["existing-session", "idle"],
-        ["deleted-session", "missing"],
-      ]));
+      await expect(
+        provider.activityBatch?.(["existing-session", "deleted-session", "existing-session"]),
+      ).resolves.toEqual(
+        new Map([
+          ["existing-session", "idle"],
+          ["deleted-session", "missing"],
+        ]),
+      );
       expect(fake.statusCallCount).toBe(1);
       expect(fake.sessionListCallCount).toBe(1);
       expect(fake.sessionGetCallCount).toBe(1);
@@ -51,10 +66,7 @@ describe("OpenCode provider", () => {
   });
 
   test("reports provider unavailability when OpenCode existence cannot be read", async () => {
-    for (const failure of [
-      { error: { message: "failed" } },
-      new Error("connection reset"),
-    ]) {
+    for (const failure of [{ error: { message: "failed" } }, new Error("connection reset")]) {
       const fake = openCodeFake();
       fake.setStatusResponse({ data: {} });
       if (failure instanceof Error) fake.setSessionListError(failure);
@@ -62,10 +74,12 @@ describe("OpenCode provider", () => {
       fake.setSessionGetError(new Error("exact read failed"));
       const provider = openCodeActivityProvider(fake);
       try {
-        await expect(provider.status("omitted-session"))
-          .rejects.toBeInstanceOf(ProviderUnavailableError);
-        await expect(provider.activityBatch?.(["omitted-session"]))
-          .resolves.toEqual(new Map([["omitted-session", "idle"]]));
+        await expect(provider.status("omitted-session")).rejects.toBeInstanceOf(
+          ProviderUnavailableError,
+        );
+        await expect(provider.activityBatch?.(["omitted-session"])).resolves.toEqual(
+          new Map([["omitted-session", "idle"]]),
+        );
       } finally {
         await provider.dispose?.();
       }
@@ -84,10 +98,12 @@ describe("OpenCode provider", () => {
         })),
       },
       {
-        data: [{
-          id: "foreign-session",
-          title: "x".repeat(4 * 1024 * 1024 + 1),
-        }],
+        data: [
+          {
+            id: "foreign-session",
+            title: "x".repeat(4 * 1024 * 1024 + 1),
+          },
+        ],
       },
     ]) {
       const fake = openCodeFake();
@@ -98,12 +114,15 @@ describe("OpenCode provider", () => {
       });
       const provider = openCodeActivityProvider(fake);
       try {
-        await expect(provider.activityBatch?.(["omitted-session"]))
-          .resolves.toEqual(new Map([["omitted-session", "idle"]]));
-        expect(fake.sessionGetCalls).toEqual([{
-          sessionID: "omitted-session",
-          directory: "/workspace",
-        }]);
+        await expect(provider.activityBatch?.(["omitted-session"])).resolves.toEqual(
+          new Map([["omitted-session", "idle"]]),
+        );
+        expect(fake.sessionGetCalls).toEqual([
+          {
+            sessionID: "omitted-session",
+            directory: "/workspace",
+          },
+        ]);
       } finally {
         await provider.dispose?.();
       }
@@ -123,8 +142,7 @@ describe("OpenCode provider", () => {
     });
     const provider = openCodeActivityProvider(fake);
     try {
-      await expect(provider.activity?.("omitted-session"))
-        .resolves.toBe("idle");
+      await expect(provider.activity?.("omitted-session")).resolves.toBe("idle");
       expect(fake.sessionListCallCount).toBe(1);
       expect(fake.sessionGetCallCount).toBe(1);
       expect(fake.sessionGetCalls[0]).toEqual({
@@ -147,12 +165,13 @@ describe("OpenCode provider", () => {
     });
     const provider = openCodeActivityProvider(fake);
     try {
-      await expect(provider.activity?.("deleted-session"))
-        .resolves.toBe("missing");
-      expect(fake.sessionGetCalls).toEqual([{
-        sessionID: "deleted-session",
-        directory: "/workspace",
-      }]);
+      await expect(provider.activity?.("deleted-session")).resolves.toBe("missing");
+      expect(fake.sessionGetCalls).toEqual([
+        {
+          sessionID: "deleted-session",
+          directory: "/workspace",
+        },
+      ]);
     } finally {
       await provider.dispose?.();
     }
@@ -194,12 +213,9 @@ describe("OpenCode provider", () => {
     fake.setSessionListResponse({ data: [{ id: "session-that-deletes" }] });
     const provider = openCodeActivityProvider(fake);
     try {
-      await expect(provider.activity?.("session-that-deletes"))
-        .resolves.toBe("idle");
-      await expect(provider.status("session-that-deletes"))
-        .resolves.toBe("missing");
-      await expect(provider.activity?.("session-that-deletes"))
-        .resolves.toBe("missing");
+      await expect(provider.activity?.("session-that-deletes")).resolves.toBe("idle");
+      await expect(provider.status("session-that-deletes")).resolves.toBe("missing");
+      await expect(provider.activity?.("session-that-deletes")).resolves.toBe("missing");
       expect(fake.sessionGetCallCount).toBe(2);
     } finally {
       await provider.dispose?.();
@@ -262,8 +278,7 @@ describe("OpenCode provider", () => {
     fake.setSessionGetError(new Error("connection reset"));
     const provider = openCodeActivityProvider(fake);
     try {
-      await expect(provider.status("target"))
-        .rejects.toBeInstanceOf(ProviderUnavailableError);
+      await expect(provider.status("target")).rejects.toBeInstanceOf(ProviderUnavailableError);
     } finally {
       await provider.dispose?.();
     }
@@ -276,11 +291,12 @@ describe("OpenCode provider", () => {
     fake.setSessionGetError(new Error("get unavailable"));
     const provider = openCodeActivityProvider(fake);
     try {
-      await expect(provider.activityBatch?.(["busy", "unresolved"]))
-        .resolves.toEqual(new Map([
+      await expect(provider.activityBatch?.(["busy", "unresolved"])).resolves.toEqual(
+        new Map([
           ["unresolved", "idle"],
           ["busy", "working"],
-        ]));
+        ]),
+      );
       expect(fake.questionListCallCount).toBe(1);
       expect(fake.permissionListCallCount).toBe(1);
     } finally {
@@ -321,8 +337,7 @@ describe("OpenCode provider", () => {
       expect(fake.sessionListCallCount).toBe(1);
       expect(fake.sessionGetCallCount).toBe(1);
 
-      await expect(provider.status("target"))
-        .rejects.toBeInstanceOf(ProviderUnavailableError);
+      await expect(provider.status("target")).rejects.toBeInstanceOf(ProviderUnavailableError);
       expect(fake.sessionGetCallCount).toBe(2);
 
       now += 101;
@@ -335,10 +350,7 @@ describe("OpenCode provider", () => {
   });
 
   test("caps exact activity probes to one rotating concurrency wave", async () => {
-    const sessionIds = Array.from(
-      { length: 20 },
-      (_, index) => `missing-${index}`,
-    );
+    const sessionIds = Array.from({ length: 20 }, (_, index) => `missing-${index}`);
     const fake = openCodeFake();
     fake.setStatusResponse({ data: {} });
     fake.setSessionListError(new Error("list unavailable"));
@@ -359,10 +371,7 @@ describe("OpenCode provider", () => {
   });
 
   test("handles more than 1024 tracked sessions in one bounded activity read", async () => {
-    const sessionIds = Array.from(
-      { length: 1_025 },
-      (_, index) => `session-${index}`,
-    );
+    const sessionIds = Array.from({ length: 1_025 }, (_, index) => `session-${index}`);
     const fake = openCodeFake();
     fake.setStatusResponse({ data: {} });
     fake.setSessionListResponse({ data: sessionIds.map((id) => ({ id })) });
@@ -392,14 +401,13 @@ describe("OpenCode provider", () => {
     try {
       await expect(provider.status("tracked")).resolves.toBe("running");
       fake.setStatusResponse({ data: { tracked: { type: 3 } } });
-      await expect(provider.status("tracked"))
-        .rejects.toMatchObject({
-          name: "ProviderUnavailableError",
-          message: "OpenCode status is unavailable",
-          cause: {
-            message: "OpenCode status read contains a malformed entry",
-          },
-        });
+      await expect(provider.status("tracked")).rejects.toMatchObject({
+        name: "ProviderUnavailableError",
+        message: "OpenCode status is unavailable",
+        cause: {
+          message: "OpenCode status read contains a malformed entry",
+        },
+      });
     } finally {
       await provider.dispose?.();
     }
@@ -418,10 +426,7 @@ describe("OpenCode provider", () => {
       await boundaryProvider.dispose?.();
     }
 
-    for (const sessionId of [
-      "",
-      "x".repeat(AGENT_INTERACTION_LIMITS.maxIdLength + 1),
-    ]) {
+    for (const sessionId of ["", "x".repeat(AGENT_INTERACTION_LIMITS.maxIdLength + 1)]) {
       const fake = openCodeFake();
       const provider = openCodeActivityProvider(fake);
       try {
@@ -436,16 +441,13 @@ describe("OpenCode provider", () => {
     }
 
     for (const data of [
-      Object.fromEntries(Array.from(
-        { length: 4_097 },
-        (_, index) => [`foreign-${index}`, { type: "idle" }],
-      )),
+      Object.fromEntries(
+        Array.from({ length: 4_097 }, (_, index) => [`foreign-${index}`, { type: "idle" }]),
+      ),
       {
         foreign: {
           type: "idle",
-          padding: "x".repeat(
-            AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes + 1,
-          ),
+          padding: "x".repeat(AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes + 1),
         },
       },
     ]) {
@@ -475,15 +477,9 @@ describe("OpenCode provider", () => {
     const provider = openCodeActivityProvider(fake);
     try {
       await expect(provider.activity?.("owned-session")).resolves.toBe("waiting");
-      fake.setPending(
-        [{ id: "permission-other", sessionID: "other-session" }],
-        [],
-      );
+      fake.setPending([{ id: "permission-other", sessionID: "other-session" }], []);
       await expect(provider.activity?.("owned-session")).resolves.toBe("working");
-      fake.setPending(
-        [{ id: "permission-owned", sessionID: "owned-session" }],
-        [],
-      );
+      fake.setPending([{ id: "permission-owned", sessionID: "owned-session" }], []);
       await expect(provider.activity?.("owned-session")).resolves.toBe("waiting");
     } finally {
       await provider.dispose?.();
@@ -516,12 +512,14 @@ describe("OpenCode provider", () => {
         "busy-session",
       ]);
 
-      expect(activity).toEqual(new Map([
-        ["idle-session", "idle"],
-        ["missing-session", "missing"],
-        ["busy-session", "waiting"],
-        ["retry-session", "waiting"],
-      ]));
+      expect(activity).toEqual(
+        new Map([
+          ["idle-session", "idle"],
+          ["missing-session", "missing"],
+          ["busy-session", "waiting"],
+          ["retry-session", "waiting"],
+        ]),
+      );
       expect(fake.statusCallCount).toBe(1);
       expect(fake.sessionListCallCount).toBe(1);
       expect(fake.questionListCallCount).toBe(1);
@@ -550,11 +548,13 @@ describe("OpenCode provider", () => {
         "missing-session",
       ]);
 
-      expect(activity).toEqual(new Map([
-        ["idle-session", "idle"],
-        ["error-session", "idle"],
-        ["missing-session", "missing"],
-      ]));
+      expect(activity).toEqual(
+        new Map([
+          ["idle-session", "idle"],
+          ["error-session", "idle"],
+          ["missing-session", "missing"],
+        ]),
+      );
       expect(fake.statusCallCount).toBe(1);
       expect(fake.sessionListCallCount).toBe(1);
       expect(fake.questionListCallCount).toBe(0);
@@ -633,23 +633,26 @@ describe("OpenCode provider", () => {
     const durableDetection = new Promise<void>((resolve) => {
       releaseDurableDetection = resolve;
     });
-    const provider = createNativeAgentProvider({
-      agent: "opencode",
-      baseUrl: "http://opencode.test",
-      authToken: "test-token",
-      directory: "/workspace",
-    }, {
-      openCodeClient: fake.client,
-      monitorRetryMs: 1,
-      autoAnswerRequests: true,
-      onInteractionObservation: async (event) => {
-        events.push({ state: event.state, kind: event.kind });
-        if (event.kind === "permission") throw new Error("diagnostics unavailable");
-        if (event.kind === "question" && event.state === "detected") {
-          await durableDetection;
-        }
+    const provider = createNativeAgentProvider(
+      {
+        agent: "opencode",
+        baseUrl: "http://opencode.test",
+        authToken: "test-token",
+        directory: "/workspace",
       },
-    });
+      {
+        openCodeClient: fake.client,
+        monitorRetryMs: 1,
+        autoAnswerRequests: true,
+        onInteractionObservation: async (event) => {
+          events.push({ state: event.state, kind: event.kind });
+          if (event.kind === "permission") throw new Error("diagnostics unavailable");
+          if (event.kind === "question" && event.state === "detected") {
+            await durableDetection;
+          }
+        },
+      },
+    );
     try {
       await provider.createSession("build", "Build task", {
         interaction: {
@@ -667,9 +670,9 @@ describe("OpenCode provider", () => {
         type: "question.asked",
         properties: { id: "question-1", sessionID: "owned-session" },
       });
-      await waitUntil(() => events.some((event) =>
-        event.kind === "question" && event.state === "detected"
-      ));
+      await waitUntil(() =>
+        events.some((event) => event.kind === "question" && event.state === "detected"),
+      );
       expect(fake.questionRejections).toEqual([]);
       await waitUntil(() => fake.permissionReplies.length === 1);
       await expect(provider.status("owned-session")).resolves.toBe("blocked");
@@ -678,11 +681,11 @@ describe("OpenCode provider", () => {
       expect(fake.permissionReplies).toHaveLength(1);
       expect(events).toHaveLength(4);
       for (const kind of ["permission", "question"] as const) {
-        expect(events.findIndex((event) =>
-          event.kind === kind && event.state === "detected"
-        )).toBeLessThan(events.findIndex((event) =>
-          event.kind === kind && event.state === "withdrawn"
-        ));
+        expect(
+          events.findIndex((event) => event.kind === kind && event.state === "detected"),
+        ).toBeLessThan(
+          events.findIndex((event) => event.kind === kind && event.state === "withdrawn"),
+        );
       }
     } finally {
       await provider.dispose?.();
@@ -696,23 +699,26 @@ describe("OpenCode provider", () => {
       state: string;
       providerState?: string;
     }> = [];
-    const provider = createNativeAgentProvider({
-      agent: "opencode",
-      baseUrl: "http://opencode.test",
-      authToken: "test-token",
-      directory: "/workspace",
-    }, {
-      openCodeClient: fake.client,
-      monitorRetryMs: 1,
-      autoAnswerRequests: true,
-      onInteractionObservation: (event) => {
-        events.push({
-          kind: event.kind,
-          state: event.state,
-          providerState: event.providerState,
-        });
+    const provider = createNativeAgentProvider(
+      {
+        agent: "opencode",
+        baseUrl: "http://opencode.test",
+        authToken: "test-token",
+        directory: "/workspace",
       },
-    });
+      {
+        openCodeClient: fake.client,
+        monitorRetryMs: 1,
+        autoAnswerRequests: true,
+        onInteractionObservation: (event) => {
+          events.push({
+            kind: event.kind,
+            state: event.state,
+            providerState: event.providerState,
+          });
+        },
+      },
+    );
     try {
       await provider.createSession("build", "Build task");
       await waitUntil(() => fake.subscriptions.length === 1);
@@ -754,19 +760,22 @@ describe("OpenCode provider", () => {
       fence: "pipeline-1:build:3:abc",
     };
     const observed: ProviderSessionRegistration[] = [];
-    const provider = createNativeAgentProvider({
-      agent: "opencode",
-      baseUrl: "http://opencode.test",
-      authToken: "test-token",
-      directory: "/workspace",
-    }, {
-      openCodeClient: fake.client,
-      monitorRetryMs: 1,
-      autoAnswerRequests: true,
-      onInteractionObservation: (event) => {
-        observed.push(event.registration);
+    const provider = createNativeAgentProvider(
+      {
+        agent: "opencode",
+        baseUrl: "http://opencode.test",
+        authToken: "test-token",
+        directory: "/workspace",
       },
-    });
+      {
+        openCodeClient: fake.client,
+        monitorRetryMs: 1,
+        autoAnswerRequests: true,
+        onInteractionObservation: (event) => {
+          observed.push(event.registration);
+        },
+      },
+    );
     try {
       await provider.createSession("build", "Build task", {
         interaction: registration,
@@ -798,19 +807,22 @@ describe("OpenCode provider", () => {
       fence: "pipeline-1:build:3:abc",
     };
     const observed: ProviderSessionRegistration[] = [];
-    const provider = createNativeAgentProvider({
-      agent: "opencode",
-      baseUrl: "http://opencode.test",
-      authToken: "test-token",
-      directory: "/workspace",
-    }, {
-      openCodeClient: fake.client,
-      monitorRetryMs: 1,
-      autoAnswerRequests: true,
-      onInteractionObservation: (event) => {
-        observed.push(event.registration);
+    const provider = createNativeAgentProvider(
+      {
+        agent: "opencode",
+        baseUrl: "http://opencode.test",
+        authToken: "test-token",
+        directory: "/workspace",
       },
-    });
+      {
+        openCodeClient: fake.client,
+        monitorRetryMs: 1,
+        autoAnswerRequests: true,
+        onInteractionObservation: (event) => {
+          observed.push(event.registration);
+        },
+      },
+    );
     try {
       await waitUntil(() => fake.subscriptions.length === 1);
       provider.registerSession?.("restored-session", original);
@@ -839,21 +851,24 @@ describe("OpenCode provider", () => {
 
   test("leaves an OpenCode question pending when durable detection fails", async () => {
     const fake = openCodeFake();
-    const provider = createNativeAgentProvider({
-      agent: "opencode",
-      baseUrl: "http://opencode.test",
-      authToken: "test-token",
-      directory: "/workspace",
-    }, {
-      openCodeClient: fake.client,
-      monitorRetryMs: 1,
-      autoAnswerRequests: true,
-      onInteractionObservation: (event) => {
-        if (event.kind === "question" && event.state === "detected") {
-          throw new Error("durable failure write failed");
-        }
+    const provider = createNativeAgentProvider(
+      {
+        agent: "opencode",
+        baseUrl: "http://opencode.test",
+        authToken: "test-token",
+        directory: "/workspace",
       },
-    });
+      {
+        openCodeClient: fake.client,
+        monitorRetryMs: 1,
+        autoAnswerRequests: true,
+        onInteractionObservation: (event) => {
+          if (event.kind === "question" && event.state === "detected") {
+            throw new Error("durable failure write failed");
+          }
+        },
+      },
+    );
     try {
       await provider.createSession("build", "Build task");
       await waitUntil(() => fake.subscriptions.length === 1);
@@ -877,8 +892,9 @@ describe("OpenCode provider", () => {
       // provider rather than a missing session. Defaulting to `missing` would
       // turn that bug into a deleted session mapping.
       provider.activityBatch = async () => new Map();
-      await expect(provider.activity?.("owned-session"))
-        .rejects.toBeInstanceOf(ProviderUnavailableError);
+      await expect(provider.activity?.("owned-session")).rejects.toBeInstanceOf(
+        ProviderUnavailableError,
+      );
     } finally {
       await provider.dispose?.();
     }
@@ -889,34 +905,35 @@ describe("OpenCode provider", () => {
     ["permission", "envelope"],
     ["question", "throw"],
     ["permission", "throw"],
-  ] as const)("wraps OpenCode %s list %s failures as unavailable", async (
-    requestType,
-    failureType,
-  ) => {
-    const fake = openCodeFake();
-    fake.setStatusResponse({ data: { "owned-session": { type: "busy" } } });
-    if (failureType === "envelope") {
-      fake.setPendingReadResponses(
-        requestType === "permission" ? { error: { message: "failed" } } : null,
-        requestType === "question" ? { error: { message: "failed" } } : null,
-      );
-    } else {
-      fake.setPendingReadErrors(
-        requestType === "permission" ? new Error("failed") : null,
-        requestType === "question" ? new Error("failed") : null,
-      );
-    }
-    const provider = openCodeActivityProvider(fake);
-    try {
-      await expect(provider.activity?.("owned-session"))
-        .rejects.toBeInstanceOf(ProviderUnavailableError);
-      expect(fake.statusCallCount).toBe(1);
-      expect(fake.questionListCallCount).toBe(1);
-      expect(fake.permissionListCallCount).toBe(1);
-    } finally {
-      await provider.dispose?.();
-    }
-  });
+  ] as const)(
+    "wraps OpenCode %s list %s failures as unavailable",
+    async (requestType, failureType) => {
+      const fake = openCodeFake();
+      fake.setStatusResponse({ data: { "owned-session": { type: "busy" } } });
+      if (failureType === "envelope") {
+        fake.setPendingReadResponses(
+          requestType === "permission" ? { error: { message: "failed" } } : null,
+          requestType === "question" ? { error: { message: "failed" } } : null,
+        );
+      } else {
+        fake.setPendingReadErrors(
+          requestType === "permission" ? new Error("failed") : null,
+          requestType === "question" ? new Error("failed") : null,
+        );
+      }
+      const provider = openCodeActivityProvider(fake);
+      try {
+        await expect(provider.activity?.("owned-session")).rejects.toBeInstanceOf(
+          ProviderUnavailableError,
+        );
+        expect(fake.statusCallCount).toBe(1);
+        expect(fake.questionListCallCount).toBe(1);
+        expect(fake.permissionListCallCount).toBe(1);
+      } finally {
+        await provider.dispose?.();
+      }
+    },
+  );
 
   test("bounds OpenCode activity snapshots and accepts a maximum-length identity", async () => {
     const invalidQuestionResponses: Array<Record<string, unknown>> = [
@@ -927,10 +944,12 @@ describe("OpenCode provider", () => {
         })),
       },
       {
-        data: [{
-          id: "x".repeat(AGENT_INTERACTION_LIMITS.maxIdLength + 1),
-          sessionID: "owned-session",
-        }],
+        data: [
+          {
+            id: "x".repeat(AGENT_INTERACTION_LIMITS.maxIdLength + 1),
+            sessionID: "owned-session",
+          },
+        ],
       },
     ];
     for (const questions of invalidQuestionResponses) {
@@ -939,8 +958,9 @@ describe("OpenCode provider", () => {
       fake.setPendingReadResponses({ data: [] }, questions);
       const provider = openCodeActivityProvider(fake);
       try {
-        await expect(provider.activity?.("owned-session"))
-          .rejects.toBeInstanceOf(ProviderUnavailableError);
+        await expect(provider.activity?.("owned-session")).rejects.toBeInstanceOf(
+          ProviderUnavailableError,
+        );
       } finally {
         await provider.dispose?.();
       }
@@ -948,16 +968,20 @@ describe("OpenCode provider", () => {
 
     const boundary = openCodeFake();
     boundary.setStatusResponse({ data: { "owned-session": { type: "busy" } } });
-    boundary.setPendingReadResponses({ data: [] }, {
-      data: [{
-        id: "x".repeat(AGENT_INTERACTION_LIMITS.maxIdLength),
-        sessionID: "owned-session",
-      }],
-    });
+    boundary.setPendingReadResponses(
+      { data: [] },
+      {
+        data: [
+          {
+            id: "x".repeat(AGENT_INTERACTION_LIMITS.maxIdLength),
+            sessionID: "owned-session",
+          },
+        ],
+      },
+    );
     const boundaryProvider = openCodeActivityProvider(boundary);
     try {
-      await expect(boundaryProvider.activity?.("owned-session"))
-        .resolves.toBe("waiting");
+      await expect(boundaryProvider.activity?.("owned-session")).resolves.toBe("waiting");
     } finally {
       await boundaryProvider.dispose?.();
     }
@@ -983,32 +1007,30 @@ describe("OpenCode provider", () => {
     );
 
     try {
-      expect(factoryCalls).toEqual([{
-        baseUrl: "http://opencode.test",
-        directory: "/workspace/project",
-        headers: {
-          Authorization: `Basic ${
-            Buffer.from("opencode:factory-token").toString("base64")
-          }`,
-          "X-Orkestrator-OpenCode-Token": "factory-token",
+      expect(factoryCalls).toEqual([
+        {
+          baseUrl: "http://opencode.test",
+          directory: "/workspace/project",
+          headers: {
+            Authorization: `Basic ${Buffer.from("opencode:factory-token").toString("base64")}`,
+            "X-Orkestrator-OpenCode-Token": "factory-token",
+          },
         },
-      }]);
+      ]);
     } finally {
       await provider.dispose?.();
     }
   });
 
   test("wraps empty and failed OpenCode session creation responses as unavailable", async () => {
-    for (const response of [
-      { data: {} },
-      { error: { message: "failed" } },
-    ]) {
+    for (const response of [{ data: {} }, { error: { message: "failed" } }]) {
       const fake = openCodeFake();
       fake.setCreateResponse(response);
       const provider = openCodeProvider(fake);
       try {
-        await expect(provider.createSession("build", "Build task"))
-          .rejects.toBeInstanceOf(ProviderUnavailableError);
+        await expect(provider.createSession("build", "Build task")).rejects.toBeInstanceOf(
+          ProviderUnavailableError,
+        );
       } finally {
         await provider.dispose?.();
       }
@@ -1019,9 +1041,7 @@ describe("OpenCode provider", () => {
     const fake = openCodeFake();
     const provider = openCodeProvider(fake);
     try {
-      await expect(provider.createSession("build", "Build task")).resolves.toBe(
-        "owned-session",
-      );
+      await expect(provider.createSession("build", "Build task")).resolves.toBe("owned-session");
       expect(fake.createCalls).toEqual([{ title: "Build task" }]);
     } finally {
       await provider.dispose?.();
@@ -1053,15 +1073,19 @@ describe("OpenCode provider", () => {
       });
 
       await waitUntil(() => fake.questionRejections.length === 1);
-      expect(fake.permissionReplies).toEqual([{
-        requestID: "owned-p",
-        directory: "/workspace",
-        reply: "reject",
-      }]);
-      expect(fake.questionRejections).toEqual([{
-        requestID: "owned-q",
-        directory: "/workspace",
-      }]);
+      expect(fake.permissionReplies).toEqual([
+        {
+          requestID: "owned-p",
+          directory: "/workspace",
+          reply: "reject",
+        },
+      ]);
+      expect(fake.questionRejections).toEqual([
+        {
+          requestID: "owned-q",
+          directory: "/workspace",
+        },
+      ]);
       await expect(provider.status("owned-session")).resolves.toBe("error");
     } finally {
       await provider.dispose?.();
@@ -1084,12 +1108,8 @@ describe("OpenCode provider", () => {
     try {
       provider.registerSession?.("restored");
       await waitUntil(() => fake.questionRejections.length === 1);
-      expect(fake.permissionReplies.map((call) => call.requestID)).toEqual([
-        "owned-p",
-      ]);
-      expect(fake.questionRejections.map((call) => call.requestID)).toEqual([
-        "owned-q",
-      ]);
+      expect(fake.permissionReplies.map((call) => call.requestID)).toEqual(["owned-p"]);
+      expect(fake.questionRejections.map((call) => call.requestID)).toEqual(["owned-q"]);
     } finally {
       await provider.dispose?.();
     }
@@ -1115,12 +1135,8 @@ describe("OpenCode provider", () => {
     async (requestType) => {
       const fake = openCodeFake();
       fake.setPending(
-        requestType === "permission"
-          ? [{ id: "pending-request", sessionID: "restored" }]
-          : [],
-        requestType === "question"
-          ? [{ id: "pending-request", sessionID: "restored" }]
-          : [],
+        requestType === "permission" ? [{ id: "pending-request", sessionID: "restored" }] : [],
+        requestType === "question" ? [{ id: "pending-request", sessionID: "restored" }] : [],
       );
       fake.setPendingReadResponses(
         requestType === "permission" ? { error: { message: "failed" } } : null,
@@ -1130,9 +1146,7 @@ describe("OpenCode provider", () => {
       try {
         await waitUntil(() => fake.subscriptions.length === 1);
         provider.registerSession?.("restored");
-        await waitUntil(() =>
-          fake.permissionListCallCount >= 1 && fake.questionListCallCount >= 1
-        );
+        await waitUntil(() => fake.permissionListCallCount >= 1 && fake.questionListCallCount >= 1);
 
         fake.setPendingReadResponses(null, null);
         fake.subscriptions[0]!.close();
@@ -1160,10 +1174,15 @@ describe("OpenCode provider", () => {
     ];
     for (const invalidPermissions of invalidPermissionResponses) {
       const fake = openCodeFake();
-      fake.setPending([{
-        id: "pending-request",
-        sessionID: "restored",
-      }], []);
+      fake.setPending(
+        [
+          {
+            id: "pending-request",
+            sessionID: "restored",
+          },
+        ],
+        [],
+      );
       fake.setPendingReadResponses(invalidPermissions, { data: [] });
       const provider = openCodeProvider(fake);
       try {
@@ -1194,5 +1213,4 @@ describe("OpenCode provider", () => {
       await provider.dispose?.();
     }
   });
-
 });

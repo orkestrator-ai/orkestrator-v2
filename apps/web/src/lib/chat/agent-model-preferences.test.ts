@@ -110,9 +110,7 @@ describe("persistAgentModelDefault", () => {
     await persistAgentModelDefault("claudeModel", "sonnet", "Claude");
 
     expect(useConfigStore.getState().config.global.claudeModel).toBe("opus");
-    expect(mockToastError).toHaveBeenCalledWith(
-      "Failed to save Claude model default",
-    );
+    expect(mockToastError).toHaveBeenCalledWith("Failed to save Claude model default");
   });
 
   test("a failed write rolls back only its model key", async () => {
@@ -248,9 +246,7 @@ describe("persistAgentModelDefault", () => {
       opencodeModel: "opencode/gpt-4",
       webClientEnabled: false,
     });
-    expect(mockToastError).toHaveBeenCalledWith(
-      "Failed to save OpenCode model default",
-    );
+    expect(mockToastError).toHaveBeenCalledWith("Failed to save OpenCode model default");
   });
 
   test("a cross-agent failure cannot roll back a later successful key", async () => {

@@ -61,13 +61,8 @@ export class OpenCodeSessionLifecycle {
   ): Promise<Map<string, OpenCodeSessionLifecycleState>> {
     const uniqueSessionIds = [...new Set(sessionIds)];
     for (const sessionId of uniqueSessionIds) {
-      if (
-        sessionId.length === 0
-        || sessionId.length > AGENT_INTERACTION_LIMITS.maxIdLength
-      ) {
-        throw new ProviderUnavailableError(
-          "OpenCode lifecycle read contains a malformed identity",
-        );
+      if (sessionId.length === 0 || sessionId.length > AGENT_INTERACTION_LIMITS.maxIdLength) {
+        throw new ProviderUnavailableError("OpenCode lifecycle read contains a malformed identity");
       }
     }
     const lifecycle = new Map<string, OpenCodeSessionLifecycleState>();
@@ -97,10 +92,7 @@ export class OpenCodeSessionLifecycle {
     }
     if (omittedSessionIds.length === 0) return lifecycle;
 
-    const existence = await this.resolveSessionExistence(
-      omittedSessionIds,
-      strongExistenceRead,
-    );
+    const existence = await this.resolveSessionExistence(omittedSessionIds, strongExistenceRead);
     for (const sessionId of omittedSessionIds) {
       const probe = existence.get(sessionId);
       if (probe?.state === "exists") {
@@ -169,9 +161,8 @@ export class OpenCodeSessionLifecycle {
     const probeCount = strong
       ? directlyProbed.length
       : Math.min(OPENCODE_EXISTENCE_PROBE_CONCURRENCY, directlyProbed.length);
-    const probeStart = directlyProbed.length === 0
-      ? 0
-      : this.existenceProbeCursor % directlyProbed.length;
+    const probeStart =
+      directlyProbed.length === 0 ? 0 : this.existenceProbeCursor % directlyProbed.length;
     const scheduledProbes = Array.from(
       { length: probeCount },
       (_, index) => directlyProbed[(probeStart + index) % directlyProbed.length]!,
@@ -201,15 +192,14 @@ export class OpenCodeSessionLifecycle {
         result.set(sessionId, probe);
       }
     };
-    await Promise.all(Array.from(
-      {
-        length: Math.min(
-          OPENCODE_EXISTENCE_PROBE_CONCURRENCY,
-          scheduledProbes.length,
-        ),
-      },
-      () => worker(),
-    ));
+    await Promise.all(
+      Array.from(
+        {
+          length: Math.min(OPENCODE_EXISTENCE_PROBE_CONCURRENCY, scheduledProbes.length),
+        },
+        () => worker(),
+      ),
+    );
     return result;
   }
 
@@ -254,9 +244,7 @@ export class OpenCodeSessionLifecycle {
     return read;
   }
 
-  private async probeSessionExistence(
-    sessionId: string,
-  ): Promise<OpenCodeExistenceProbe> {
+  private async probeSessionExistence(sessionId: string): Promise<OpenCodeExistenceProbe> {
     try {
       const response = await this.client.session.get(
         { sessionID: sessionId, directory: this.directory },
@@ -273,12 +261,9 @@ export class OpenCodeSessionLifecycle {
       }
       const session = asRecord(response.data);
       if (
-        nonEmptyString(session?.id) !== sessionId
-        || (
-          this.directory !== undefined
-          && nonEmptyString(session?.directory) !== this.directory
-        )
-        || serializedByteLength(response.data) > MAX_OPENCODE_EXISTENCE_SNAPSHOT_BYTES
+        nonEmptyString(session?.id) !== sessionId ||
+        (this.directory !== undefined && nonEmptyString(session?.directory) !== this.directory) ||
+        serializedByteLength(response.data) > MAX_OPENCODE_EXISTENCE_SNAPSHOT_BYTES
       ) {
         throw new ProviderUnavailableError(
           "OpenCode session existence read is malformed or oversized",
@@ -300,7 +285,6 @@ export class OpenCodeSessionLifecycle {
     );
     this.sessionExistenceRetryAt.delete(sessionId);
   }
-
 
   clear(): void {
     this.ownedSessions.clear();

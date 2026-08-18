@@ -4,11 +4,7 @@ import { cn } from "@/lib/utils";
 import { getTodoItems, getTodoToolLabel } from "@/lib/todo-tool";
 import type { TodoStatus } from "@/lib/todo-tool";
 import type { TaskListSnapshot } from "@/lib/chat/native-message-types";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
 
 export const TOOL_STATE_COLORS = {
@@ -84,8 +80,7 @@ export function TodoToolPart({
   const totalCount = todos.length;
 
   const hasExpandableContent =
-    totalCount > 0 || hasSnapshot || Boolean(toolOutput) || Boolean(toolError)
-    || deferredDetails;
+    totalCount > 0 || hasSnapshot || Boolean(toolOutput) || Boolean(toolError) || deferredDetails;
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-0">
@@ -104,9 +99,7 @@ export function TodoToolPart({
           )}
         />
         <ListTodo className="h-3.5 w-3.5 shrink-0" />
-        <span className="shrink-0 font-medium leading-none">
-          {toolLabel}
-        </span>
+        <span className="shrink-0 font-medium leading-none">{toolLabel}</span>
         {totalCount > 0 && (
           <span className="flex-1 text-left text-muted-foreground/80 leading-none">
             {/* A partial list has no denominator worth quoting: the total is
@@ -136,8 +129,7 @@ export function TodoToolPart({
             {totalCount > 0 && (
               <div className="space-y-1.5 px-3 py-2">
                 {todos.map((todo, index) => {
-                  const isChanged =
-                    todo.id !== undefined && todo.id === changedTaskId;
+                  const isChanged = todo.id !== undefined && todo.id === changedTaskId;
 
                   return (
                     <div
@@ -171,22 +163,17 @@ export function TodoToolPart({
                         className={cn(
                           "flex-1",
                           todo.status === "completed" && "line-through",
-                          todo.status === "cancelled" &&
-                            "line-through text-muted-foreground/70",
+                          todo.status === "cancelled" && "line-through text-muted-foreground/70",
                           todo.status === "in_progress" && "font-medium text-foreground",
                         )}
                       >
                         {todo.content}
                       </span>
                       {todo.status === "in_progress" && (
-                        <span className="shrink-0 text-[10px] text-yellow-500">
-                          in progress
-                        </span>
+                        <span className="shrink-0 text-[10px] text-yellow-500">in progress</span>
                       )}
                       {todo.status === "cancelled" && (
-                        <span className="shrink-0 text-[10px] text-red-500">
-                          cancelled
-                        </span>
+                        <span className="shrink-0 text-[10px] text-red-500">cancelled</span>
                       )}
                     </div>
                   );
@@ -194,15 +181,13 @@ export function TodoToolPart({
 
                 {isPartialList && (
                   <div className="pt-1 text-[10px] text-muted-foreground/60">
-                    Tasks created before this session was being watched are not
-                    shown.
+                    Tasks created before this session was being watched are not shown.
                   </div>
                 )}
 
                 {truncatedCount > 0 && (
                   <div className="pt-1 text-[10px] text-muted-foreground/60">
-                    {truncatedCount} more task{truncatedCount === 1 ? "" : "s"} not
-                    shown.
+                    {truncatedCount} more task{truncatedCount === 1 ? "" : "s"} not shown.
                   </div>
                 )}
               </div>
@@ -210,9 +195,7 @@ export function TodoToolPart({
 
             {totalCount === 0 && hasSnapshot && (
               <div className="px-3 py-2 text-xs text-muted-foreground/70">
-                {isPartialList
-                  ? "No tasks tracked yet for this session."
-                  : "Task list is empty."}
+                {isPartialList ? "No tasks tracked yet for this session." : "Task list is empty."}
               </div>
             )}
 

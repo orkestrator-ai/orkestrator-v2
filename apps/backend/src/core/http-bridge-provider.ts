@@ -62,33 +62,30 @@ function normalizeClaudeBackgroundTasks(
 ): NativeAgentBackgroundTaskSummary[] | undefined {
   const tasks = asRecord(value);
   if (!tasks) return undefined;
-  const allowed = new Set([
-    "pending",
-    "running",
-    "completed",
-    "failed",
-    "killed",
-    "paused",
-  ]);
-  return Object.entries(tasks).slice(0, 256).flatMap(([id, raw]) => {
-    const task = asRecord(raw);
-    if (!task || !allowed.has(String(task.status))) return [];
-    return [{
-      id,
-      status: task.status as NativeAgentBackgroundTaskSummary["status"],
-      ...(typeof task.description === "string"
-        ? { description: task.description.slice(0, 1_000) }
-        : {}),
-      // Bounded like every other free-form provider string here: the renderer
-      // only ever compares it against a transcript `toolUseId`, so an
-      // over-long value can never match and must not be carried.
-      ...(typeof task.toolUseId === "string" && task.toolUseId.length <= 512
-        ? { toolUseId: task.toolUseId }
-        : {}),
-      ...startedAtField(task.startedAt),
-      ...settledAtFromEndedAt(task.endedAt, task.status),
-    }];
-  });
+  const allowed = new Set(["pending", "running", "completed", "failed", "killed", "paused"]);
+  return Object.entries(tasks)
+    .slice(0, 256)
+    .flatMap(([id, raw]) => {
+      const task = asRecord(raw);
+      if (!task || !allowed.has(String(task.status))) return [];
+      return [
+        {
+          id,
+          status: task.status as NativeAgentBackgroundTaskSummary["status"],
+          ...(typeof task.description === "string"
+            ? { description: task.description.slice(0, 1_000) }
+            : {}),
+          // Bounded like every other free-form provider string here: the renderer
+          // only ever compares it against a transcript `toolUseId`, so an
+          // over-long value can never match and must not be carried.
+          ...(typeof task.toolUseId === "string" && task.toolUseId.length <= 512
+            ? { toolUseId: task.toolUseId }
+            : {}),
+          ...startedAtField(task.startedAt),
+          ...settledAtFromEndedAt(task.endedAt, task.status),
+        },
+      ];
+    });
 }
 
 /**
@@ -125,10 +122,7 @@ function startedAtField(startedAt: unknown): { startedAt?: string } {
  * hand the renderer a position for work that is running again, which is exactly
  * the state that belongs at the bottom of the transcript instead.
  */
-function settledAtFromEndedAt(
-  endedAt: unknown,
-  status: unknown,
-): { settledAt?: string } {
+function settledAtFromEndedAt(endedAt: unknown, status: unknown): { settledAt?: string } {
   const live = status === "pending" || status === "running" || status === "paused";
   if (live) return {};
   const settledAt = isoFromEpoch(endedAt);
@@ -153,7 +147,6 @@ const CLAUDE_BUILT_IN_SLASH_COMMANDS: readonly NativeAgentSlashCommand[] = [
   { name: "/vim", description: "Toggle vim mode" },
 ];
 
-
 /**
  * Drop the staged `dataUrl` before an attachment reaches an ACP bridge.
  *
@@ -176,7 +169,6 @@ function bridgePromptAttachments(
   }));
 }
 
-
 export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   readonly agent: "claude" | "codex" | "cursor" | "grok";
   private readonly stageImages?: HttpBridgeProviderDependencies["stageImages"];
@@ -192,11 +184,14 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
    * do have to be reconciled against the bridge.
    */
   private readonly codexModes = new Map<string, ProviderExecutionMode>();
-  private readonly interactiveMetadata = new Map<string, {
-    expiresAt: number;
-    executionProfiles?: NativeAgentComposerState["executionProfiles"];
-    runtime?: NativeAgentRuntimeSummary;
-  }>();
+  private readonly interactiveMetadata = new Map<
+    string,
+    {
+      expiresAt: number;
+      executionProfiles?: NativeAgentComposerState["executionProfiles"];
+      runtime?: NativeAgentRuntimeSummary;
+    }
+  >();
   /** Runtime inventory is optional UI metadata and must not delay transcripts. */
   private readonly codexRuntimeMetadataRefreshes = new Map<string, Promise<void>>();
   private codexRuntimeMetadataGeneration = 0;
@@ -208,11 +203,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   ) {
     this.agent = connection.agent as "claude" | "codex" | "cursor" | "grok";
     this.stageImages = stageImages;
-    this.interactionAdapter = new HttpBridgeInteractionAdapter(
-      this.agent,
-      connection,
-      fetchImpl,
-    );
+    this.interactionAdapter = new HttpBridgeInteractionAdapter(this.agent, connection, fetchImpl);
     this.interactions = {
       listPendingInteractions: (sessionId) =>
         this.interactionAdapter.listPendingInteractions(sessionId),
@@ -221,10 +212,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     };
   }
 
-  registerSession(
-    sessionId: string,
-    interaction?: ProviderSessionRegistration,
-  ): void {
+  registerSession(sessionId: string, interaction?: ProviderSessionRegistration): void {
     this.interactionAdapter.registerSession(sessionId, interaction);
   }
 
@@ -240,30 +228,32 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       "/session/create",
       {
         method: "POST",
-        body: JSON.stringify(this.agent === "codex"
-          ? {
-              title: label,
-              model: options.model ?? this.connection.model,
-              modelReasoningEffort: options.effort ?? this.connection.effort,
-              mode,
-              clientSessionKey,
-            }
-          : this.agent === "cursor" || this.agent === "grok"
+        body: JSON.stringify(
+          this.agent === "codex"
             ? {
                 title: label,
-                clientSessionKey,
                 model: options.model ?? this.connection.model,
-                reasoningEffort: options.effort ?? this.connection.effort,
+                modelReasoningEffort: options.effort ?? this.connection.effort,
                 mode,
-                ...(typeof options.fastMode === "boolean" ? { fastMode: options.fastMode } : {}),
+                clientSessionKey,
               }
-            : { title: label, clientSessionKey }),
+            : this.agent === "cursor" || this.agent === "grok"
+              ? {
+                  title: label,
+                  clientSessionKey,
+                  model: options.model ?? this.connection.model,
+                  reasoningEffort: options.effort ?? this.connection.effort,
+                  mode,
+                  ...(typeof options.fastMode === "boolean" ? { fastMode: options.fastMode } : {}),
+                }
+              : { title: label, clientSessionKey },
+        ),
       },
       this.fetchImpl,
       "session-start",
     );
     await assertOkWithErrorDetail(response, `${this.agent} session creation`);
-    const body = await response.json() as { sessionId?: unknown };
+    const body = (await response.json()) as { sessionId?: unknown };
     if (typeof body.sessionId !== "string") {
       throw new Error(`${this.agent} returned a malformed session`);
     }
@@ -304,35 +294,23 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
    * and a record lost to a bridge restart all read as `unknown`, because none
    * of them is evidence that the prompt did not run.
    */
-  async dispatchStatus(
-    sessionId: string,
-    requestId: string,
-  ): Promise<ProviderDispatchStatus> {
+  async dispatchStatus(sessionId: string, requestId: string): Promise<ProviderDispatchStatus> {
     const response = await bridgeFetch(
       this.connection,
-      `/session/${encodeURIComponent(sessionId)}/dispatch`
-        + `?requestId=${encodeURIComponent(requestId)}`,
+      `/session/${encodeURIComponent(sessionId)}/dispatch` +
+        `?requestId=${encodeURIComponent(requestId)}`,
       {},
       this.fetchImpl,
     );
     if (!response.ok) return "unknown";
     const body = asRecord(
-      await boundedJson(response, `${this.agent} dispatch status`)
-        .catch(() => null),
+      await boundedJson(response, `${this.agent} dispatch status`).catch(() => null),
     );
     return body?.dispatch === "dispatched" ? "dispatched" : "unknown";
   }
 
-  async send(
-    sessionId: string,
-    prompt: string,
-    options: ProviderSendOptions,
-  ): Promise<void> {
-    if (
-      this.agent === "codex"
-      && options.mode
-      && this.codexModes.get(sessionId) !== options.mode
-    ) {
+  async send(sessionId: string, prompt: string, options: ProviderSendOptions): Promise<void> {
+    if (this.agent === "codex" && options.mode && this.codexModes.get(sessionId) !== options.mode) {
       await this.ensureCodexMode(sessionId, options.mode);
       this.codexModes.set(sessionId, options.mode);
     }
@@ -360,8 +338,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
                   agent: options.subAgent,
                   includeLocalSettings: options.includeLocalSettings,
                   promptSuggestions: options.promptSuggestions,
-                  permissionMode:
-                    options.mode === "plan" ? "plan" : "bypassPermissions",
+                  permissionMode: options.mode === "plan" ? "plan" : "bypassPermissions",
                 }
               : this.agent === "cursor" || this.agent === "grok"
                 ? {
@@ -382,10 +359,9 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       // to resolve a dispatch that provably never happened.
       if (error instanceof ProviderUnreachableError) throw error;
       if (error instanceof ProviderUnavailableError) {
-        throw new AmbiguousPromptDispatchError(
-          `${this.agent} prompt dispatch outcome is unknown`,
-          { cause: error },
-        );
+        throw new AmbiguousPromptDispatchError(`${this.agent} prompt dispatch outcome is unknown`, {
+          cause: error,
+        });
       }
       throw error;
     }
@@ -394,9 +370,9 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     // turn. Both are retryable dispatch races, not validation rejections that
     // should park the user's prompt indefinitely.
     if (
-      response.status === 404
-      || response.status === 409
-      || isTransientHttpStatus(response.status)
+      response.status === 404 ||
+      response.status === 409 ||
+      isTransientHttpStatus(response.status)
     ) {
       throw new ProviderUnavailableError(
         `${this.agent} prompt dispatch is temporarily unavailable (HTTP ${response.status})`,
@@ -406,10 +382,9 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       // Bridges answer terminal rejections with an actionable message (e.g. an
       // ACP prompt whose outcome is unknown after a restart). Surface it so the
       // pipeline failure tells the user what to do instead of a bare status.
-      const detail = await response.json().catch(() => null) as { error?: unknown } | null;
-      const detailMessage = detail !== null && typeof detail.error === "string"
-        ? `: ${detail.error}`
-        : "";
+      const detail = (await response.json().catch(() => null)) as { error?: unknown } | null;
+      const detailMessage =
+        detail !== null && typeof detail.error === "string" ? `: ${detail.error}` : "";
       throw new PromptRejectedError(
         `${this.agent} rejected the prompt (HTTP ${response.status})${detailMessage}`,
       );
@@ -421,28 +396,20 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
    * prompt route. Reused workflow threads can move between plan and build
    * turns, so reconcile the idle thread before dispatching when needed.
    */
-  private async ensureCodexMode(
-    sessionId: string,
-    mode: ProviderExecutionMode,
-  ): Promise<void> {
+  private async ensureCodexMode(sessionId: string, mode: ProviderExecutionMode): Promise<void> {
     const path = `/session/${encodeURIComponent(sessionId)}/config`;
-    const currentResponse = await bridgeFetch(
-      this.connection,
-      path,
-      {},
-      this.fetchImpl,
-    );
+    const currentResponse = await bridgeFetch(this.connection, path, {}, this.fetchImpl);
     if (
-      currentResponse.status === 404
-      || currentResponse.status === 409
-      || isTransientHttpStatus(currentResponse.status)
+      currentResponse.status === 404 ||
+      currentResponse.status === 409 ||
+      isTransientHttpStatus(currentResponse.status)
     ) {
       throw new ProviderUnavailableError(
         `Codex mode reconciliation is temporarily unavailable (HTTP ${currentResponse.status})`,
       );
     }
     assertOk(currentResponse, "Codex config read");
-    const current = await currentResponse.json() as {
+    const current = (await currentResponse.json()) as {
       model?: unknown;
       modelReasoningEffort?: unknown;
       mode?: unknown;
@@ -450,14 +417,12 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       durable?: unknown;
     };
     if (
-      (current.mode !== "plan" && current.mode !== "build")
-      || (current.model !== undefined && typeof current.model !== "string")
-      || (
-        current.modelReasoningEffort !== undefined
-        && typeof current.modelReasoningEffort !== "string"
-      )
-      || typeof current.fastMode !== "boolean"
-      || typeof current.durable !== "boolean"
+      (current.mode !== "plan" && current.mode !== "build") ||
+      (current.model !== undefined && typeof current.model !== "string") ||
+      (current.modelReasoningEffort !== undefined &&
+        typeof current.modelReasoningEffort !== "string") ||
+      typeof current.fastMode !== "boolean" ||
+      typeof current.durable !== "boolean"
     ) {
       throw new Error("Codex returned a malformed session config");
     }
@@ -478,20 +443,18 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       this.fetchImpl,
     );
     if (
-      updateResponse.status === 404
-      || updateResponse.status === 409
-      || isTransientHttpStatus(updateResponse.status)
+      updateResponse.status === 404 ||
+      updateResponse.status === 409 ||
+      isTransientHttpStatus(updateResponse.status)
     ) {
       throw new ProviderUnavailableError(
         `Codex mode update is temporarily unavailable (HTTP ${updateResponse.status})`,
       );
     }
     assertOk(updateResponse, "Codex config update");
-    const update = await updateResponse.json() as { durable?: unknown };
+    const update = (await updateResponse.json()) as { durable?: unknown };
     if (update.durable !== true) {
-      throw new ProviderUnavailableError(
-        "Codex mode update was not durably persisted",
-      );
+      throw new ProviderUnavailableError("Codex mode update was not durably persisted");
     }
   }
 
@@ -508,18 +471,14 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
    * fires either way and the detail is available to it.
    */
   async status(sessionId: string): Promise<ProviderStatus> {
-    const path = this.agent === "claude"
-      ? `/session/${encodeURIComponent(sessionId)}`
-      : `/session/${encodeURIComponent(sessionId)}/status`;
-    const response = await bridgeFetch(
-      this.connection,
-      path,
-      {},
-      this.fetchImpl,
-    );
+    const path =
+      this.agent === "claude"
+        ? `/session/${encodeURIComponent(sessionId)}`
+        : `/session/${encodeURIComponent(sessionId)}/status`;
+    const response = await bridgeFetch(this.connection, path, {}, this.fetchImpl);
     if (response.status === 404) return "missing";
     assertOk(response, `${this.agent} status read`);
-    const body = await response.json() as { status?: unknown; error?: unknown };
+    const body = (await response.json()) as { status?: unknown; error?: unknown };
     if (body.status === "error" && typeof body.error === "string") {
       const detail = body.error.trim().slice(0, 4_000);
       if (detail) {
@@ -555,11 +514,9 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       this.fetchImpl,
     );
     assertOk(response, `${this.agent} activity read`);
-    const body = await response.json() as { activity?: unknown };
+    const body = (await response.json()) as { activity?: unknown };
     if (!isProviderActivityState(body.activity)) {
-      throw new ProviderUnavailableError(
-        `${this.agent} returned a malformed activity snapshot`,
-      );
+      throw new ProviderUnavailableError(`${this.agent} returned a malformed activity snapshot`);
     }
     return body.activity;
   }
@@ -579,11 +536,9 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     );
     if (response.status === 404) return { messages: [], truncated: false };
     assertOk(response, `${this.agent} transcript read`);
-    const body = asRecord(await boundedJson(
-      response,
-      `${this.agent} transcript read`,
-      { remaining: 16 * 1024 * 1024 },
-    ));
+    const body = asRecord(
+      await boundedJson(response, `${this.agent} transcript read`, { remaining: 16 * 1024 * 1024 }),
+    );
     const messageWindow = asRecord(body?.messageWindow);
     const transcriptStatus = body?.status;
     const transcriptRevision = body?.revision;
@@ -593,9 +548,9 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       ...(Number.isSafeInteger(transcriptRevision)
         ? { revision: transcriptRevision as number }
         : {}),
-      ...(transcriptStatus === "idle"
-        || transcriptStatus === "running"
-        || transcriptStatus === "error"
+      ...(transcriptStatus === "idle" ||
+      transcriptStatus === "running" ||
+      transcriptStatus === "error"
         ? { status: transcriptStatus }
         : {}),
       ...(typeof body?.error === "string" ? { error: body.error } : {}),
@@ -664,28 +619,31 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
           this.fetchImpl,
         );
         assertOk(response, "Codex runtime health read");
-        const runtime = this.codexRuntimeSummary(await boundedJson(
-          response,
-          "Codex runtime health read",
-          { remaining: 512 * 1024 },
-        ));
+        const runtime = this.codexRuntimeSummary(
+          await boundedJson(response, "Codex runtime health read", { remaining: 512 * 1024 }),
+        );
         if (!runtime) {
           throw new ProviderUnavailableError(
             "Codex runtime health read returned malformed metadata",
           );
         }
         if (generation !== this.codexRuntimeMetadataGeneration) return;
-        setBoundedMapEntry(this.interactiveMetadata, sessionId, {
-          expiresAt: Date.now() + INTERACTIVE_RUNTIME_METADATA_TTL_MS,
-          runtime,
-        }, MAX_TRACKED_INTERACTION_SESSIONS);
+        setBoundedMapEntry(
+          this.interactiveMetadata,
+          sessionId,
+          {
+            expiresAt: Date.now() + INTERACTIVE_RUNTIME_METADATA_TTL_MS,
+            runtime,
+          },
+          MAX_TRACKED_INTERACTION_SESSIONS,
+        );
       } catch {
         // Keep known inventory usable and avoid retrying a failed optional
         // endpoint on every 500ms projection poll.
         if (
-          generation === this.codexRuntimeMetadataGeneration
-          && retained
-          && this.interactiveMetadata.get(sessionId) === retained
+          generation === this.codexRuntimeMetadataGeneration &&
+          retained &&
+          this.interactiveMetadata.get(sessionId) === retained
         ) {
           retained.expiresAt = Date.now() + INTERACTIVE_RUNTIME_METADATA_RETRY_MS;
         }
@@ -699,9 +657,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     });
   }
 
-  async interactiveSnapshot(
-    sessionId: string,
-  ): Promise<ProviderInteractiveSnapshot> {
+  async interactiveSnapshot(sessionId: string): Promise<ProviderInteractiveSnapshot> {
     if (this.agent === "cursor" || this.agent === "grok") {
       const [response, transcript] = await Promise.all([
         bridgeFetch(
@@ -714,28 +670,26 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       ]);
       if (response.status === 404) return { status: "missing", messages: [] };
       assertOk(response, `${this.agent} interactive status`);
-      const payload = asRecord(await boundedJson(
-        response,
-        `${this.agent} interactive status`,
-        { remaining: 512 * 1024 },
-      ));
+      const payload = asRecord(
+        await boundedJson(response, `${this.agent} interactive status`, { remaining: 512 * 1024 }),
+      );
       // `/messages` returns status and revision from the same synchronous ACP
       // snapshot as its transcript. Prefer that pair so a turn transition
       // between the parallel requests cannot combine two different revisions.
-      const hasTranscriptSnapshot = transcript.status !== undefined
-        && transcript.revision !== undefined;
+      const hasTranscriptSnapshot =
+        transcript.status !== undefined && transcript.revision !== undefined;
       const status = hasTranscriptSnapshot ? transcript.status : payload?.status;
       const messages = transcript.messages;
       const composer = asRecord(payload?.composer);
       const providerRevision = hasTranscriptSnapshot ? transcript.revision : payload?.revision;
       const providerError = hasTranscriptSnapshot ? transcript.error : payload?.error;
       if (
-        (status !== "idle" && status !== "running" && status !== "error")
-        || !Array.isArray(messages)
-        || !Number.isSafeInteger(providerRevision)
-        || !composer
-        || !Array.isArray(composer.models)
-        || !Array.isArray(composer.modes)
+        (status !== "idle" && status !== "running" && status !== "error") ||
+        !Array.isArray(messages) ||
+        !Number.isSafeInteger(providerRevision) ||
+        !composer ||
+        !Array.isArray(composer.models) ||
+        !Array.isArray(composer.modes)
       ) {
         throw new ProviderUnavailableError(
           `${this.agent} returned a malformed interactive snapshot`,
@@ -753,19 +707,25 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         providerRevision: providerRevision as number,
         ...(contextUsage ? { contextUsage } : {}),
         ...(runtime ? { runtime } : {}),
-        ...(transcript.truncated ? {
-          notices: [{
-            kind: "warning" as const,
-            message: "Earlier transcript content was omitted to stay within the 16 MiB transport limit.",
-          }],
-        } : {}),
+        ...(transcript.truncated
+          ? {
+              notices: [
+                {
+                  kind: "warning" as const,
+                  message:
+                    "Earlier transcript content was omitted to stay within the 16 MiB transport limit.",
+                },
+              ],
+            }
+          : {}),
         ...(typeof providerError === "string" ? { error: providerError } : {}),
       };
     }
 
-    const sessionPath = this.agent === "codex"
-      ? `/session/${encodeURIComponent(sessionId)}/status`
-      : `/session/${encodeURIComponent(sessionId)}`;
+    const sessionPath =
+      this.agent === "codex"
+        ? `/session/${encodeURIComponent(sessionId)}/status`
+        : `/session/${encodeURIComponent(sessionId)}`;
     const cachedMetadata = this.interactiveMetadata.get(sessionId);
     const refreshMetadata = !cachedMetadata || cachedMetadata.expiresAt <= Date.now();
     if (this.agent === "codex" && cachedMetadata && refreshMetadata) {
@@ -774,84 +734,89 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       // message/status/config reads below are the foreground critical path.
       void this.refreshCodexRuntimeMetadata(sessionId);
     }
-    const [sessionResponse, transcript, configResponse, initResponse, runtimeResponse] = await Promise.all([
-      bridgeFetch(this.connection, sessionPath, {}, this.fetchImpl),
-      this.readTranscript(sessionId),
-      this.agent === "codex"
-        ? bridgeFetch(
-            this.connection,
-            `/session/${encodeURIComponent(sessionId)}/config`,
-            {},
-            this.fetchImpl,
-          )
-        : Promise.resolve(undefined),
-      this.agent === "claude" && refreshMetadata
-        ? bridgeFetch(
-            this.connection,
-            `/session/${encodeURIComponent(sessionId)}/init`,
-            {},
-            this.fetchImpl,
-          )
-        : Promise.resolve(undefined),
-      this.agent === "codex" && refreshMetadata && !cachedMetadata
-        ? bridgeFetch(
-            this.connection,
-            `/session/${encodeURIComponent(sessionId)}/runtime-health`,
-            {},
-            this.fetchImpl,
-          )
-        : Promise.resolve(undefined),
-    ]);
+    const [sessionResponse, transcript, configResponse, initResponse, runtimeResponse] =
+      await Promise.all([
+        bridgeFetch(this.connection, sessionPath, {}, this.fetchImpl),
+        this.readTranscript(sessionId),
+        this.agent === "codex"
+          ? bridgeFetch(
+              this.connection,
+              `/session/${encodeURIComponent(sessionId)}/config`,
+              {},
+              this.fetchImpl,
+            )
+          : Promise.resolve(undefined),
+        this.agent === "claude" && refreshMetadata
+          ? bridgeFetch(
+              this.connection,
+              `/session/${encodeURIComponent(sessionId)}/init`,
+              {},
+              this.fetchImpl,
+            )
+          : Promise.resolve(undefined),
+        this.agent === "codex" && refreshMetadata && !cachedMetadata
+          ? bridgeFetch(
+              this.connection,
+              `/session/${encodeURIComponent(sessionId)}/runtime-health`,
+              {},
+              this.fetchImpl,
+            )
+          : Promise.resolve(undefined),
+      ]);
     const messages = transcript.messages;
     if (sessionResponse.status === 404) return { status: "missing", messages: [] };
     assertOk(sessionResponse, `${this.agent} interactive session read`);
-    const payload = asRecord(await boundedJson(
-      sessionResponse,
-      `${this.agent} interactive session read`,
-      { remaining: 512 * 1024 },
-    ));
+    const payload = asRecord(
+      await boundedJson(sessionResponse, `${this.agent} interactive session read`, {
+        remaining: 512 * 1024,
+      }),
+    );
     const status = payload?.status;
     if (!payload || (status !== "idle" && status !== "running" && status !== "error")) {
-      throw new ProviderUnavailableError(
-        `${this.agent} returned a malformed interactive session`,
-      );
+      throw new ProviderUnavailableError(`${this.agent} returned a malformed interactive session`);
     }
     if (this.agent === "codex") {
       if (!configResponse) {
         throw new ProviderUnavailableError("Codex interactive config response is missing");
       }
       assertOk(configResponse, "Codex interactive config read");
-      const config = asRecord(await boundedJson(
-        configResponse,
-        "Codex interactive config read",
-        { remaining: 128 * 1024 },
-      ));
+      const config = asRecord(
+        await boundedJson(configResponse, "Codex interactive config read", {
+          remaining: 128 * 1024,
+        }),
+      );
       const rawPhase = payload?.phase;
       let runtime: NativeAgentRuntimeSummary | undefined = cachedMetadata?.runtime;
       if (runtimeResponse?.ok) {
-        runtime = this.codexRuntimeSummary(await boundedJson(
-          runtimeResponse,
-          "Codex runtime health read",
-          { remaining: 512 * 1024 },
-        ));
+        runtime = this.codexRuntimeSummary(
+          await boundedJson(runtimeResponse, "Codex runtime health read", {
+            remaining: 512 * 1024,
+          }),
+        );
       }
       if (refreshMetadata && !cachedMetadata) {
-        setBoundedMapEntry(this.interactiveMetadata, sessionId, {
-          expiresAt: Date.now() + INTERACTIVE_RUNTIME_METADATA_TTL_MS,
-          ...(runtime ? { runtime } : {}),
-        }, MAX_TRACKED_INTERACTION_SESSIONS);
+        setBoundedMapEntry(
+          this.interactiveMetadata,
+          sessionId,
+          {
+            expiresAt: Date.now() + INTERACTIVE_RUNTIME_METADATA_TTL_MS,
+            ...(runtime ? { runtime } : {}),
+          },
+          MAX_TRACKED_INTERACTION_SESSIONS,
+        );
       }
-      const phase: NativeAgentTurnPhase | undefined = rawPhase === "cancelling"
-        ? "cancelling"
-        : rawPhase === "recovering" || rawPhase === "starting"
-          ? "recovering"
-          : rawPhase === "failed"
-            ? "error"
-            : rawPhase === "running"
-              ? "running"
-              : rawPhase === "idle"
-                ? "idle"
-                : undefined;
+      const phase: NativeAgentTurnPhase | undefined =
+        rawPhase === "cancelling"
+          ? "cancelling"
+          : rawPhase === "recovering" || rawPhase === "starting"
+            ? "recovering"
+            : rawPhase === "failed"
+              ? "error"
+              : rawPhase === "running"
+                ? "running"
+                : rawPhase === "idle"
+                  ? "idle"
+                  : undefined;
       return {
         status,
         messages,
@@ -863,16 +828,12 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
           ...(typeof config?.modelReasoningEffort === "string"
             ? { reasoningId: config.modelReasoningEffort }
             : {}),
-          ...(config?.mode === "build" || config?.mode === "plan"
-            ? { mode: config.mode }
-            : {}),
-          ...(typeof config?.fastMode === "boolean"
-            ? { fastMode: config.fastMode }
-            : {}),
+          ...(config?.mode === "build" || config?.mode === "plan" ? { mode: config.mode } : {}),
+          ...(typeof config?.fastMode === "boolean" ? { fastMode: config.fastMode } : {}),
         },
         ...(phase ? { phase } : {}),
-        ...(typeof payload.turnStartedAt === "string"
-          && Number.isFinite(Date.parse(payload.turnStartedAt))
+        ...(typeof payload.turnStartedAt === "string" &&
+        Number.isFinite(Date.parse(payload.turnStartedAt))
           ? { turnStartedAt: Date.parse(payload.turnStartedAt) }
           : {}),
         ...(Number.isSafeInteger(payload.messageRevision)
@@ -885,12 +846,17 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
           ? { contextUsage: normalizeProviderContextUsage(payload.contextUsage) }
           : {}),
         ...(runtime ? { runtime } : {}),
-        ...(transcript.truncated ? {
-          notices: [{
-            kind: "warning" as const,
-            message: "Earlier transcript content was omitted to stay within the 16 MiB transport limit.",
-          }],
-        } : {}),
+        ...(transcript.truncated
+          ? {
+              notices: [
+                {
+                  kind: "warning" as const,
+                  message:
+                    "Earlier transcript content was omitted to stay within the 16 MiB transport limit.",
+                },
+              ],
+            }
+          : {}),
         ...(typeof payload.error === "string" ? { error: payload.error } : {}),
       };
     }
@@ -898,11 +864,9 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       cachedMetadata?.executionProfiles;
     let runtime: NativeAgentRuntimeSummary | undefined = cachedMetadata?.runtime;
     if (initResponse?.ok) {
-      const initPayload = asRecord(await boundedJson(
-        initResponse,
-        "Claude init read",
-        { remaining: 256 * 1024 },
-      ));
+      const initPayload = asRecord(
+        await boundedJson(initResponse, "Claude init read", { remaining: 256 * 1024 }),
+      );
       const initData = asRecord(initPayload?.initData);
       runtime = {
         mcpServers: Array.isArray(initData?.mcpServers) ? initData.mcpServers.length : 0,
@@ -914,21 +878,28 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
           const agent = asRecord(candidate);
           const name = nonEmptyString(agent?.name);
           if (!name) return [];
-          return [{
-            id: name,
-            label: name,
-            ...(typeof agent?.description === "string" ? { description: agent.description } : {}),
-            ...(typeof agent?.model === "string" ? { modelId: agent.model } : {}),
-          }];
+          return [
+            {
+              id: name,
+              label: name,
+              ...(typeof agent?.description === "string" ? { description: agent.description } : {}),
+              ...(typeof agent?.model === "string" ? { modelId: agent.model } : {}),
+            },
+          ];
         });
       }
     }
     if (refreshMetadata) {
-      setBoundedMapEntry(this.interactiveMetadata, sessionId, {
-        expiresAt: Date.now() + INTERACTIVE_RUNTIME_METADATA_TTL_MS,
-        ...(executionProfiles ? { executionProfiles } : {}),
-        ...(runtime ? { runtime } : {}),
-      }, MAX_TRACKED_INTERACTION_SESSIONS);
+      setBoundedMapEntry(
+        this.interactiveMetadata,
+        sessionId,
+        {
+          expiresAt: Date.now() + INTERACTIVE_RUNTIME_METADATA_TTL_MS,
+          ...(executionProfiles ? { executionProfiles } : {}),
+          ...(runtime ? { runtime } : {}),
+        },
+        MAX_TRACKED_INTERACTION_SESSIONS,
+      );
     }
     return {
       status,
@@ -953,12 +924,17 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         ? { rateLimits: normalizeProviderRateLimits(payload.rateLimits) }
         : {}),
       ...(runtime ? { runtime } : {}),
-      ...(transcript.truncated ? {
-        notices: [{
-          kind: "warning" as const,
-          message: "Earlier transcript content was omitted to stay within the 16 MiB transport limit.",
-        }],
-      } : {}),
+      ...(transcript.truncated
+        ? {
+            notices: [
+              {
+                kind: "warning" as const,
+                message:
+                  "Earlier transcript content was omitted to stay within the 16 MiB transport limit.",
+              },
+            ],
+          }
+        : {}),
       ...(normalizeClaudeBackgroundTasks(payload.backgroundTasks)
         ? { backgroundTasks: normalizeClaudeBackgroundTasks(payload.backgroundTasks) }
         : {}),
@@ -1016,10 +992,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       this.fetchImpl,
     );
     await assertOkWithErrorDetail(response, `${this.agent} config update`);
-    const composer = asRecord(await boundedJson(
-      response,
-      `${this.agent} config update`,
-    ));
+    const composer = asRecord(await boundedJson(response, `${this.agent} config update`));
     if (!composer || !Array.isArray(composer.models) || !Array.isArray(composer.modes)) {
       throw new ProviderUnavailableError(`${this.agent} returned a malformed composer`);
     }
@@ -1035,21 +1008,16 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   }
 
   async listResumableSessions(): Promise<NativeAgentResumeEntry[]> {
-    const response = await bridgeFetch(
-      this.connection,
-      "/session/list",
-      {},
-      this.fetchImpl,
-    );
+    const response = await bridgeFetch(this.connection, "/session/list", {}, this.fetchImpl);
     // The ACP bridge answers 410 with the reason the agent cannot list its own
     // history. Dropping that body would reduce a specific, actionable message
     // to a bare status code in front of the user.
     await assertOkWithErrorDetail(response, `${this.agent} resumable session list`);
-    const payload = asRecord(await boundedJson(
-      response,
-      `${this.agent} resumable session list`,
-      { remaining: 2 * 1024 * 1024 },
-    ));
+    const payload = asRecord(
+      await boundedJson(response, `${this.agent} resumable session list`, {
+        remaining: 2 * 1024 * 1024,
+      }),
+    );
     if (!payload || !Array.isArray(payload.sessions)) {
       throw new ProviderUnavailableError(`${this.agent} returned a malformed session list`);
     }
@@ -1058,26 +1026,26 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       const id = nonEmptyString(session?.id);
       if (!id) return [];
       const createdAt = nonEmptyString(session?.createdAt);
-      const updatedAt = nonEmptyString(session?.updatedAt)
-        ?? nonEmptyString(session?.lastActivity);
-      const status = session?.status === "running"
-        || session?.status === "error"
-        || session?.status === "idle"
-        ? session.status
-        : undefined;
+      const updatedAt = nonEmptyString(session?.updatedAt) ?? nonEmptyString(session?.lastActivity);
+      const status =
+        session?.status === "running" || session?.status === "error" || session?.status === "idle"
+          ? session.status
+          : undefined;
       const messageCount = Number.isSafeInteger(session?.messageCount)
-        ? session!.messageCount as number
+        ? (session!.messageCount as number)
         : undefined;
-      return [{
-        sessionId: id,
-        ...(typeof session?.title === "string" ? { title: session.title } : {}),
-        ...(createdAt && Number.isFinite(Date.parse(createdAt)) ? { createdAt } : {}),
-        ...(updatedAt && Number.isFinite(Date.parse(updatedAt)) ? { updatedAt } : {}),
-        ...(status ? { status } : {}),
-        ...(messageCount === undefined
-          ? {}
-          : { detail: `${messageCount} message${messageCount === 1 ? "" : "s"}` }),
-      }];
+      return [
+        {
+          sessionId: id,
+          ...(typeof session?.title === "string" ? { title: session.title } : {}),
+          ...(createdAt && Number.isFinite(Date.parse(createdAt)) ? { createdAt } : {}),
+          ...(updatedAt && Number.isFinite(Date.parse(updatedAt)) ? { updatedAt } : {}),
+          ...(status ? { status } : {}),
+          ...(messageCount === undefined
+            ? {}
+            : { detail: `${messageCount} message${messageCount === 1 ? "" : "s"}` }),
+        },
+      ];
     });
   }
 
@@ -1090,11 +1058,9 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       this.fetchImpl,
     );
     assertOk(response, `${this.agent} slash command list`);
-    const payload = asRecord(await boundedJson(
-      response,
-      `${this.agent} slash command list`,
-      { remaining: 512 * 1024 },
-    ));
+    const payload = asRecord(
+      await boundedJson(response, `${this.agent} slash command list`, { remaining: 512 * 1024 }),
+    );
     const commands = new Map<string, NativeAgentSlashCommand>(
       this.agent === "claude"
         ? CLAUDE_BUILT_IN_SLASH_COMMANDS.map((command) => [command.name, command])
@@ -1147,10 +1113,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     }
   }
 
-  async resumeSession(
-    sessionId: string,
-    controls?: NativeAgentControlUpdate,
-  ): Promise<string> {
+  async resumeSession(sessionId: string, controls?: NativeAgentControlUpdate): Promise<string> {
     if (this.agent === "cursor" || this.agent === "grok") {
       const response = await bridgeFetch(
         this.connection,
@@ -1193,12 +1156,9 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         body: JSON.stringify({
           threadId: sessionId,
           ...(controls?.modelId ? { model: controls.modelId } : {}),
-          ...(controls?.reasoningId
-            ? { modelReasoningEffort: controls.reasoningId }
-            : {}),
+          ...(controls?.reasoningId ? { modelReasoningEffort: controls.reasoningId } : {}),
           ...(controls?.mode ? { mode: controls.mode } : {}),
-          ...(controls?.fastMode === undefined
-            ? {} : { fastMode: controls.fastMode }),
+          ...(controls?.fastMode === undefined ? {} : { fastMode: controls.fastMode }),
         }),
       },
       this.fetchImpl,
@@ -1206,14 +1166,12 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     assertOk(response, "Codex session resume");
     const payload = asRecord(await boundedJson(response, "Codex session resume"));
     const resumedId = nonEmptyString(payload?.sessionId);
-    if (!resumedId) throw new ProviderUnavailableError("Codex returned a malformed resumed session");
+    if (!resumedId)
+      throw new ProviderUnavailableError("Codex returned a malformed resumed session");
     return resumedId;
   }
 
-  async forkSession(
-    sessionId: string,
-    messageId?: string,
-  ): Promise<NativeAgentForkOutcome> {
+  async forkSession(sessionId: string, messageId?: string): Promise<NativeAgentForkOutcome> {
     if (this.agent === "cursor" || this.agent === "grok") {
       throw new PromptRejectedError(`${this.agent} does not support session forks`);
     }
@@ -1222,9 +1180,9 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       `/session/${encodeURIComponent(sessionId)}/fork`,
       {
         method: "POST",
-        body: JSON.stringify(this.agent === "codex"
-          ? { lastMessageId: messageId }
-          : { upToMessageId: messageId }),
+        body: JSON.stringify(
+          this.agent === "codex" ? { lastMessageId: messageId } : { upToMessageId: messageId },
+        ),
       },
       this.fetchImpl,
     );
@@ -1283,8 +1241,14 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       return { outcome: "applied" };
     }
     if (this.agent === "codex" && action.kind === "steer") {
-      const statusResponse = await bridgeFetch(this.connection, `${base}/status`, {}, this.fetchImpl);
-      if (statusResponse.status === 404) throw new PromptRejectedError("Codex session was not found");
+      const statusResponse = await bridgeFetch(
+        this.connection,
+        `${base}/status`,
+        {},
+        this.fetchImpl,
+      );
+      if (statusResponse.status === 404)
+        throw new PromptRejectedError("Codex session was not found");
       await assertOkWithErrorDetail(statusResponse, "Codex steer status read");
       const status = asRecord(await boundedJson(statusResponse, "Codex steer status read"));
       if (status?.status !== "running") return { outcome: "idle" };
@@ -1308,8 +1272,11 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       } catch {
         return { outcome: "unknown", requestId: action.requestId };
       }
-      const payload = asRecord(await boundedJson(response, "Codex steer response").catch(() => ({})));
-      if (payload?.outcome === "unknown") return { outcome: "unknown", requestId: action.requestId };
+      const payload = asRecord(
+        await boundedJson(response, "Codex steer response").catch(() => ({})),
+      );
+      if (payload?.outcome === "unknown")
+        return { outcome: "unknown", requestId: action.requestId };
       if (response.status === 409) return { outcome: "mismatch" };
       await assertOkWithErrorDetail(response, "Codex steer");
       return { outcome: "applied" };
@@ -1328,7 +1295,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       this.fetchImpl,
     );
     assertOk(response, `${this.agent} structured-output read`);
-    const body = await response.json() as { structuredOutput?: unknown };
+    const body = (await response.json()) as { structuredOutput?: unknown };
     return (body.structuredOutput ?? null) as StructuredOutputResult<T> | null;
   }
 

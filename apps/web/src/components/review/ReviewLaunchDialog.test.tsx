@@ -15,8 +15,9 @@ const SelectTestContext = createContext<{
 mock.module("@/components/ui/dialog", () => ({
   Dialog: ({ open, children }: { open: boolean; children: React.ReactNode }) =>
     open ? <div>{children}</div> : null,
-  DialogContent: ({ children }: { children: React.ReactNode }) =>
-    <div role="dialog">{children}</div>,
+  DialogContent: ({ children }: { children: React.ReactNode }) => (
+    <div role="dialog">{children}</div>
+  ),
   DialogDescription: ({ children }: { children: React.ReactNode }) => <p>{children}</p>,
   DialogFooter: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   DialogHeader: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
@@ -137,14 +138,10 @@ const catalog: ReviewModelCatalog = {
     { id: "claude-a", name: "Claude A", reasoningEfforts: ["low", "high"] },
     { id: "claude-b", name: "Claude B", reasoningEfforts: ["xhigh"] },
   ],
-  codex: [
-    { id: "codex-a", name: "Codex A", reasoningEfforts: ["medium", "high"] },
-  ],
+  codex: [{ id: "codex-a", name: "Codex A", reasoningEfforts: ["medium", "high"] }],
   cursor: [{ id: "cursor-a", name: "Cursor A", reasoningEfforts: [] }],
   grok: [{ id: "grok-a", name: "Grok A", reasoningEfforts: [] }],
-  opencode: [
-    { id: "provider/model-a", name: "OpenCode A", reasoningEfforts: ["fast", "deep"] },
-  ],
+  opencode: [{ id: "provider/model-a", name: "OpenCode A", reasoningEfforts: ["fast", "deep"] }],
 };
 
 /** A model with no reasoning efforts, and a provider whose catalog is empty. */
@@ -352,7 +349,9 @@ describe("ReviewLaunchDialog", () => {
     openPicker();
     fireEvent.click(screen.getByRole("button", { name: "Favorite models" }));
     expect(modelItem(/Claude B/)).toBeTruthy();
-    expect(models().queryByRole("menuitemradio", { name: /provider\/model-a/ }) === null).toBe(true);
+    expect(models().queryByRole("menuitemradio", { name: /provider\/model-a/ }) === null).toBe(
+      true,
+    );
     expect(models().queryByRole("menuitemradio", { name: /OpenCode/ }) === null).toBe(true);
     closePicker();
   });
@@ -363,11 +362,7 @@ describe("ReviewLaunchDialog", () => {
     const second = { platform: "claude" as const, modelId: "claude-b" };
 
     expect(
-      mergeReorderedFavoriteModels(
-        [first, hidden, second],
-        [first, second],
-        [second, first],
-      ),
+      mergeReorderedFavoriteModels([first, hidden, second], [first, second], [second, first]),
     ).toEqual([second, hidden, first]);
   });
 
@@ -381,14 +376,17 @@ describe("ReviewLaunchDialog", () => {
 
     openPicker();
     const list = document.querySelector("[data-native-model-list]")!;
-    expect(screen.getByRole("button", { name: "Favorite models" }).getAttribute("aria-pressed"))
-      .toBe("true");
+    expect(
+      screen.getByRole("button", { name: "Favorite models" }).getAttribute("aria-pressed"),
+    ).toBe("true");
     fireEvent.keyDown(list, { key: "ArrowRight" });
-    expect(screen.getByRole("button", { name: "claude models" }).getAttribute("aria-pressed"))
-      .toBe("true");
+    expect(screen.getByRole("button", { name: "claude models" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
     fireEvent.keyDown(list, { key: "ArrowLeft" });
-    expect(screen.getByRole("button", { name: "Favorite models" }).getAttribute("aria-pressed"))
-      .toBe("true");
+    expect(
+      screen.getByRole("button", { name: "Favorite models" }).getAttribute("aria-pressed"),
+    ).toBe("true");
     closePicker();
 
     expect(picker().textContent).toContain("Claude B");
@@ -421,8 +419,9 @@ describe("ReviewLaunchDialog", () => {
     showProviderModels("claude");
     // The caption the old model list showed has to survive the move into the
     // picker, where a row's second line is the provider label.
-    expect(modelItem(/Claude A/).textContent)
-      .toContain("Balanced reviews for everyday code changes");
+    expect(modelItem(/Claude A/).textContent).toContain(
+      "Balanced reviews for everyday code changes",
+    );
     // A model with no description still names its platform.
     expect(modelItem(/Claude B/).textContent).toContain("Claude");
     closePicker();
@@ -598,8 +597,7 @@ describe("ReviewLaunchDialog", () => {
     // Claude B does. Leaving it on default here would quietly downgrade the run
     // the user configured a preference for.
     expect(picker().textContent).toContain("Extra high");
-    expect(screen.getByText(/Claude Native · Claude B · xhigh effort · one pass/))
-      .toBeTruthy();
+    expect(screen.getByText(/Claude Native · Claude B · xhigh effort · one pass/)).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
     expect(onConfirm).toHaveBeenCalledWith({
@@ -619,8 +617,7 @@ describe("ReviewLaunchDialog", () => {
 
     expect(picker().textContent).toContain("OpenCode A");
     expect(picker().textContent).toContain("Deep");
-    expect(screen.getByText(/OpenCode Native · OpenCode A · deep effort · one pass/))
-      .toBeTruthy();
+    expect(screen.getByText(/OpenCode Native · OpenCode A · deep effort · one pass/)).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
     // The preferences are per provider, so switching must read OpenCode's own
@@ -805,9 +802,7 @@ describe("ReviewLaunchDialog reopen behaviour", () => {
 
     // A parent re-render hands down an equal but fresh catalog object, which
     // changes the effect's dependencies without the dialog having reopened.
-    rerender(
-      <ReviewLaunchDialog {...props} catalog={structuredClone(catalog)} />,
-    );
+    rerender(<ReviewLaunchDialog {...props} catalog={structuredClone(catalog)} />);
 
     expect(picker().textContent).toContain("Codex A");
   });
@@ -819,10 +814,7 @@ describe("ReviewLaunchDialog reopen behaviour", () => {
     expect(picker().textContent).toContain("Claude B");
 
     rerender(
-      <ReviewLaunchDialog
-        {...props}
-        catalog={{ ...catalog, claude: [catalog.claude[0]!] }}
-      />,
+      <ReviewLaunchDialog {...props} catalog={{ ...catalog, claude: [catalog.claude[0]!] }} />,
     );
 
     expect(picker().textContent).toContain("Claude A");
@@ -959,9 +951,7 @@ describe("ReviewLaunchDialog on a phone", () => {
 
     // Reasoning is behind a drill-in view rather than a visible column.
     openPicker();
-    fireEvent.click(document.querySelector<HTMLElement>(
-      "[data-native-mobile-reasoning-trigger]",
-    )!);
+    fireEvent.click(document.querySelector<HTMLElement>("[data-native-mobile-reasoning-trigger]")!);
     fireEvent.click(await screen.findByRole("menuitemradio", { name: "High" }));
 
     expect(picker().textContent).toContain("High");
@@ -1016,8 +1006,9 @@ describe("ReviewLaunchDialog summary", () => {
 
     chooseProvider("opencode");
 
-    expect(screen.getByText(/OpenCode Native · OpenCode A · default effort · one pass/))
-      .toBeTruthy();
+    expect(
+      screen.getByText(/OpenCode Native · OpenCode A · default effort · one pass/),
+    ).toBeTruthy();
   });
 });
 

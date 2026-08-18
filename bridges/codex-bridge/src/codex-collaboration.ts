@@ -1,7 +1,4 @@
-import type {
-  TranscriptActionPart,
-  TranscriptSubagentPart,
-} from "./subagent-transcript.js";
+import type { TranscriptActionPart, TranscriptSubagentPart } from "./subagent-transcript.js";
 
 export type CodexCollabAgentStatus =
   | "pending_init"
@@ -88,29 +85,25 @@ function normalizeStringArray(value: unknown): string[] | undefined {
 function normalizeAgentState(value: unknown): CodexCollabAgentState | undefined {
   if (!isRecord(value)) return undefined;
   const status = AGENT_STATUSES.has(value.status as CodexCollabAgentStatus)
-    ? value.status as CodexCollabAgentStatus
+    ? (value.status as CodexCollabAgentStatus)
     : undefined;
-  const message = value.message === null
-    ? null
-    : normalizeNonEmptyString(value.message);
+  const message = value.message === null ? null : normalizeNonEmptyString(value.message);
   return {
     ...(status ? { status } : {}),
     ...(message !== undefined || value.message === null ? { message } : {}),
   };
 }
 
-function normalizeSubagentActivityItem(
-  value: unknown,
-): CodexSubagentActivityItem | null {
+function normalizeSubagentActivityItem(value: unknown): CodexSubagentActivityItem | null {
   if (!isRecord(value) || value.type !== "subagent_activity") return null;
   const id = normalizeNonEmptyString(value.id);
   const agentThreadId = normalizeNonEmptyString(value.agent_thread_id);
   const activity = value.activity;
   const agentPath = normalizeNonEmptyString(value.agent_path);
   if (
-    !id
-    || !agentThreadId
-    || (activity !== "started" && activity !== "interacted" && activity !== "interrupted")
+    !id ||
+    !agentThreadId ||
+    (activity !== "started" && activity !== "interacted" && activity !== "interrupted")
   ) {
     return null;
   }
@@ -133,9 +126,7 @@ function taskNameFromAgentPath(agentPath: string | undefined): string | undefine
  * untrusted runtime value. Return a detached, normalized representation and
  * silently discard malformed optional fields.
  */
-export function normalizeCodexCollabToolCallItem(
-  value: unknown,
-): CodexCollabToolCallItem | null {
+export function normalizeCodexCollabToolCallItem(value: unknown): CodexCollabToolCallItem | null {
   if (!isRecord(value) || value.type !== "collab_tool_call") return null;
   const id = normalizeNonEmptyString(value.id);
   const tool = normalizeNonEmptyString(value.tool);
@@ -145,7 +136,7 @@ export function normalizeCodexCollabToolCallItem(
   const receiverThreadIds = normalizeStringArray(value.receiver_thread_ids);
   const prompt = value.prompt === null ? null : normalizeNonEmptyString(value.prompt);
   const status = ITEM_STATUSES.has(value.status as CodexCollabToolCallItem["status"])
-    ? value.status as CodexCollabToolCallItem["status"]
+    ? (value.status as CodexCollabToolCallItem["status"])
     : undefined;
   const agentsStates: Record<string, CodexCollabAgentState> = {};
   if (isRecord(value.agents_states)) {
@@ -168,40 +159,43 @@ export function normalizeCodexCollabToolCallItem(
   };
 }
 
-export function isCodexCollabToolCallItem(
-  value: unknown,
-): value is CodexCollabToolCallItem {
+export function isCodexCollabToolCallItem(value: unknown): value is CodexCollabToolCallItem {
   if (!isRecord(value)) return false;
   const normalized = normalizeCodexCollabToolCallItem(value);
   if (!normalized) return false;
+  if (value.sender_thread_id !== undefined && typeof value.sender_thread_id !== "string")
+    return false;
   if (
-    value.sender_thread_id !== undefined
-    && typeof value.sender_thread_id !== "string"
-  ) return false;
-  if (
-    value.receiver_thread_ids !== undefined
-    && (!Array.isArray(value.receiver_thread_ids)
-      || value.receiver_thread_ids.some((entry) => typeof entry !== "string"))
-  ) return false;
-  if (
-    value.prompt !== undefined
-    && value.prompt !== null
-    && typeof value.prompt !== "string"
-  ) return false;
+    value.receiver_thread_ids !== undefined &&
+    (!Array.isArray(value.receiver_thread_ids) ||
+      value.receiver_thread_ids.some((entry) => typeof entry !== "string"))
+  )
+    return false;
+  if (value.prompt !== undefined && value.prompt !== null && typeof value.prompt !== "string")
+    return false;
   if (value.agents_states !== undefined) {
     if (!isRecord(value.agents_states)) return false;
     for (const state of Object.values(value.agents_states)) {
       if (!isRecord(state)) return false;
-      if (state.status !== undefined && !AGENT_STATUSES.has(state.status as CodexCollabAgentStatus)) {
+      if (
+        state.status !== undefined &&
+        !AGENT_STATUSES.has(state.status as CodexCollabAgentStatus)
+      ) {
         return false;
       }
-      if (state.message !== undefined && state.message !== null && typeof state.message !== "string") {
+      if (
+        state.message !== undefined &&
+        state.message !== null &&
+        typeof state.message !== "string"
+      ) {
         return false;
       }
     }
   }
-  return value.status === undefined
-    || ITEM_STATUSES.has(value.status as CodexCollabToolCallItem["status"]);
+  return (
+    value.status === undefined ||
+    ITEM_STATUSES.has(value.status as CodexCollabToolCallItem["status"])
+  );
 }
 
 function isSpawnTool(tool: string): boolean {
@@ -273,8 +267,9 @@ function makeSubagentPart(
     subagentPrompt: latest?.spawnPrompt,
     subagentActions: appendFinalCollabMessage([], latest?.state?.message),
     subagentActionCount: 0,
-    toolState: toToolState(latest?.state?.status)
-      ?? (latest?.interruptedWithoutSnapshot ? "failure" : "pending"),
+    toolState:
+      toToolState(latest?.state?.status) ??
+      (latest?.interruptedWithoutSnapshot ? "failure" : "pending"),
   };
 }
 
@@ -328,8 +323,8 @@ export function applyCodexCollabStateToSubagentParts(
       const interrupted = item.activity === "interrupted";
       if (item.activity !== "started" && !interrupted && !previous) continue;
       const previousToolState = toToolState(previous?.state?.status);
-      const preserveTerminalState = interrupted
-        && (previousToolState === "success" || previousToolState === "failure");
+      const preserveTerminalState =
+        interrupted && (previousToolState === "success" || previousToolState === "failure");
       const nextState = preserveTerminalState
         ? previous?.state
         : previous?.state?.message !== undefined
@@ -346,15 +341,12 @@ export function applyCodexCollabStateToSubagentParts(
         // Only an interrupt carries this forward: a started or interacted beat
         // means the child is working again, so an earlier interrupt no longer
         // describes it.
-        ...(interrupted && !preserveTerminalState
-          ? { interruptedWithoutSnapshot: true }
-          : {}),
+        ...(interrupted && !preserveTerminalState ? { interruptedWithoutSnapshot: true } : {}),
       });
       continue;
     }
-    const spawnPrompt = isSpawnTool(item.tool) && typeof item.prompt === "string"
-      ? item.prompt
-      : undefined;
+    const spawnPrompt =
+      isSpawnTool(item.tool) && typeof item.prompt === "string" ? item.prompt : undefined;
     for (const agentId of getReceiverThreadIds(item)) {
       const previous = latestByAgentId.get(agentId);
       const reportedState = item.agents_states?.[agentId];
@@ -410,9 +402,9 @@ export function applyCodexCollabStateToSubagentParts(
       if (existingIndex < 0) {
         const preferredIndex = spawnIndex + receiverIndex;
         if (
-          !claimedIndexes.has(preferredIndex)
-          && parts[preferredIndex]
-          && !parts[preferredIndex]?.subagentId
+          !claimedIndexes.has(preferredIndex) &&
+          parts[preferredIndex] &&
+          !parts[preferredIndex]?.subagentId
         ) {
           existingIndex = preferredIndex;
         } else {
@@ -454,10 +446,7 @@ export function applyCodexCollabStateToSubagentParts(
       part.toolState = "failure";
     }
     if (failedSpawnAgentIds.has(agentId)) part.toolState = "failure";
-    part.subagentActions = appendFinalCollabMessage(
-      part.subagentActions,
-      latest.state?.message,
-    );
+    part.subagentActions = appendFinalCollabMessage(part.subagentActions, latest.state?.message);
   }
 
   // send/wait/close can refer to an agent spawned in an earlier turn. Keep an
@@ -475,12 +464,8 @@ function timelineKeyForSubagent(
   index: number,
   occurrences: Map<string, number>,
 ): string {
-  const escapedAgentId = part.subagentId
-    ?.replaceAll("%", "%25")
-    .replaceAll(":", "%3A");
-  const identity = part.subagentId
-    ? `id:${escapedAgentId}`
-    : `anonymous:${index}`;
+  const escapedAgentId = part.subagentId?.replaceAll("%", "%25").replaceAll(":", "%3A");
+  const identity = part.subagentId ? `id:${escapedAgentId}` : `anonymous:${index}`;
   const occurrence = occurrences.get(identity) ?? 0;
   occurrences.set(identity, occurrence + 1);
   return `${CODEX_TIMELINE_SUBAGENT_PREFIX}${identity}${occurrence > 0 ? `:${occurrence}` : ""}`;
@@ -513,7 +498,7 @@ export function reconcileCodexSubagentTimeline<T extends { subagentId?: string }
     timelineOrder.push(key);
   });
 
-  for (const key of [...currentParts.keys()]) {
+  for (const key of Array.from(currentParts.keys())) {
     if (activeKeys.has(key)) continue;
     currentParts.delete(key);
     fingerprints.delete(key);

@@ -11,22 +11,16 @@ import {
 } from "./github";
 
 type Assert<T extends true> = T;
-type SameShape<Left, Right> =
-  Left extends Right ? (Right extends Left ? true : false) : false;
+type SameShape<Left, Right> = Left extends Right ? (Right extends Left ? true : false) : false;
 
 // These aliases intentionally fail typechecking if the independently compiled
 // backend and renderer contracts drift apart.
 type SnapshotContractMatches = Assert<
   SameShape<RendererGitHubIssuesSnapshot, BackendGitHubIssuesSnapshot>
 >;
-type DetailContractMatches = Assert<
-  SameShape<RendererGitHubIssueDetail, BackendGitHubIssueDetail>
->;
+type DetailContractMatches = Assert<SameShape<RendererGitHubIssueDetail, BackendGitHubIssueDetail>>;
 
-const contractChecks: [SnapshotContractMatches, DetailContractMatches] = [
-  true,
-  true,
-];
+const contractChecks: [SnapshotContractMatches, DetailContractMatches] = [true, true];
 
 describe("GitHub renderer contract", () => {
   test("keeps workflow labels and issue payloads aligned with the backend", () => {

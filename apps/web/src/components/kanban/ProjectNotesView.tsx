@@ -44,25 +44,28 @@ export function ProjectNotesView({ projectId, onBack }: ProjectNotesViewProps) {
     void loadNotes(projectId);
   }, [projectId, loadNotes]);
 
-  const persistNotes = useCallback((value: string, editRevision: number) => {
-    const queuedSave = saveQueueRef.current.then(async () => {
-      try {
-        await saveNotes(projectId, value);
-        // A newer edit may have landed while this request was in flight. Only
-        // discard the recovery record when the completed save still represents
-        // the live editor; otherwise the newer text must remain recoverable.
-        if (editRevisionRef.current === editRevision) {
-          await discardDurableDraft();
+  const persistNotes = useCallback(
+    (value: string, editRevision: number) => {
+      const queuedSave = saveQueueRef.current.then(async () => {
+        try {
+          await saveNotes(projectId, value);
+          // A newer edit may have landed while this request was in flight. Only
+          // discard the recovery record when the completed save still represents
+          // the live editor; otherwise the newer text must remain recoverable.
+          if (editRevisionRef.current === editRevision) {
+            await discardDurableDraft();
+          }
+        } catch (error) {
+          console.warn("[ProjectNotesView] Notes remain in the durable draft:", error);
         }
-      } catch (error) {
-        console.warn("[ProjectNotesView] Notes remain in the durable draft:", error);
-      }
-    });
-    // Serialize writes so an older slow save can never complete after a newer
-    // manual save and overwrite the backend with stale content.
-    saveQueueRef.current = queuedSave;
-    return queuedSave;
-  }, [discardDurableDraft, projectId, saveNotes]);
+      });
+      // Serialize writes so an older slow save can never complete after a newer
+      // manual save and overwrite the backend with stale content.
+      saveQueueRef.current = queuedSave;
+      return queuedSave;
+    },
+    [discardDurableDraft, projectId, saveNotes],
+  );
 
   const handleChange = useCallback(
     (value: string) => {
@@ -82,7 +85,7 @@ export function ProjectNotesView({ projectId, onBack }: ProjectNotesViewProps) {
         void persistNotes(value, editRevision);
       }, 1000);
     },
-    [notesReady, persistNotes, setDraft]
+    [notesReady, persistNotes, setDraft],
   );
 
   const handleSaveNow = () => {
@@ -112,9 +115,7 @@ export function ProjectNotesView({ projectId, onBack }: ProjectNotesViewProps) {
         <h2 className="text-lg font-semibold text-foreground">
           {project?.name ?? "Project"} Notes
         </h2>
-        {isDirty && (
-          <span className="text-xs text-muted-foreground italic">Unsaved changes</span>
-        )}
+        {isDirty && <span className="text-xs text-muted-foreground italic">Unsaved changes</span>}
         <div className="ml-auto">
           <Button size="sm" onClick={handleSaveNow} disabled={!isDirty}>
             Save

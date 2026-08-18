@@ -159,7 +159,9 @@ function Step({
             {number}
           </span>
         </div>
-        {!last && <div className="my-1 h-full min-h-5 w-px bg-gradient-to-b from-cyan-400/35 to-zinc-700/20" />}
+        {!last && (
+          <div className="my-1 h-full min-h-5 w-px bg-gradient-to-b from-cyan-400/35 to-zinc-700/20" />
+        )}
       </div>
       <div className={cn("min-w-0", !last && "pb-4")}>{children}</div>
     </div>
@@ -195,20 +197,16 @@ function initialStepState(
   return {
     agent,
     model,
-    reasoningEffort: defaultEffortFor(
-      agent,
-      model,
-      catalog,
-      preferredReasoningEfforts,
-    ),
+    reasoningEffort: defaultEffortFor(agent, model, catalog, preferredReasoningEfforts),
   };
 }
 
 /** Every step set to the same state, which is what {@link uniform} means. */
 function everyStep(state: StepState): Record<BuildStepKey, StepState> {
-  return Object.fromEntries(
-    BUILD_STEPS.map(({ key }) => [key, { ...state }]),
-  ) as Record<BuildStepKey, StepState>;
+  return Object.fromEntries(BUILD_STEPS.map(({ key }) => [key, { ...state }])) as Record<
+    BuildStepKey,
+    StepState
+  >;
 }
 
 function initialSteps(
@@ -217,12 +215,7 @@ function initialSteps(
   preferredModels: BuildLaunchDialogProps["preferredModels"],
   preferredReasoningEfforts: BuildLaunchDialogProps["preferredReasoningEfforts"],
 ): Record<BuildStepKey, StepState> {
-  return everyStep(initialStepState(
-    agent,
-    catalog,
-    preferredModels,
-    preferredReasoningEfforts,
-  ));
+  return everyStep(initialStepState(agent, catalog, preferredModels, preferredReasoningEfforts));
 }
 
 /**
@@ -250,13 +243,12 @@ export function BuildLaunchDialog({
   const dockerAvailable = useDockerAvailability();
   const [environmentType, setEnvironmentType] = useState(defaultEnvironmentType);
   const [steps, setSteps] = useState(() =>
-    initialSteps(defaultAgent, catalog, preferredModels, preferredReasoningEfforts));
+    initialSteps(defaultAgent, catalog, preferredModels, preferredReasoningEfforts),
+  );
   // On by default: one configuration for the whole pipeline is the common case,
   // and it keeps five extra step sections out of the way until they are wanted.
   const [uniform, setUniform] = useState(true);
-  const [includeComments, setIncludeComments] = useState(
-    commentContext?.defaultIncluded ?? true,
-  );
+  const [includeComments, setIncludeComments] = useState(commentContext?.defaultIncluded ?? true);
   const wasOpenRef = useRef(false);
   const environmentGroupId = useId();
   const commentContextId = useId();
@@ -278,12 +270,7 @@ export function BuildLaunchDialog({
     });
     setUniform(true);
     setIncludeComments(commentContext?.defaultIncluded ?? true);
-    setSteps(initialSteps(
-      defaultAgent,
-      catalog,
-      preferredModels,
-      preferredReasoningEfforts,
-    ));
+    setSteps(initialSteps(defaultAgent, catalog, preferredModels, preferredReasoningEfforts));
   }, [
     catalog,
     commentContext?.defaultIncluded,
@@ -311,15 +298,11 @@ export function BuildLaunchDialog({
       const model = models.find((option) => option.id === step.model) ?? models[0];
       const efforts = model?.reasoningEfforts ?? [];
       const effort =
-        efforts.length > 0
-        && (step.reasoningEffort === "default"
-          || efforts.includes(step.reasoningEffort))
+        efforts.length > 0 &&
+        (step.reasoningEffort === "default" || efforts.includes(step.reasoningEffort))
           ? step.reasoningEffort
           : "default";
-      return [
-        key,
-        { models, model, efforts, effort },
-      ] as const;
+      return [key, { models, model, efforts, effort }] as const;
     });
     return Object.fromEntries(entries) as Record<
       BuildStepKey,
@@ -330,14 +313,16 @@ export function BuildLaunchDialog({
         effort: string;
       }
     >;
-  }, [catalog, steps, uniform]);
+  }, [catalog, steps]);
 
   // While uniform, every step is edited together, so the submitted payload needs
   // no special case and unticking leaves the steps where the shared value was.
   const updateStep = (key: BuildStepKey, next: Partial<StepState>) => {
-    setSteps((current) => (uniform
-      ? everyStep({ ...current[key], ...next })
-      : { ...current, [key]: { ...current[key], ...next } }));
+    setSteps((current) =>
+      uniform
+        ? everyStep({ ...current[key], ...next })
+        : { ...current, [key]: { ...current[key], ...next } },
+    );
   };
 
   const handleUniformChange = (next: boolean) => {
@@ -346,12 +331,7 @@ export function BuildLaunchDialog({
   };
 
   const handleAgentChange = (key: BuildStepKey, agent: LaunchAgent) => {
-    updateStep(key, initialStepState(
-      agent,
-      catalog,
-      preferredModels,
-      preferredReasoningEfforts,
-    ));
+    updateStep(key, initialStepState(agent, catalog, preferredModels, preferredReasoningEfforts));
   };
 
   const handleModelChange = (key: BuildStepKey, model: string) => {
@@ -370,9 +350,7 @@ export function BuildLaunchDialog({
 
   const summary = visibleSteps.map(({ key, title }) => {
     const step = resolved[key];
-    const effort = step.effort === "default"
-      ? "default effort"
-      : `${step.effort} effort`;
+    const effort = step.effort === "default" ? "default effort" : `${step.effort} effort`;
     const label = uniform ? "All steps" : title;
     return `${label}: ${step.model?.name ?? steps[key].model} · ${effort}`;
   });
@@ -391,8 +369,8 @@ export function BuildLaunchDialog({
             Configure build
           </DialogTitle>
           <DialogDescription>
-            Pick where the build runs, then the agent, model and reasoning effort
-            for each pipeline step.
+            Pick where the build runs, then the agent, model and reasoning effort for each pipeline
+            step.
           </DialogDescription>
         </DialogHeader>
 
@@ -405,13 +383,17 @@ export function BuildLaunchDialog({
             onConfirm({
               environmentType,
               ...(commentContext ? { includeComments } : {}),
-              steps: Object.fromEntries(BUILD_STEPS.map(({ key }) => [key, {
-                agent: steps[key].agent,
-                model: resolved[key].model?.id ?? steps[key].model,
-                reasoningEffort: resolved[key].effort === "default"
-                  ? undefined
-                  : resolved[key].effort,
-              }])) as Record<BuildStepKey, BuildLaunchStepSelection>,
+              steps: Object.fromEntries(
+                BUILD_STEPS.map(({ key }) => [
+                  key,
+                  {
+                    agent: steps[key].agent,
+                    model: resolved[key].model?.id ?? steps[key].model,
+                    reasoningEffort:
+                      resolved[key].effort === "default" ? undefined : resolved[key].effort,
+                  },
+                ]),
+              ) as Record<BuildStepKey, BuildLaunchStepSelection>,
             });
           }}
         >
@@ -431,9 +413,10 @@ export function BuildLaunchDialog({
               >
                 {ENVIRONMENT_OPTIONS.map((option) => {
                   const selected = environmentType === option.value;
-                  const disabled = option.value === "containerized"
-                    ? !dockerAvailable
-                    : !localEnvironmentAvailable;
+                  const disabled =
+                    option.value === "containerized"
+                      ? !dockerAvailable
+                      : !localEnvironmentAvailable;
                   const id = `${environmentGroupId}-${option.value}`;
                   return (
                     <div key={option.value} className="relative min-w-0">
@@ -484,7 +467,10 @@ export function BuildLaunchDialog({
                     aria-label={commentContextLabel}
                     className="mt-0.5"
                   />
-                  <Label htmlFor={commentContextId} className="flex cursor-pointer items-start gap-2.5">
+                  <Label
+                    htmlFor={commentContextId}
+                    className="flex cursor-pointer items-start gap-2.5"
+                  >
                     <MessageSquare className="mt-0.5 size-4 shrink-0 text-cyan-300/80" />
                     <span>
                       <span className="block text-sm font-medium text-zinc-200">
@@ -512,8 +498,8 @@ export function BuildLaunchDialog({
                     Use one configuration for every step
                   </span>
                   <span className="mt-0.5 block text-[11px] font-normal leading-snug text-zinc-500">
-                    Untick to give build, review, address issues, verify, PR and
-                    conflict resolution their own agent, model and reasoning.
+                    Untick to give build, review, address issues, verify, PR and conflict resolution
+                    their own agent, model and reasoning.
                   </span>
                 </Label>
               </div>
@@ -546,10 +532,7 @@ export function BuildLaunchDialog({
                     label={`${stepLabel} agent`}
                   />
                   {(uniform || key === "review" || key === "verify") && (
-                    <p
-                      className="mt-2 text-[11px] leading-snug text-amber-400/80"
-                      role="note"
-                    >
+                    <p className="mt-2 text-[11px] leading-snug text-amber-400/80" role="note">
                       {validationWorkspaceNotice(uniform)}
                     </p>
                   )}
@@ -629,8 +612,7 @@ export function BuildLaunchDialog({
                       </Label>
                       <Select
                         value={step.effort}
-                        onValueChange={(effort) =>
-                          updateStep(key, { reasoningEffort: effort })}
+                        onValueChange={(effort) => updateStep(key, { reasoningEffort: effort })}
                         disabled={!effortAvailable}
                       >
                         <SelectTrigger
@@ -677,9 +659,9 @@ export function BuildLaunchDialog({
             <Button
               type="submit"
               disabled={
-                busy
-                || (environmentType === "containerized" && !dockerAvailable)
-                || (environmentType === "local" && !localEnvironmentAvailable)
+                busy ||
+                (environmentType === "containerized" && !dockerAvailable) ||
+                (environmentType === "local" && !localEnvironmentAvailable)
               }
             >
               Start build

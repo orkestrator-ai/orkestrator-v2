@@ -3,9 +3,9 @@ import * as realBackend from "@/lib/backend";
 import type { Session } from "@/types";
 
 const realBackendSnapshot = { ...realBackend };
-const getSessionsByEnvironmentMock = mock<
-  (environmentId: string) => Promise<Session[]>
->(async () => []);
+const getSessionsByEnvironmentMock = mock<(environmentId: string) => Promise<Session[]>>(
+  async () => [],
+);
 const updateSessionStatusMock = mock(async (_sessionId: string, _status: string) => {});
 const createSessionMock = mock(async () => makeSession());
 const updateSessionActivityMock = mock(async () => makeSession({ lastActivityAt: "later" }));
@@ -15,7 +15,9 @@ const disconnectEnvironmentSessionsMock = mock(async () => [] as Session[]);
 const saveSessionBufferMock = mock(async () => {});
 const loadSessionBufferMock = mock(async () => null as string | null);
 const syncSessionsWithContainerMock = mock(async () => [] as Session[]);
-const renameSessionMock = mock(async (_id: string, name: string | null) => makeSession({ name: name ?? undefined }));
+const renameSessionMock = mock(async (_id: string, name: string | null) =>
+  makeSession({ name: name ?? undefined }),
+);
 const reorderSessionsMock = mock(async () => [] as Session[]);
 
 mock.module("@/lib/backend", () => ({
@@ -97,9 +99,7 @@ describe("sessionStore.loadSessionsForEnvironment", () => {
     const session = makeSession();
     const sessions = new Map([[session.id, session]]);
     useSessionStore.setState({ sessions });
-    const reordered = Object.fromEntries(
-      Object.entries(session).reverse(),
-    ) as Session;
+    const reordered = Object.fromEntries(Object.entries(session).reverse()) as Session;
     expect(Object.keys(reordered)).not.toEqual(Object.keys(session));
     getSessionsByEnvironmentMock.mockResolvedValue([reordered]);
 
@@ -117,9 +117,7 @@ describe("sessionStore.loadSessionsForEnvironment", () => {
     const session = makeSession();
     useSessionStore.setState({ sessions: new Map([[session.id, session]]) });
     expect(Object.hasOwn(session, "name")).toBe(false);
-    getSessionsByEnvironmentMock.mockResolvedValue([
-      { ...session, name: undefined },
-    ]);
+    getSessionsByEnvironmentMock.mockResolvedValue([{ ...session, name: undefined }]);
 
     await useSessionStore.getState().loadSessionsForEnvironment("env-1");
 
@@ -137,10 +135,7 @@ describe("sessionStore.loadSessionsForEnvironment", () => {
         [changed.id, changed],
       ]),
     });
-    getSessionsByEnvironmentMock.mockResolvedValue([
-      { ...unchanged },
-      { ...changed, name: "new" },
-    ]);
+    getSessionsByEnvironmentMock.mockResolvedValue([{ ...unchanged }, { ...changed, name: "new" }]);
 
     await useSessionStore.getState().loadSessionsForEnvironment("env-1");
 
@@ -194,21 +189,13 @@ describe("sessionStore.loadSessionsForEnvironment", () => {
 
     oldest.resolve([makeSession({ name: "oldest" })]);
     await first;
-    expect(useSessionStore.getState().sessions.get("session-1")?.name).toBe(
-      "middle",
-    );
-    expect(useSessionStore.getState().loadingEnvironments.has("env-1")).toBe(
-      true,
-    );
+    expect(useSessionStore.getState().sessions.get("session-1")?.name).toBe("middle");
+    expect(useSessionStore.getState().loadingEnvironments.has("env-1")).toBe(true);
 
     latest.resolve([makeSession({ name: "latest" })]);
     await third;
-    expect(useSessionStore.getState().sessions.get("session-1")?.name).toBe(
-      "latest",
-    );
-    expect(useSessionStore.getState().loadingEnvironments.has("env-1")).toBe(
-      false,
-    );
+    expect(useSessionStore.getState().sessions.get("session-1")?.name).toBe("latest");
+    expect(useSessionStore.getState().loadingEnvironments.has("env-1")).toBe(false);
   });
 });
 
@@ -332,7 +319,8 @@ describe("sessionStore remaining actions", () => {
       syncSessionsWithContainerMock,
       renameSessionMock,
       reorderSessionsMock,
-    ]) backendMock.mockReset();
+    ])
+      backendMock.mockReset();
     createSessionMock.mockResolvedValue(makeSession());
     updateSessionActivityMock.mockResolvedValue(makeSession({ lastActivityAt: "later" }));
     deleteSessionMock.mockResolvedValue(undefined);
@@ -341,14 +329,18 @@ describe("sessionStore remaining actions", () => {
     saveSessionBufferMock.mockResolvedValue(undefined);
     loadSessionBufferMock.mockResolvedValue(null);
     syncSessionsWithContainerMock.mockResolvedValue([]);
-    renameSessionMock.mockImplementation(async (_id, name) => makeSession({ name: name ?? undefined }));
+    renameSessionMock.mockImplementation(async (_id, name) =>
+      makeSession({ name: name ?? undefined }),
+    );
     reorderSessionsMock.mockResolvedValue([]);
     useSessionStore.setState({ sessions: new Map(), loadingEnvironments: new Set(), error: null });
   });
 
   test("creates, updates activity, renames, and forwards buffer operations", async () => {
     const store = useSessionStore.getState();
-    await expect(store.createSession("env-1", "container-1", "tab-1", "plain")).resolves.toMatchObject({ id: "session-1" });
+    await expect(
+      store.createSession("env-1", "container-1", "tab-1", "plain"),
+    ).resolves.toMatchObject({ id: "session-1" });
     await store.updateSessionActivity("session-1");
     await store.renameSession("session-1", "Renamed");
     await store.saveSessionBuffer("session-1", "buffer");
@@ -361,20 +353,36 @@ describe("sessionStore remaining actions", () => {
   test("rolls back failed single and environment deletions", async () => {
     const first = makeSession();
     const second = makeSession({ id: "session-2" });
-    useSessionStore.setState({ sessions: new Map([[first.id, first], [second.id, second]]) });
+    useSessionStore.setState({
+      sessions: new Map([
+        [first.id, first],
+        [second.id, second],
+      ]),
+    });
     deleteSessionMock.mockRejectedValueOnce(new Error("delete failed"));
-    await expect(useSessionStore.getState().deleteSession(first.id)).rejects.toThrow("delete failed");
+    await expect(useSessionStore.getState().deleteSession(first.id)).rejects.toThrow(
+      "delete failed",
+    );
     expect(useSessionStore.getState().sessions.has(first.id)).toBe(true);
 
     deleteSessionsByEnvironmentMock.mockRejectedValueOnce(new Error("bulk failed"));
-    await expect(useSessionStore.getState().deleteSessionsByEnvironment("env-1")).rejects.toThrow("bulk failed");
+    await expect(useSessionStore.getState().deleteSessionsByEnvironment("env-1")).rejects.toThrow(
+      "bulk failed",
+    );
     expect(useSessionStore.getState().sessions.size).toBe(2);
   });
 
   test("applies disconnect and sync snapshots while preserving other environments", async () => {
     const other = makeSession({ id: "other", environmentId: "env-2" });
-    useSessionStore.setState({ sessions: new Map([[other.id, other], ["old", makeSession({ id: "old" })]]) });
-    disconnectEnvironmentSessionsMock.mockResolvedValueOnce([makeSession({ status: "disconnected" })]);
+    useSessionStore.setState({
+      sessions: new Map([
+        [other.id, other],
+        ["old", makeSession({ id: "old" })],
+      ]),
+    });
+    disconnectEnvironmentSessionsMock.mockResolvedValueOnce([
+      makeSession({ status: "disconnected" }),
+    ]);
     await useSessionStore.getState().disconnectEnvironmentSessions("env-1");
     expect(useSessionStore.getState().sessions.get("session-1")?.status).toBe("disconnected");
 
@@ -388,10 +396,23 @@ describe("sessionStore remaining actions", () => {
   test("optimistically reorders and adopts the authoritative response", async () => {
     const first = makeSession({ id: "a", order: 0 });
     const second = makeSession({ id: "b", order: 1 });
-    useSessionStore.setState({ sessions: new Map([[first.id, first], [second.id, second]]) });
-    reorderSessionsMock.mockResolvedValueOnce([{ ...second, order: 0 }, { ...first, order: 1 }]);
+    useSessionStore.setState({
+      sessions: new Map([
+        [first.id, first],
+        [second.id, second],
+      ]),
+    });
+    reorderSessionsMock.mockResolvedValueOnce([
+      { ...second, order: 0 },
+      { ...first, order: 1 },
+    ]);
     await useSessionStore.getState().reorderSessions("env-1", ["b", "a"]);
-    expect(useSessionStore.getState().getSessionsByEnvironment("env-1").map((s) => s.id)).toEqual(["b", "a"]);
+    expect(
+      useSessionStore
+        .getState()
+        .getSessionsByEnvironment("env-1")
+        .map((s) => s.id),
+    ).toEqual(["b", "a"]);
   });
 
   test("handles remaining backend error paths without publishing false state", async () => {
@@ -403,7 +424,9 @@ describe("sessionStore remaining actions", () => {
     ).rejects.toThrow("create failed");
 
     renameSessionMock.mockRejectedValueOnce(new Error("rename failed"));
-    await expect(useSessionStore.getState().renameSession(original.id, "bad")).rejects.toThrow("rename failed");
+    await expect(useSessionStore.getState().renameSession(original.id, "bad")).rejects.toThrow(
+      "rename failed",
+    );
     expect(useSessionStore.getState().sessions.get(original.id)?.name).toBe("original");
 
     updateSessionActivityMock.mockRejectedValueOnce(new Error("activity failed"));

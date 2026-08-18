@@ -46,22 +46,25 @@ export function transcriptHasUserMessage(session: AcpSessionSnapshot | null): bo
 
 export const useAcpPendingPromptStore = create<AcpPendingPromptState>()((set) => ({
   pending: new Map(),
-  setPendingPrompt: (sessionKey, prompt) => set((state) => {
-    const pending = new Map(state.pending);
-    pending.set(sessionKey, prompt);
-    return { pending };
-  }),
-  setPendingPromptNaming: (sessionKey, isNaming) => set((state) => {
-    const current = state.pending.get(sessionKey);
-    if (!current || current.isNaming === isNaming) return state;
-    const pending = new Map(state.pending);
-    pending.set(sessionKey, { ...current, isNaming });
-    return { pending };
-  }),
-  clearPendingPrompt: (sessionKey) => set((state) => {
-    if (!state.pending.has(sessionKey)) return state;
-    const pending = new Map(state.pending);
-    pending.delete(sessionKey);
-    return { pending };
-  }),
+  setPendingPrompt: (sessionKey, prompt) =>
+    set((state) => {
+      const pending = new Map(state.pending);
+      pending.set(sessionKey, prompt);
+      return { pending };
+    }),
+  setPendingPromptNaming: (sessionKey, isNaming) =>
+    set((state) => {
+      const current = state.pending.get(sessionKey);
+      if (!current || current.isNaming === isNaming) return state;
+      const pending = new Map(state.pending);
+      pending.set(sessionKey, { ...current, isNaming });
+      return { pending };
+    }),
+  clearPendingPrompt: (sessionKey) =>
+    set((state) => {
+      if (!state.pending.has(sessionKey)) return state;
+      const pending = new Map(state.pending);
+      pending.delete(sessionKey);
+      return { pending };
+    }),
 }));

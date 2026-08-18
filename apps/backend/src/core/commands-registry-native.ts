@@ -1,6 +1,19 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import { BUILD_PIPELINE_AGENTS, nativeAgentSessionStorageKey } from "./commands-dependencies.js";
-import { asString, asRecord, asOptionalAgentInteractionOrigin, asOptionalAgentInteractionPolicy, asRequiredBoolean, asPositiveInteger, asNonBlankString, asBoundedNonBlankString, MAX_EXECUTION_PROFILE_ID_LENGTH, asDispatchNativeAgentPromptInput, asNativeAgentControlUpdate, asNativeAgentSessionAction } from "./commands-helpers.js";
+import {
+  asString,
+  asRecord,
+  asOptionalAgentInteractionOrigin,
+  asOptionalAgentInteractionPolicy,
+  asRequiredBoolean,
+  asPositiveInteger,
+  asNonBlankString,
+  asBoundedNonBlankString,
+  MAX_EXECUTION_PROFILE_ID_LENGTH,
+  asDispatchNativeAgentPromptInput,
+  asNativeAgentControlUpdate,
+  asNativeAgentSessionAction,
+} from "./commands-helpers.js";
 
 export function registerNativeAgentCommands(
   register: CommandRegistrar,
@@ -13,36 +26,29 @@ export function registerNativeAgentCommands(
     return context.nativeAgents.ensureSession({
       environmentId: asNonBlankString(args.environmentId, "environmentId"),
       agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
-      logicalSessionKey: asNonBlankString(
-        args.logicalSessionKey,
-        "logicalSessionKey",
-      ),
+      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
       origin: asOptionalAgentInteractionOrigin(args.origin),
       interactionPolicy: asOptionalAgentInteractionPolicy(args.interactionPolicy),
       title: typeof args.title === "string" ? args.title : undefined,
       model: typeof args.model === "string" ? args.model : undefined,
-      reasoningEffort:
-        typeof args.reasoningEffort === "string"
-          ? args.reasoningEffort
-          : undefined,
+      reasoningEffort: typeof args.reasoningEffort === "string" ? args.reasoningEffort : undefined,
       phase:
         typeof args.phase === "string"
-          ? args.phase as import("@orkestrator/protocol/build-pipeline").PipelineSessionPhase
+          ? (args.phase as import("@orkestrator/protocol/build-pipeline").PipelineSessionPhase)
           : undefined,
       // Only an explicit mode overrides the phase-derived default, so a caller
       // that does not care keeps the existing behaviour.
       sessionMode:
-        args.sessionMode === "plan" || args.sessionMode === "build"
-          ? args.sessionMode
-          : undefined,
+        args.sessionMode === "plan" || args.sessionMode === "build" ? args.sessionMode : undefined,
       fastMode: typeof args.fastMode === "boolean" ? args.fastMode : undefined,
-      executionProfileId: args.executionProfileId === undefined
-        ? undefined
-        : asBoundedNonBlankString(
-          args.executionProfileId,
-          "executionProfileId",
-          MAX_EXECUTION_PROFILE_ID_LENGTH,
-        ),
+      executionProfileId:
+        args.executionProfileId === undefined
+          ? undefined
+          : asBoundedNonBlankString(
+              args.executionProfileId,
+              "executionProfileId",
+              MAX_EXECUTION_PROFILE_ID_LENGTH,
+            ),
     });
   });
 
@@ -53,44 +59,34 @@ export function registerNativeAgentCommands(
     return context.nativeAgents.adoptSession({
       environmentId: asNonBlankString(args.environmentId, "environmentId"),
       agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
-      logicalSessionKey: asNonBlankString(
-        args.logicalSessionKey,
-        "logicalSessionKey",
-      ),
+      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
       origin: asOptionalAgentInteractionOrigin(args.origin),
       interactionPolicy: asOptionalAgentInteractionPolicy(args.interactionPolicy),
-      providerSessionId: asNonBlankString(
-        args.providerSessionId,
-        "providerSessionId",
-      ),
+      providerSessionId: asNonBlankString(args.providerSessionId, "providerSessionId"),
       expectedProviderSessionId:
         args.expectedProviderSessionId === undefined
           ? undefined
-          : asNonBlankString(
-              args.expectedProviderSessionId,
-              "expectedProviderSessionId",
-            ),
+          : asNonBlankString(args.expectedProviderSessionId, "expectedProviderSessionId"),
       title: typeof args.title === "string" ? args.title : undefined,
       model: typeof args.model === "string" ? args.model : undefined,
-      reasoningEffort:
-        typeof args.reasoningEffort === "string"
-          ? args.reasoningEffort
-          : undefined,
+      reasoningEffort: typeof args.reasoningEffort === "string" ? args.reasoningEffort : undefined,
       phase:
         typeof args.phase === "string"
-          ? args.phase as import("@orkestrator/protocol/build-pipeline").PipelineSessionPhase
+          ? (args.phase as import("@orkestrator/protocol/build-pipeline").PipelineSessionPhase)
           : undefined,
       ...(args.sessionMode === "plan" || args.sessionMode === "build"
         ? { sessionMode: args.sessionMode }
         : {}),
       ...(typeof args.fastMode === "boolean" ? { fastMode: args.fastMode } : {}),
-      ...(args.executionProfileId === undefined ? {} : {
-        executionProfileId: asBoundedNonBlankString(
-          args.executionProfileId,
-          "executionProfileId",
-          MAX_EXECUTION_PROFILE_ID_LENGTH,
-        ),
-      }),
+      ...(args.executionProfileId === undefined
+        ? {}
+        : {
+            executionProfileId: asBoundedNonBlankString(
+              args.executionProfileId,
+              "executionProfileId",
+              MAX_EXECUTION_PROFILE_ID_LENGTH,
+            ),
+          }),
     });
   });
 
@@ -98,18 +94,14 @@ export function registerNativeAgentCommands(
     if (!context.nativeAgents) {
       throw new Error("Native agent service is unavailable");
     }
-    return context.nativeAgents.dispatchPrompt(
-      asDispatchNativeAgentPromptInput(args),
-    );
+    return context.nativeAgents.dispatchPrompt(asDispatchNativeAgentPromptInput(args));
   });
 
   register("dispatch_native_agent_intent", async (args, context) => {
     if (!context.nativeAgents) {
       throw new Error("Native agent service is unavailable");
     }
-    return context.nativeAgents.dispatchIntent(
-      asDispatchNativeAgentPromptInput(args),
-    );
+    return context.nativeAgents.dispatchIntent(asDispatchNativeAgentPromptInput(args));
   });
 
   register("retry_native_agent_dispatch", async (args, context) => {
@@ -119,10 +111,7 @@ export function registerNativeAgentCommands(
     return context.nativeAgents.retryRecoverableDispatch({
       environmentId: asNonBlankString(args.environmentId, "environmentId"),
       agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
-      logicalSessionKey: asNonBlankString(
-        args.logicalSessionKey,
-        "logicalSessionKey",
-      ),
+      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
       requestId: asNonBlankString(args.requestId, "requestId"),
     });
   });
@@ -134,10 +123,7 @@ export function registerNativeAgentCommands(
     return context.nativeAgents.discardRecoverableDispatch({
       environmentId: asNonBlankString(args.environmentId, "environmentId"),
       agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
-      logicalSessionKey: asNonBlankString(
-        args.logicalSessionKey,
-        "logicalSessionKey",
-      ),
+      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
       requestId: asNonBlankString(args.requestId, "requestId"),
     });
   });
@@ -145,21 +131,19 @@ export function registerNativeAgentCommands(
   register("get_native_agent_session", async (args, context) => {
     const environmentId = asNonBlankString(args.environmentId, "environmentId");
     const agent = asString(args.agent, "agent") as import("./models.js").NativeAgentProvider;
-    const logicalSessionKey = asNonBlankString(
-      args.logicalSessionKey,
-      "logicalSessionKey",
-    );
+    const logicalSessionKey = asNonBlankString(args.logicalSessionKey, "logicalSessionKey");
     if (!BUILD_PIPELINE_AGENTS.includes(agent)) {
       throw new Error("Native agent provider is invalid");
     }
     const session = await context.storage.getNativeAgentSession(
       nativeAgentSessionStorageKey(environmentId, agent, logicalSessionKey),
     );
-    if (session && (
-      session.environmentId !== environmentId
-      || session.agent !== agent
-      || session.logicalSessionKey !== logicalSessionKey
-    )) {
+    if (
+      session &&
+      (session.environmentId !== environmentId ||
+        session.agent !== agent ||
+        session.logicalSessionKey !== logicalSessionKey)
+    ) {
       throw new Error("Native agent session identity mismatch");
     }
     return session;
@@ -172,13 +156,11 @@ export function registerNativeAgentCommands(
     return context.nativeAgents.getProjection({
       environmentId: asNonBlankString(args.environmentId, "environmentId"),
       agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
-      logicalSessionKey: asNonBlankString(
-        args.logicalSessionKey,
-        "logicalSessionKey",
-      ),
-      messageLimit: args.messageLimit === undefined
-        ? undefined
-        : asPositiveInteger(args.messageLimit, "messageLimit"),
+      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
+      messageLimit:
+        args.messageLimit === undefined
+          ? undefined
+          : asPositiveInteger(args.messageLimit, "messageLimit"),
     });
   });
 
@@ -189,10 +171,7 @@ export function registerNativeAgentCommands(
     return context.nativeAgents.getProjectionToolDetails({
       environmentId: asNonBlankString(args.environmentId, "environmentId"),
       agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
-      logicalSessionKey: asNonBlankString(
-        args.logicalSessionKey,
-        "logicalSessionKey",
-      ),
+      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
       detailRef: asNonBlankString(args.detailRef, "detailRef"),
     });
   });
@@ -204,10 +183,7 @@ export function registerNativeAgentCommands(
     return context.nativeAgents.refreshProjectionModels({
       environmentId: asNonBlankString(args.environmentId, "environmentId"),
       agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
-      logicalSessionKey: asNonBlankString(
-        args.logicalSessionKey,
-        "logicalSessionKey",
-      ),
+      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
     });
   });
 
@@ -218,10 +194,7 @@ export function registerNativeAgentCommands(
     return context.nativeAgents.stopProjectionSession({
       environmentId: asNonBlankString(args.environmentId, "environmentId"),
       agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
-      logicalSessionKey: asNonBlankString(
-        args.logicalSessionKey,
-        "logicalSessionKey",
-      ),
+      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
     });
   });
 
@@ -260,9 +233,10 @@ export function registerNativeAgentCommands(
       agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
       logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
       providerSessionId: asNonBlankString(args.providerSessionId, "providerSessionId"),
-      controls: args.controls === undefined
-        ? undefined
-        : asNativeAgentControlUpdate(args.controls, "controls"),
+      controls:
+        args.controls === undefined
+          ? undefined
+          : asNativeAgentControlUpdate(args.controls, "controls"),
     });
   });
 
@@ -272,9 +246,8 @@ export function registerNativeAgentCommands(
       environmentId: asNonBlankString(args.environmentId, "environmentId"),
       agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
       logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
-      messageId: args.messageId === undefined
-        ? undefined
-        : asNonBlankString(args.messageId, "messageId"),
+      messageId:
+        args.messageId === undefined ? undefined : asNonBlankString(args.messageId, "messageId"),
     });
   });
 
@@ -286,10 +259,7 @@ export function registerNativeAgentCommands(
     return context.nativeAgents.updateProjectionControls({
       environmentId: asNonBlankString(args.environmentId, "environmentId"),
       agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
-      logicalSessionKey: asNonBlankString(
-        args.logicalSessionKey,
-        "logicalSessionKey",
-      ),
+      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
       update,
     });
   });
@@ -312,12 +282,10 @@ export function registerNativeAgentCommands(
     return context.nativeAgents.resolveProjectionInteraction({
       environmentId: asNonBlankString(args.environmentId, "environmentId"),
       agent: asString(args.agent, "agent") as import("./models.js").NativeAgentProvider,
-      logicalSessionKey: asNonBlankString(
-        args.logicalSessionKey,
-        "logicalSessionKey",
-      ),
+      logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
       interactionId: asNonBlankString(args.interactionId, "interactionId"),
-      resolution: resolution as unknown as import("@orkestrator/protocol/agent-interactions").AgentInteractionResolution,
+      resolution:
+        resolution as unknown as import("@orkestrator/protocol/agent-interactions").AgentInteractionResolution,
     });
   });
 
@@ -342,6 +310,4 @@ export function registerNativeAgentCommands(
     context.nativeAgents.setInteractionMonitorAdoptionEnabled(value);
     return { enabled: value };
   });
-
-
 }

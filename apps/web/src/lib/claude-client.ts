@@ -5,10 +5,7 @@ import { resolveGatewayLoopbackBaseUrl } from "./gateway-url";
 import { parseBackendTurnStartedAt } from "./session-timer";
 import { isRendererDebugLoggingEnabled, rendererDebugLog } from "./debug-log";
 import { createUuid } from "./uuid";
-import type {
-  ClaudeModelCatalogEntry,
-  ClaudeModelCatalogSnapshot,
-} from "@/types";
+import type { ClaudeModelCatalogEntry, ClaudeModelCatalogSnapshot } from "@/types";
 import {
   isStructuredOutputResult,
   structuredOutputFailure,
@@ -161,21 +158,21 @@ export function parseClaudeRateLimits(
   }
   return value.flatMap((entry) => {
     if (
-      isRecord(entry)
-      && typeof entry.label === "string"
-      && isOptionalNonNegativeNumber(entry.usedPercent)
-      && (entry.usedPercent === undefined || entry.usedPercent <= 100)
-      && isOptionalString(entry.resetsAt)
-      && isOptionalNonNegativeNumber(entry.windowMinutes)
+      isRecord(entry) &&
+      typeof entry.label === "string" &&
+      isOptionalNonNegativeNumber(entry.usedPercent) &&
+      (entry.usedPercent === undefined || entry.usedPercent <= 100) &&
+      isOptionalString(entry.resetsAt) &&
+      isOptionalNonNegativeNumber(entry.windowMinutes)
     ) {
-      return [{
-        label: entry.label,
-        ...(entry.usedPercent !== undefined ? { usedPercent: entry.usedPercent } : {}),
-        ...(entry.resetsAt !== undefined ? { resetsAt: entry.resetsAt } : {}),
-        ...(entry.windowMinutes !== undefined
-          ? { windowMinutes: entry.windowMinutes }
-          : {}),
-      }];
+      return [
+        {
+          label: entry.label,
+          ...(entry.usedPercent !== undefined ? { usedPercent: entry.usedPercent } : {}),
+          ...(entry.resetsAt !== undefined ? { resetsAt: entry.resetsAt } : {}),
+          ...(entry.windowMinutes !== undefined ? { windowMinutes: entry.windowMinutes } : {}),
+        },
+      ];
     }
     // e.g. `usedPercent > 100`: the bridge forwards utilization unclamped,
     // so an overdrawn window is dropped rather than costing the reading.
@@ -205,17 +202,17 @@ export function parseClaudeContextUsage(
 
   // The required triple: anything wrong here means there is no usable reading.
   if (
-    typeof usedTokens !== "number"
-    || !Number.isFinite(usedTokens)
-    || usedTokens < 0
-    || typeof totalTokens !== "number"
-    || !Number.isFinite(totalTokens)
-    || totalTokens <= 0
-    || usedTokens > totalTokens
-    || typeof percentUsed !== "number"
-    || !Number.isFinite(percentUsed)
-    || percentUsed < 0
-    || percentUsed > 100
+    typeof usedTokens !== "number" ||
+    !Number.isFinite(usedTokens) ||
+    usedTokens < 0 ||
+    typeof totalTokens !== "number" ||
+    !Number.isFinite(totalTokens) ||
+    totalTokens <= 0 ||
+    usedTokens > totalTokens ||
+    typeof percentUsed !== "number" ||
+    !Number.isFinite(percentUsed) ||
+    percentUsed < 0 ||
+    percentUsed > 100
   ) {
     return undefined;
   }
@@ -247,8 +244,8 @@ export function parseClaudeContextUsage(
 
   if (value.source !== undefined) {
     if (
-      typeof value.source === "string"
-      && CONTEXT_USAGE_SOURCES.has(value.source as NonNullable<ContextUsageSnapshot["source"]>)
+      typeof value.source === "string" &&
+      CONTEXT_USAGE_SOURCES.has(value.source as NonNullable<ContextUsageSnapshot["source"]>)
     ) {
       result.source = value.source as ContextUsageSnapshot["source"];
     } else {
@@ -264,10 +261,10 @@ export function parseClaudeContextUsage(
   if (value.credits !== undefined) {
     const credits = value.credits;
     if (
-      isRecord(credits)
-      && (credits.hasCredits === undefined || typeof credits.hasCredits === "boolean")
-      && (credits.unlimited === undefined || typeof credits.unlimited === "boolean")
-      && isOptionalString(credits.balance)
+      isRecord(credits) &&
+      (credits.hasCredits === undefined || typeof credits.hasCredits === "boolean") &&
+      (credits.unlimited === undefined || typeof credits.unlimited === "boolean") &&
+      isOptionalString(credits.balance)
     ) {
       result.credits = {
         ...(credits.hasCredits !== undefined ? { hasCredits: credits.hasCredits } : {}),
@@ -283,18 +280,20 @@ export function parseClaudeContextUsage(
     if (Array.isArray(value.contextCategories)) {
       const categories = value.contextCategories.flatMap((entry) => {
         if (
-          isRecord(entry)
-          && typeof entry.name === "string"
-          && typeof entry.tokens === "number"
-          && Number.isFinite(entry.tokens)
-          && entry.tokens >= 0
-          && isOptionalString(entry.color)
+          isRecord(entry) &&
+          typeof entry.name === "string" &&
+          typeof entry.tokens === "number" &&
+          Number.isFinite(entry.tokens) &&
+          entry.tokens >= 0 &&
+          isOptionalString(entry.color)
         ) {
-          return [{
-            name: entry.name,
-            tokens: entry.tokens,
-            ...(entry.color !== undefined ? { color: entry.color } : {}),
-          }];
+          return [
+            {
+              name: entry.name,
+              tokens: entry.tokens,
+              ...(entry.color !== undefined ? { color: entry.color } : {}),
+            },
+          ];
         }
         drop("contextCategories");
         return [];
@@ -325,28 +324,20 @@ export function parseClaudeBackgroundTasks(
       droppedTasks?.push(taskId);
       continue;
     }
-    const {
-      id,
-      toolUseId,
-      description,
-      status,
-      isBackgrounded,
-      startedAt,
-      endedAt,
-      error,
-    } = taskValue;
+    const { id, toolUseId, description, status, isBackgrounded, startedAt, endedAt, error } =
+      taskValue;
     if (
-      typeof id !== "string"
-      || id.length === 0
-      || id !== taskId
-      || typeof status !== "string"
-      || !CLAUDE_BACKGROUND_TASK_STATUSES.has(status as ClaudeBackgroundTask["status"])
-      || !isOptionalString(toolUseId)
-      || !isOptionalString(description)
-      || (isBackgrounded !== undefined && typeof isBackgrounded !== "boolean")
-      || !isOptionalFiniteNumber(startedAt)
-      || !isOptionalFiniteNumber(endedAt)
-      || !isOptionalString(error)
+      typeof id !== "string" ||
+      id.length === 0 ||
+      id !== taskId ||
+      typeof status !== "string" ||
+      !CLAUDE_BACKGROUND_TASK_STATUSES.has(status as ClaudeBackgroundTask["status"]) ||
+      !isOptionalString(toolUseId) ||
+      !isOptionalString(description) ||
+      (isBackgrounded !== undefined && typeof isBackgrounded !== "boolean") ||
+      !isOptionalFiniteNumber(startedAt) ||
+      !isOptionalFiniteNumber(endedAt) ||
+      !isOptionalString(error)
     ) {
       droppedTasks?.push(taskId);
       continue;
@@ -652,7 +643,7 @@ const PROMPT_TIMEOUT_MS = 120_000;
 async function fetchWithTimeout(
   url: string,
   options: RequestInit = {},
-  timeoutMs: number = DEFAULT_TIMEOUT_MS
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
 ): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -676,11 +667,7 @@ function fetchClaude(
   // The desktop gateway consumes its own Authorization header before proxying.
   // Keep bridge authentication in a dedicated header so it survives that hop.
   if (client.authToken) headers.set("X-Orkestrator-Claude-Token", client.authToken);
-  return fetchWithTimeout(
-    `${client.baseUrl}${path}`,
-    { ...options, headers },
-    timeoutMs,
-  );
+  return fetchWithTimeout(`${client.baseUrl}${path}`, { ...options, headers }, timeoutMs);
 }
 
 /**
@@ -746,9 +733,7 @@ export async function createSession(
 /**
  * List all sessions
  */
-export async function listSessions(
-  client: ClaudeClient
-): Promise<
+export async function listSessions(client: ClaudeClient): Promise<
   Array<{
     id: string;
     title?: string;
@@ -787,16 +772,12 @@ export async function lookupSession(
     }
     const session = (await response.json()) as Record<string, unknown>;
     if (
-      typeof session.id !== "string"
-      || (
-        session.status !== "idle"
-        && session.status !== "running"
-        && session.status !== "error"
-      )
-      || typeof session.createdAt !== "string"
-      || typeof session.lastActivity !== "string"
-      || !isOptionalString(session.title)
-      || !isOptionalString(session.error)
+      typeof session.id !== "string" ||
+      (session.status !== "idle" && session.status !== "running" && session.status !== "error") ||
+      typeof session.createdAt !== "string" ||
+      typeof session.lastActivity !== "string" ||
+      !isOptionalString(session.title) ||
+      !isOptionalString(session.error)
     ) {
       return {
         kind: "unavailable",
@@ -804,10 +785,7 @@ export async function lookupSession(
       };
     }
     const droppedUsageFields: string[] = [];
-    const contextUsage = parseClaudeContextUsage(
-      session.contextUsage,
-      droppedUsageFields,
-    );
+    const contextUsage = parseClaudeContextUsage(session.contextUsage, droppedUsageFields);
     const droppedRateLimitFields: string[] = [];
     const authoritativeRateLimits = parseClaudeRateLimits(
       session.rateLimits,
@@ -821,10 +799,7 @@ export async function lookupSession(
       }
     }
     const droppedTaskIds: string[] = [];
-    const backgroundTasks = parseClaudeBackgroundTasks(
-      session.backgroundTasks,
-      droppedTaskIds,
-    );
+    const backgroundTasks = parseClaudeBackgroundTasks(session.backgroundTasks, droppedTaskIds);
     const invalidMetadataFields: string[] = [];
     const turnStartedAt = parseBackendTurnStartedAt(session.turnStartedAt);
     if (session.turnStartedAt !== undefined && turnStartedAt === undefined) {
@@ -838,18 +813,15 @@ export async function lookupSession(
       }
     }
     invalidMetadataFields.push(...droppedRateLimitFields);
-    if (
-      session.promptSuggestion !== undefined
-      && typeof session.promptSuggestion !== "string"
-    ) {
+    if (session.promptSuggestion !== undefined && typeof session.promptSuggestion !== "string") {
       invalidMetadataFields.push("promptSuggestion");
     }
     if (session.planMode !== undefined && typeof session.planMode !== "boolean") {
       invalidMetadataFields.push("planMode");
     }
     if (
-      session.completionBlockedByBackgroundTasks !== undefined
-      && typeof session.completionBlockedByBackgroundTasks !== "boolean"
+      session.completionBlockedByBackgroundTasks !== undefined &&
+      typeof session.completionBlockedByBackgroundTasks !== "boolean"
     ) {
       invalidMetadataFields.push("completionBlockedByBackgroundTasks");
     }
@@ -874,13 +846,8 @@ export async function lookupSession(
         contextUsage,
         rateLimits: authoritativeRateLimits,
         promptSuggestion:
-          typeof session.promptSuggestion === "string"
-            ? session.promptSuggestion
-            : undefined,
-        planMode:
-          typeof session.planMode === "boolean"
-            ? session.planMode
-            : undefined,
+          typeof session.promptSuggestion === "string" ? session.promptSuggestion : undefined,
+        planMode: typeof session.planMode === "boolean" ? session.planMode : undefined,
         backgroundTasks,
         completionBlockedByBackgroundTasks:
           typeof session.completionBlockedByBackgroundTasks === "boolean"
@@ -892,9 +859,7 @@ export async function lookupSession(
   } catch (error) {
     return {
       kind: "unavailable",
-      error: error instanceof Error
-        ? error
-        : new Error("Failed to get Claude session"),
+      error: error instanceof Error ? error : new Error("Failed to get Claude session"),
     };
   }
 }
@@ -904,15 +869,11 @@ export async function updateSessionPreferences(
   sessionId: string,
   preferences: { planMode?: boolean },
 ): Promise<void> {
-  const response = await fetchClaude(
-    client,
-    `/session/${sessionId}/preferences`,
-    {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(preferences),
-    },
-  );
+  const response = await fetchClaude(client, `/session/${sessionId}/preferences`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(preferences),
+  });
   if (!response.ok) {
     throw new Error(`Failed to update Claude session preferences: HTTP ${response.status}`);
   }
@@ -922,11 +883,9 @@ export async function dismissPromptSuggestion(
   client: ClaudeClient,
   sessionId: string,
 ): Promise<void> {
-  const response = await fetchClaude(
-    client,
-    `/session/${sessionId}/prompt-suggestion`,
-    { method: "DELETE" },
-  );
+  const response = await fetchClaude(client, `/session/${sessionId}/prompt-suggestion`, {
+    method: "DELETE",
+  });
   if (!response.ok && response.status !== 404) {
     throw new Error(`Failed to dismiss Claude prompt suggestion: HTTP ${response.status}`);
   }
@@ -992,7 +951,13 @@ export async function getSessionMessages(
 }
 
 /** Permission mode for Claude Agent SDK */
-export type PermissionMode = "default" | "acceptEdits" | "bypassPermissions" | "plan" | "dontAsk" | "auto";
+export type PermissionMode =
+  | "default"
+  | "acceptEdits"
+  | "bypassPermissions"
+  | "plan"
+  | "dontAsk"
+  | "auto";
 
 export type ClaudePromptSendOutcome =
   | {
@@ -1024,15 +989,13 @@ export type ClaudePromptSendOutcome =
  * bridge already started. Legacy boolean test doubles remain supported.
  */
 export function shouldReconcileClaudePrompt(result: unknown): boolean {
-  return result === true
-    || (
-      typeof result === "object"
-      && result !== null
-      && (
-        (result as { ok?: unknown }).ok === true
-        || (result as { outcome?: unknown }).outcome === "unknown"
-      )
-    );
+  return (
+    result === true ||
+    (typeof result === "object" &&
+      result !== null &&
+      ((result as { ok?: unknown }).ok === true ||
+        (result as { outcome?: unknown }).outcome === "unknown"))
+  );
 }
 
 /**
@@ -1059,7 +1022,7 @@ export async function sendPrompt(
     promptSuggestions?: boolean;
     outputSchema?: JsonSchema;
     requestId?: string;
-  }
+  },
 ): Promise<ClaudePromptSendOutcome> {
   const requestId = options?.requestId ?? createUuid();
   try {
@@ -1120,9 +1083,7 @@ export async function sendPrompt(
     return {
       ok: true,
       outcome: "accepted",
-      status: body.status === "already-processed"
-        ? "already-processed"
-        : "processing",
+      status: body.status === "already-processed" ? "already-processed" : "processing",
       requestId: typeof body.requestId === "string" ? body.requestId : requestId,
       ...(turnStartedAt !== undefined ? { turnStartedAt } : {}),
       duplicate: body.duplicate === true,
@@ -1192,16 +1153,11 @@ export async function getStructuredOutput<T = unknown>(
   let response: Response;
   try {
     const query = requestId ? `?requestId=${encodeURIComponent(requestId)}` : "";
-    response = await fetchClaude(
-      client,
-      `/session/${sessionId}/structured-output${query}`,
-    );
+    response = await fetchClaude(client, `/session/${sessionId}/structured-output${query}`);
   } catch (error) {
     throw new StructuredOutputReadUnavailableError(
       "claude",
-      error instanceof Error
-        ? error.message
-        : "Failed to read Claude structured output.",
+      error instanceof Error ? error.message : "Failed to read Claude structured output.",
       { requestId, cause: error },
     );
   }
@@ -1244,10 +1200,7 @@ export async function getStructuredOutput<T = unknown>(
 /**
  * Abort a running session
  */
-export async function abortSession(
-  client: ClaudeClient,
-  sessionId: string
-): Promise<boolean> {
+export async function abortSession(client: ClaudeClient, sessionId: string): Promise<boolean> {
   try {
     const response = await fetchClaude(client, `/session/${sessionId}/abort`, {
       method: "POST",
@@ -1262,10 +1215,7 @@ export async function abortSession(
 /**
  * Delete a session
  */
-export async function deleteSession(
-  client: ClaudeClient,
-  sessionId: string
-): Promise<boolean> {
+export async function deleteSession(client: ClaudeClient, sessionId: string): Promise<boolean> {
   try {
     const response = await fetchClaude(client, `/session/${sessionId}`, {
       method: "DELETE",
@@ -1373,9 +1323,7 @@ export async function getPendingQuestions(
   } catch (error) {
     console.error("[claude-client] Failed to get pending questions:", error);
     if (options.throwOnError) {
-      throw error instanceof Error
-        ? error
-        : new Error("Failed to get pending Claude questions");
+      throw error instanceof Error ? error : new Error("Failed to get pending Claude questions");
     }
     return [];
   }
@@ -1390,14 +1338,9 @@ export async function getPendingPlanApprovals(
   options: { throwOnError?: boolean } = {},
 ): Promise<ClaudePlanApprovalRequest[]> {
   try {
-    const response = await fetchClaude(
-      client,
-      `/session/${sessionId}/plan-approvals`,
-    );
+    const response = await fetchClaude(client, `/session/${sessionId}/plan-approvals`);
     if (!response.ok) {
-      throw new Error(
-        `Failed to get pending Claude plan approvals: HTTP ${response.status}`,
-      );
+      throw new Error(`Failed to get pending Claude plan approvals: HTTP ${response.status}`);
     }
     const data = await response.json();
     return data.approvals || [];
@@ -1426,12 +1369,7 @@ export async function getPendingPlanApprovals(
  * `{status:"stale"}` for a closed window and 403 for a prompt that belongs
  * somewhere else, so the two agents' cards can reason identically.
  */
-export type ClaudeApprovalResponseResult =
-  | "applied"
-  | "stale"
-  | "forbidden"
-  | "error"
-  | "unknown";
+export type ClaudeApprovalResponseResult = "applied" | "stale" | "forbidden" | "error" | "unknown";
 
 /** Maps a bridge reply onto the shared outcome union. */
 function approvalResponseResult(response: Response): ClaudeApprovalResponseResult {
@@ -1448,7 +1386,7 @@ export async function answerQuestion(
   client: ClaudeClient,
   sessionId: string,
   questionId: string,
-  answers: string[][]
+  answers: string[][],
 ): Promise<ClaudeApprovalResponseResult> {
   try {
     const response = await fetchClaude(
@@ -1458,7 +1396,7 @@ export async function answerQuestion(
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ answers }),
-      }
+      },
     );
     return approvalResponseResult(response);
   } catch (error) {
@@ -1481,11 +1419,9 @@ export async function dismissQuestion(
   questionId: string,
 ): Promise<ClaudeApprovalResponseResult> {
   try {
-    const response = await fetchClaude(
-      client,
-      `/session/${sessionId}/questions/${questionId}`,
-      { method: "DELETE" },
-    );
+    const response = await fetchClaude(client, `/session/${sessionId}/questions/${questionId}`, {
+      method: "DELETE",
+    });
     return approvalResponseResult(response);
   } catch (error) {
     console.error("[claude-client] Failed to dismiss question:", error);
@@ -1506,7 +1442,7 @@ export async function respondToPlanApproval(
   sessionId: string,
   approvalId: string,
   approved: boolean,
-  feedback?: string
+  feedback?: string,
 ): Promise<ClaudeApprovalResponseResult> {
   try {
     const response = await fetchClaude(
@@ -1516,7 +1452,7 @@ export async function respondToPlanApproval(
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ approved, feedback }),
-      }
+      },
     );
     // A 404 here means the *session* is unknown, which is a genuine failure —
     // the closed-window case is 409/`stale`. These were conflated while the
@@ -1541,14 +1477,10 @@ export async function respondToPlanApproval(
  */
 export async function getSlashCommands(
   client: ClaudeClient,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<string[]> {
   try {
-    const response = await fetchClaude(
-      client,
-      "/plugins/commands",
-      signal ? { signal } : {}
-    );
+    const response = await fetchClaude(client, "/plugins/commands", signal ? { signal } : {});
     if (!response.ok) return [];
     const data = await response.json();
     return data.commands || [];
@@ -1577,9 +1509,7 @@ const MAX_TRACKED_EVENT_CURSORS = 32;
 const VALID_CLAUDE_EVENT_CURSOR = /^[A-Za-z0-9._~-]+(?::[A-Za-z0-9._~-]+)*$/;
 
 /** Split `"<generation>:<revision>"`; null for any other shape. */
-function parseClaudeEventCursor(
-  cursor: string,
-): { generation: string; revision: number } | null {
+function parseClaudeEventCursor(cursor: string): { generation: string; revision: number } | null {
   const separator = cursor.lastIndexOf(":");
   if (separator <= 0) return null;
   const revisionText = cursor.slice(separator + 1);
@@ -1605,10 +1535,10 @@ function rememberClaudeEventCursor(baseUrl: string, cursor: string): void {
     const next = parseClaudeEventCursor(cursor);
     const current = parseClaudeEventCursor(previous);
     if (
-      next
-      && current
-      && next.generation === current.generation
-      && next.revision <= current.revision
+      next &&
+      current &&
+      next.generation === current.generation &&
+      next.revision <= current.revision
     ) {
       return;
     }
@@ -1625,7 +1555,7 @@ function rememberClaudeEventCursor(baseUrl: string, cursor: string): void {
 
 export function subscribeToEvents(
   client: ClaudeClient,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): AsyncIterable<ClaudeEvent> {
   return {
     [Symbol.asyncIterator](): AsyncIterator<ClaudeEvent> {

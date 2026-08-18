@@ -27,9 +27,7 @@ function pngBytes(width: number, height: number): Uint8Array {
 function gifBytes(width: number, height: number, version: "87a" | "89a" = "89a"): Uint8Array {
   const bytes = new Uint8Array(10);
   bytes.set(
-    version === "87a"
-      ? [0x47, 0x49, 0x46, 0x38, 0x37, 0x61]
-      : [0x47, 0x49, 0x46, 0x38, 0x39, 0x61],
+    version === "87a" ? [0x47, 0x49, 0x46, 0x38, 0x37, 0x61] : [0x47, 0x49, 0x46, 0x38, 0x39, 0x61],
     0,
   );
   const view = new DataView(bytes.buffer);
@@ -49,24 +47,44 @@ function bmpBytes(width: number, height: number): Uint8Array {
 
 function jpegBytes(width: number, height: number): Uint8Array {
   const bytes = new Uint8Array([
-    0xff, 0xd8,
-    0xff, 0xe0, 0x00, 0x02,
-    0xff, 0xc0, 0x00, 0x07, 0x08,
-    (height >> 8) & 0xff, height & 0xff,
-    (width >> 8) & 0xff, width & 0xff,
+    0xff,
+    0xd8,
+    0xff,
+    0xe0,
+    0x00,
+    0x02,
+    0xff,
+    0xc0,
+    0x00,
+    0x07,
+    0x08,
+    (height >> 8) & 0xff,
+    height & 0xff,
+    (width >> 8) & 0xff,
+    width & 0xff,
   ]);
   return bytes;
 }
 
 function jpegWithMarkerPrefix(width: number, height: number): Uint8Array {
   return new Uint8Array([
-    0xff, 0xd8,
+    0xff,
+    0xd8,
     0x00,
-    0xff, 0xff, 0x01,
-    0xff, 0xd0,
-    0xff, 0xc2, 0x00, 0x07, 0x08,
-    (height >> 8) & 0xff, height & 0xff,
-    (width >> 8) & 0xff, width & 0xff,
+    0xff,
+    0xff,
+    0x01,
+    0xff,
+    0xd0,
+    0xff,
+    0xc2,
+    0x00,
+    0x07,
+    0x08,
+    (height >> 8) & 0xff,
+    height & 0xff,
+    (width >> 8) & 0xff,
+    width & 0xff,
   ]);
 }
 
@@ -138,16 +156,28 @@ describe("clipboard image validation", () => {
   });
 
   test("returns exact dimensions for each WebP encoding", async () => {
-    await expect(readClipboardImageBlob(new Blob([webpExtendedBytes(48, 24)]))).resolves.toMatchObject({ width: 48, height: 24 });
-    await expect(readClipboardImageBlob(new Blob([webpLosslessBytes(50, 25)]))).resolves.toMatchObject({ width: 50, height: 25 });
-    await expect(readClipboardImageBlob(new Blob([webpLossyBytes(60, 30)]))).resolves.toMatchObject({ width: 60, height: 30 });
+    await expect(
+      readClipboardImageBlob(new Blob([webpExtendedBytes(48, 24)])),
+    ).resolves.toMatchObject({ width: 48, height: 24 });
+    await expect(
+      readClipboardImageBlob(new Blob([webpLosslessBytes(50, 25)])),
+    ).resolves.toMatchObject({ width: 50, height: 25 });
+    await expect(readClipboardImageBlob(new Blob([webpLossyBytes(60, 30)]))).resolves.toMatchObject(
+      { width: 60, height: 30 },
+    );
   });
 
   test("rejects empty, malformed, invalid-dimension, and unsupported images", async () => {
     await expect(readClipboardImageBlob(new Blob([]))).rejects.toMatchObject({ code: "invalid" });
-    await expect(readClipboardImageBlob(new Blob(["not-an-image"]))).rejects.toMatchObject({ code: "unsupported" });
-    await expect(readClipboardImageBlob(new Blob([pngBytes(0, 10)]))).rejects.toMatchObject({ code: "invalid" });
-    await expect(readClipboardImageBlob(new Blob([jpegBytes(10, 0)]))).rejects.toMatchObject({ code: "invalid" });
+    await expect(readClipboardImageBlob(new Blob(["not-an-image"]))).rejects.toMatchObject({
+      code: "unsupported",
+    });
+    await expect(readClipboardImageBlob(new Blob([pngBytes(0, 10)]))).rejects.toMatchObject({
+      code: "invalid",
+    });
+    await expect(readClipboardImageBlob(new Blob([jpegBytes(10, 0)]))).rejects.toMatchObject({
+      code: "invalid",
+    });
   });
 
   test("rejects recognizable but truncated or malformed image headers", async () => {
@@ -164,10 +194,7 @@ describe("clipboard image validation", () => {
       new Uint8Array([0xff, 0xd8, 0xff, 0xd9]),
       new Uint8Array([0xff, 0xd8, 0xff, 0xda]),
       // RIFF/WEBP signature that is truncated or has no recognized VP8 chunk.
-      new Uint8Array([
-        0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0,
-        0x57, 0x45, 0x42, 0x50,
-      ]),
+      new Uint8Array([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50]),
       (() => {
         const bytes = webpExtendedBytes(2, 1);
         bytes.set([0x42, 0x41, 0x44, 0x21], 12);
@@ -202,22 +229,15 @@ describe("clipboard image validation", () => {
       // The declared segment extends beyond the available bytes.
       new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x00]),
       // A start-of-frame segment shorter than seven bytes has no dimensions.
-      new Uint8Array([
-        0xff, 0xd8,
-        0xff, 0xc0, 0x00, 0x06, 0x08, 0x00, 0x01, 0x00,
-      ]),
+      new Uint8Array([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x06, 0x08, 0x00, 0x01, 0x00]),
       // Standalone markers are legal to skip, but do not make an image complete.
-      new Uint8Array([
-        0xff, 0xd8,
-        0xff, 0x01,
-        0xff, 0xd7,
-        0xff, 0xd9,
-      ]),
+      new Uint8Array([0xff, 0xd8, 0xff, 0x01, 0xff, 0xd7, 0xff, 0xd9]),
     ];
 
     for (const bytes of malformedJpegs) {
-      await expect(readClipboardImageBlob(new Blob([bytes], { type: "image/jpeg" }))).rejects
-        .toMatchObject({ code: "unsupported" });
+      await expect(
+        readClipboardImageBlob(new Blob([bytes], { type: "image/jpeg" })),
+      ).rejects.toMatchObject({ code: "unsupported" });
     }
   });
 
@@ -240,11 +260,17 @@ describe("clipboard image validation", () => {
       type: "image/png",
       arrayBuffer,
     } as unknown as Blob;
-    await expect(readClipboardImageBlob(oversizedBlob)).rejects.toMatchObject({ code: "too-large" });
+    await expect(readClipboardImageBlob(oversizedBlob)).rejects.toMatchObject({
+      code: "too-large",
+    });
     expect(arrayBuffer).not.toHaveBeenCalled();
 
-    await expect(readClipboardImageBlob(new Blob([pngBytes(32769, 1)]))).rejects.toMatchObject({ code: "too-large" });
-    await expect(readClipboardImageBlob(new Blob([pngBytes(9000, 9000)]))).rejects.toMatchObject({ code: "too-large" });
+    await expect(readClipboardImageBlob(new Blob([pngBytes(32769, 1)]))).rejects.toMatchObject({
+      code: "too-large",
+    });
+    await expect(readClipboardImageBlob(new Blob([pngBytes(9000, 9000)]))).rejects.toMatchObject({
+      code: "too-large",
+    });
   });
 
   test("accepts the exact byte limit and rejects the first byte over it", async () => {
@@ -314,7 +340,9 @@ describe("clipboard image validation", () => {
       [-1, 2],
       [1, 0],
     ] as const) {
-      expect(() => validateClipboardImageDimensions(...dimensions)).toThrow(ClipboardImageValidationError);
+      expect(() => validateClipboardImageDimensions(...dimensions)).toThrow(
+        ClipboardImageValidationError,
+      );
     }
   });
 
@@ -323,10 +351,12 @@ describe("clipboard image validation", () => {
       width: MAX_CLIPBOARD_IMAGE_DIMENSION,
       height: 1,
     });
-    expect(() => validateClipboardImageDimensions(MAX_CLIPBOARD_IMAGE_DIMENSION + 1, 1))
-      .toThrow(ClipboardImageValidationError);
-    expect(() => validateClipboardImageDimensions(1, MAX_CLIPBOARD_IMAGE_DIMENSION + 1))
-      .toThrow(ClipboardImageValidationError);
+    expect(() => validateClipboardImageDimensions(MAX_CLIPBOARD_IMAGE_DIMENSION + 1, 1)).toThrow(
+      ClipboardImageValidationError,
+    );
+    expect(() => validateClipboardImageDimensions(1, MAX_CLIPBOARD_IMAGE_DIMENSION + 1)).toThrow(
+      ClipboardImageValidationError,
+    );
 
     const squareAtPixelLimit = Math.sqrt(MAX_CLIPBOARD_IMAGE_PIXELS);
     expect(Number.isInteger(squareAtPixelLimit)).toBe(true);
@@ -334,10 +364,9 @@ describe("clipboard image validation", () => {
       width: squareAtPixelLimit,
       height: squareAtPixelLimit,
     });
-    expect(() => validateClipboardImageDimensions(
-      squareAtPixelLimit,
-      squareAtPixelLimit + 1,
-    )).toThrow(ClipboardImageValidationError);
+    expect(() =>
+      validateClipboardImageDimensions(squareAtPixelLimit, squareAtPixelLimit + 1),
+    ).toThrow(ClipboardImageValidationError);
   });
 
   test("calculates bounded output dimensions while preserving aspect ratio", () => {
@@ -383,7 +412,9 @@ describe("clipboard image validation", () => {
       }
     }
     globalThis.FileReader = NonStringReader as unknown as typeof FileReader;
-    await expect(readClipboardImageBlob(new Blob([pngBytes(2, 1)]))).rejects.toThrow("could not be read");
+    await expect(readClipboardImageBlob(new Blob([pngBytes(2, 1)]))).rejects.toThrow(
+      "could not be read",
+    );
   });
 
   test("uses a stable fallback when FileReader reports an error without details", async () => {
@@ -398,7 +429,8 @@ describe("clipboard image validation", () => {
     }
     globalThis.FileReader = EmptyErrorReader as unknown as typeof FileReader;
 
-    await expect(readClipboardImageBlob(new Blob([pngBytes(2, 1)]))).rejects
-      .toThrow("Clipboard image could not be read");
+    await expect(readClipboardImageBlob(new Blob([pngBytes(2, 1)]))).rejects.toThrow(
+      "Clipboard image could not be read",
+    );
   });
 });

@@ -29,14 +29,16 @@ interface Harness {
   dispose(): Promise<void>;
 }
 
-async function harness(options: {
-  environmentName?: string;
-  setupScriptsComplete?: boolean;
-  setupPhase?: "pending" | "running" | "ready" | "failed";
-  status?: "running" | "stopped";
-  containerId?: string | null;
-  maxDispatchAttempts?: number;
-} = {}): Promise<Harness> {
+async function harness(
+  options: {
+    environmentName?: string;
+    setupScriptsComplete?: boolean;
+    setupPhase?: "pending" | "running" | "ready" | "failed";
+    status?: "running" | "stopped";
+    containerId?: string | null;
+    maxDispatchAttempts?: number;
+  } = {},
+): Promise<Harness> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-prompt-queue-"));
   const storage = new StorageService(dataDir);
   await storage.init();
@@ -96,9 +98,8 @@ async function harness(options: {
 
   context.drainer = drainer;
   context.storage = storage;
-  context.submits = () => context.calls.filter(
-    (call) => call.command === "claude_tmux_submit_queued",
-  );
+  context.submits = () =>
+    context.calls.filter((call) => call.command === "claude_tmux_submit_queued");
   context.queue = () => storage.getPromptQueue(QUEUE_KEY);
   context.dispose = async () => {
     await drainer.shutdown();
@@ -169,11 +170,13 @@ describe("PromptQueueDrainer", () => {
   test("appends staged attachments as workspace paths", async () => {
     const context = await harness();
     try {
-      await enqueue(context.storage, [{
-        id: "m-1",
-        text: "Look at this",
-        attachments: [{ name: "shot.png", path: "/tmp/my shots/shot.png" }],
-      }]);
+      await enqueue(context.storage, [
+        {
+          id: "m-1",
+          text: "Look at this",
+          attachments: [{ name: "shot.png", path: "/tmp/my shots/shot.png" }],
+        },
+      ]);
 
       await context.drainer.drainAll();
 
@@ -227,12 +230,11 @@ describe("PromptQueueDrainer", () => {
     const malformed = await harness();
     try {
       await enqueue(malformed.storage, [{ id: "m-1", text: "Queued", attachments: [] }]);
-      await malformed.storage.saveComposeDraft(
-        DRAFT_KEY,
-        "environment",
-        ENVIRONMENT_ID,
-        { text: 42, mentions: [], attachments: [] },
-      );
+      await malformed.storage.saveComposeDraft(DRAFT_KEY, "environment", ENVIRONMENT_ID, {
+        text: 42,
+        mentions: [],
+        attachments: [],
+      });
       await malformed.drainer.drainAll();
       expect(malformed.submits()).toHaveLength(0);
     } finally {
@@ -372,10 +374,7 @@ describe("PromptQueueDrainer", () => {
       await enqueue(context.storage, [{ id: "m-1", text: "Queued", attachments: [] }]);
       const reservation = await context.storage.reservePromptQueueHeadForDispatch(QUEUE_KEY);
       expect(reservation).not.toBeNull();
-      await context.storage.markPromptQueueDispatchSubmitting(
-        QUEUE_KEY,
-        reservation!.requestId,
-      );
+      await context.storage.markPromptQueueDispatchSubmitting(QUEUE_KEY, reservation!.requestId);
 
       await context.drainer.drainAll();
 
@@ -391,9 +390,7 @@ describe("PromptQueueDrainer", () => {
   test("rejects a queue whose owner differs from its encoded target", async () => {
     const context = await harness();
     try {
-      await enqueue(context.storage, [
-        { id: "m-1", text: "Wrong target", attachments: [] },
-      ]);
+      await enqueue(context.storage, [{ id: "m-1", text: "Wrong target", attachments: [] }]);
       const getPromptQueue = context.storage.getPromptQueue.bind(context.storage);
       context.storage.getPromptQueue = async (queueKey) => {
         const queue = await getPromptQueue(queueKey);
@@ -469,9 +466,9 @@ describe("PromptQueueDrainer", () => {
 
       await context.drainer.drainAll();
 
-      expect(context.calls.some(
-        (call) => call.command === "rename_environment_from_prompt",
-      )).toBe(false);
+      expect(context.calls.some((call) => call.command === "rename_environment_from_prompt")).toBe(
+        false,
+      );
       expect(context.submits()).toHaveLength(1);
     } finally {
       await context.dispose();
@@ -481,11 +478,9 @@ describe("PromptQueueDrainer", () => {
   test("ignores queues belonging to agents with their own drainer", async () => {
     const context = await harness();
     try {
-      await context.storage.savePromptQueue(
-        `codex\0env-${ENVIRONMENT_ID}:tab-1`,
-        ENVIRONMENT_ID,
-        [{ id: "m-1", text: "Codex work", attachments: [] }],
-      );
+      await context.storage.savePromptQueue(`codex\0env-${ENVIRONMENT_ID}:tab-1`, ENVIRONMENT_ID, [
+        { id: "m-1", text: "Codex work", attachments: [] },
+      ]);
 
       await context.drainer.drainAll();
 

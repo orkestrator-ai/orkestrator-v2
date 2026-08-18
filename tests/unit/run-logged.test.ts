@@ -8,10 +8,14 @@ const runner = path.join(root, "scripts/run-logged.ts");
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(temporaryDirectories.splice(0).map((target) => rm(target, {
-    recursive: true,
-    force: true,
-  })));
+  await Promise.all(
+    temporaryDirectories.splice(0).map((target) =>
+      rm(target, {
+        recursive: true,
+        force: true,
+      }),
+    ),
+  );
 });
 
 async function runLogged(args: string[]) {
@@ -49,10 +53,9 @@ describe("scripts/run-logged.ts", () => {
     const entries = await readdir(result.logDirectory);
     expect(entries).toContain("summary.json");
     expect(entries.some((entry) => entry.endsWith(".log"))).toBe(false);
-    const summary = JSON.parse(await readFile(
-      path.join(result.logDirectory, "summary.json"),
-      "utf8",
-    )) as { succeeded: boolean; groups: Array<{ name: string }> };
+    const summary = JSON.parse(
+      await readFile(path.join(result.logDirectory, "summary.json"), "utf8"),
+    ) as { succeeded: boolean; groups: Array<{ name: string }> };
     expect(summary.succeeded).toBe(true);
     expect(summary.groups[0]?.name).toBe("focused validation");
   });
@@ -71,8 +74,9 @@ describe("scripts/run-logged.ts", () => {
     expect(result.stdout).toContain("FAIL failing validation");
     expect(result.stderr).toContain("intentional failure");
     expect(result.stderr).toContain("Failure artifacts:");
-    expect((await readdir(result.logDirectory)).some((entry) => entry.endsWith(".log.gz")))
-      .toBe(true);
+    expect((await readdir(result.logDirectory)).some((entry) => entry.endsWith(".log.gz"))).toBe(
+      true,
+    );
   });
 
   test("uses the default name when no name flag is supplied", async () => {

@@ -33,9 +33,7 @@ async function createWorkspaceTempDir(prefix: string): Promise<string> {
   return dir;
 }
 
-async function captureCommandFailure(
-  promise: Promise<unknown>,
-): Promise<CommandFailedError> {
+async function captureCommandFailure(promise: Promise<unknown>): Promise<CommandFailedError> {
   try {
     await promise;
   } catch (error) {
@@ -86,7 +84,9 @@ describe("Electron shell file helpers", () => {
     await fs.mkdir(directoryTarget);
     await expect(readFileBase64(directoryTarget)).rejects.toThrow("not a stable regular file");
 
-    await expect(readFileBase64(disallowedFile)).rejects.toThrow("outside Orkestrator workspace storage");
+    await expect(readFileBase64(disallowedFile)).rejects.toThrow(
+      "outside Orkestrator workspace storage",
+    );
   });
 
   test("writes and reads only relative paths inside the requested root", async () => {
@@ -94,15 +94,21 @@ describe("Electron shell file helpers", () => {
     const worktree = path.join(root, "orkestrator-ai", "workspaces", "project");
     await fs.mkdir(worktree, { recursive: true });
 
-    await expect(writeFileBase64(worktree, "../escape.txt", Buffer.from("bad").toString("base64"))).rejects.toThrow(
-      "parent directory traversal",
-    );
+    await expect(
+      writeFileBase64(worktree, "../escape.txt", Buffer.from("bad").toString("base64")),
+    ).rejects.toThrow("parent directory traversal");
 
-    const writtenPath = await writeFileBase64(worktree, "src\\hello.ts", Buffer.from("export {};").toString("base64"));
+    const writtenPath = await writeFileBase64(
+      worktree,
+      "src\\hello.ts",
+      Buffer.from("export {};").toString("base64"),
+    );
     expect(writtenPath).toBe(path.join(worktree, "src", "hello.ts"));
 
     await expect(readTextFile(worktree, "/absolute.ts")).rejects.toThrow("absolute paths");
-    await expect(readTextFile(worktree, "src/../hello.ts")).rejects.toThrow("parent directory traversal");
+    await expect(readTextFile(worktree, "src/../hello.ts")).rejects.toThrow(
+      "parent directory traversal",
+    );
     await expect(readTextFile(worktree, "src/hello.ts")).resolves.toEqual({
       path: "src/hello.ts",
       content: "export {};",
@@ -193,7 +199,10 @@ describe("runCommand", () => {
     const secret = "github_secret_token";
     const success = await runCommand(
       "node",
-      ["-e", "process.stdout.write(process.env.TEST_SECRET);process.stderr.write(process.env.TEST_SECRET)"],
+      [
+        "-e",
+        "process.stdout.write(process.env.TEST_SECRET);process.stderr.write(process.env.TEST_SECRET)",
+      ],
       {
         env: { ...process.env, TEST_SECRET: secret },
         redactValues: [secret],
@@ -208,7 +217,10 @@ describe("runCommand", () => {
     try {
       await runCommand(
         "node",
-        ["-e", "process.stderr.write('Docker permission denied for ' + process.env.TEST_SECRET);process.exit(1)"],
+        [
+          "-e",
+          "process.stderr.write('Docker permission denied for ' + process.env.TEST_SECRET);process.exit(1)",
+        ],
         {
           env: { ...process.env, TEST_SECRET: secret },
           redactValues: [secret],
@@ -228,11 +240,7 @@ describe("runCommand", () => {
 
     let argvFailure: unknown;
     try {
-      await runCommand(
-        "node",
-        ["-e", "process.exit(1)", secret],
-        { redactValues: [secret] },
-      );
+      await runCommand("node", ["-e", "process.exit(1)", secret], { redactValues: [secret] });
     } catch (error) {
       argvFailure = error;
     }
@@ -247,9 +255,7 @@ describe("runCommand", () => {
   });
 
   test("preserves a missing executable as structured failure metadata", async () => {
-    const failure = await captureCommandFailure(
-      runCommand("orkestrator-no-such-binary-xyz", []),
-    );
+    const failure = await captureCommandFailure(runCommand("orkestrator-no-such-binary-xyz", []));
 
     expect(failure.timedOut).toBe(false);
     expect(failure.executableMissing).toBe(true);
@@ -258,11 +264,9 @@ describe("runCommand", () => {
   });
 
   test("can launch a child in an owned process group", async () => {
-    const child = spawnCommand(
-      process.execPath,
-      ["-e", "setInterval(() => {}, 1_000)"],
-      { detached: true },
-    );
+    const child = spawnCommand(process.execPath, ["-e", "setInterval(() => {}, 1_000)"], {
+      detached: true,
+    });
     expect(child.pid).toBeGreaterThan(0);
     try {
       process.kill(-(child.pid ?? 0), "SIGTERM");

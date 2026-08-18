@@ -22,9 +22,8 @@ import { cancelCursorToolMetadataReconcile } from "./acp-tools.js";
 await restorePersistedState();
 
 export const server = createServer((request, response) => {
-  (response as ServerResponse & { [RESPONSE_ACCEPTS_GZIP]?: boolean })[
-    RESPONSE_ACCEPTS_GZIP
-  ] = acceptsGzip(request.headers["accept-encoding"]);
+  (response as ServerResponse & { [RESPONSE_ACCEPTS_GZIP]?: boolean })[RESPONSE_ACCEPTS_GZIP] =
+    acceptsGzip(request.headers["accept-encoding"]);
   if (!applyOriginPolicy(request, response)) return;
   const controller = new AbortController();
   const abortDisconnectedClient = () => {
@@ -52,7 +51,9 @@ export const server = createServer((request, response) => {
     });
 });
 
-server.listen(port, hostname, () => console.log(`ACP bridge (${provider}) listening on ${hostname}:${port}`));
+server.listen(port, hostname, () =>
+  console.log(`ACP bridge (${provider}) listening on ${hostname}:${port}`),
+);
 
 let shutdownPromise: Promise<void> | null = null;
 export function shutdown(): Promise<void> {
@@ -60,7 +61,7 @@ export function shutdown(): Promise<void> {
   setShuttingDown(true);
   shutdownPromise = (async () => {
     for (const state of sessions.values()) {
-      for (const approval of [...state.approvals.values()]) approval.respond();
+      for (const approval of Array.from(state.approvals.values())) approval.respond();
       cancelCursorToolMetadataReconcile(state);
     }
     await Promise.allSettled([
@@ -85,7 +86,10 @@ if (parentPid !== null) {
 }
 for (const signal of ["SIGTERM", "SIGINT"] as const) {
   process.once(signal, () => {
-    void shutdown().then(() => process.exit(0), () => process.exit(1));
+    void shutdown().then(
+      () => process.exit(0),
+      () => process.exit(1),
+    );
     setTimeout(() => process.exit(1), 5_000).unref();
   });
 }

@@ -31,9 +31,7 @@ function simpleList(values: readonly string[], emptyLabel = "None."): string {
 
 function scopedFileList(values: readonly ReviewScopedFile[]): string {
   return values.length > 0
-    ? values
-        .map((entry) => `  - ${text(entry.file)} — ${text(entry.reason)}`)
-        .join("\n")
+    ? values.map((entry) => `  - ${text(entry.file)} — ${text(entry.reason)}`).join("\n")
     : "  - None.";
 }
 
@@ -91,10 +89,7 @@ export function formatStructuredReviewReport(value: unknown): string {
     "## Review Scope",
     bullet("Target branch", report.reviewScope.targetBranch),
     bullet("Base ref", report.reviewScope.baseRef),
-    bullet(
-      "Commit created",
-      commit ? `${text(commit.sha)} — ${text(commit.subject)}` : "None.",
-    ),
+    bullet("Commit created", commit ? `${text(commit.sha)} — ${text(commit.subject)}` : "None."),
     "- Files reviewed:",
     simpleList(report.reviewScope.filesReviewed),
     "- Files skipped:",
@@ -106,19 +101,14 @@ export function formatStructuredReviewReport(value: unknown): string {
       ? report.reviewScope.commandsRun
           .map(
             (command) =>
-              `  - ${text(command.command)} — ${command.result} (${text(
-                command.summary,
-              )})`,
+              `  - ${text(command.command)} — ${command.result} (${text(command.summary)})`,
           )
           .join("\n")
       : "  - None.",
     "- Commands not run:",
     report.reviewScope.commandsNotRun.length > 0
       ? report.reviewScope.commandsNotRun
-          .map(
-            (command) =>
-              `  - ${text(command.command)} — ${text(command.reason)}`,
-          )
+          .map((command) => `  - ${text(command.command)} — ${text(command.reason)}`)
           .join("\n")
       : "  - None.",
     "- Limitations:",
@@ -132,10 +122,7 @@ export function formatStructuredReviewReport(value: unknown): string {
     report.whatChanged.keyCodeChanges.length > 0
       ? report.whatChanged.keyCodeChanges
           .map(
-            (change) =>
-              `  - ${location(change.file, change.line)} — ${text(
-                change.description,
-              )}`,
+            (change) => `  - ${location(change.file, change.line)} — ${text(change.description)}`,
           )
           .join("\n")
       : "  - None.",
@@ -150,9 +137,7 @@ export function formatStructuredReviewReport(value: unknown): string {
     ),
     bullet(
       "Risk areas",
-      report.riskProfile.riskAreas.length > 0
-        ? report.riskProfile.riskAreas.join(", ")
-        : "None.",
+      report.riskProfile.riskAreas.length > 0 ? report.riskProfile.riskAreas.join(", ") : "None.",
     ),
     bullet("Overall risk", report.riskProfile.overallRisk),
     bullet("Reasoning", report.riskProfile.reasoning),
@@ -170,10 +155,7 @@ export function formatStructuredReviewReport(value: unknown): string {
       ? report.strengths
           .map(
             (strength) =>
-              `- ${text(strength.description)} — ${location(
-                strength.file,
-                strength.line,
-              )}`,
+              `- ${text(strength.description)} — ${location(strength.file, strength.line)}`,
           )
           .join("\n")
       : "- None.",

@@ -85,7 +85,18 @@ interface DiffStatsEntry {
 export class DiffStatsService {
   private readonly entries = new Map<string, DiffStatsEntry>();
   private readonly options: Required<
-    Pick<DiffStatsServiceOptions, "scan" | "emit" | "pollIntervalMs" | "safetyNetIntervalMs" | "now" | "monotonicNow" | "schedule" | "cancel" | "startWatcher">
+    Pick<
+      DiffStatsServiceOptions,
+      | "scan"
+      | "emit"
+      | "pollIntervalMs"
+      | "safetyNetIntervalMs"
+      | "now"
+      | "monotonicNow"
+      | "schedule"
+      | "cancel"
+      | "startWatcher"
+    >
   > & { onWarning?: DiffStatsServiceOptions["onWarning"] };
 
   constructor(options: DiffStatsServiceOptions) {
@@ -96,11 +107,13 @@ export class DiffStatsService {
       safetyNetIntervalMs: options.safetyNetIntervalMs ?? DIFF_SAFETY_NET_INTERVAL_MS,
       now: options.now ?? (() => new Date().toISOString()),
       monotonicNow: options.monotonicNow ?? (() => Date.now()),
-      schedule: options.schedule ?? ((callback, intervalMs) => {
-        const timer = setInterval(callback, intervalMs);
-        timer.unref?.();
-        return timer;
-      }),
+      schedule:
+        options.schedule ??
+        ((callback, intervalMs) => {
+          const timer = setInterval(callback, intervalMs);
+          timer.unref?.();
+          return timer;
+        }),
       cancel: options.cancel ?? ((timer) => clearInterval(timer as ReturnType<typeof setInterval>)),
       startWatcher: options.startWatcher ?? startWorktreeWatcher,
       onWarning: options.onWarning,
@@ -202,7 +215,7 @@ export class DiffStatsService {
 
   /** Releases every watcher and timer; used on backend shutdown. */
   shutdown(): void {
-    for (const environmentId of [...this.entries.keys()]) {
+    for (const environmentId of Array.from(this.entries.keys())) {
       this.untrack(environmentId);
     }
   }
@@ -268,7 +281,10 @@ export class DiffStatsService {
     if (entry.inFlight) entry.rescanRequested = true;
   }
 
-  private findEntry(lookup: { worktreePath?: string; containerId?: string }): DiffStatsEntry | undefined {
+  private findEntry(lookup: {
+    worktreePath?: string;
+    containerId?: string;
+  }): DiffStatsEntry | undefined {
     for (const entry of this.entries.values()) {
       if (lookup.worktreePath && entry.target.worktreePath === lookup.worktreePath) return entry;
       if (lookup.containerId && entry.target.containerId === lookup.containerId) return entry;
@@ -374,10 +390,11 @@ export class DiffStatsService {
 
     // The environment may have been retargeted or dropped while the scan ran.
     if (
-      !entry.active
-      || !isSameTarget(entry.target, target)
-      || entry.scanGeneration !== scanGeneration
-    ) return;
+      !entry.active ||
+      !isSameTarget(entry.target, target) ||
+      entry.scanGeneration !== scanGeneration
+    )
+      return;
 
     entry.cachedChanges = result.changes;
     entry.cachedAt = this.options.monotonicNow();
@@ -414,16 +431,20 @@ export class DiffStatsService {
 }
 
 function isSameTarget(a: DiffStatsTarget, b: DiffStatsTarget): boolean {
-  return a.environmentId === b.environmentId
-    && a.kind === b.kind
-    && a.comparisonRef === b.comparisonRef
-    && a.worktreePath === b.worktreePath
-    && a.containerId === b.containerId;
+  return (
+    a.environmentId === b.environmentId &&
+    a.kind === b.kind &&
+    a.comparisonRef === b.comparisonRef &&
+    a.worktreePath === b.worktreePath &&
+    a.containerId === b.containerId
+  );
 }
 
 function isSameStats(a: EnvironmentDiffStats, b: EnvironmentDiffStats): boolean {
-  return a.additions === b.additions
-    && a.deletions === b.deletions
-    && a.filesChanged === b.filesChanged
-    && a.truncated === b.truncated;
+  return (
+    a.additions === b.additions &&
+    a.deletions === b.deletions &&
+    a.filesChanged === b.filesChanged &&
+    a.truncated === b.truncated
+  );
 }

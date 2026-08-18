@@ -1,26 +1,28 @@
 import { beforeEach, expect, mock, test } from "bun:test";
 import type { Environment } from "@/types";
 
-const overrideEnvironmentSetup = mock(async (environmentId: string) => ({
-  id: environmentId,
-  setupPhase: "ready",
-  setupOverride: true,
-} as Environment));
-const runEnvironmentSetup = mock(async (environmentId: string) => ({
-  id: environmentId,
-  setupPhase: "ready",
-  setupScriptsComplete: true,
-} as Environment));
+const overrideEnvironmentSetup = mock(
+  async (environmentId: string) =>
+    ({
+      id: environmentId,
+      setupPhase: "ready",
+      setupOverride: true,
+    }) as Environment,
+);
+const runEnvironmentSetup = mock(
+  async (environmentId: string) =>
+    ({
+      id: environmentId,
+      setupPhase: "ready",
+      setupScriptsComplete: true,
+    }) as Environment,
+);
 
 mock.module("@/lib/backend", () => ({ overrideEnvironmentSetup, runEnvironmentSetup }));
 
 const { useEnvironmentStore } = await import("@/stores/environmentStore");
-const {
-  forceResolveSetupRuntime,
-  isSetupBlocked,
-  isSetupPending,
-  retrySetupRuntime,
-} = await import("./setup-commands");
+const { forceResolveSetupRuntime, isSetupBlocked, isSetupPending, retrySetupRuntime } =
+  await import("./setup-commands");
 
 beforeEach(() => {
   overrideEnvironmentSetup.mockClear();
@@ -63,8 +65,7 @@ test("forceResolveSetupRuntime rejects when the backend override fails", async (
   overrideEnvironmentSetup.mockRejectedValueOnce(new Error("backend unavailable"));
 
   await expect(forceResolveSetupRuntime("env-1")).rejects.toThrow("backend unavailable");
-  expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.setupPhase)
-    .toBe("failed");
+  expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.setupPhase).toBe("failed");
 });
 
 test("retrySetupRuntime runs setup and projects the authoritative result", async () => {
@@ -92,6 +93,5 @@ test("retrySetupRuntime leaves the failed phase intact when retry rejects", asyn
   runEnvironmentSetup.mockRejectedValueOnce(new Error("retry unavailable"));
 
   await expect(retrySetupRuntime("env-1")).rejects.toThrow("retry unavailable");
-  expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.setupPhase)
-    .toBe("failed");
+  expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.setupPhase).toBe("failed");
 });

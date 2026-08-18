@@ -101,9 +101,7 @@ const ROOT = "root and agent-support tests";
 const BRIDGES = "bridges";
 const PROTOCOL = "codex protocol lockfile";
 
-function isolatedRunnerEnvironment(
-  overrides: NodeJS.ProcessEnv = {},
-): NodeJS.ProcessEnv {
+function isolatedRunnerEnvironment(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const environment = { ...process.env, ...overrides };
   delete environment[TEST_LOG_DIRECTORY_ENV];
   return environment;
@@ -178,9 +176,7 @@ describe("scripts/test-all.ts", () => {
     // of its `dependsOn` tasks, so `--` here would give `bun run build` and
     // `bun run test` different `@orkestrator/*#build` hashes and re-run
     // `tsc && vite build` on every alternation between the two.
-    const workspaceGroup = buildConcurrentGroups(10).find(
-      (group) => group.name === WORKSPACE,
-    )!;
+    const workspaceGroup = buildConcurrentGroups(10).find((group) => group.name === WORKSPACE)!;
 
     expect(workspaceGroup.args).not.toContain("--");
     expect(workspaceGroup.args.some((argument) => argument.startsWith("--parallel"))).toBe(false);
@@ -206,8 +202,31 @@ describe("scripts/test-all.ts", () => {
     // not merely a slow run. Degenerate inputs are included because `cores`
     // ultimately comes from `availableParallelism()`.
     for (const cores of [
-      -8, -1, 0, 0.5, 1, 1.9, 2, 3, 3.7, 4, 5, 6, 7, 8, 9, 10, 12, 16, 18, 20, 24, 32, 64,
-      Number.NaN, Number.POSITIVE_INFINITY,
+      -8,
+      -1,
+      0,
+      0.5,
+      1,
+      1.9,
+      2,
+      3,
+      3.7,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      12,
+      16,
+      18,
+      20,
+      24,
+      32,
+      64,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
     ]) {
       const plan = planWorkers(cores);
       const budget = Math.min(
@@ -217,9 +236,7 @@ describe("scripts/test-all.ts", () => {
           Number.isFinite(cores) ? Math.floor(cores) : MIN_AGGREGATE_TEST_WORKERS,
         ),
       );
-      const aggregate = plan.root
-        + plan.bridges
-        + plan.workspace * plan.workspaceConcurrency;
+      const aggregate = plan.root + plan.bridges + plan.workspace * plan.workspaceConcurrency;
 
       // Exactly the budget, everywhere: `root` absorbs the integer-division
       // remainder, so the plan neither oversubscribes nor leaves workers idle.
@@ -246,11 +263,9 @@ describe("scripts/test-all.ts", () => {
     const large = planWorkers(20);
     expect(large.root).toBe(6);
     expect(large.workspaceConcurrency).toBe(2);
-    expect(
-      large.root
-      + large.bridges
-      + large.workspace * large.workspaceConcurrency,
-    ).toBe(MAX_AGGREGATE_TEST_WORKERS);
+    expect(large.root + large.bridges + large.workspace * large.workspaceConcurrency).toBe(
+      MAX_AGGREGATE_TEST_WORKERS,
+    );
     // Beyond the cap the plan is constant: more cores must not multiply peak heap.
     expect(planWorkers(64)).toEqual(planWorkers(MAX_AGGREGATE_TEST_WORKERS));
   });
@@ -265,9 +280,7 @@ describe("scripts/test-all.ts", () => {
   });
 
   test("runs the Codex protocol check with an explicit offline fallback", () => {
-    const protocolGroup = buildConcurrentGroups(8).find(
-      (group) => group.name === PROTOCOL,
-    )!;
+    const protocolGroup = buildConcurrentGroups(8).find((group) => group.name === PROTOCOL)!;
 
     expect(protocolGroup.command).toBe("bun");
     expect(protocolGroup.args).toEqual(["run", "codex:protocol:check"]);
@@ -277,9 +290,7 @@ describe("scripts/test-all.ts", () => {
   });
 
   test("runs workspace tests as Turbo package tasks with explicit Bun parallelism", () => {
-    const workspaceGroup = buildConcurrentGroups(8).find(
-      (group) => group.name === WORKSPACE,
-    )!;
+    const workspaceGroup = buildConcurrentGroups(8).find((group) => group.name === WORKSPACE)!;
 
     expect(workspaceGroup.command).toBe("turbo");
     expect(workspaceGroup.args.slice(0, 2)).toEqual(["run", "test:workspace"]);
@@ -474,11 +485,14 @@ describe("scripts/test-all.ts", () => {
   });
 
   test("default runner captures child output and close status", async () => {
-    const result = await defaultRunGroup({
-      name: "fixture",
-      command: process.execPath,
-      args: ["-e", "process.stdout.write('out'); process.stderr.write('err')"],
-    }, isolatedRunnerEnvironment());
+    const result = await defaultRunGroup(
+      {
+        name: "fixture",
+        command: process.execPath,
+        args: ["-e", "process.stdout.write('out'); process.stderr.write('err')"],
+      },
+      isolatedRunnerEnvironment(),
+    );
 
     expect(result.status).toBe(0);
     expect(result.output).toContain("out");
@@ -487,11 +501,14 @@ describe("scripts/test-all.ts", () => {
   });
 
   test("default runner converts spawn errors into a failed result", async () => {
-    const result = await defaultRunGroup({
-      name: "missing",
-      command: "/definitely/not/a/real/executable",
-      args: [],
-    }, isolatedRunnerEnvironment());
+    const result = await defaultRunGroup(
+      {
+        name: "missing",
+        command: "/definitely/not/a/real/executable",
+        args: [],
+      },
+      isolatedRunnerEnvironment(),
+    );
 
     expect(result.status).toBe(1);
     expect(result.output).toMatch(/ENOENT|not found/i);
@@ -499,11 +516,14 @@ describe("scripts/test-all.ts", () => {
   });
 
   test("terminates a group whose diagnostic output exceeds the byte budget", async () => {
-    const result = await defaultRunGroup({
-      name: "noisy fixture",
-      command: process.execPath,
-      args: ["-e", "process.stdout.write('x'.repeat(32_000))"],
-    }, isolatedRunnerEnvironment({ [TEST_MAX_OUTPUT_BYTES_ENV]: "4096" }));
+    const result = await defaultRunGroup(
+      {
+        name: "noisy fixture",
+        command: process.execPath,
+        args: ["-e", "process.stdout.write('x'.repeat(32_000))"],
+      },
+      isolatedRunnerEnvironment({ [TEST_MAX_OUTPUT_BYTES_ENV]: "4096" }),
+    );
 
     expect(result.status).toBe(1);
     expect(result.outputLimitExceeded).toBe(true);
@@ -515,11 +535,14 @@ describe("scripts/test-all.ts", () => {
     const logDirectory = await mkdtemp(path.join(os.tmpdir(), "ork-test-log-error-"));
     await mkdir(path.join(logDirectory, "fixture.log"));
     try {
-      const result = await defaultRunGroup({
-        name: "fixture",
-        command: process.execPath,
-        args: ["-e", "process.stdout.write('hi')"],
-      }, { ...process.env, [TEST_LOG_DIRECTORY_ENV]: logDirectory });
+      const result = await defaultRunGroup(
+        {
+          name: "fixture",
+          command: process.execPath,
+          args: ["-e", "process.stdout.write('hi')"],
+        },
+        { ...process.env, [TEST_LOG_DIRECTORY_ENV]: logDirectory },
+      );
 
       expect(result.status).toBe(1);
       expect(result.output).toMatch(/EISDIR|directory/i);
@@ -536,15 +559,21 @@ describe("scripts/test-all.ts", () => {
     const unrelated = await mkdtemp(path.join(os.tmpdir(), "unrelated-test-log-"));
     const oldCreatedAt = new Date(now - TEST_LOG_RETENTION_MS - 1_000).toISOString();
     try {
-      await writeFile(path.join(expired, ".orkestrator-test-log"), JSON.stringify({
-        version: 1,
-        pid: process.pid,
-        createdAt: oldCreatedAt,
-      }));
-      await writeFile(path.join(invalid, ".orkestrator-test-log"), JSON.stringify({
-        version: 999,
-        createdAt: oldCreatedAt,
-      }));
+      await writeFile(
+        path.join(expired, ".orkestrator-test-log"),
+        JSON.stringify({
+          version: 1,
+          pid: process.pid,
+          createdAt: oldCreatedAt,
+        }),
+      );
+      await writeFile(
+        path.join(invalid, ".orkestrator-test-log"),
+        JSON.stringify({
+          version: 999,
+          createdAt: oldCreatedAt,
+        }),
+      );
 
       await pruneExpiredTestLogDirectories(now);
 
@@ -553,10 +582,14 @@ describe("scripts/test-all.ts", () => {
       expect(await stat(invalid).catch(() => null)).not.toBeNull();
       expect(await stat(unrelated).catch(() => null)).not.toBeNull();
     } finally {
-      await Promise.all([recent, invalid, unrelated].map((target) => rm(target, {
-        recursive: true,
-        force: true,
-      })));
+      await Promise.all(
+        [recent, invalid, unrelated].map((target) =>
+          rm(target, {
+            recursive: true,
+            force: true,
+          }),
+        ),
+      );
     }
   });
 
@@ -569,38 +602,52 @@ describe("scripts/test-all.ts", () => {
     await writeFile(passingLog, "passing output", { mode: 0o600 });
     await writeFile(failingLog, "failing output", { mode: 0o600 });
     try {
-      await finalizeTestLogs(passingDirectory, [{
-        group,
-        result: { status: 0, logPath: passingLog, outputBytes: 14 },
-        elapsedMs: 1,
-      }], true);
-      await finalizeTestLogs(failingDirectory, [{
-        group,
-        result: { status: 1, logPath: failingLog, outputBytes: 14 },
-        elapsedMs: 2,
-      }], false);
+      await finalizeTestLogs(
+        passingDirectory,
+        [
+          {
+            group,
+            result: { status: 0, logPath: passingLog, outputBytes: 14 },
+            elapsedMs: 1,
+          },
+        ],
+        true,
+      );
+      await finalizeTestLogs(
+        failingDirectory,
+        [
+          {
+            group,
+            result: { status: 1, logPath: failingLog, outputBytes: 14 },
+            elapsedMs: 2,
+          },
+        ],
+        false,
+      );
 
       expect(await stat(passingLog).catch(() => null)).toBeNull();
       expect(await stat(`${failingLog}.gz`)).not.toBeNull();
       expect(await stat(failingLog).catch(() => null)).toBeNull();
-      const passingSummary = JSON.parse(await readFile(
-        path.join(passingDirectory, "summary.json"),
-        "utf8",
-      )) as { succeeded: boolean };
-      const failingSummary = JSON.parse(await readFile(
-        path.join(failingDirectory, "summary.json"),
-        "utf8",
-      )) as { succeeded: boolean; groups: Array<{ artifact?: string }> };
+      const passingSummary = JSON.parse(
+        await readFile(path.join(passingDirectory, "summary.json"), "utf8"),
+      ) as { succeeded: boolean };
+      const failingSummary = JSON.parse(
+        await readFile(path.join(failingDirectory, "summary.json"), "utf8"),
+      ) as { succeeded: boolean; groups: Array<{ artifact?: string }> };
       expect(passingSummary.succeeded).toBe(true);
       expect(failingSummary.succeeded).toBe(false);
       expect(failingSummary.groups[0]?.artifact).toBe("failing.log.gz");
       expect((await stat(passingDirectory)).mode & 0o777).toBe(0o700);
       expect((await stat(path.join(passingDirectory, "summary.json"))).mode & 0o777).toBe(0o600);
     } finally {
-      await Promise.all([passingDirectory, failingDirectory].map((target) => rm(target, {
-        recursive: true,
-        force: true,
-      })));
+      await Promise.all(
+        [passingDirectory, failingDirectory].map((target) =>
+          rm(target, {
+            recursive: true,
+            force: true,
+          }),
+        ),
+      );
     }
   });
 
@@ -610,11 +657,15 @@ describe("scripts/test-all.ts", () => {
     const unreadableLog = path.join(directory, "unreadable.log");
     await mkdir(unreadableLog);
     try {
-      await finalizeTestLogs(directory, [missingLog, unreadableLog].map((logPath) => ({
-        group: { name: path.basename(logPath), command: "bun", args: [] },
-        result: { status: 1, logPath },
-        elapsedMs: 1,
-      })), false);
+      await finalizeTestLogs(
+        directory,
+        [missingLog, unreadableLog].map((logPath) => ({
+          group: { name: path.basename(logPath), command: "bun", args: [] },
+          result: { status: 1, logPath },
+          elapsedMs: 1,
+        })),
+        false,
+      );
       const summary = JSON.parse(await readFile(path.join(directory, "summary.json"), "utf8")) as {
         groups: Array<{ artifactError?: string }>;
       };

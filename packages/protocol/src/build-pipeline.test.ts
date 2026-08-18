@@ -104,16 +104,18 @@ function snapshotWithInteractions({
 }): unknown {
   return {
     ...snapshot(),
-    sessions: [{
-      phase: "build",
-      iteration: 0,
-      sessionKey: "build-0",
-      sdkSessionId: "session-1",
-      status: "running",
-      startedAt: "2026-07-29T00:00:00.000Z",
-      label: "Build",
-      ...(transcript === undefined ? {} : { interactionTranscript: transcript }),
-    }],
+    sessions: [
+      {
+        phase: "build",
+        iteration: 0,
+        sessionKey: "build-0",
+        sdkSessionId: "session-1",
+        status: "running",
+        startedAt: "2026-07-29T00:00:00.000Z",
+        label: "Build",
+        ...(transcript === undefined ? {} : { interactionTranscript: transcript }),
+      },
+    ],
     currentSessionIndex: 0,
     ...(pending === undefined ? {} : { pendingInteractionResolution: pending }),
   };
@@ -126,15 +128,17 @@ describe("build pipeline protocol", () => {
   });
 
   test("accepts interactive-request as a fail-closed workflow failure", () => {
-    expect(isBuildPipeline({
-      ...snapshot(),
-      phase: "failed",
-      failureContext: {
-        phase: "building",
-        kind: "interactive-request",
-        sessionId: "session-1",
-      },
-    })).toBe(true);
+    expect(
+      isBuildPipeline({
+        ...snapshot(),
+        phase: "failed",
+        failureContext: {
+          phase: "building",
+          kind: "interactive-request",
+          sessionId: "session-1",
+        },
+      }),
+    ).toBe(true);
   });
 
   test("validates persisted build-pipeline interaction authority", () => {
@@ -156,84 +160,148 @@ describe("build pipeline protocol", () => {
     // Snapshots written before interaction authority was persisted remain
     // readable, while new snapshots must carry the complete unattended pair.
     expect(isBuildPipeline(withSession({}))).toBe(true);
-    expect(isBuildPipeline(withSession({
-      origin: "build-pipeline",
-      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-      validationHeadAtStart: "1111111111111111111111111111111111111111",
-      validationWorktreeStatusAtStart: "clean",
-    }))).toBe(true);
-    expect(isBuildPipeline(withSession({
-      origin: "build-pipeline",
-    }))).toBe(false);
-    expect(isBuildPipeline(withSession({
-      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-    }))).toBe(false);
-    expect(isBuildPipeline(withSession({
-      origin: "build-pipeline",
-      interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
-    }))).toBe(false);
-    expect(isBuildPipeline(withSession({
-      origin: "interactive-native",
-      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-    }))).toBe(false);
-    expect(isBuildPipeline(withSession({
-      origin: "build-pipeline",
-      interactionPolicy: {
-        ...UNATTENDED_AGENT_INTERACTION_POLICY,
-        authorization: "await-user",
-      },
-    }))).toBe(false);
+    expect(
+      isBuildPipeline(
+        withSession({
+          origin: "build-pipeline",
+          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+          validationHeadAtStart: "1111111111111111111111111111111111111111",
+          validationWorktreeStatusAtStart: "clean",
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isBuildPipeline(
+        withSession({
+          origin: "build-pipeline",
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isBuildPipeline(
+        withSession({
+          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isBuildPipeline(
+        withSession({
+          origin: "build-pipeline",
+          interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isBuildPipeline(
+        withSession({
+          origin: "interactive-native",
+          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isBuildPipeline(
+        withSession({
+          origin: "build-pipeline",
+          interactionPolicy: {
+            ...UNATTENDED_AGENT_INTERACTION_POLICY,
+            authorization: "await-user",
+          },
+        }),
+      ),
+    ).toBe(false);
 
     for (const invalid of ["", "not-a-commit", 1, null]) {
       expect(isBuildPipeline(withSession({ validationHeadAtStart: invalid }))).toBe(false);
     }
     for (const invalid of ["modified", "read-only", 1, null]) {
-      expect(isBuildPipeline(withSession({
-        validationWorktreeStatusAtStart: invalid,
-      }))).toBe(false);
+      expect(
+        isBuildPipeline(
+          withSession({
+            validationWorktreeStatusAtStart: invalid,
+          }),
+        ),
+      ).toBe(false);
     }
-    expect(isBuildPipeline(withSession({
-      validationWorktreeStatusAtStart: "clean",
-    }))).toBe(false);
-    expect(isBuildPipeline(withSession({
-      validationHeadAtStart: "1111111111111111111111111111111111111111",
-    }))).toBe(false);
-    expect(isBuildPipeline(withSession({
-      validationWorktreeStatusAtStart: "unknown",
-    }))).toBe(true);
+    expect(
+      isBuildPipeline(
+        withSession({
+          validationWorktreeStatusAtStart: "clean",
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isBuildPipeline(
+        withSession({
+          validationHeadAtStart: "1111111111111111111111111111111111111111",
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isBuildPipeline(
+        withSession({
+          validationWorktreeStatusAtStart: "unknown",
+        }),
+      ),
+    ).toBe(true);
 
     // The baseline path set travels with the head it was observed at.
-    expect(isBuildPipeline(withSession({
-      validationHeadAtStart: "1111111111111111111111111111111111111111",
-      validationWorktreeStatusAtStart: "dirty",
-      validationUncommittedPathsAtStart: ["src/forgotten.ts"],
-    }))).toBe(true);
-    expect(isBuildPipeline(withSession({
-      validationHeadAtStart: "1111111111111111111111111111111111111111",
-      validationWorktreeStatusAtStart: "clean",
-      validationUncommittedPathsAtStart: [],
-    }))).toBe(true);
+    expect(
+      isBuildPipeline(
+        withSession({
+          validationHeadAtStart: "1111111111111111111111111111111111111111",
+          validationWorktreeStatusAtStart: "dirty",
+          validationUncommittedPathsAtStart: ["src/forgotten.ts"],
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isBuildPipeline(
+        withSession({
+          validationHeadAtStart: "1111111111111111111111111111111111111111",
+          validationWorktreeStatusAtStart: "clean",
+          validationUncommittedPathsAtStart: [],
+        }),
+      ),
+    ).toBe(true);
     for (const invalid of ["src/a.ts", [1], [null], {}]) {
-      expect(isBuildPipeline(withSession({
-        validationHeadAtStart: "1111111111111111111111111111111111111111",
-        validationWorktreeStatusAtStart: "dirty",
-        validationUncommittedPathsAtStart: invalid,
-      }))).toBe(false);
+      expect(
+        isBuildPipeline(
+          withSession({
+            validationHeadAtStart: "1111111111111111111111111111111111111111",
+            validationWorktreeStatusAtStart: "dirty",
+            validationUncommittedPathsAtStart: invalid,
+          }),
+        ),
+      ).toBe(false);
     }
     // Paths without an observation to anchor them are not a baseline at all.
-    expect(isBuildPipeline(withSession({
-      validationUncommittedPathsAtStart: [],
-    }))).toBe(false);
-    expect(isBuildPipeline(withSession({
-      validationWorktreeStatusAtStart: "unknown",
-      validationUncommittedPathsAtStart: [],
-    }))).toBe(false);
+    expect(
+      isBuildPipeline(
+        withSession({
+          validationUncommittedPathsAtStart: [],
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isBuildPipeline(
+        withSession({
+          validationWorktreeStatusAtStart: "unknown",
+          validationUncommittedPathsAtStart: [],
+        }),
+      ),
+    ).toBe(false);
     // A snapshot written before the path list existed still loads, so an
     // in-flight pipeline is not stranded by the upgrade.
-    expect(isBuildPipeline(withSession({
-      validationHeadAtStart: "1111111111111111111111111111111111111111",
-      validationWorktreeStatusAtStart: "dirty",
-    }))).toBe(true);
+    expect(
+      isBuildPipeline(
+        withSession({
+          validationHeadAtStart: "1111111111111111111111111111111111111111",
+          validationWorktreeStatusAtStart: "dirty",
+        }),
+      ),
+    ).toBe(true);
   });
 
   test("rejects a client-authored or malformed snapshot", () => {
@@ -273,23 +341,14 @@ describe("build pipeline protocol", () => {
       ["negative iteration", { ...snapshot(), iteration: -1 }],
       ["fractional iteration", { ...snapshot(), iteration: 0.5 }],
       ["fractional maxIterations", { ...snapshot(), maxIterations: 1.5 }],
-      [
-        "unsafe maxIterations",
-        { ...snapshot(), maxIterations: Number.MAX_SAFE_INTEGER + 1 },
-      ],
+      ["unsafe maxIterations", { ...snapshot(), maxIterations: Number.MAX_SAFE_INTEGER + 1 }],
       ["negative backendRevision", { ...snapshot(), backendRevision: -1 }],
-      [
-        "fractional backendRevision",
-        { ...snapshot(), backendRevision: 0.5 },
-      ],
+      ["fractional backendRevision", { ...snapshot(), backendRevision: 0.5 }],
       ["taskTitle type", { ...snapshot(), taskTitle: 1 }],
       ["taskSnapshot", { ...snapshot(), taskSnapshot: {} }],
       ["verificationFeedback", { ...snapshot(), verificationFeedback: 1 }],
       ["structuredReview", { ...snapshot(), structuredReview: {} }],
-      [
-        "structuredReviewRequestId",
-        { ...snapshot(), structuredReviewRequestId: "" },
-      ],
+      ["structuredReviewRequestId", { ...snapshot(), structuredReviewRequestId: "" }],
       ["pausedFromPhase", { ...snapshot(), pausedFromPhase: "paused" }],
       ["error", { ...snapshot(), error: 1 }],
       ["failureContext", { ...snapshot(), failureContext: {} }],
@@ -303,34 +362,13 @@ describe("build pipeline protocol", () => {
       ["featurePlanId", { ...snapshot(), featurePlanId: "" }],
       ["admissionKey", { ...snapshot(), admissionKey: "" }],
       ["sourceLinkedAt", { ...snapshot(), sourceLinkedAt: "invalid" }],
-      [
-        "completionCommentStatus",
-        { ...snapshot(), completionCommentStatus: "unknown" },
-      ],
-      [
-        "completionCommentError",
-        { ...snapshot(), completionCommentError: 1 },
-      ],
-      [
-        "completionCommentId",
-        { ...snapshot(), completionCommentId: "" },
-      ],
-      [
-        "completionCommentPostedAt",
-        { ...snapshot(), completionCommentPostedAt: "invalid" },
-      ],
-      [
-        "fractional currentSessionIndex",
-        { ...snapshot(), currentSessionIndex: -0.5 },
-      ],
-      [
-        "negative index with sessions",
-        { ...withSession, currentSessionIndex: -1 },
-      ],
-      [
-        "out-of-range index with sessions",
-        { ...withSession, currentSessionIndex: 1 },
-      ],
+      ["completionCommentStatus", { ...snapshot(), completionCommentStatus: "unknown" }],
+      ["completionCommentError", { ...snapshot(), completionCommentError: 1 }],
+      ["completionCommentId", { ...snapshot(), completionCommentId: "" }],
+      ["completionCommentPostedAt", { ...snapshot(), completionCommentPostedAt: "invalid" }],
+      ["fractional currentSessionIndex", { ...snapshot(), currentSessionIndex: -0.5 }],
+      ["negative index with sessions", { ...withSession, currentSessionIndex: -1 }],
+      ["out-of-range index with sessions", { ...withSession, currentSessionIndex: 1 }],
     ];
 
     for (const [field, value] of invalid) {
@@ -344,46 +382,52 @@ describe("build pipeline protocol", () => {
     const valid = {
       ...snapshot(),
       phase: "paused" as const,
-      sessions: [{
-        phase: "review" as const,
-        iteration: 1,
-        sessionKey: "review-1",
-        sdkSessionId: "session-1",
-        status: "running" as const,
-        startedAt: "2026-07-29T00:01:00.000Z",
-        label: "Review",
-        messages: [],
-        messageRevision: 2,
-        structuredRequestId: "structured-1",
-        origin: "build-pipeline" as const,
-        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-        interactionSummary: {
-          version: AGENT_INTERACTION_SUMMARY_VERSION,
-          entries: [{
-            provider: "codex" as const,
-            kind: "question" as const,
-            phase: "review",
-            sessionId: "session-1",
-            firstSeenAt: 1,
-            lastResolvedAt: 2,
-            outcome: "auto-declined" as const,
-            count: 1,
-          }],
-        },
-        autoDeclineCount: 1,
-        interactionTranscript: [{
-          id: "question-1",
-          provider: "codex" as const,
-          kind: "question" as const,
+      sessions: [
+        {
           phase: "review" as const,
-          requestedAt: 1,
-          resolvedAt: 2,
-          outcome: "auto-declined-headless" as const,
-          title: "Choose safely",
-          body: "A choice was requested.",
-          questions: [{ prompt: "Which option?", options: ["Safe"] }],
-        }],
-      }],
+          iteration: 1,
+          sessionKey: "review-1",
+          sdkSessionId: "session-1",
+          status: "running" as const,
+          startedAt: "2026-07-29T00:01:00.000Z",
+          label: "Review",
+          messages: [],
+          messageRevision: 2,
+          structuredRequestId: "structured-1",
+          origin: "build-pipeline" as const,
+          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+          interactionSummary: {
+            version: AGENT_INTERACTION_SUMMARY_VERSION,
+            entries: [
+              {
+                provider: "codex" as const,
+                kind: "question" as const,
+                phase: "review",
+                sessionId: "session-1",
+                firstSeenAt: 1,
+                lastResolvedAt: 2,
+                outcome: "auto-declined" as const,
+                count: 1,
+              },
+            ],
+          },
+          autoDeclineCount: 1,
+          interactionTranscript: [
+            {
+              id: "question-1",
+              provider: "codex" as const,
+              kind: "question" as const,
+              phase: "review" as const,
+              requestedAt: 1,
+              resolvedAt: 2,
+              outcome: "auto-declined-headless" as const,
+              title: "Choose safely",
+              body: "A choice was requested.",
+              questions: [{ prompt: "Which option?", options: ["Safe"] }],
+            },
+          ],
+        },
+      ],
       currentSessionIndex: 0,
       verificationResult: "fail" as const,
       verificationFeedback: "A test failed.",
@@ -435,16 +479,18 @@ describe("build pipeline protocol", () => {
       },
       interactionSummary: {
         version: AGENT_INTERACTION_SUMMARY_VERSION,
-        entries: [{
-          provider: "codex" as const,
-          kind: "question" as const,
-          phase: "review",
-          sessionId: "session-1",
-          firstSeenAt: 1,
-          lastResolvedAt: 2,
-          outcome: "auto-declined" as const,
-          count: 1,
-        }],
+        entries: [
+          {
+            provider: "codex" as const,
+            kind: "question" as const,
+            phase: "review",
+            sessionId: "session-1",
+            firstSeenAt: 1,
+            lastResolvedAt: 2,
+            outcome: "auto-declined" as const,
+            count: 1,
+          },
+        ],
       },
       autoDeclineCount: 1,
       stallWarning: {
@@ -478,10 +524,12 @@ describe("build pipeline protocol", () => {
       { failureContext: { phase: "building", kind: "unknown" } },
       { reconnectAttempt: { ...valid.reconnectAttempt, startedAt: "invalid" } },
       { pendingPromptAttempt: { ...valid.pendingPromptAttempt, requestId: "" } },
-      { pendingInteractionResolution: {
-        ...valid.pendingInteractionResolution,
-        action: "approve",
-      } },
+      {
+        pendingInteractionResolution: {
+          ...valid.pendingInteractionResolution,
+          action: "approve",
+        },
+      },
       { interactionSummary: { version: 99, entries: [] } },
       { autoDeclineCount: -1 },
       { stallWarning: { sessionId: "session-1", detectedAt: "invalid" } },
@@ -494,10 +542,19 @@ describe("build pipeline protocol", () => {
       { sessions: [{ ...valid.sessions[0], messageRevision: -1 }] },
       { sessions: [{ ...valid.sessions[0], startedAt: "invalid" }] },
       { sessions: [{ ...valid.sessions[0], autoDeclineCount: -1 }] },
-      { sessions: [{ ...valid.sessions[0], interactionTranscript: [{
-        ...valid.sessions[0].interactionTranscript[0],
-        outcome: "answered",
-      }] }] },
+      {
+        sessions: [
+          {
+            ...valid.sessions[0],
+            interactionTranscript: [
+              {
+                ...valid.sessions[0].interactionTranscript[0],
+                outcome: "answered",
+              },
+            ],
+          },
+        ],
+      },
     ];
     for (const override of invalidOverrides) {
       expect(isBuildPipeline({ ...valid, ...override })).toBe(false);
@@ -534,10 +591,8 @@ describe("build pipeline protocol", () => {
       entries: [summaryEntry],
     };
 
-    expect(isBuildPipeline(withSession({ interactionSummary, autoDeclineCount: 1 })))
-      .toBe(true);
-    expect(isBuildPipeline({ ...snapshot(), interactionSummary, autoDeclineCount: 1 }))
-      .toBe(true);
+    expect(isBuildPipeline(withSession({ interactionSummary, autoDeclineCount: 1 }))).toBe(true);
+    expect(isBuildPipeline({ ...snapshot(), interactionSummary, autoDeclineCount: 1 })).toBe(true);
 
     // The per-session copy drives the stage badges. It is validated by the same
     // guard as the pipeline-level total, and a malformed one has to fail the
@@ -555,10 +610,8 @@ describe("build pipeline protocol", () => {
       { version: AGENT_INTERACTION_SUMMARY_VERSION, entries: {} },
       "summary",
     ]) {
-      expect(isBuildPipeline(withSession({ interactionSummary: invalid })))
-        .toBe(false);
-      expect(isBuildPipeline({ ...snapshot(), interactionSummary: invalid }))
-        .toBe(false);
+      expect(isBuildPipeline(withSession({ interactionSummary: invalid }))).toBe(false);
+      expect(isBuildPipeline({ ...snapshot(), interactionSummary: invalid })).toBe(false);
     }
 
     // 1.5 declines never happened: a bare `>= 0` check would let it through and
@@ -575,9 +628,13 @@ describe("build pipeline protocol", () => {
     }
     // The id is the recording's idempotency key, so a blank one would let the
     // same interaction be appended on every supervisor pass.
-    expect(isBuildPipeline(snapshotWithInteractions({
-      transcript: [interactionTranscriptEntry({ id: "" })],
-    }))).toBe(false);
+    expect(
+      isBuildPipeline(
+        snapshotWithInteractions({
+          transcript: [interactionTranscriptEntry({ id: "" })],
+        }),
+      ),
+    ).toBe(false);
 
     for (const questions of [
       [{ prompt: "Which option?" }],
@@ -586,27 +643,46 @@ describe("build pipeline protocol", () => {
       ["Which option?"],
       [null],
     ]) {
-      expect(isBuildPipeline(snapshotWithInteractions({
-        transcript: [interactionTranscriptEntry({ questions })],
-      }))).toBe(false);
-      expect(isBuildPipeline(snapshotWithInteractions({
-        pending: pendingInteractionResolution({ questions }),
-      }))).toBe(false);
+      expect(
+        isBuildPipeline(
+          snapshotWithInteractions({
+            transcript: [interactionTranscriptEntry({ questions })],
+          }),
+        ),
+      ).toBe(false);
+      expect(
+        isBuildPipeline(
+          snapshotWithInteractions({
+            pending: pendingInteractionResolution({ questions }),
+          }),
+        ),
+      ).toBe(false);
     }
     // An empty option list is not malformed: an approval has no options at all.
-    expect(isBuildPipeline(snapshotWithInteractions({
-      transcript: [interactionTranscriptEntry({
-        questions: [{ prompt: "Which option?", options: [] }],
-      })],
-    }))).toBe(true);
+    expect(
+      isBuildPipeline(
+        snapshotWithInteractions({
+          transcript: [
+            interactionTranscriptEntry({
+              questions: [{ prompt: "Which option?", options: [] }],
+            }),
+          ],
+        }),
+      ),
+    ).toBe(true);
   });
 
   test("rejects a stall warning that names no session or no moment", () => {
     const detectedAt = "2026-07-29T00:03:30.000Z";
-    expect(isBuildPipeline({ ...snapshot(), stallWarning: {
-      sessionId: "session-1",
-      detectedAt,
-    } })).toBe(true);
+    expect(
+      isBuildPipeline({
+        ...snapshot(),
+        stallWarning: {
+          sessionId: "session-1",
+          detectedAt,
+        },
+      }),
+    ).toBe(true);
 
     // The warning is rendered against a session and aged from its timestamp;
     // either one missing leaves a badge the user cannot act on.
@@ -636,23 +712,20 @@ describe("build pipeline protocol", () => {
       interactionTranscriptEntry({
         id: `question-${index}`,
         body: undefined,
-        questions: Array.from(
-          { length: AGENT_INTERACTION_LIMITS.maxQuestionsPerRequest },
-          () => ({
-            prompt: maxText,
-            options: Array.from(
-              { length: AGENT_INTERACTION_LIMITS.maxOptionsPerQuestion },
-              () => maxText,
-            ),
-          }),
-        ),
-      }));
+        questions: Array.from({ length: AGENT_INTERACTION_LIMITS.maxQuestionsPerRequest }, () => ({
+          prompt: maxText,
+          options: Array.from(
+            { length: AGENT_INTERACTION_LIMITS.maxOptionsPerQuestion },
+            () => maxText,
+          ),
+        })),
+      }),
+    );
 
     expect(isBuildPipeline(snapshotWithInteractions({ transcript }))).toBe(false);
     // A single entry already overflows on its own, so the sum cannot be an
     // artefact of the entry count.
-    expect(isBuildPipeline(snapshotWithInteractions({ transcript: [transcript[0]] })))
-      .toBe(false);
+    expect(isBuildPipeline(snapshotWithInteractions({ transcript: [transcript[0]] }))).toBe(false);
   });
 
   test("binds every unattended interaction kind to its fail-closed action", () => {
@@ -673,14 +746,14 @@ describe("build pipeline protocol", () => {
     // The policy table is what decides behaviour, so pin it directly rather
     // than through the persistence validator.
     for (const kind of inputKinds) {
-      expect(
-        agentInteractionPolicyAction(UNATTENDED_AGENT_INTERACTION_POLICY, kind),
-      ).toBe("decline-and-continue");
+      expect(agentInteractionPolicyAction(UNATTENDED_AGENT_INTERACTION_POLICY, kind)).toBe(
+        "decline-and-continue",
+      );
     }
     for (const kind of authorizationKinds) {
-      expect(
-        agentInteractionPolicyAction(UNATTENDED_AGENT_INTERACTION_POLICY, kind),
-      ).toBe("deny-and-fail");
+      expect(agentInteractionPolicyAction(UNATTENDED_AGENT_INTERACTION_POLICY, kind)).toBe(
+        "deny-and-fail",
+      );
     }
   });
 
@@ -692,60 +765,108 @@ describe("build pipeline protocol", () => {
     // deletes. Both actions and every kind must therefore still parse.
     for (const kind of AGENT_INTERACTION_KINDS) {
       for (const action of ["decline-and-continue", "deny-and-fail"] as const) {
-        expect(isBuildPipeline(snapshotWithInteractions({
-          pending: pendingInteractionResolution({ kind, action }),
-        }))).toBe(true);
+        expect(
+          isBuildPipeline(
+            snapshotWithInteractions({
+              pending: pendingInteractionResolution({ kind, action }),
+            }),
+          ),
+        ).toBe(true);
       }
-      expect(isBuildPipeline(snapshotWithInteractions({
-        transcript: [interactionTranscriptEntry({ kind })],
-      }))).toBe(true);
+      expect(
+        isBuildPipeline(
+          snapshotWithInteractions({
+            transcript: [interactionTranscriptEntry({ kind })],
+          }),
+        ),
+      ).toBe(true);
     }
 
     // The action vocabulary itself is still closed.
-    expect(isBuildPipeline(snapshotWithInteractions({
-      pending: pendingInteractionResolution({ action: "answer-and-continue" }),
-    }))).toBe(false);
+    expect(
+      isBuildPipeline(
+        snapshotWithInteractions({
+          pending: pendingInteractionResolution({ action: "answer-and-continue" }),
+        }),
+      ),
+    ).toBe(false);
     // And a transcript entry still only ever describes a successful decline.
-    expect(isBuildPipeline(snapshotWithInteractions({
-      transcript: [interactionTranscriptEntry({ outcome: "denied" })],
-    }))).toBe(false);
+    expect(
+      isBuildPipeline(
+        snapshotWithInteractions({
+          transcript: [interactionTranscriptEntry({ outcome: "denied" })],
+        }),
+      ),
+    ).toBe(false);
   });
 
   test("derives the accepted providers and kinds from the protocol vocabularies", () => {
     for (const provider of AGENT_INTERACTION_PROVIDERS) {
-      expect(isBuildPipeline(snapshotWithInteractions({
-        pending: pendingInteractionResolution({ provider }),
-        transcript: [interactionTranscriptEntry({ provider })],
-      }))).toBe(true);
+      expect(
+        isBuildPipeline(
+          snapshotWithInteractions({
+            pending: pendingInteractionResolution({ provider }),
+            transcript: [interactionTranscriptEntry({ provider })],
+          }),
+        ),
+      ).toBe(true);
     }
-    expect(isBuildPipeline(snapshotWithInteractions({
-      pending: pendingInteractionResolution({ provider: "gemini" }),
-    }))).toBe(false);
-    expect(isBuildPipeline(snapshotWithInteractions({
-      pending: pendingInteractionResolution({ kind: "shell-approval" }),
-    }))).toBe(false);
+    expect(
+      isBuildPipeline(
+        snapshotWithInteractions({
+          pending: pendingInteractionResolution({ provider: "gemini" }),
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isBuildPipeline(
+        snapshotWithInteractions({
+          pending: pendingInteractionResolution({ kind: "shell-approval" }),
+        }),
+      ),
+    ).toBe(false);
   });
 
   test("enforces identifier and presentation text boundaries", () => {
     const maxId = "i".repeat(AGENT_INTERACTION_LIMITS.maxIdLength);
     const oversizedId = `${maxId}i`;
     for (const field of ["journalId", "sessionKey", "sessionId", "interactionId"]) {
-      expect(isBuildPipeline(snapshotWithInteractions({
-        pending: pendingInteractionResolution({ [field]: maxId }),
-      }))).toBe(true);
-      expect(isBuildPipeline(snapshotWithInteractions({
-        pending: pendingInteractionResolution({ [field]: oversizedId }),
-      }))).toBe(false);
-      expect(isBuildPipeline(snapshotWithInteractions({
-        pending: pendingInteractionResolution({ [field]: "" }),
-      }))).toBe(false);
+      expect(
+        isBuildPipeline(
+          snapshotWithInteractions({
+            pending: pendingInteractionResolution({ [field]: maxId }),
+          }),
+        ),
+      ).toBe(true);
+      expect(
+        isBuildPipeline(
+          snapshotWithInteractions({
+            pending: pendingInteractionResolution({ [field]: oversizedId }),
+          }),
+        ),
+      ).toBe(false);
+      expect(
+        isBuildPipeline(
+          snapshotWithInteractions({
+            pending: pendingInteractionResolution({ [field]: "" }),
+          }),
+        ),
+      ).toBe(false);
     }
-    expect(isBuildPipeline(snapshotWithInteractions({
-      transcript: [interactionTranscriptEntry({ id: maxId })],
-    }))).toBe(true);
-    expect(isBuildPipeline(snapshotWithInteractions({
-      transcript: [interactionTranscriptEntry({ id: oversizedId })],
-    }))).toBe(false);
+    expect(
+      isBuildPipeline(
+        snapshotWithInteractions({
+          transcript: [interactionTranscriptEntry({ id: maxId })],
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isBuildPipeline(
+        snapshotWithInteractions({
+          transcript: [interactionTranscriptEntry({ id: oversizedId })],
+        }),
+      ),
+    ).toBe(false);
 
     const maxText = "t".repeat(AGENT_INTERACTION_LIMITS.maxTextLength);
     const oversizedText = `${maxText}t`;
@@ -753,41 +874,73 @@ describe("build pipeline protocol", () => {
       ["title", maxText, oversizedText],
       ["body", maxText, oversizedText],
     ]) {
-      expect(isBuildPipeline(snapshotWithInteractions({
-        pending: pendingInteractionResolution({ [field]: valid }),
-      }))).toBe(true);
-      expect(isBuildPipeline(snapshotWithInteractions({
-        pending: pendingInteractionResolution({ [field]: invalid }),
-      }))).toBe(false);
-      expect(isBuildPipeline(snapshotWithInteractions({
-        pending: pendingInteractionResolution({ [field]: "" }),
-      }))).toBe(false);
+      expect(
+        isBuildPipeline(
+          snapshotWithInteractions({
+            pending: pendingInteractionResolution({ [field]: valid }),
+          }),
+        ),
+      ).toBe(true);
+      expect(
+        isBuildPipeline(
+          snapshotWithInteractions({
+            pending: pendingInteractionResolution({ [field]: invalid }),
+          }),
+        ),
+      ).toBe(false);
+      expect(
+        isBuildPipeline(
+          snapshotWithInteractions({
+            pending: pendingInteractionResolution({ [field]: "" }),
+          }),
+        ),
+      ).toBe(false);
     }
-    expect(isBuildPipeline(snapshotWithInteractions({
-      pending: pendingInteractionResolution({
-        questions: [{ prompt: maxText, options: [maxText] }],
-      }),
-    }))).toBe(true);
-    expect(isBuildPipeline(snapshotWithInteractions({
-      pending: pendingInteractionResolution({
-        questions: [{ prompt: oversizedText, options: ["Safe"] }],
-      }),
-    }))).toBe(false);
-    expect(isBuildPipeline(snapshotWithInteractions({
-      pending: pendingInteractionResolution({
-        questions: [{ prompt: "Which?", options: [oversizedText] }],
-      }),
-    }))).toBe(false);
-    expect(isBuildPipeline(snapshotWithInteractions({
-      pending: pendingInteractionResolution({
-        questions: [{ prompt: "", options: ["Safe"] }],
-      }),
-    }))).toBe(false);
-    expect(isBuildPipeline(snapshotWithInteractions({
-      pending: pendingInteractionResolution({
-        questions: [{ prompt: "Which?", options: [""] }],
-      }),
-    }))).toBe(false);
+    expect(
+      isBuildPipeline(
+        snapshotWithInteractions({
+          pending: pendingInteractionResolution({
+            questions: [{ prompt: maxText, options: [maxText] }],
+          }),
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isBuildPipeline(
+        snapshotWithInteractions({
+          pending: pendingInteractionResolution({
+            questions: [{ prompt: oversizedText, options: ["Safe"] }],
+          }),
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isBuildPipeline(
+        snapshotWithInteractions({
+          pending: pendingInteractionResolution({
+            questions: [{ prompt: "Which?", options: [oversizedText] }],
+          }),
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isBuildPipeline(
+        snapshotWithInteractions({
+          pending: pendingInteractionResolution({
+            questions: [{ prompt: "", options: ["Safe"] }],
+          }),
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isBuildPipeline(
+        snapshotWithInteractions({
+          pending: pendingInteractionResolution({
+            questions: [{ prompt: "Which?", options: [""] }],
+          }),
+        }),
+      ),
+    ).toBe(false);
   });
 
   test("enforces interaction collection bounds and nested record shapes", () => {
@@ -796,52 +949,85 @@ describe("build pipeline protocol", () => {
       { length: AGENT_INTERACTION_LIMITS.maxQuestionsPerRequest },
       () => question,
     );
-    expect(isBuildPipeline(snapshotWithInteractions({
-      pending: pendingInteractionResolution({ questions: maxQuestions }),
-    }))).toBe(true);
-    expect(isBuildPipeline(snapshotWithInteractions({
-      pending: pendingInteractionResolution({ questions: [...maxQuestions, question] }),
-    }))).toBe(false);
+    expect(
+      isBuildPipeline(
+        snapshotWithInteractions({
+          pending: pendingInteractionResolution({ questions: maxQuestions }),
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isBuildPipeline(
+        snapshotWithInteractions({
+          pending: pendingInteractionResolution({ questions: [...maxQuestions, question] }),
+        }),
+      ),
+    ).toBe(false);
 
     const maxOptions = Array.from(
       { length: AGENT_INTERACTION_LIMITS.maxOptionsPerQuestion },
       (_, index) => `option-${index}`,
     );
-    expect(isBuildPipeline(snapshotWithInteractions({
-      pending: pendingInteractionResolution({
-        questions: [{ prompt: "Which option?", options: maxOptions }],
-      }),
-    }))).toBe(true);
-    expect(isBuildPipeline(snapshotWithInteractions({
-      pending: pendingInteractionResolution({
-        questions: [{
-          prompt: "Which option?",
-          options: [...maxOptions, "one-too-many"],
-        }],
-      }),
-    }))).toBe(false);
+    expect(
+      isBuildPipeline(
+        snapshotWithInteractions({
+          pending: pendingInteractionResolution({
+            questions: [{ prompt: "Which option?", options: maxOptions }],
+          }),
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isBuildPipeline(
+        snapshotWithInteractions({
+          pending: pendingInteractionResolution({
+            questions: [
+              {
+                prompt: "Which option?",
+                options: [...maxOptions, "one-too-many"],
+              },
+            ],
+          }),
+        }),
+      ),
+    ).toBe(false);
 
     const maxTranscript = Array.from(
       { length: AGENT_INTERACTION_LIMITS.maxWorkflowSummaries },
       (_, index) => interactionTranscriptEntry({ id: `question-${index}` }),
     );
-    expect(isBuildPipeline(snapshotWithInteractions({ transcript: maxTranscript })))
-      .toBe(true);
-    expect(isBuildPipeline(snapshotWithInteractions({
-      transcript: [...maxTranscript, interactionTranscriptEntry({ id: "overflow" })],
-    }))).toBe(false);
+    expect(isBuildPipeline(snapshotWithInteractions({ transcript: maxTranscript }))).toBe(true);
+    expect(
+      isBuildPipeline(
+        snapshotWithInteractions({
+          transcript: [...maxTranscript, interactionTranscriptEntry({ id: "overflow" })],
+        }),
+      ),
+    ).toBe(false);
 
-    expect(isBuildPipeline(snapshotWithInteractions({
-      pending: { ...pendingInteractionResolution(), unexpected: true },
-    }))).toBe(false);
-    expect(isBuildPipeline(snapshotWithInteractions({
-      pending: pendingInteractionResolution({
-        questions: [{ ...question, unexpected: true }],
-      }),
-    }))).toBe(false);
-    expect(isBuildPipeline(snapshotWithInteractions({
-      transcript: [{ ...interactionTranscriptEntry(), unexpected: true }],
-    }))).toBe(false);
+    expect(
+      isBuildPipeline(
+        snapshotWithInteractions({
+          pending: { ...pendingInteractionResolution(), unexpected: true },
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isBuildPipeline(
+        snapshotWithInteractions({
+          pending: pendingInteractionResolution({
+            questions: [{ ...question, unexpected: true }],
+          }),
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isBuildPipeline(
+        snapshotWithInteractions({
+          transcript: [{ ...interactionTranscriptEntry(), unexpected: true }],
+        }),
+      ),
+    ).toBe(false);
   });
 
   test("rejects unknown interaction presentation enums", () => {
@@ -850,107 +1036,156 @@ describe("build pipeline protocol", () => {
       ["kind", "custom-approval"],
       ["phase", "deploy"],
     ]) {
-      expect(isBuildPipeline(snapshotWithInteractions({
-        pending: pendingInteractionResolution({ [field]: value }),
-      }))).toBe(false);
-      expect(isBuildPipeline(snapshotWithInteractions({
-        transcript: [interactionTranscriptEntry({ [field]: value })],
-      }))).toBe(false);
+      expect(
+        isBuildPipeline(
+          snapshotWithInteractions({
+            pending: pendingInteractionResolution({ [field]: value }),
+          }),
+        ),
+      ).toBe(false);
+      expect(
+        isBuildPipeline(
+          snapshotWithInteractions({
+            transcript: [interactionTranscriptEntry({ [field]: value })],
+          }),
+        ),
+      ).toBe(false);
     }
   });
 
   test("accepts only renderable, ordered interaction epochs", () => {
     const maxRenderableEpoch = 8.64e15;
-    expect(isBuildPipeline(snapshotWithInteractions({
-      pending: pendingInteractionResolution({
-        requestedAt: maxRenderableEpoch,
-        claimedAt: maxRenderableEpoch,
-      }),
-      transcript: [interactionTranscriptEntry({
-        requestedAt: maxRenderableEpoch,
-        resolvedAt: maxRenderableEpoch,
-      })],
-    }))).toBe(true);
+    expect(
+      isBuildPipeline(
+        snapshotWithInteractions({
+          pending: pendingInteractionResolution({
+            requestedAt: maxRenderableEpoch,
+            claimedAt: maxRenderableEpoch,
+          }),
+          transcript: [
+            interactionTranscriptEntry({
+              requestedAt: maxRenderableEpoch,
+              resolvedAt: maxRenderableEpoch,
+            }),
+          ],
+        }),
+      ),
+    ).toBe(true);
 
     for (const value of [-1, 1.5, maxRenderableEpoch + 1]) {
-      expect(isBuildPipeline(snapshotWithInteractions({
-        pending: pendingInteractionResolution({ requestedAt: value, claimedAt: value }),
-      }))).toBe(false);
-      expect(isBuildPipeline(snapshotWithInteractions({
-        pending: pendingInteractionResolution({ claimedAt: value }),
-      }))).toBe(false);
-      expect(isBuildPipeline(snapshotWithInteractions({
-        transcript: [interactionTranscriptEntry({
-          requestedAt: value,
-          resolvedAt: value,
-        })],
-      }))).toBe(false);
-      expect(isBuildPipeline(snapshotWithInteractions({
-        transcript: [interactionTranscriptEntry({ resolvedAt: value })],
-      }))).toBe(false);
+      expect(
+        isBuildPipeline(
+          snapshotWithInteractions({
+            pending: pendingInteractionResolution({ requestedAt: value, claimedAt: value }),
+          }),
+        ),
+      ).toBe(false);
+      expect(
+        isBuildPipeline(
+          snapshotWithInteractions({
+            pending: pendingInteractionResolution({ claimedAt: value }),
+          }),
+        ),
+      ).toBe(false);
+      expect(
+        isBuildPipeline(
+          snapshotWithInteractions({
+            transcript: [
+              interactionTranscriptEntry({
+                requestedAt: value,
+                resolvedAt: value,
+              }),
+            ],
+          }),
+        ),
+      ).toBe(false);
+      expect(
+        isBuildPipeline(
+          snapshotWithInteractions({
+            transcript: [interactionTranscriptEntry({ resolvedAt: value })],
+          }),
+        ),
+      ).toBe(false);
     }
-    expect(isBuildPipeline(snapshotWithInteractions({
-      pending: pendingInteractionResolution({ requestedAt: 2, claimedAt: 1 }),
-    }))).toBe(false);
-    expect(isBuildPipeline(snapshotWithInteractions({
-      transcript: [interactionTranscriptEntry({ requestedAt: 2, resolvedAt: 1 })],
-    }))).toBe(false);
+    expect(
+      isBuildPipeline(
+        snapshotWithInteractions({
+          pending: pendingInteractionResolution({ requestedAt: 2, claimedAt: 1 }),
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isBuildPipeline(
+        snapshotWithInteractions({
+          transcript: [interactionTranscriptEntry({ requestedAt: 2, resolvedAt: 1 })],
+        }),
+      ),
+    ).toBe(false);
   });
 
   test("rejects aggregate interaction payloads above the serialized byte limit", () => {
     const maxText = "x".repeat(AGENT_INTERACTION_LIMITS.maxTextLength);
     const oversizedPending = pendingInteractionResolution({
-      questions: Array.from(
-        { length: AGENT_INTERACTION_LIMITS.maxQuestionsPerRequest },
-        () => ({ prompt: maxText, options: [] }),
-      ),
+      questions: Array.from({ length: AGENT_INTERACTION_LIMITS.maxQuestionsPerRequest }, () => ({
+        prompt: maxText,
+        options: [],
+      })),
     });
-    expect(new TextEncoder().encode(JSON.stringify(oversizedPending)).byteLength)
-      .toBeGreaterThan(AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes);
-    expect(isBuildPipeline(snapshotWithInteractions({ pending: oversizedPending })))
-      .toBe(false);
+    expect(new TextEncoder().encode(JSON.stringify(oversizedPending)).byteLength).toBeGreaterThan(
+      AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes,
+    );
+    expect(isBuildPipeline(snapshotWithInteractions({ pending: oversizedPending }))).toBe(false);
 
-    const oversizedTranscript = Array.from(
-      { length: 17 },
-      (_, index) => interactionTranscriptEntry({
+    const oversizedTranscript = Array.from({ length: 17 }, (_, index) =>
+      interactionTranscriptEntry({
         id: `question-${index}`,
         title: maxText,
         body: undefined,
         questions: [],
       }),
     );
-    expect(new TextEncoder().encode(JSON.stringify(oversizedTranscript)).byteLength)
-      .toBeGreaterThan(AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes);
-    expect(isBuildPipeline(snapshotWithInteractions({ transcript: oversizedTranscript })))
-      .toBe(false);
+    expect(
+      new TextEncoder().encode(JSON.stringify(oversizedTranscript)).byteLength,
+    ).toBeGreaterThan(AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes);
+    expect(isBuildPipeline(snapshotWithInteractions({ transcript: oversizedTranscript }))).toBe(
+      false,
+    );
   });
 
   test("validates every source variant", () => {
     const base = snapshot();
-    expect(isBuildPipeline({
-      ...base,
-      source: { type: "kanban", taskId: "task-1" },
-    })).toBe(true);
-    expect(isBuildPipeline({
-      ...base,
-      source: {
-        type: "linear",
-        issueId: "linear-id",
-        issueIdentifier: "ENG-1",
-        issueUrl: "https://example.test/ENG-1",
-        status: "Started",
-        teamKey: "ENG",
-        updatedAt: "2026-07-29T00:00:00.000Z",
-      },
-    })).toBe(true);
-    expect(isBuildPipeline({
-      ...base,
-      source: { type: "linear", issueId: "", issueIdentifier: "ENG-1" },
-    })).toBe(false);
-    expect(isBuildPipeline({
-      ...base,
-      source: { type: "kanban", taskId: "" },
-    })).toBe(false);
+    expect(
+      isBuildPipeline({
+        ...base,
+        source: { type: "kanban", taskId: "task-1" },
+      }),
+    ).toBe(true);
+    expect(
+      isBuildPipeline({
+        ...base,
+        source: {
+          type: "linear",
+          issueId: "linear-id",
+          issueIdentifier: "ENG-1",
+          issueUrl: "https://example.test/ENG-1",
+          status: "Started",
+          teamKey: "ENG",
+          updatedAt: "2026-07-29T00:00:00.000Z",
+        },
+      }),
+    ).toBe(true);
+    expect(
+      isBuildPipeline({
+        ...base,
+        source: { type: "linear", issueId: "", issueIdentifier: "ENG-1" },
+      }),
+    ).toBe(false);
+    expect(
+      isBuildPipeline({
+        ...base,
+        source: { type: "kanban", taskId: "" },
+      }),
+    ).toBe(false);
   });
 
   test("accepts per-step configuration and rejects keys no step reads", () => {
@@ -961,20 +1196,24 @@ describe("build pipeline protocol", () => {
       address: { agent: "opencode", model: "provider/model" },
     };
     expect(isBuildPipeline({ ...base, steps })).toBe(true);
-    expect(isBuildPipeline({
-      ...base,
-      sessions: [{
-        phase: "review",
-        agent: "codex",
-        iteration: 0,
-        sessionKey: "key",
-        sdkSessionId: "session",
-        status: "running",
-        startedAt: base.createdAt,
-        label: "Review Session",
-      }],
-      currentSessionIndex: 0,
-    })).toBe(true);
+    expect(
+      isBuildPipeline({
+        ...base,
+        sessions: [
+          {
+            phase: "review",
+            agent: "codex",
+            iteration: 0,
+            sessionKey: "key",
+            sdkSessionId: "session",
+            status: "running",
+            startedAt: base.createdAt,
+            label: "Review Session",
+          },
+        ],
+        currentSessionIndex: 0,
+      }),
+    ).toBe(true);
 
     expect(isBuildStepConfigs(steps)).toBe(true);
     expect(isBuildStepConfigs({ "resolve-conflicts": { agent: "codex" } })).toBe(true);
@@ -983,20 +1222,24 @@ describe("build pipeline protocol", () => {
     expect(isBuildStepConfigs({ build: { agent: "gemini" } })).toBe(false);
     expect(isBuildStepConfigs({ build: { agent: "claude", model: "" } })).toBe(false);
     expect(isBuildPipeline({ ...base, steps: { verify: {} } })).toBe(false);
-    expect(isBuildPipeline({
-      ...base,
-      sessions: [{
-        phase: "build",
-        agent: "gemini",
-        iteration: 0,
-        sessionKey: "key",
-        sdkSessionId: "session",
-        status: "running",
-        startedAt: base.createdAt,
-        label: "Build Session",
-      }],
-      currentSessionIndex: 0,
-    })).toBe(false);
+    expect(
+      isBuildPipeline({
+        ...base,
+        sessions: [
+          {
+            phase: "build",
+            agent: "gemini",
+            iteration: 0,
+            sessionKey: "key",
+            sdkSessionId: "session",
+            status: "running",
+            startedAt: base.createdAt,
+            label: "Build Session",
+          },
+        ],
+        currentSessionIndex: 0,
+      }),
+    ).toBe(false);
   });
 
   test("rejects a step map that is not a record of steps at all", () => {
@@ -1013,8 +1256,7 @@ describe("build pipeline protocol", () => {
     // A launcher that clears a step leaves the key behind with `undefined`,
     // which survives a structured clone but not JSON; both must round-trip.
     expect(isBuildStepConfigs({ build: undefined })).toBe(true);
-    expect(isBuildStepConfigs({ build: undefined, review: { agent: "codex" } }))
-      .toBe(true);
+    expect(isBuildStepConfigs({ build: undefined, review: { agent: "codex" } })).toBe(true);
     // `null` is not "unset": it would reach the launcher as a configured step
     // and be dereferenced for its agent.
     expect(isBuildStepConfigs({ build: null })).toBe(false);
@@ -1040,9 +1282,11 @@ describe("build pipeline protocol", () => {
     for (const value of invalid) {
       expect(isBuildStepConfigs(value)).toBe(false);
     }
-    expect(isBuildStepConfigs({
-      build: { agent: "claude", model: "claude-a", reasoningEffort: "high" },
-    })).toBe(true);
+    expect(
+      isBuildStepConfigs({
+        build: { agent: "claude", model: "claude-a", reasoningEffort: "high" },
+      }),
+    ).toBe(true);
     expect(isBuildStepConfigs({ build: { agent: "claude" } })).toBe(true);
   });
 
@@ -1054,9 +1298,7 @@ describe("build pipeline protocol", () => {
     expect(Object.keys(parsed as object)).toEqual(["__proto__"]);
     expect(isBuildStepConfigs(parsed)).toBe(false);
     expect(isBuildPipeline({ ...snapshot(), steps: parsed })).toBe(false);
-    expect(isBuildStepConfigs(
-      JSON.parse('{"constructor":{"agent":"claude"}}'),
-    )).toBe(false);
+    expect(isBuildStepConfigs(JSON.parse('{"constructor":{"agent":"claude"}}'))).toBe(false);
   });
 
   test("rejects a snapshot or a start request whose step map is malformed", () => {
@@ -1090,16 +1332,18 @@ describe("build pipeline protocol", () => {
     const base = snapshot();
     const withAgent = (agent: unknown) => ({
       ...base,
-      sessions: [{
-        phase: "review",
-        ...(agent === undefined ? {} : { agent }),
-        iteration: 0,
-        sessionKey: "review-key",
-        sdkSessionId: "review-session",
-        status: "idle",
-        startedAt: base.createdAt,
-        label: "Review Session",
-      }],
+      sessions: [
+        {
+          phase: "review",
+          ...(agent === undefined ? {} : { agent }),
+          iteration: 0,
+          sessionKey: "review-key",
+          sdkSessionId: "review-session",
+          status: "idle",
+          startedAt: base.createdAt,
+          label: "Review Session",
+        },
+      ],
       currentSessionIndex: 0,
     });
 
@@ -1149,8 +1393,7 @@ describe("build pipeline protocol", () => {
     }
     // Every configurable step is reachable from some phase, so no launcher
     // control can be configured and then never consulted.
-    expect(new Set(phases.map(stepKeyForSessionPhase)))
-      .toEqual(new Set(BUILD_STEP_KEYS));
+    expect(new Set(phases.map(stepKeyForSessionPhase))).toEqual(new Set(BUILD_STEP_KEYS));
   });
 
   test("publishes the configurable step keys in launcher order, immutably", () => {
@@ -1190,19 +1433,25 @@ describe("build pipeline protocol", () => {
       maxIterations: 3,
     };
     expect(isStartBuildPipelineInput(input)).toBe(true);
-    expect(isStartBuildPipelineInput({
-      ...input,
-      steps: { build: { agent: "claude", model: "claude-a" } },
-    })).toBe(true);
-    expect(isStartBuildPipelineInput({
-      ...input,
-      steps: { build: { agent: "claude" }, deploy: { agent: "codex" } },
-    })).toBe(false);
+    expect(
+      isStartBuildPipelineInput({
+        ...input,
+        steps: { build: { agent: "claude", model: "claude-a" } },
+      }),
+    ).toBe(true);
+    expect(
+      isStartBuildPipelineInput({
+        ...input,
+        steps: { build: { agent: "claude" }, deploy: { agent: "codex" } },
+      }),
+    ).toBe(false);
     expect(isStartBuildPipelineInput({ ...input, maxIterations: 11 })).toBe(false);
-    expect(isStartBuildPipelineInput({
-      ...input,
-      taskSnapshot: { ...input.taskSnapshot, images: [{ filename: 7, data: "" }] },
-    })).toBe(false);
+    expect(
+      isStartBuildPipelineInput({
+        ...input,
+        taskSnapshot: { ...input.taskSnapshot, images: [{ filename: 7, data: "" }] },
+      }),
+    ).toBe(false);
   });
 
   test("rejects malformed start request identifiers, enums, sources, and limits", () => {
@@ -1258,8 +1507,7 @@ describe("build pipeline protocol", () => {
       createdAt: "2026-07-29T00:00:00.000Z",
     };
     expect(isBuildPipeline({ ...snapshot(), pendingUserMessages: [] })).toBe(true);
-    expect(isBuildPipeline({ ...snapshot(), pendingUserMessages: [message] }))
-      .toBe(true);
+    expect(isBuildPipeline({ ...snapshot(), pendingUserMessages: [message] })).toBe(true);
 
     const invalid = [
       // Over the queue bound: a client that ignored sendMessage's limit, or a
@@ -1281,21 +1529,15 @@ describe("build pipeline protocol", () => {
   });
 
   test("validates the review-retry request flag", () => {
-    expect(isBuildPipeline({ ...snapshot(), reviewRetryRequested: true }))
-      .toBe(true);
-    expect(isBuildPipeline({ ...snapshot(), reviewRetryRequested: false }))
-      .toBe(true);
-    expect(isBuildPipeline({ ...snapshot(), reviewRetryRequested: "yes" }))
-      .toBe(false);
+    expect(isBuildPipeline({ ...snapshot(), reviewRetryRequested: true })).toBe(true);
+    expect(isBuildPipeline({ ...snapshot(), reviewRetryRequested: false })).toBe(true);
+    expect(isBuildPipeline({ ...snapshot(), reviewRetryRequested: "yes" })).toBe(false);
   });
 
   test("validates the failed-stage retry request flag", () => {
-    expect(isBuildPipeline({ ...snapshot(), stageRetryRequested: true }))
-      .toBe(true);
-    expect(isBuildPipeline({ ...snapshot(), stageRetryRequested: false }))
-      .toBe(true);
-    expect(isBuildPipeline({ ...snapshot(), stageRetryRequested: "yes" }))
-      .toBe(false);
+    expect(isBuildPipeline({ ...snapshot(), stageRetryRequested: true })).toBe(true);
+    expect(isBuildPipeline({ ...snapshot(), stageRetryRequested: false })).toBe(true);
+    expect(isBuildPipeline({ ...snapshot(), stageRetryRequested: "yes" })).toBe(false);
   });
 
   test("validates the session fields the supervisor derives deadlines from", () => {
@@ -1314,40 +1556,35 @@ describe("build pipeline protocol", () => {
       currentSessionIndex: 0,
     });
 
-    expect(isBuildPipeline(withSession({
-      messagesFingerprint: "3:{}",
-      messagesPersistedAt: "2026-07-29T00:00:01.000Z",
-      turnStartedAt: "2026-07-29T00:00:01.500Z",
-      structuredWaitStartedAt: "2026-07-29T00:00:02.000Z",
-      structuredResultStatus: "pending",
-      structuredReportRepairAttempts: 2,
-    }))).toBe(true);
-    expect(isBuildPipeline(withSession({ structuredResultStatus: "accepted" })))
-      .toBe(true);
-    expect(isBuildPipeline(withSession({ structuredResultStatus: "complete" })))
-      .toBe(false);
-    expect(isBuildPipeline(withSession({ structuredReportRepairAttempts: 0 })))
-      .toBe(true);
+    expect(
+      isBuildPipeline(
+        withSession({
+          messagesFingerprint: "3:{}",
+          messagesPersistedAt: "2026-07-29T00:00:01.000Z",
+          turnStartedAt: "2026-07-29T00:00:01.500Z",
+          structuredWaitStartedAt: "2026-07-29T00:00:02.000Z",
+          structuredResultStatus: "pending",
+          structuredReportRepairAttempts: 2,
+        }),
+      ),
+    ).toBe(true);
+    expect(isBuildPipeline(withSession({ structuredResultStatus: "accepted" }))).toBe(true);
+    expect(isBuildPipeline(withSession({ structuredResultStatus: "complete" }))).toBe(false);
+    expect(isBuildPipeline(withSession({ structuredReportRepairAttempts: 0 }))).toBe(true);
 
     // A malformed timestamp here is not cosmetic: the supervisor subtracts it
     // from now() to decide whether to fail a stalled turn.
-    expect(isBuildPipeline(withSession({ structuredWaitStartedAt: "soon" })))
-      .toBe(false);
+    expect(isBuildPipeline(withSession({ structuredWaitStartedAt: "soon" }))).toBe(false);
     expect(isBuildPipeline(withSession({ messagesPersistedAt: 0 }))).toBe(false);
     expect(isBuildPipeline(withSession({ turnStartedAt: "soon" }))).toBe(false);
-    expect(isBuildPipeline(withSession({ turnStartedAt: "March 5 2020" })))
-      .toBe(false);
+    expect(isBuildPipeline(withSession({ turnStartedAt: "March 5 2020" }))).toBe(false);
     expect(isBuildPipeline(withSession({ turnStartedAt: 0 }))).toBe(false);
     expect(isBuildPipeline(withSession({ messagesFingerprint: "" }))).toBe(false);
     // The repair budget is compared against a bound, and the supervisor refuses
     // to persist a snapshot this rejects — so a value that cannot be counted
     // has to fail here rather than strand every later save.
-    for (
-      const repairs of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, "2", null]
-    ) {
-      expect(
-        isBuildPipeline(withSession({ structuredReportRepairAttempts: repairs })),
-      ).toBe(false);
+    for (const repairs of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, "2", null]) {
+      expect(isBuildPipeline(withSession({ structuredReportRepairAttempts: repairs }))).toBe(false);
     }
   });
 
@@ -1375,16 +1612,20 @@ describe("build pipeline protocol", () => {
 
   test("bounds maxIterations the same way on the record as at the gateway", () => {
     expect(isBuildPipeline({ ...snapshot(), maxIterations: 1 })).toBe(true);
-    expect(isBuildPipeline({
-      ...snapshot(),
-      maxIterations: MAX_BUILD_PIPELINE_ITERATIONS,
-    })).toBe(true);
+    expect(
+      isBuildPipeline({
+        ...snapshot(),
+        maxIterations: MAX_BUILD_PIPELINE_ITERATIONS,
+      }),
+    ).toBe(true);
     // The gateway caps starts at this bound, so a record above it can only come
     // from a writer that bypassed it — and it drives the fix-loop iteration cap.
-    expect(isBuildPipeline({
-      ...snapshot(),
-      maxIterations: MAX_BUILD_PIPELINE_ITERATIONS + 1,
-    })).toBe(false);
+    expect(
+      isBuildPipeline({
+        ...snapshot(),
+        maxIterations: MAX_BUILD_PIPELINE_ITERATIONS + 1,
+      }),
+    ).toBe(false);
     expect(isBuildPipeline({ ...snapshot(), maxIterations: 0 })).toBe(false);
   });
 
@@ -1423,12 +1664,13 @@ describe("build pipeline protocol", () => {
       reviewSummary: "r",
     } as unknown as StructuredReviewReport;
 
-    expect(isBuildPipeline({ ...snapshot(), structuredReview: report }))
-      .toBe(true);
-    expect(isBuildPipeline({
-      ...snapshot(),
-      structuredReview: { ...report, issues: "not-an-array" },
-    })).toBe(false);
+    expect(isBuildPipeline({ ...snapshot(), structuredReview: report })).toBe(true);
+    expect(
+      isBuildPipeline({
+        ...snapshot(),
+        structuredReview: { ...report, issues: "not-an-array" },
+      }),
+    ).toBe(false);
   });
 
   test("accepts the blank environmentId a pipeline holds before provisioning", () => {
@@ -1443,23 +1685,22 @@ describe("build pipeline protocol", () => {
 
 describe("verification verdict contract", () => {
   test("accepts exactly the two contract fields", () => {
-    expect(isVerificationVerdict({ complete: true, rationale: "Clean." }))
-      .toBe(true);
-    expect(isVerificationVerdict({ complete: false, rationale: "" }))
-      .toBe(true);
+    expect(isVerificationVerdict({ complete: true, rationale: "Clean." })).toBe(true);
+    expect(isVerificationVerdict({ complete: false, rationale: "" })).toBe(true);
   });
 
   test("rejects anything the schema would have rejected", () => {
     // `additionalProperties: false` is part of the contract, so a payload that
     // merely carries these two fields is not a verdict — the transcript would
     // otherwise render an unrelated tool result as a verification outcome.
-    expect(isVerificationVerdict({
-      complete: true,
-      rationale: "Clean.",
-      stage: "verify",
-    })).toBe(false);
-    expect(isVerificationVerdict({ complete: "yes", rationale: "Clean." }))
-      .toBe(false);
+    expect(
+      isVerificationVerdict({
+        complete: true,
+        rationale: "Clean.",
+        stage: "verify",
+      }),
+    ).toBe(false);
+    expect(isVerificationVerdict({ complete: "yes", rationale: "Clean." })).toBe(false);
     expect(isVerificationVerdict({ complete: true })).toBe(false);
     expect(isVerificationVerdict([])).toBe(false);
     expect(isVerificationVerdict(null)).toBe(false);
@@ -1482,10 +1723,7 @@ describe("verification verdict contract", () => {
   // list would keep passing the assertion above while silently refusing every
   // verdict the supervisor now asks for.
   test("the guard requires exactly the fields the schema declares", () => {
-    const properties = VERIFICATION_VERDICT_SCHEMA.properties as Record<
-      string,
-      { type: string }
-    >;
+    const properties = VERIFICATION_VERDICT_SCHEMA.properties as Record<string, { type: string }>;
     const fields = Object.keys(properties);
     const sample: Record<string, unknown> = {};
     for (const [field, { type }] of Object.entries(properties)) {
@@ -1508,10 +1746,7 @@ describe("verification verdict contract", () => {
     // The supervisor hands this object straight to the provider, so a mutation
     // here would change what every future turn is constrained to.
     const required = VERIFICATION_VERDICT_SCHEMA.required as string[];
-    const properties = VERIFICATION_VERDICT_SCHEMA.properties as Record<
-      string,
-      { type: string }
-    >;
+    const properties = VERIFICATION_VERDICT_SCHEMA.properties as Record<string, { type: string }>;
 
     expect(Object.isFrozen(VERIFICATION_VERDICT_SCHEMA)).toBe(true);
     expect(Object.isFrozen(required)).toBe(true);
@@ -1562,13 +1797,7 @@ describe("execution mode policy", () => {
   });
 
   test("never sandboxes a stage that has to write", () => {
-    const writing: PipelineSessionPhase[] = [
-      "build",
-      "address",
-      "fix",
-      "pr",
-      "resolve-conflicts",
-    ];
+    const writing: PipelineSessionPhase[] = ["build", "address", "fix", "pr", "resolve-conflicts"];
     for (const phase of writing) {
       for (const agent of BUILD_PIPELINE_AGENTS) {
         expect(executionModeForSessionPhase(phase, agent)).toBe("build");
@@ -1577,8 +1806,13 @@ describe("execution mode policy", () => {
   });
 
   test("publishes one agent list that the guard is built from", () => {
-    expect([...BUILD_PIPELINE_AGENTS].sort())
-      .toEqual(["claude", "codex", "cursor", "grok", "opencode"]);
+    expect([...BUILD_PIPELINE_AGENTS].sort()).toEqual([
+      "claude",
+      "codex",
+      "cursor",
+      "grok",
+      "opencode",
+    ]);
     expect(Object.isFrozen(BUILD_PIPELINE_AGENTS)).toBe(true);
     // Every published agent must satisfy the snapshot guard, or the list and
     // the validator would disagree about what an agent is.
@@ -1598,18 +1832,21 @@ describe("reconnect attempt harness", () => {
     };
     // Recorded so the supervisor can tell whose outage it is: a stage
     // transition fails before its own session exists, so no session names it.
-    expect(isBuildPipeline({
-      ...snapshot(),
-      reconnectAttempt: { ...attempt, agent: "codex" },
-    })).toBe(true);
-    // Absent on attempts written before per-step harnesses existed.
-    expect(isBuildPipeline({ ...snapshot(), reconnectAttempt: attempt }))
-      .toBe(true);
-    for (const agent of ["", "gpt", null, 3, {}]) {
-      expect(isBuildPipeline({
+    expect(
+      isBuildPipeline({
         ...snapshot(),
-        reconnectAttempt: { ...attempt, agent },
-      })).toBe(false);
+        reconnectAttempt: { ...attempt, agent: "codex" },
+      }),
+    ).toBe(true);
+    // Absent on attempts written before per-step harnesses existed.
+    expect(isBuildPipeline({ ...snapshot(), reconnectAttempt: attempt })).toBe(true);
+    for (const agent of ["", "gpt", null, 3, {}]) {
+      expect(
+        isBuildPipeline({
+          ...snapshot(),
+          reconnectAttempt: { ...attempt, agent },
+        }),
+      ).toBe(false);
     }
   });
 });

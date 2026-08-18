@@ -43,8 +43,7 @@ describe("firstModelFor", () => {
 
   test("returns the default placeholder when the agent has no models", () => {
     expect(firstModelFor("opencode", catalog)).toBe("default");
-    expect(firstModelFor("opencode", catalog, { opencode: "provider/model-a" }))
-      .toBe("default");
+    expect(firstModelFor("opencode", catalog, { opencode: "provider/model-a" })).toBe("default");
     expect(firstModelFor("opencode", catalog, { opencode: "" })).toBe("default");
   });
 });
@@ -56,18 +55,17 @@ describe("defaultEffortFor", () => {
   });
 
   test("drops a preferred effort the model does not support", () => {
-    expect(defaultEffortFor("claude", "claude-a", catalog, { claude: "xhigh" }))
-      .toBe("default");
+    expect(defaultEffortFor("claude", "claude-a", catalog, { claude: "xhigh" })).toBe("default");
   });
 
   test("drops every effort for a model the catalog no longer lists", () => {
-    expect(defaultEffortFor("claude", "claude-retired", catalog, { claude: "high" }))
-      .toBe("default");
+    expect(defaultEffortFor("claude", "claude-retired", catalog, { claude: "high" })).toBe(
+      "default",
+    );
   });
 
   test("drops every effort for a model that exposes none", () => {
-    expect(defaultEffortFor("claude", "claude-fixed", catalog, { claude: "high" }))
-      .toBe("default");
+    expect(defaultEffortFor("claude", "claude-fixed", catalog, { claude: "high" })).toBe("default");
   });
 
   test("ignores an empty preference string", () => {
@@ -80,8 +78,7 @@ describe("defaultEffortFor", () => {
 
   test("reads only the requested agent's preference", () => {
     // "high" is valid for claude-a, but it was configured for Codex.
-    expect(defaultEffortFor("claude", "claude-a", catalog, { codex: "high" }))
-      .toBe("default");
+    expect(defaultEffortFor("claude", "claude-a", catalog, { codex: "high" })).toBe("default");
   });
 });
 
@@ -145,8 +142,7 @@ describe("firstModelFor resolved-model matching", () => {
   test("matches a preference stored as the resolved model", () => {
     // Without this the preference misses every entry and the launcher silently
     // opens on the catalog's first model instead of the configured one.
-    expect(firstModelFor("claude", aliased, { claude: "claude-sonnet-5" }))
-      .toBe("sonnet");
+    expect(firstModelFor("claude", aliased, { claude: "claude-sonnet-5" })).toBe("sonnet");
   });
 
   test("prefers an exact catalog id over a resolved-model match", () => {
@@ -154,12 +150,10 @@ describe("firstModelFor resolved-model matching", () => {
   });
 
   test("still falls back when neither the id nor the resolved model matches", () => {
-    expect(firstModelFor("claude", aliased, { claude: "claude-retired-9" }))
-      .toBe("default");
+    expect(firstModelFor("claude", aliased, { claude: "claude-retired-9" })).toBe("default");
   });
 
   test("ignores a resolved model on another agent's entries", () => {
-    expect(firstModelFor("codex", aliased, { codex: "claude-sonnet-5" }))
-      .toBe("codex-a");
+    expect(firstModelFor("codex", aliased, { codex: "claude-sonnet-5" })).toBe("codex-a");
   });
 });

@@ -49,6 +49,8 @@ try {
 } catch (error) {
   console.error(`Failed to install ${appName} to ${applicationsDir}.`);
   console.error(error instanceof Error ? error.message : String(error));
-  console.error("You may need to rerun the package command with permission to write to /Applications.");
+  console.error(
+    "You may need to rerun the package command with permission to write to /Applications.",
+  );
   process.exit(1);
 }

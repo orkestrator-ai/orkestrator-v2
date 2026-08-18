@@ -1,8 +1,5 @@
 import { create } from "zustand";
-import type {
-  PrMonitorEnvironmentState,
-  PrMonitorEvent,
-} from "@orkestrator/protocol/pr-monitor";
+import type { PrMonitorEnvironmentState, PrMonitorEvent } from "@orkestrator/protocol/pr-monitor";
 
 export type { PrMonitorEnvironmentState };
 
@@ -35,13 +32,15 @@ interface PrMonitorStoreState {
 }
 
 function isSameState(a: PrMonitorEnvironmentState, b: PrMonitorEnvironmentState): boolean {
-  return a.mode === b.mode
-    && a.checkInProgress === b.checkInProgress
-    && a.consecutiveErrors === b.consecutiveErrors
-    && a.lastCheckAt === b.lastCheckAt
-    && a.prUrl === b.prUrl
-    && a.prState === b.prState
-    && a.hasMergeConflicts === b.hasMergeConflicts;
+  return (
+    a.mode === b.mode &&
+    a.checkInProgress === b.checkInProgress &&
+    a.consecutiveErrors === b.consecutiveErrors &&
+    a.lastCheckAt === b.lastCheckAt &&
+    a.prUrl === b.prUrl &&
+    a.prState === b.prState &&
+    a.hasMergeConflicts === b.hasMergeConflicts
+  );
 }
 
 export const usePrMonitorStore = create<PrMonitorStoreState>()((set, get) => ({

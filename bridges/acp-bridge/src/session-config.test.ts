@@ -17,19 +17,24 @@ function grokConfig() {
   return normalizeAcpSessionConfig("grok", {
     modes: {
       currentModeId: "agent",
-      availableModes: [{ id: "agent", name: "Agent" }, { id: "plan", name: "Plan" }],
+      availableModes: [
+        { id: "agent", name: "Agent" },
+        { id: "plan", name: "Plan" },
+      ],
     },
     models: {
       currentModelId: "grok-build",
-      availableModels: [{
-        modelId: "grok-build",
-        name: "Grok Build",
-        _meta: {
-          reasoningEffort: "high",
-          reasoningEfforts: [{ value: "low" }, { value: "high" }],
-          totalContextTokens: 500_000,
+      availableModels: [
+        {
+          modelId: "grok-build",
+          name: "Grok Build",
+          _meta: {
+            reasoningEffort: "high",
+            reasoningEfforts: [{ value: "low" }, { value: "high" }],
+            totalContextTokens: 500_000,
+          },
         },
-      }],
+      ],
     },
   });
 }
@@ -81,7 +86,10 @@ function cursorSessionResult() {
         category: "model_config",
         type: "select",
         currentValue: "false",
-        options: [{ value: "false", name: "Off" }, { value: "true", name: "Fast" }],
+        options: [
+          { value: "false", name: "Off" },
+          { value: "true", name: "Fast" },
+        ],
       },
     ],
   };
@@ -171,10 +179,15 @@ describe("normalizeAcpSessionConfig", () => {
     expect(wire.usesSetModel).toBe(true);
     expect(composer.selectedModelId).toBe("grok-4.6");
     expect(composer.selectedReasoningId).toBe("high");
-    expect(composer.models[0]?.reasoning?.map((option) => option.id))
-      .toEqual(["low", "medium", "high", "xhigh"]);
-    expect(composer.models[0]?.reasoning?.find((option) => option.id === "xhigh")?.label)
-      .toBe("Extra High");
+    expect(composer.models[0]?.reasoning?.map((option) => option.id)).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
+    expect(composer.models[0]?.reasoning?.find((option) => option.id === "xhigh")?.label).toBe(
+      "Extra High",
+    );
     expect(composer.fastModeAvailable).toBe(true);
     expect(composer.fastModeEnabled).toBe(false);
     expect(composer.selectedModeId).toBe("build");
@@ -206,8 +219,14 @@ describe("normalizeAcpSessionConfig", () => {
     expect(wire.usesSetModel).toBe(true);
     expect(composer.selectedModelId).toBe("grok-build");
     expect(composer.selectedReasoningId).toBe("high");
-    expect(composer.models[0]?.reasoning?.map((option) => option.id)).toEqual(["low", "high", "xhigh"]);
-    expect(composer.models[0]?.reasoning?.find((option) => option.id === "xhigh")?.label).toBe("Extra high");
+    expect(composer.models[0]?.reasoning?.map((option) => option.id)).toEqual([
+      "low",
+      "high",
+      "xhigh",
+    ]);
+    expect(composer.models[0]?.reasoning?.find((option) => option.id === "xhigh")?.label).toBe(
+      "Extra high",
+    );
     expect(composer.models[1]?.id).toBe("grok-composer-2.5-fast");
   });
 
@@ -305,7 +324,10 @@ describe("planComposerApply", () => {
     const normalized = normalizeAcpSessionConfig("cursor", {
       modes: {
         currentModeId: "agent",
-        availableModes: [{ id: "agent", name: "Agent" }, { id: "plan", name: "Plan" }],
+        availableModes: [
+          { id: "agent", name: "Agent" },
+          { id: "plan", name: "Plan" },
+        ],
       },
       configOptions: [
         {
@@ -313,28 +335,42 @@ describe("planComposerApply", () => {
           category: "model",
           type: "select",
           currentValue: "composer-2.5",
-          options: [{ value: "composer-2.5", name: "Composer 2.5" }, { value: "gpt-5.5", name: "GPT-5.5" }],
+          options: [
+            { value: "composer-2.5", name: "Composer 2.5" },
+            { value: "gpt-5.5", name: "GPT-5.5" },
+          ],
         },
         {
           configId: "thought_level",
           category: "thought_level",
           type: "select",
           currentValue: "medium",
-          options: [{ value: "medium", name: "Medium" }, { value: "high", name: "High" }],
+          options: [
+            { value: "medium", name: "Medium" },
+            { value: "high", name: "High" },
+          ],
         },
         { configId: "fast", category: "model_config", type: "boolean", currentValue: false },
       ],
     });
 
-    expect(planComposerApply("sess", normalized, {
-      modelId: "gpt-5.5",
-      reasoningId: "high",
-      fastMode: true,
-      mode: "plan",
-    })).toEqual([
+    expect(
+      planComposerApply("sess", normalized, {
+        modelId: "gpt-5.5",
+        reasoningId: "high",
+        fastMode: true,
+        mode: "plan",
+      }),
+    ).toEqual([
       { method: "session/set_mode", params: { sessionId: "sess", modeId: "plan" } },
-      { method: "session/set_config_option", params: { sessionId: "sess", configId: "model", value: "gpt-5.5" } },
-      { method: "session/set_config_option", params: { sessionId: "sess", configId: "thought_level", value: "high" } },
+      {
+        method: "session/set_config_option",
+        params: { sessionId: "sess", configId: "model", value: "gpt-5.5" },
+      },
+      {
+        method: "session/set_config_option",
+        params: { sessionId: "sess", configId: "thought_level", value: "high" },
+      },
       {
         method: "session/set_config_option",
         params: { sessionId: "sess", configId: "fast", type: "boolean", value: true },
@@ -345,14 +381,25 @@ describe("planComposerApply", () => {
   test("does not duplicate a Cursor config option as session/set_model", () => {
     const normalized = normalizeAcpSessionConfig("cursor", cursorSessionResult());
 
-    expect(planComposerApply("sess", normalized, {
-      modelId: "composer-2.5",
-      reasoningId: "low",
-      fastMode: true,
-    })).toEqual([
-      { method: "session/set_config_option", params: { sessionId: "sess", configId: "model", value: "composer-2.5" } },
-      { method: "session/set_config_option", params: { sessionId: "sess", configId: "effort", value: "low" } },
-      { method: "session/set_config_option", params: { sessionId: "sess", configId: "fast", value: "true" } },
+    expect(
+      planComposerApply("sess", normalized, {
+        modelId: "composer-2.5",
+        reasoningId: "low",
+        fastMode: true,
+      }),
+    ).toEqual([
+      {
+        method: "session/set_config_option",
+        params: { sessionId: "sess", configId: "model", value: "composer-2.5" },
+      },
+      {
+        method: "session/set_config_option",
+        params: { sessionId: "sess", configId: "effort", value: "low" },
+      },
+      {
+        method: "session/set_config_option",
+        params: { sessionId: "sess", configId: "fast", value: "true" },
+      },
     ]);
   });
 
@@ -403,16 +450,21 @@ describe("planComposerApply", () => {
           {
             modelId: "grok-build",
             name: "Grok Build",
-            _meta: { reasoningEffort: "high", reasoningEfforts: [{ value: "low" }, { value: "high" }] },
+            _meta: {
+              reasoningEffort: "high",
+              reasoningEfforts: [{ value: "low" }, { value: "high" }],
+            },
           },
           { modelId: "grok-composer-2.5-fast", name: "Composer Fast" },
         ],
       },
     });
 
-    expect(planComposerApply("sess", normalized, {
-      modelId: "grok-composer-2.5-fast",
-    })).toEqual([
+    expect(
+      planComposerApply("sess", normalized, {
+        modelId: "grok-composer-2.5-fast",
+      }),
+    ).toEqual([
       {
         method: "session/set_model",
         params: { sessionId: "sess", modelId: "grok-composer-2.5-fast" },
@@ -461,7 +513,10 @@ describe("session config updates", () => {
           category: "model_config",
           type: "select",
           currentValue: "false",
-          options: [{ value: "false", name: "Off" }, { value: "true", name: "Fast" }],
+          options: [
+            { value: "false", name: "Off" },
+            { value: "true", name: "Fast" },
+          ],
         },
       ],
     });
@@ -483,7 +538,10 @@ describe("session config updates", () => {
     const normalized = normalizeAcpSessionConfig("cursor", {
       modes: {
         currentModeId: "agent",
-        availableModes: [{ id: "agent", name: "Agent" }, { id: "plan", name: "Plan" }],
+        availableModes: [
+          { id: "agent", name: "Agent" },
+          { id: "plan", name: "Plan" },
+        ],
       },
     });
     expect(applyCurrentModeUpdate(normalized, "plan").composer.selectedModeId).toBe("plan");
@@ -497,7 +555,10 @@ describe("session config updates", () => {
           {
             modelId: "grok-build",
             name: "Grok Build",
-            _meta: { reasoningEffort: "high", reasoningEfforts: [{ value: "low" }, { value: "high" }] },
+            _meta: {
+              reasoningEffort: "high",
+              reasoningEfforts: [{ value: "low" }, { value: "high" }],
+            },
           },
         ],
       },
@@ -513,25 +574,33 @@ describe("session config updates", () => {
 
   test("merges live catalogs by model id", () => {
     const first = normalizeAcpSessionConfig("cursor", {
-      configOptions: [{
-        id: "model",
-        category: "model",
-        type: "select",
-        currentValue: "a",
-        options: [{ value: "a", name: "A" }],
-      }],
+      configOptions: [
+        {
+          id: "model",
+          category: "model",
+          type: "select",
+          currentValue: "a",
+          options: [{ value: "a", name: "A" }],
+        },
+      ],
     });
     const second = normalizeAcpSessionConfig("cursor", {
-      configOptions: [{
-        id: "model",
-        category: "model",
-        type: "select",
-        currentValue: "b",
-        options: [{ value: "a", name: "A" }, { value: "b", name: "B" }],
-      }],
+      configOptions: [
+        {
+          id: "model",
+          category: "model",
+          type: "select",
+          currentValue: "b",
+          options: [
+            { value: "a", name: "A" },
+            { value: "b", name: "B" },
+          ],
+        },
+      ],
     });
-    expect(mergeComposerCatalog("cursor", [first.composer, second.composer]).map((model) => model.id))
-      .toEqual(["a", "b"]);
+    expect(
+      mergeComposerCatalog("cursor", [first.composer, second.composer]).map((model) => model.id),
+    ).toEqual(["a", "b"]);
   });
 });
 
@@ -595,7 +664,10 @@ describe("persisted session config", () => {
     const normalized = normalizeAcpSessionConfig("cursor", {
       modes: {
         currentModeId: "agent",
-        availableModes: [{ id: "agent", name: "Agent" }, { id: "plan", name: "Plan" }],
+        availableModes: [
+          { id: "agent", name: "Agent" },
+          { id: "plan", name: "Plan" },
+        ],
       },
       configOptions: [
         {
@@ -603,7 +675,10 @@ describe("persisted session config", () => {
           category: "model",
           type: "select",
           currentValue: "composer-2.5",
-          options: [{ value: "composer-2.5", name: "Composer 2.5" }, { value: "gpt-5.5", name: "GPT-5.5" }],
+          options: [
+            { value: "composer-2.5", name: "Composer 2.5" },
+            { value: "gpt-5.5", name: "GPT-5.5" },
+          ],
         },
         { id: "fast", category: "model_config", type: "boolean", currentValue: true },
       ],
@@ -617,8 +692,9 @@ describe("persisted session config", () => {
 
   test("round-trips a normalized Grok config through the validator", () => {
     const normalized = grokConfig();
-    expect(parsePersistedAcpSessionConfig("grok", JSON.parse(JSON.stringify(normalized))))
-      .toEqual(normalized);
+    expect(parsePersistedAcpSessionConfig("grok", JSON.parse(JSON.stringify(normalized)))).toEqual(
+      normalized,
+    );
   });
 
   test("round-trips a catalogue the normalizer built from duplicate vendor ids", () => {
@@ -634,8 +710,9 @@ describe("persisted session config", () => {
       },
     });
     expect(normalized.composer.models.map((model) => model.id)).toEqual(["grok-build"]);
-    expect(parsePersistedAcpSessionConfig("grok", JSON.parse(JSON.stringify(normalized))))
-      .toEqual(normalized);
+    expect(parsePersistedAcpSessionConfig("grok", JSON.parse(JSON.stringify(normalized)))).toEqual(
+      normalized,
+    );
   });
 
   test("bounds an oversized vendor catalogue to what the validator accepts", () => {
@@ -655,23 +732,27 @@ describe("persisted session config", () => {
     });
     expect(normalized.composer.models).toHaveLength(MAX_CATALOG_MODELS);
     expect(normalized.composer.models[0]?.reasoning).toHaveLength(MAX_REASONING_OPTIONS);
-    expect(parsePersistedAcpSessionConfig("grok", JSON.parse(JSON.stringify(normalized))))
-      .not.toBeNull();
+    expect(
+      parsePersistedAcpSessionConfig("grok", JSON.parse(JSON.stringify(normalized))),
+    ).not.toBeNull();
   });
 
   test("rejects structurally wrong persisted state", () => {
     expect(parsePersistedAcpSessionConfig("cursor", undefined)).toBeNull();
     expect(parsePersistedAcpSessionConfig("cursor", { composer: {}, wire: {} })).toBeNull();
-    expect(parsePersistedAcpSessionConfig("cursor", {
-      composer: { models: [], modes: [], fastModeAvailable: false, fastModeEnabled: null },
-      wire: { configOptions: [], availableModeIds: {}, usesSetModel: "no" },
-    })).toBeNull();
+    expect(
+      parsePersistedAcpSessionConfig("cursor", {
+        composer: { models: [], modes: [], fastModeAvailable: false, fastModeEnabled: null },
+        wire: { configOptions: [], availableModeIds: {}, usesSetModel: "no" },
+      }),
+    ).toBeNull();
   });
 
   test("rejects a catalogue belonging to a different provider", () => {
     const normalized = grokConfig();
-    expect(parsePersistedAcpSessionConfig("cursor", JSON.parse(JSON.stringify(normalized))))
-      .toBeNull();
+    expect(
+      parsePersistedAcpSessionConfig("cursor", JSON.parse(JSON.stringify(normalized))),
+    ).toBeNull();
   });
 
   test("rejects duplicate model ids and duplicate reasoning ids", () => {
@@ -679,25 +760,36 @@ describe("persisted session config", () => {
       platform: "grok",
       id: "grok-build",
       label: "Grok Build",
-      reasoning: [{ id: "low", label: "Low" }, { id: "low", label: "Low again" }],
+      reasoning: [
+        { id: "low", label: "Low" },
+        { id: "low", label: "Low again" },
+      ],
     };
-    expect(parsePersistedComposerState("grok", {
-      models: [model],
-      modes: [],
-      fastModeAvailable: false,
-      fastModeEnabled: null,
-    })).toBeNull();
-    expect(parsePersistedComposerState("grok", {
-      models: [{ ...model, reasoning: undefined }, { ...model, reasoning: undefined }],
-      modes: [],
-      fastModeAvailable: false,
-      fastModeEnabled: null,
-    })).toBeNull();
+    expect(
+      parsePersistedComposerState("grok", {
+        models: [model],
+        modes: [],
+        fastModeAvailable: false,
+        fastModeEnabled: null,
+      }),
+    ).toBeNull();
+    expect(
+      parsePersistedComposerState("grok", {
+        models: [
+          { ...model, reasoning: undefined },
+          { ...model, reasoning: undefined },
+        ],
+        modes: [],
+        fastModeAvailable: false,
+        fastModeEnabled: null,
+      }),
+    ).toBeNull();
   });
 
   test("accepts a legacy composer-only snapshot", () => {
     const composer = grokConfig().composer;
-    expect(parsePersistedComposerState("grok", JSON.parse(JSON.stringify(composer))))
-      .toEqual(composer);
+    expect(parsePersistedComposerState("grok", JSON.parse(JSON.stringify(composer)))).toEqual(
+      composer,
+    );
   });
 });

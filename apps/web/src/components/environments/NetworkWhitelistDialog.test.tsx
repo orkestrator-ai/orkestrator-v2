@@ -42,11 +42,12 @@ mock.module("@/lib/backend", () => ({
 
 mock.module("@/stores", () => ({
   ...realStoresSnapshot,
-  useConfigStore: <T,>(selector: (state: {
-    config: { global: { allowedDomains: string[] } };
-  }) => T) => selector({
-    config: { global: { allowedDomains: globalAllowedDomains } },
-  }),
+  useConfigStore: <T,>(
+    selector: (state: { config: { global: { allowedDomains: string[] } } }) => T,
+  ) =>
+    selector({
+      config: { global: { allowedDomains: globalAllowedDomains } },
+    }),
 }));
 
 const { NetworkWhitelistDialog } = await import("./NetworkWhitelistDialog");
@@ -63,9 +64,10 @@ describe("NetworkWhitelistDialog", () => {
       { domain: "api.example.com", valid: true, resolvable: true },
     ]);
     updateEnvironmentAllowedDomainsMock.mockReset();
-    updateEnvironmentAllowedDomainsMock.mockImplementation(
-      async (_environmentId, domains) => ({ ...environment, allowedDomains: domains }),
-    );
+    updateEnvironmentAllowedDomainsMock.mockImplementation(async (_environmentId, domains) => ({
+      ...environment,
+      allowedDomains: domains,
+    }));
   });
 
   afterEach(cleanup);
@@ -85,8 +87,9 @@ describe("NetworkWhitelistDialog", () => {
     const textarea = screen.getByRole("textbox", { name: "Allowed Domains" });
     fireEvent.change(textarea, { target: { value: "not a domain" } });
     expect(screen.getByText("Invalid domain format: not a domain")).toBeTruthy();
-    expect((screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled)
-      .toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
 
     fireEvent.change(textarea, {
       target: { value: " api.example.com \n\nregistry.example.org " },
@@ -102,13 +105,15 @@ describe("NetworkWhitelistDialog", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
     await waitFor(() => {
-      expect(updateEnvironmentAllowedDomainsMock).toHaveBeenCalledWith(
-        "env-1",
-        ["api.example.com", "registry.example.org"],
+      expect(updateEnvironmentAllowedDomainsMock).toHaveBeenCalledWith("env-1", [
+        "api.example.com",
+        "registry.example.org",
+      ]);
+      expect(onUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          allowedDomains: ["api.example.com", "registry.example.org"],
+        }),
       );
-      expect(onUpdate).toHaveBeenCalledWith(expect.objectContaining({
-        allowedDomains: ["api.example.com", "registry.example.org"],
-      }));
       expect(onOpenChange).toHaveBeenCalledWith(false);
     });
   });
@@ -125,8 +130,9 @@ describe("NetworkWhitelistDialog", () => {
     );
 
     fireEvent.click(screen.getByRole("switch"));
-    expect((screen.getByRole("textbox", { name: "Allowed Domains" }) as HTMLTextAreaElement).value)
-      .toBe("global.example.com");
+    expect(
+      (screen.getByRole("textbox", { name: "Allowed Domains" }) as HTMLTextAreaElement).value,
+    ).toBe("global.example.com");
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => {

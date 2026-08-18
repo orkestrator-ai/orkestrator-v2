@@ -1,10 +1,7 @@
 import { createSessionKey } from "@/lib/utils";
 import { beforeEach, describe, expect, test } from "bun:test";
 import { createOptimisticNativeMessage } from "@/lib/chat/client-only-messages";
-import {
-  ERROR_MESSAGE_PREFIX,
-  SYSTEM_MESSAGE_PREFIX,
-} from "@/lib/opencode-client";
+import { ERROR_MESSAGE_PREFIX, SYSTEM_MESSAGE_PREFIX } from "@/lib/opencode-client";
 import {
   CODEX_MODELS,
   DEFAULT_CODEX_MODEL,
@@ -13,14 +10,8 @@ import {
   type CodexInteraction,
 } from "@/lib/codex-client";
 import type { ContextUsageSnapshot } from "@/lib/context-usage";
-import {
-  CODEX_UNCONFIRMED_DISPATCH_ERROR,
-  useCodexStore,
-} from "./codexStore";
-import {
-  codexInteractionDraftKey,
-  usePromptDraftStore,
-} from "./promptDraftStore";
+import { CODEX_UNCONFIRMED_DISPATCH_ERROR, useCodexStore } from "./codexStore";
+import { codexInteractionDraftKey, usePromptDraftStore } from "./promptDraftStore";
 import { seedQueuedPrompt } from "@/stores/testing/queue-projection";
 
 const SESSION_KEY = createSessionKey("env-1", "tab-1");
@@ -113,10 +104,7 @@ function permissionsApproval(
 }
 
 /** File-change approval, the only kind carrying a `changes` list. */
-function fileChangeApproval(
-  approvalId: string,
-  changes: CodexApprovalFileChange[],
-): CodexApproval {
+function fileChangeApproval(approvalId: string, changes: CodexApprovalFileChange[]): CodexApproval {
   return {
     approvalId,
     kind: "file-change",
@@ -156,14 +144,16 @@ describe("codexStore message helpers", () => {
 
   test("classifies applied, stale, and gap message patches", () => {
     const store = useCodexStore.getState();
-    store.setMessages(SESSION_KEY, [{
-      id: "assistant-patched",
-      role: "assistant",
-      content: "one",
-      parts: [{ type: "text", content: "one" }],
-      createdAt: "2026-04-15T00:00:00.000Z",
-      revision: 1,
-    }]);
+    store.setMessages(SESSION_KEY, [
+      {
+        id: "assistant-patched",
+        role: "assistant",
+        content: "one",
+        parts: [{ type: "text", content: "one" }],
+        createdAt: "2026-04-15T00:00:00.000Z",
+        revision: 1,
+      },
+    ]);
     const patch = (revision: number, content = "two") => ({
       messageId: "assistant-patched",
       partCount: 1,
@@ -174,19 +164,25 @@ describe("codexStore message helpers", () => {
     });
 
     expect(store.patchMessage(SESSION_KEY, patch(2))).toBe("applied");
-    expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.messages[0])
-      .toMatchObject({ content: "two", revision: 2 });
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.messages[0]).toMatchObject({
+      content: "two",
+      revision: 2,
+    });
     expect(store.patchMessage(SESSION_KEY, patch(2, "duplicate"))).toBe("stale");
     expect(store.patchMessage(SESSION_KEY, patch(4, "gap"))).toBe("needs-reconcile");
-    expect(store.patchMessage(SESSION_KEY, {
-      ...patch(3),
-      changedParts: [],
-      partCount: 2,
-    })).toBe("needs-reconcile");
-    expect(store.patchMessage(SESSION_KEY, {
-      ...patch(3),
-      messageId: "missing",
-    })).toBe("needs-reconcile");
+    expect(
+      store.patchMessage(SESSION_KEY, {
+        ...patch(3),
+        changedParts: [],
+        partCount: 2,
+      }),
+    ).toBe("needs-reconcile");
+    expect(
+      store.patchMessage(SESSION_KEY, {
+        ...patch(3),
+        messageId: "missing",
+      }),
+    ).toBe("needs-reconcile");
   });
 
   test("does not let an older full-message frame roll back a newer revision", () => {
@@ -231,9 +227,10 @@ describe("codexStore message helpers", () => {
     });
 
     expect(
-      useCodexStore.getState().sessions.get(SESSION_KEY)?.messages.map(
-        (message) => message.id,
-      ),
+      useCodexStore
+        .getState()
+        .sessions.get(SESSION_KEY)
+        ?.messages.map((message) => message.id),
     ).toEqual(["server-live-echo"]);
   });
 
@@ -251,18 +248,21 @@ describe("codexStore message helpers", () => {
       id: "server-attachment-live-echo",
       role: "user",
       content: "",
-      parts: [{
-        type: "file",
-        content: "screenshot.png",
-        fileUrl: "file:///workspace/screenshot.png",
-      }],
+      parts: [
+        {
+          type: "file",
+          content: "screenshot.png",
+          fileUrl: "file:///workspace/screenshot.png",
+        },
+      ],
       createdAt: "2026-04-15T10:00:01.000Z",
     });
 
     expect(
-      useCodexStore.getState().sessions.get(SESSION_KEY)?.messages.map(
-        (message) => message.id,
-      ),
+      useCodexStore
+        .getState()
+        .sessions.get(SESSION_KEY)
+        ?.messages.map((message) => message.id),
     ).toEqual(["server-attachment-live-echo"]);
   });
 
@@ -303,9 +303,10 @@ describe("codexStore message helpers", () => {
     });
 
     expect(
-      useCodexStore.getState().sessions.get(SESSION_KEY)?.messages.map(
-        (message) => message.id,
-      ),
+      useCodexStore
+        .getState()
+        .sessions.get(SESSION_KEY)
+        ?.messages.map((message) => message.id),
     ).toEqual([
       `${SYSTEM_MESSAGE_PREFIX}naming`,
       "server-with-client-rows",
@@ -459,30 +460,30 @@ describe("codexStore message helpers", () => {
 
   test("settles an unconfirmed dispatch as confirmed when the transcript echoes it", () => {
     const store = useCodexStore.getState();
-    const optimistic = createOptimisticNativeMessage(
-      "optimistic-confirmed",
-      "Run the checks",
-    );
+    const optimistic = createOptimisticNativeMessage("optimistic-confirmed", "Run the checks");
     store.addMessage(SESSION_KEY, optimistic);
     store.setUnconfirmedDispatch(SESSION_KEY, {
       userMessageId: optimistic.id,
       fingerprint: "fingerprint-confirmed",
       requestId: "request-confirmed",
     });
-    store.setMessages(SESSION_KEY, [{
-      id: "server-confirmed",
-      role: "user",
-      content: "Run the checks",
-      parts: [{ type: "text", content: "Run the checks" }],
-      createdAt: optimistic.createdAt,
-    }]);
+    store.setMessages(SESSION_KEY, [
+      {
+        id: "server-confirmed",
+        role: "user",
+        content: "Run the checks",
+        parts: [{ type: "text", content: "Run the checks" }],
+        createdAt: optimistic.createdAt,
+      },
+    ]);
 
     expect(store.settleUnconfirmedDispatch(SESSION_KEY)).toBe("confirmed");
     expect(useCodexStore.getState().unconfirmedDispatches.has(SESSION_KEY)).toBe(false);
     expect(
-      useCodexStore.getState().sessions.get(SESSION_KEY)?.messages.map(
-        (message) => message.id,
-      ),
+      useCodexStore
+        .getState()
+        .sessions.get(SESSION_KEY)
+        ?.messages.map((message) => message.id),
     ).toEqual(["server-confirmed"]);
   });
 
@@ -495,10 +496,7 @@ describe("codexStore message helpers", () => {
       parts: [{ type: "text" as const, content: "Earlier response" }],
       createdAt: "2026-04-15T10:00:00.000Z",
     };
-    const optimistic = createOptimisticNativeMessage(
-      "optimistic-response",
-      "Run the checks",
-    );
+    const optimistic = createOptimisticNativeMessage("optimistic-response", "Run the checks");
     store.setMessages(SESSION_KEY, [existing]);
     store.addMessage(SESSION_KEY, optimistic);
     store.setUnconfirmedDispatch(SESSION_KEY, {
@@ -525,16 +523,15 @@ describe("codexStore message helpers", () => {
       requestId: "request-response",
       retryable: true,
     });
-    expect(state.sessions.get(SESSION_KEY)?.messages.map((message) => message.id))
-      .toEqual(["server-existing", "server-new-response"]);
+    expect(state.sessions.get(SESSION_KEY)?.messages.map((message) => message.id)).toEqual([
+      "server-existing",
+      "server-new-response",
+    ]);
   });
 
   test("turns an unmatched unconfirmed dispatch into a durable safe retry", () => {
     const store = useCodexStore.getState();
-    const optimistic = createOptimisticNativeMessage(
-      "optimistic-retryable",
-      "Run the checks",
-    );
+    const optimistic = createOptimisticNativeMessage("optimistic-retryable", "Run the checks");
     store.addMessage(SESSION_KEY, optimistic);
     store.setUnconfirmedDispatch(SESSION_KEY, {
       userMessageId: optimistic.id,
@@ -546,24 +543,24 @@ describe("codexStore message helpers", () => {
     expect(store.settleUnconfirmedDispatch(SESSION_KEY)).toBe("retryable");
     expect(store.settleUnconfirmedDispatch(SESSION_KEY)).toBe("retryable");
     expect(
-      useCodexStore.getState().sessions.get(SESSION_KEY)?.messages.some(
-        (message) => message.id === optimistic.id,
-      ),
+      useCodexStore
+        .getState()
+        .sessions.get(SESSION_KEY)
+        ?.messages.some((message) => message.id === optimistic.id),
     ).toBe(false);
-    expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.error)
-      .toBe(CODEX_UNCONFIRMED_DISPATCH_ERROR);
-    expect(useCodexStore.getState().unconfirmedDispatches.get(SESSION_KEY))
-      .toEqual({
-        userMessageId: optimistic.id,
-        fingerprint: "fingerprint-retryable",
-        requestId: "request-retryable",
-        retryable: true,
-      });
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.error).toBe(
+      CODEX_UNCONFIRMED_DISPATCH_ERROR,
+    );
+    expect(useCodexStore.getState().unconfirmedDispatches.get(SESSION_KEY)).toEqual({
+      userMessageId: optimistic.id,
+      fingerprint: "fingerprint-retryable",
+      requestId: "request-retryable",
+      retryable: true,
+    });
   });
 
   test("reports no unconfirmed dispatch when there is nothing to settle", () => {
-    expect(useCodexStore.getState().settleUnconfirmedDispatch(SESSION_KEY))
-      .toBe("none");
+    expect(useCodexStore.getState().settleUnconfirmedDispatch(SESSION_KEY)).toBe("none");
   });
 
   test("does not fabricate timer metadata across loading transitions", () => {
@@ -647,8 +644,9 @@ describe("codexStore prompt dispatch claims", () => {
 
     expect(store.claimPromptDispatch(SESSION_KEY, "request-1")).toBe(true);
     expect(store.claimPromptDispatch(SESSION_KEY, "request-1")).toBe(false);
-    expect(useCodexStore.getState().promptDispatchClaims.get(SESSION_KEY))
-      .toEqual(new Set(["request-1"]));
+    expect(useCodexStore.getState().promptDispatchClaims.get(SESSION_KEY)).toEqual(
+      new Set(["request-1"]),
+    );
 
     store.releasePromptDispatch(SESSION_KEY, "request-1");
 
@@ -663,8 +661,9 @@ describe("codexStore prompt dispatch claims", () => {
 
     store.releasePromptDispatch(SESSION_KEY, "request-1");
 
-    expect(useCodexStore.getState().promptDispatchClaims.get(SESSION_KEY))
-      .toEqual(new Set(["request-2"]));
+    expect(useCodexStore.getState().promptDispatchClaims.get(SESSION_KEY)).toEqual(
+      new Set(["request-2"]),
+    );
     expect(store.claimPromptDispatch(SESSION_KEY, "request-1")).toBe(true);
     expect(store.claimPromptDispatch(SESSION_KEY, "request-2")).toBe(false);
   });
@@ -681,13 +680,11 @@ describe("codexStore prompt dispatch claims", () => {
     const stateAfterRelease = useCodexStore.getState();
     expect(stateAfterRelease).toBe(stateBeforeRelease);
     expect(stateAfterRelease.promptDispatchClaims).toBe(claimsBeforeRelease);
-    expect(stateAfterRelease.promptDispatchClaims.get(SESSION_KEY))
-      .toBe(sessionClaimsBeforeRelease);
-
-    store.releasePromptDispatch(
-      createSessionKey("env-1", "missing-tab"),
-      "request-1",
+    expect(stateAfterRelease.promptDispatchClaims.get(SESSION_KEY)).toBe(
+      sessionClaimsBeforeRelease,
     );
+
+    store.releasePromptDispatch(createSessionKey("env-1", "missing-tab"), "request-1");
 
     expect(useCodexStore.getState()).toBe(stateAfterRelease);
     expect(useCodexStore.getState().promptDispatchClaims).toBe(claimsBeforeRelease);
@@ -725,15 +722,42 @@ describe("codexStore session cleanup", () => {
         [targetKey, 3],
         [otherKey, 7],
       ]),
-      attachments: new Map([[targetKey, []], [otherKey, []]]),
-      draftText: new Map([[targetKey, "target"], [otherKey, "other"]]),
-      draftMentions: new Map([[targetKey, []], [otherKey, []]]),
-      messageQueue: new Map([[targetKey, []], [otherKey, []]]),
-      selectedModel: new Map([[targetKey, "gpt-5.4"], [otherKey, "gpt-5.3"]]),
-      selectedMode: new Map([[targetKey, "build"], [otherKey, "plan"]]),
-      selectedReasoningEffort: new Map([[targetKey, "high"], [otherKey, "medium"]]),
-      fastMode: new Map([[targetKey, true], [otherKey, false]]),
-      sessionPhase: new Map([[targetKey, "running"], [otherKey, "idle"]]),
+      attachments: new Map([
+        [targetKey, []],
+        [otherKey, []],
+      ]),
+      draftText: new Map([
+        [targetKey, "target"],
+        [otherKey, "other"],
+      ]),
+      draftMentions: new Map([
+        [targetKey, []],
+        [otherKey, []],
+      ]),
+      messageQueue: new Map([
+        [targetKey, []],
+        [otherKey, []],
+      ]),
+      selectedModel: new Map([
+        [targetKey, "gpt-5.4"],
+        [otherKey, "gpt-5.3"],
+      ]),
+      selectedMode: new Map([
+        [targetKey, "build"],
+        [otherKey, "plan"],
+      ]),
+      selectedReasoningEffort: new Map([
+        [targetKey, "high"],
+        [otherKey, "medium"],
+      ]),
+      fastMode: new Map([
+        [targetKey, true],
+        [otherKey, false],
+      ]),
+      sessionPhase: new Map([
+        [targetKey, "running"],
+        [otherKey, "idle"],
+      ]),
       pendingApprovals: new Map([
         [targetKey, [approval("approval-target")]],
         [otherKey, [approval("approval-other")]],
@@ -769,16 +793,12 @@ describe("codexStore session cleanup", () => {
         [otherKey, new Set(["request-other"])],
       ]),
     });
-    usePromptDraftStore.getState().setDraftValue(
-      codexInteractionDraftKey(targetKey, "interaction-target"),
-      "answer",
-      "target",
-    );
-    usePromptDraftStore.getState().setDraftValue(
-      codexInteractionDraftKey(otherKey, "interaction-other"),
-      "answer",
-      "other",
-    );
+    usePromptDraftStore
+      .getState()
+      .setDraftValue(codexInteractionDraftKey(targetKey, "interaction-target"), "answer", "target");
+    usePromptDraftStore
+      .getState()
+      .setDraftValue(codexInteractionDraftKey(otherKey, "interaction-other"), "answer", "other");
 
     useCodexStore.getState().clearSession(targetKey);
 
@@ -806,14 +826,14 @@ describe("codexStore session cleanup", () => {
       expect(state[field].has(otherKey), `${field} should preserve other tab`).toBe(true);
     }
     expect(
-      usePromptDraftStore.getState().drafts.has(
-        codexInteractionDraftKey(targetKey, "interaction-target"),
-      ),
+      usePromptDraftStore
+        .getState()
+        .drafts.has(codexInteractionDraftKey(targetKey, "interaction-target")),
     ).toBe(false);
     expect(
-      usePromptDraftStore.getState().drafts.has(
-        codexInteractionDraftKey(otherKey, "interaction-other"),
-      ),
+      usePromptDraftStore
+        .getState()
+        .drafts.has(codexInteractionDraftKey(otherKey, "interaction-other")),
     ).toBe(true);
   });
 });
@@ -877,12 +897,8 @@ describe("codexStore cleanup and queue helpers", () => {
 
     expect(store.getSession(sessionKeyA)).toBeUndefined();
     expect(store.getSession(sessionKeyB)?.sessionId).toBe("session-b");
-    expect(
-      useCodexStore.getState().sessionLoadingRevisions.has(sessionKeyA),
-    ).toBe(false);
-    expect(
-      useCodexStore.getState().sessionLoadingRevisions.has(sessionKeyB),
-    ).toBe(true);
+    expect(useCodexStore.getState().sessionLoadingRevisions.has(sessionKeyA)).toBe(false);
+    expect(useCodexStore.getState().sessionLoadingRevisions.has(sessionKeyB)).toBe(true);
     expect(store.getDraftText(sessionKeyA)).toBe("");
     expect(store.getAttachments(sessionKeyA)).toEqual([]);
     expect(store.getQueueLength(sessionKeyA)).toBe(0);
@@ -890,10 +906,10 @@ describe("codexStore cleanup and queue helpers", () => {
     expect(useCodexStore.getState().selectedModel.get(sessionKeyB)).toBe("gpt-4");
     expect(useCodexStore.getState().sessionPhase.get(sessionKeyA)).toBeUndefined();
     expect(useCodexStore.getState().sessionPhase.get(sessionKeyB)).toBe("running");
-    expect(useCodexStore.getState().unconfirmedDispatches.get(sessionKeyA))
-      .toBeUndefined();
-    expect(useCodexStore.getState().unconfirmedDispatches.get(sessionKeyB))
-      .toMatchObject({ requestId: "request-b" });
+    expect(useCodexStore.getState().unconfirmedDispatches.get(sessionKeyA)).toBeUndefined();
+    expect(useCodexStore.getState().unconfirmedDispatches.get(sessionKeyB)).toMatchObject({
+      requestId: "request-b",
+    });
     expect(useCodexStore.getState().slashCommands.get("env-1")).toBeUndefined();
     expect(useCodexStore.getState().slashCommands.get("env-2")).toEqual([
       { name: "/keep", source: "builtin" },
@@ -933,10 +949,7 @@ describe("codexStore cleanup and queue helpers", () => {
       fastMode: false,
     });
 
-    expect(store.getQueuedMessages(queueA).map((item) => item.id)).toEqual([
-      "q-1",
-      "q-2",
-    ]);
+    expect(store.getQueuedMessages(queueA).map((item) => item.id)).toEqual(["q-1", "q-2"]);
 
     store.setQueueProjection(queueA, []);
 
@@ -973,10 +986,7 @@ describe("codexStore cleanup and queue helpers", () => {
       "request-1",
       "request-2",
     ]);
-    store.setQueueProjection(
-      SESSION_KEY,
-      store.getQueuedMessages(SESSION_KEY).slice(1),
-    );
+    store.setQueueProjection(SESSION_KEY, store.getQueuedMessages(SESSION_KEY).slice(1));
     expect(store.getQueuedMessages(SESSION_KEY).map((item) => item.requestId)).toEqual([
       "request-2",
     ]);
@@ -1099,10 +1109,16 @@ describe("codexStore pending approvals", () => {
     store.addPendingApproval(OTHER_KEY, approval("apr-3"));
 
     expect(
-      useCodexStore.getState().pendingApprovals.get(SESSION_KEY)?.map((a) => a.approvalId),
+      useCodexStore
+        .getState()
+        .pendingApprovals.get(SESSION_KEY)
+        ?.map((a) => a.approvalId),
     ).toEqual(["apr-1", "apr-2"]);
     expect(
-      useCodexStore.getState().pendingApprovals.get(OTHER_KEY)?.map((a) => a.approvalId),
+      useCodexStore
+        .getState()
+        .pendingApprovals.get(OTHER_KEY)
+        ?.map((a) => a.approvalId),
     ).toEqual(["apr-3"]);
   });
 
@@ -1126,7 +1142,10 @@ describe("codexStore pending approvals", () => {
 
     store.removePendingApproval(SESSION_KEY, "apr-1");
     expect(
-      useCodexStore.getState().pendingApprovals.get(SESSION_KEY)?.map((a) => a.approvalId),
+      useCodexStore
+        .getState()
+        .pendingApprovals.get(SESSION_KEY)
+        ?.map((a) => a.approvalId),
     ).toEqual(["apr-2"]);
 
     store.removePendingApproval(SESSION_KEY, "apr-2");
@@ -1152,7 +1171,10 @@ describe("codexStore pending approvals", () => {
     // approval it no longer knows about must disappear.
     store.setPendingApprovals(SESSION_KEY, [approval("apr-9")]);
     expect(
-      useCodexStore.getState().pendingApprovals.get(SESSION_KEY)?.map((a) => a.approvalId),
+      useCodexStore
+        .getState()
+        .pendingApprovals.get(SESSION_KEY)
+        ?.map((a) => a.approvalId),
     ).toEqual(["apr-9"]);
 
     store.setPendingApprovals(SESSION_KEY, []);
@@ -1189,19 +1211,17 @@ describe("codexStore pending approvals", () => {
     const store = useCodexStore.getState();
     store.setPendingApprovals(SESSION_KEY, [approval("apr-1")]);
 
-    store.setPendingApprovals(SESSION_KEY, [
-      { ...approval("apr-1"), expiresAt: 900_000 },
-    ]);
-    expect(
-      useCodexStore.getState().pendingApprovals.get(SESSION_KEY)?.[0]?.expiresAt,
-    ).toBe(900_000);
+    store.setPendingApprovals(SESSION_KEY, [{ ...approval("apr-1"), expiresAt: 900_000 }]);
+    expect(useCodexStore.getState().pendingApprovals.get(SESSION_KEY)?.[0]?.expiresAt).toBe(
+      900_000,
+    );
 
     store.setPendingApprovals(SESSION_KEY, [
       { ...approval("apr-1"), expiresAt: 900_000, command: "rm -rf build" },
     ]);
-    expect(
-      useCodexStore.getState().pendingApprovals.get(SESSION_KEY)?.[0]?.command,
-    ).toBe("rm -rf build");
+    expect(useCodexStore.getState().pendingApprovals.get(SESSION_KEY)?.[0]?.command).toBe(
+      "rm -rf build",
+    );
   });
 
   test("treats a byte-identical permissions/file-change snapshot as unchanged", () => {
@@ -1244,9 +1264,10 @@ describe("codexStore pending approvals", () => {
     ]);
 
     expect(useCodexStore.getState().pendingApprovals).not.toBe(before);
-    expect(
-      useCodexStore.getState().pendingApprovals.get(SESSION_KEY)?.[0]?.permissions,
-    ).toEqual({ network: true, fileSystem: true });
+    expect(useCodexStore.getState().pendingApprovals.get(SESSION_KEY)?.[0]?.permissions).toEqual({
+      network: true,
+      fileSystem: true,
+    });
   });
 
   test("adopts a snapshot whose only change is permissions.fileSystem", () => {
@@ -1261,9 +1282,10 @@ describe("codexStore pending approvals", () => {
     ]);
 
     expect(useCodexStore.getState().pendingApprovals).not.toBe(before);
-    expect(
-      useCodexStore.getState().pendingApprovals.get(SESSION_KEY)?.[0]?.permissions,
-    ).toEqual({ network: true, fileSystem: true });
+    expect(useCodexStore.getState().pendingApprovals.get(SESSION_KEY)?.[0]?.permissions).toEqual({
+      network: true,
+      fileSystem: true,
+    });
   });
 
   test("adopts a snapshot whose only change is actionable", () => {
@@ -1271,19 +1293,13 @@ describe("codexStore pending approvals", () => {
     // re-report that revoked it would leave the user approving a command the
     // bridge can no longer describe.
     const store = useCodexStore.getState();
-    store.setPendingApprovals(SESSION_KEY, [
-      { ...approval("apr-actionable"), actionable: true },
-    ]);
+    store.setPendingApprovals(SESSION_KEY, [{ ...approval("apr-actionable"), actionable: true }]);
     const before = useCodexStore.getState().pendingApprovals;
 
-    store.setPendingApprovals(SESSION_KEY, [
-      { ...approval("apr-actionable"), actionable: false },
-    ]);
+    store.setPendingApprovals(SESSION_KEY, [{ ...approval("apr-actionable"), actionable: false }]);
 
     expect(useCodexStore.getState().pendingApprovals).not.toBe(before);
-    expect(
-      useCodexStore.getState().pendingApprovals.get(SESSION_KEY)?.[0]?.actionable,
-    ).toBe(false);
+    expect(useCodexStore.getState().pendingApprovals.get(SESSION_KEY)?.[0]?.actionable).toBe(false);
   });
 
   test("adopts a snapshot whose changes list grew or shrank", () => {
@@ -1303,9 +1319,9 @@ describe("codexStore pending approvals", () => {
     ]);
 
     expect(useCodexStore.getState().pendingApprovals).not.toBe(before);
-    expect(
-      useCodexStore.getState().pendingApprovals.get(SESSION_KEY)?.[0]?.changes,
-    ).toHaveLength(2);
+    expect(useCodexStore.getState().pendingApprovals.get(SESSION_KEY)?.[0]?.changes).toHaveLength(
+      2,
+    );
 
     const grown = useCodexStore.getState().pendingApprovals;
     store.setPendingApprovals(SESSION_KEY, [
@@ -1313,9 +1329,9 @@ describe("codexStore pending approvals", () => {
     ]);
 
     expect(useCodexStore.getState().pendingApprovals).not.toBe(grown);
-    expect(
-      useCodexStore.getState().pendingApprovals.get(SESSION_KEY)?.[0]?.changes,
-    ).toHaveLength(1);
+    expect(useCodexStore.getState().pendingApprovals.get(SESSION_KEY)?.[0]?.changes).toHaveLength(
+      1,
+    );
   });
 
   test("adopts a snapshot whose changes differ only by path", () => {
@@ -1373,12 +1389,14 @@ describe("codexStore pending approvals", () => {
     store.setPendingApprovals(SESSION_KEY, [initial]);
 
     const before = useCodexStore.getState().pendingApprovals;
-    store.setPendingApprovals(SESSION_KEY, [{
-      ...initial,
-      permissions: { network: true, fileSystem: false },
-      changes: [{ path: "/workspace/a.ts", kind: "delete" }],
-      actionable: false,
-    }]);
+    store.setPendingApprovals(SESSION_KEY, [
+      {
+        ...initial,
+        permissions: { network: true, fileSystem: false },
+        changes: [{ path: "/workspace/a.ts", kind: "delete" }],
+        actionable: false,
+      },
+    ]);
 
     const state = useCodexStore.getState();
     expect(state.pendingApprovals).not.toBe(before);
@@ -1536,13 +1554,11 @@ describe("codexStore pending interactions", () => {
     const store = useCodexStore.getState();
     store.setPendingInteractions(SESSION_KEY, [interaction("int-1")]);
 
-    store.setPendingInteractions(SESSION_KEY, [
-      interaction("int-1", { expiresAt: 900_000 }),
-    ]);
+    store.setPendingInteractions(SESSION_KEY, [interaction("int-1", { expiresAt: 900_000 })]);
 
-    expect(
-      useCodexStore.getState().pendingInteractions.get(SESSION_KEY)?.[0]?.expiresAt,
-    ).toBe(900_000);
+    expect(useCodexStore.getState().pendingInteractions.get(SESSION_KEY)?.[0]?.expiresAt).toBe(
+      900_000,
+    );
   });
 
   test("a longer or shorter list is always a real change", () => {
@@ -1560,30 +1576,22 @@ describe("codexStore pending interactions", () => {
     const otherEnvKey = createSessionKey("env-2", "tab-1");
     store.addPendingInteraction(SESSION_KEY, interaction("int-1"));
     store.addPendingInteraction(otherEnvKey, interaction("int-2"));
-    usePromptDraftStore.getState().setDraftValue(
-      codexInteractionDraftKey(SESSION_KEY, "int-1"),
-      "answer",
-      "target",
-    );
-    usePromptDraftStore.getState().setDraftValue(
-      codexInteractionDraftKey(otherEnvKey, "int-2"),
-      "answer",
-      "other",
-    );
+    usePromptDraftStore
+      .getState()
+      .setDraftValue(codexInteractionDraftKey(SESSION_KEY, "int-1"), "answer", "target");
+    usePromptDraftStore
+      .getState()
+      .setDraftValue(codexInteractionDraftKey(otherEnvKey, "int-2"), "answer", "other");
 
     store.clearEnvironment("env-1");
 
     expect(useCodexStore.getState().pendingInteractions.has(SESSION_KEY)).toBe(false);
     expect(useCodexStore.getState().pendingInteractions.has(otherEnvKey)).toBe(true);
     expect(
-      usePromptDraftStore.getState().drafts.has(
-        codexInteractionDraftKey(SESSION_KEY, "int-1"),
-      ),
+      usePromptDraftStore.getState().drafts.has(codexInteractionDraftKey(SESSION_KEY, "int-1")),
     ).toBe(false);
     expect(
-      usePromptDraftStore.getState().drafts.has(
-        codexInteractionDraftKey(otherEnvKey, "int-2"),
-      ),
+      usePromptDraftStore.getState().drafts.has(codexInteractionDraftKey(otherEnvKey, "int-2")),
     ).toBe(true);
   });
 });
@@ -1714,14 +1722,10 @@ describe("no-op equality bails", () => {
 
   test("setSlashCommands with an equal list keeps the same map identity", () => {
     const store = useCodexStore.getState();
-    store.setSlashCommands("env-1", [
-      { name: "review", description: "Review", source: "prompt" },
-    ]);
+    store.setSlashCommands("env-1", [{ name: "review", description: "Review", source: "prompt" }]);
     const before = useCodexStore.getState().slashCommands;
 
-    store.setSlashCommands("env-1", [
-      { name: "review", description: "Review", source: "prompt" },
-    ]);
+    store.setSlashCommands("env-1", [{ name: "review", description: "Review", source: "prompt" }]);
     expect(useCodexStore.getState().slashCommands).toBe(before);
 
     store.setSlashCommands("env-1", []);

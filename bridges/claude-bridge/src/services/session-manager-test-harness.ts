@@ -54,37 +54,20 @@ import type { QueryCall, SdkSessionInfo, SdkSessionMessage } from "./session-man
 // Re-exported so a suite has a single import source for the whole fixture.
 export * from "./session-manager-test-mocks.js";
 
-
-
-
 import * as sessionManager from "./session-manager.js";
-
 
 import { eventEmitter } from "./event-emitter.js";
 export { eventEmitter };
 
-
-import {
-  claudeSessionPreferencesDir,
-  setClaudeHomeForTesting,
-} from "./claude-home.js";
+import { claudeSessionPreferencesDir, setClaudeHomeForTesting } from "./claude-home.js";
 export { claudeSessionPreferencesDir, setClaudeHomeForTesting };
 
-
-import {
-  readSessionPreferences,
-  updateSessionPreferences,
-} from "./session-preferences.js";
+import { readSessionPreferences, updateSessionPreferences } from "./session-preferences.js";
 export { readSessionPreferences, updateSessionPreferences };
 
-
-export const sessionManagerTestHome = mkdtempSync(
-  join(tmpdir(), "claude-session-manager-home-"),
-);
-
+export const sessionManagerTestHome = mkdtempSync(join(tmpdir(), "claude-session-manager-home-"));
 
 setClaudeHomeForTesting(sessionManagerTestHome);
-
 
 // Only `captureEvents` below needs a type from here. The suites that assert on
 // patches, parts, usage, background tasks or the part-budget constants import
@@ -92,8 +75,6 @@ setClaudeHomeForTesting(sessionManagerTestHome);
 // not a re-export surface for them, and `part-budget.js` was being pulled in at
 // runtime for nothing.
 import type { SSEEvent } from "../types/index.js";
-
-
 
 export const {
   createSession,
@@ -143,8 +124,6 @@ export const {
   runClaudeTitleCommand,
 } = sessionManager;
 
-
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -155,8 +134,6 @@ export function captureEvents(): { events: SSEEvent[]; stop: () => void } {
   return { events, stop: unsubscribe };
 }
 
-
-
 export async function waitFor(predicate: () => boolean, timeoutMs = 1000): Promise<void> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
@@ -166,8 +143,6 @@ export async function waitFor(predicate: () => boolean, timeoutMs = 1000): Promi
   throw new Error("Timed out waiting for condition");
 }
 
-
-
 export async function withControlledNewDate<T>(
   initialTime: string,
   run: (setTime: (time: string) => void) => Promise<T>,
@@ -176,11 +151,7 @@ export async function withControlledNewDate<T>(
   let currentTime = RealDate.parse(initialTime);
   const ControlledDate = new Proxy(RealDate, {
     construct(target, args, newTarget) {
-      return Reflect.construct(
-        target,
-        args.length > 0 ? args : [currentTime],
-        newTarget,
-      );
+      return Reflect.construct(target, args.length > 0 ? args : [currentTime], newTarget);
     },
   });
   globalThis.Date = ControlledDate;
@@ -192,8 +163,6 @@ export async function withControlledNewDate<T>(
     globalThis.Date = RealDate;
   }
 }
-
-
 
 /**
  * The SDK id a client key's stable bridge alias decodes back to.
@@ -208,8 +177,6 @@ export function sdkIdForClientKey(clientSessionKey: string): string {
     .slice("session-client-".length)
     .replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, "$1-$2-$3-$4-$5");
 }
-
-
 
 /**
  * Run `body` against a private Claude home, restoring the suite-wide one after.
@@ -232,17 +199,12 @@ export async function withTemporaryClaudeHome<T>(
   }
 }
 
-
-
 export const createdSessionIds: string[] = [];
-
 
 export function track(id: string): string {
   createdSessionIds.push(id);
   return id;
 }
-
-
 
 afterEach(() => {
   setClaudeHomeForTesting(sessionManagerTestHome);
@@ -275,8 +237,6 @@ afterEach(() => {
   for (const key of Object.keys(queryControlOverrides)) delete queryControlOverrides[key];
 });
 
-
-
 afterAll(async () => {
   // Restore the real mcp-config / plugin-config modules so other test files
   // in the same `bun test` run get the real implementations.
@@ -289,8 +249,6 @@ afterAll(async () => {
   await rm(sessionManagerTestHome, { recursive: true, force: true });
 });
 
-
-
 export async function readSdkPrompt(call: QueryCall): Promise<unknown> {
   if (typeof call.prompt === "string") return call.prompt;
   const messages: unknown[] = [];
@@ -299,8 +257,6 @@ export async function readSdkPrompt(call: QueryCall): Promise<unknown> {
   }
   return messages;
 }
-
-
 
 export function createMockChildProcess(options: {
   stdout?: string;
@@ -330,8 +286,6 @@ export function createMockChildProcess(options: {
   return { child, complete };
 }
 
-
-
 export async function runPromptWithMessages(
   messages: unknown[],
   options?: Parameters<typeof sendPrompt>[2],
@@ -347,12 +301,7 @@ export async function runPromptWithMessages(
   return { session: getSession(session.id)!, call };
 }
 
-
-
-export async function withWorkspaceCwd<T>(
-  cwd: string,
-  run: () => Promise<T>,
-): Promise<T> {
+export async function withWorkspaceCwd<T>(cwd: string, run: () => Promise<T>): Promise<T> {
   const previous = process.env.CWD;
   process.env.CWD = cwd;
   try {
@@ -363,30 +312,21 @@ export async function withWorkspaceCwd<T>(
   }
 }
 
-
-
 // ---------------------------------------------------------------------------
 // Persisted session registry
 // ---------------------------------------------------------------------------
 
 export const U1 = "00000000-0000-4000-8000-000000000001";
 
-
 export const A1 = "00000000-0000-4000-8000-000000000002";
-
 
 export const TOOL_RESULT_UUID = "00000000-0000-4000-8000-000000000003";
 
-
 export const A2 = "00000000-0000-4000-8000-000000000004";
-
 
 export const U2 = "00000000-0000-4000-8000-000000000005";
 
-
 export const U3 = "00000000-0000-4000-8000-000000000006";
-
-
 
 /**
  * A transcript containing the shape that broke ordinal resolution: a
@@ -440,8 +380,6 @@ export function transcriptWithToolResult(sessionId = PERSISTED_SDK_ID): SdkSessi
   ];
 }
 
-
-
 export function sdkSessionInfo(overrides: Partial<SdkSessionInfo> = {}): SdkSessionInfo {
   return {
     sessionId: PERSISTED_SDK_ID,
@@ -451,8 +389,6 @@ export function sdkSessionInfo(overrides: Partial<SdkSessionInfo> = {}): SdkSess
     ...overrides,
   };
 }
-
-
 
 export async function materializePersistedSession(
   overrides: Partial<SdkSessionInfo> = {},
@@ -465,8 +401,6 @@ export async function materializePersistedSession(
   if (!state) throw new Error("expected the session to materialize");
   return state;
 }
-
-
 
 // ---------------------------------------------------------------------------
 // Background tasks

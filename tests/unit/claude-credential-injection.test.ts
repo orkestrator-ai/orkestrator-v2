@@ -11,7 +11,15 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { delimiter, join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -167,16 +175,18 @@ describe("host Claude credential resolution", () => {
       const configDir = join(dir, "host-config");
       await fs.mkdir(configDir, { recursive: true });
       await fs.writeFile(join(configDir, ".credentials.json"), CREDENTIAL);
-      expect(await getHostClaudeCredentials("linux", join(dir, "isolated-home"), configDir))
-        .toBe(CREDENTIAL);
+      expect(await getHostClaudeCredentials("linux", join(dir, "isolated-home"), configDir)).toBe(
+        CREDENTIAL,
+      );
     });
   });
 
   test("falls back to the home directory when the configuration directory has none", async () => {
     await withTempDirAsync(async (dir) => {
       await write(dir, CREDENTIAL);
-      expect(await getHostClaudeCredentials("linux", dir, join(dir, "empty-config")))
-        .toBe(CREDENTIAL);
+      expect(await getHostClaudeCredentials("linux", dir, join(dir, "empty-config"))).toBe(
+        CREDENTIAL,
+      );
     });
   });
 });
@@ -224,7 +234,10 @@ describe("host Claude credential resolution on macOS", () => {
   test("passes the Keychain service name the security tool expects", async () => {
     await withTempDirAsync(async (dir) => {
       const argvLog = join(dir, "argv.log");
-      stubSecurity(dir, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${argvLog}'\nprintf '%s' '${KEYCHAIN}'\n`);
+      stubSecurity(
+        dir,
+        `#!/bin/sh\nprintf '%s\\n' "$*" >> '${argvLog}'\nprintf '%s' '${KEYCHAIN}'\n`,
+      );
       await getHostClaudeCredentials("darwin", dir);
       expect(readFileSync(argvLog, "utf8")).toBe(
         `find-generic-password -s Claude Code-credentials -w ${join(dir, "Library", "Keychains", "login.keychain-db")}\n`,
@@ -238,8 +251,9 @@ describe("host Claude credential resolution on macOS", () => {
       claudeAiOauth: { accessToken: "sk-ant-oat01-live", expiresAt: now + 3_600_000 },
     });
     expect(getClaudeOAuthAccessToken(live, now)).toBe("sk-ant-oat01-live");
-    expect(getClaudeOAuthAccessToken(JSON.stringify({ claudeAiOauth: { refreshToken: "refresh" } })))
-      .toBeUndefined();
+    expect(
+      getClaudeOAuthAccessToken(JSON.stringify({ claudeAiOauth: { refreshToken: "refresh" } })),
+    ).toBeUndefined();
     expect(getClaudeOAuthAccessToken("not-json")).toBeUndefined();
   });
 
@@ -254,21 +268,28 @@ describe("host Claude credential resolution on macOS", () => {
     expect(getClaudeOAuthAccessToken(withExpiry(now - 1), now)).toBeUndefined();
     // Inside the startup grace period counts as expired.
     expect(getClaudeOAuthAccessToken(withExpiry(now + 1_000), now)).toBeUndefined();
-    expect(getClaudeOAuthAccessToken(withExpiry(now + 3_600_000), now))
-      .toBe("sk-ant-oat01-example");
+    expect(getClaudeOAuthAccessToken(withExpiry(now + 3_600_000), now)).toBe(
+      "sk-ant-oat01-example",
+    );
   });
 
   test("a credential that records no usable expiry is not treated as expired", () => {
     const now = 1_700_000_000_000;
-    expect(getClaudeOAuthAccessToken(
-      JSON.stringify({ claudeAiOauth: { accessToken: "sk-ant-oat01-example" } }),
-      now,
-    )).toBe("sk-ant-oat01-example");
+    expect(
+      getClaudeOAuthAccessToken(
+        JSON.stringify({ claudeAiOauth: { accessToken: "sk-ant-oat01-example" } }),
+        now,
+      ),
+    ).toBe("sk-ant-oat01-example");
     // A string or non-finite expiry is unreadable, not evidence of expiry.
-    expect(getClaudeOAuthAccessToken(
-      JSON.stringify({ claudeAiOauth: { accessToken: "sk-ant-oat01-example", expiresAt: "soon" } }),
-      now,
-    )).toBe("sk-ant-oat01-example");
+    expect(
+      getClaudeOAuthAccessToken(
+        JSON.stringify({
+          claudeAiOauth: { accessToken: "sk-ant-oat01-example", expiresAt: "soon" },
+        }),
+        now,
+      ),
+    ).toBe("sk-ant-oat01-example");
   });
 
   test("retries the default search list for a host that is not an isolated profile", async () => {
@@ -277,16 +298,21 @@ describe("host Claude credential resolution on macOS", () => {
       // `login.keychain-db`. Pinning the path unconditionally would report a
       // logged-in user as signed out.
       const argvLog = join(dir, "argv.log");
-      stubSecurity(dir, `#!/bin/sh
+      stubSecurity(
+        dir,
+        `#!/bin/sh
 printf '%s\\n' "$*" >> '${argvLog}'
 case "$*" in
   *login.keychain-db*) exit 1 ;;
   *) printf '%s' '${KEYCHAIN}' ;;
 esac
-`);
-      expect(await getHostClaudeCredentials("darwin", dir, undefined, {
-        allowDefaultKeychainSearchList: true,
-      })).toBe(KEYCHAIN);
+`,
+      );
+      expect(
+        await getHostClaudeCredentials("darwin", dir, undefined, {
+          allowDefaultKeychainSearchList: true,
+        }),
+      ).toBe(KEYCHAIN);
       expect(readFileSync(argvLog, "utf8").trim().split("\n")).toEqual([
         `find-generic-password -s Claude Code-credentials -w ${join(dir, "Library", "Keychains", "login.keychain-db")}`,
         "find-generic-password -s Claude Code-credentials -w",
@@ -300,13 +326,16 @@ esac
       // would resolve against whatever the launching session defaults to. That
       // is exactly the host exposure this brokering exists to remove.
       const argvLog = join(dir, "argv.log");
-      stubSecurity(dir, `#!/bin/sh
+      stubSecurity(
+        dir,
+        `#!/bin/sh
 printf '%s\\n' "$*" >> '${argvLog}'
 case "$*" in
   *login.keychain-db*) exit 1 ;;
   *) printf '%s' '${KEYCHAIN}' ;;
 esac
-`);
+`,
+      );
       expect(await getHostClaudeCredentials("darwin", dir)).toBeUndefined();
       expect(readFileSync(argvLog, "utf8").trim().split("\n")).toEqual([
         `find-generic-password -s Claude Code-credentials -w ${join(dir, "Library", "Keychains", "login.keychain-db")}`,
@@ -342,7 +371,10 @@ esac
   test("does not consult the Keychain on a non-darwin platform", async () => {
     await withTempDirAsync(async (dir) => {
       const argvLog = join(dir, "argv.log");
-      stubSecurity(dir, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${argvLog}'\nprintf '%s' '${KEYCHAIN}'\n`);
+      stubSecurity(
+        dir,
+        `#!/bin/sh\nprintf '%s\\n' "$*" >> '${argvLog}'\nprintf '%s' '${KEYCHAIN}'\n`,
+      );
       await writeOnDisk(dir, ON_DISK);
       expect(await getHostClaudeCredentials("linux", dir)).toBe(ON_DISK);
       expect(() => statSync(argvLog)).toThrow();
@@ -362,7 +394,9 @@ describe("provider-scoped Cursor credential import", () => {
       const binDir = join(dir, "bin");
       const argvLog = join(dir, "argv.log");
       mkdirSync(binDir, { recursive: true });
-      writeFileSync(join(binDir, "security"), `#!/bin/sh
+      writeFileSync(
+        join(binDir, "security"),
+        `#!/bin/sh
 printf '%s\\n' "$*" >> '${argvLog}'
 case "$*" in
   *cursor-access-token*) printf '%s' 'cursor-access' ;;
@@ -370,7 +404,8 @@ case "$*" in
   *cursor-api-key*) exit 1 ;;
   *) exit 99 ;;
 esac
-`);
+`,
+      );
       chmodSync(join(binDir, "security"), 0o755);
       process.env.PATH = `${binDir}${delimiter}${originalPath ?? ""}`;
 
@@ -421,7 +456,12 @@ esac
       expect((await fs.stat(join(cursorHome, ".cursor"))).mode & 0o777).toBe(0o700);
 
       await syncAgentTestCursorCredentials(cursorHome, undefined);
-      expect(await fs.access(target).then(() => true, () => false)).toBe(false);
+      expect(
+        await fs.access(target).then(
+          () => true,
+          () => false,
+        ),
+      ).toBe(false);
     });
   });
 
@@ -434,8 +474,12 @@ esac
 
       expect((await fs.stat(cursorHome)).isDirectory()).toBe(true);
       expect((await fs.stat(cursorHome)).mode & 0o777).toBe(0o700);
-      expect(await fs.access(join(cursorHome, ".cursor", "auth.json")).then(() => true, () => false))
-        .toBe(false);
+      expect(
+        await fs.access(join(cursorHome, ".cursor", "auth.json")).then(
+          () => true,
+          () => false,
+        ),
+      ).toBe(false);
     });
   });
 
@@ -445,10 +489,12 @@ esac
       await fs.mkdir(cursorHome, { recursive: true });
       await fs.writeFile(join(cursorHome, ".cursor"), "not-a-directory");
 
-      await expect(syncAgentTestCursorCredentials(cursorHome, { accessToken: "token" }))
-        .rejects.toThrow("not a real directory");
-      await expect(syncAgentTestCursorCredentials(cursorHome, undefined))
-        .rejects.toThrow("not a real directory");
+      await expect(
+        syncAgentTestCursorCredentials(cursorHome, { accessToken: "token" }),
+      ).rejects.toThrow("not a real directory");
+      await expect(syncAgentTestCursorCredentials(cursorHome, undefined)).rejects.toThrow(
+        "not a real directory",
+      );
       expect(await fs.readFile(join(cursorHome, ".cursor"), "utf8")).toBe("not-a-directory");
     });
   });
@@ -461,9 +507,15 @@ esac
       await fs.mkdir(outside, { recursive: true });
       await fs.symlink(outside, join(cursorHome, ".cursor"));
 
-      await expect(syncAgentTestCursorCredentials(cursorHome, { accessToken: "token" }))
-        .rejects.toThrow("not a real directory");
-      expect(await fs.access(join(outside, "auth.json")).then(() => true, () => false)).toBe(false);
+      await expect(
+        syncAgentTestCursorCredentials(cursorHome, { accessToken: "token" }),
+      ).rejects.toThrow("not a real directory");
+      expect(
+        await fs.access(join(outside, "auth.json")).then(
+          () => true,
+          () => false,
+        ),
+      ).toBe(false);
     });
   });
 
@@ -480,7 +532,12 @@ esac
       await syncAgentTestCursorCredentials(cursorHome, undefined);
 
       expect(await fs.readFile(outsideAuth, "utf8")).toBe("unrelated-host-data");
-      expect(await fs.lstat(join(cursorHome, ".cursor")).then(() => true, () => false)).toBe(false);
+      expect(
+        await fs.lstat(join(cursorHome, ".cursor")).then(
+          () => true,
+          () => false,
+        ),
+      ).toBe(false);
     });
   });
 });
@@ -514,9 +571,7 @@ describe("host Claude credential opt-out", () => {
       process.env.PATH = `${binDir}${delimiter}${originalPath ?? ""}`;
 
       expect(
-        await resolveContainerClaudeCredentials(
-          globalConfig({ useHostClaudeCredentials: false }),
-        ),
+        await resolveContainerClaudeCredentials(globalConfig({ useHostClaudeCredentials: false })),
       ).toBeUndefined();
       expect(() => statSync(argvLog)).toThrow();
     });

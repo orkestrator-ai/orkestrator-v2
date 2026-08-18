@@ -7,16 +7,10 @@ import type {
 import { TEST_STRUCTURED_REVIEW_REPORT } from "@/components/build-pipeline/structured-review-test-fixture";
 import { structuredReviewVerdictSummary } from "./structured-review-summary";
 
-function reportWithCounts(
-  issueCount: number,
-  coverageGapCount: number,
-): StructuredReviewReport {
+function reportWithCounts(issueCount: number, coverageGapCount: number): StructuredReviewReport {
   return {
     ...TEST_STRUCTURED_REVIEW_REPORT,
-    issues: Array.from(
-      { length: issueCount },
-      () => TEST_STRUCTURED_REVIEW_REPORT.issues[0]!,
-    ),
+    issues: Array.from({ length: issueCount }, () => TEST_STRUCTURED_REVIEW_REPORT.issues[0]!),
     testCoverageGaps: Array.from(
       { length: coverageGapCount },
       () => TEST_STRUCTURED_REVIEW_REPORT.testCoverageGaps[0]!,
@@ -56,9 +50,7 @@ describe("structuredReviewVerdictSummary", () => {
       const report = reportWithCounts(0, 0);
       report.verdict = { ...report.verdict, ready };
 
-      expect(structuredReviewVerdictSummary(report)).toStartWith(
-        `Ready: ${ready} ·`,
-      );
+      expect(structuredReviewVerdictSummary(report)).toStartWith(`Ready: ${ready} ·`);
     }
   });
 
@@ -69,9 +61,7 @@ describe("structuredReviewVerdictSummary", () => {
       const report = reportWithCounts(0, 0);
       report.riskProfile = { ...report.riskProfile, overallRisk };
 
-      expect(structuredReviewVerdictSummary(report)).toEndWith(
-        `· ${overallRisk} risk`,
-      );
+      expect(structuredReviewVerdictSummary(report)).toEndWith(`· ${overallRisk} risk`);
     }
   });
 

@@ -3,7 +3,10 @@ import { expect, test } from "@playwright/test";
 test("agent thinking shimmer respects motion and forced-color preferences", async ({
   page,
 }, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop-chromium", "desktop coverage is sufficient for global media rules");
+  test.skip(
+    testInfo.project.name !== "desktop-chromium",
+    "desktop coverage is sufficient for global media rules",
+  );
   await page.emulateMedia({
     reducedMotion: "no-preference",
     forcedColors: "none",
@@ -17,11 +20,15 @@ test("agent thinking shimmer respects motion and forced-color preferences", asyn
   await expect(indicator).toHaveCSS("background-clip", "text");
   await expect(indicator).toHaveCSS("background-image", /linear-gradient/);
   await expect(page.getByTestId("chat-status-row")).toHaveCSS("height", "40px");
-  await expect(page.getByTestId("chat-status-content"))
-    .toHaveCSS("animation-name", "chat-status-enter");
+  await expect(page.getByTestId("chat-status-content")).toHaveCSS(
+    "animation-name",
+    "chat-status-enter",
+  );
 
   await page.emulateMedia({ reducedMotion: "reduce" });
-  expect(await page.evaluate(() => matchMedia("(prefers-reduced-motion: reduce)").matches)).toBe(true);
+  expect(await page.evaluate(() => matchMedia("(prefers-reduced-motion: reduce)").matches)).toBe(
+    true,
+  );
   await expect(indicator).toHaveCSS("animation-name", "none");
   await expect(indicator).toHaveCSS("color", "rgb(161, 161, 170)");
   await expect(indicator).toHaveCSS("background-image", "none");
@@ -49,7 +56,10 @@ test("agent thinking shimmer respects motion and forced-color preferences", asyn
 test("connecting NativeChatShell logo respects the reduced-motion preference", async ({
   page,
 }, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop-chromium", "desktop coverage is sufficient for global media rules");
+  test.skip(
+    testInfo.project.name !== "desktop-chromium",
+    "desktop coverage is sufficient for global media rules",
+  );
   await page.emulateMedia({ reducedMotion: "no-preference" });
   await page.goto("/styles");
 
@@ -118,12 +128,8 @@ test.describe("touch compose input geometry", () => {
       metrics.twelveLines.wrapperRect.height,
       1,
     );
-    expect(metrics.twelveLines.scrollHeight).toBeLessThanOrEqual(
-      metrics.twelveLines.clientHeight,
-    );
-    expect(metrics.thirteenLines.scrollHeight).toBeGreaterThan(
-      metrics.thirteenLines.clientHeight,
-    );
+    expect(metrics.twelveLines.scrollHeight).toBeLessThanOrEqual(metrics.twelveLines.clientHeight);
+    expect(metrics.thirteenLines.scrollHeight).toBeGreaterThan(metrics.thirteenLines.clientHeight);
   });
 });
 
@@ -132,13 +138,17 @@ test("message actions use viewport and input capability instead of width alone",
   browser,
   page,
 }, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop-chromium", "one test creates both capability contexts");
+  test.skip(
+    testInfo.project.name !== "desktop-chromium",
+    "one test creates both capability contexts",
+  );
   await page.goto("/styles");
 
   const assistantActionRow = page.getByTestId("assistant-message-action").locator("..");
   const userActionRow = page.getByTestId("user-message-action").locator("..").locator("..");
-  expect(await page.evaluate(() => matchMedia("(hover: hover) and (pointer: fine)").matches))
-    .toBe(true);
+  expect(await page.evaluate(() => matchMedia("(hover: hover) and (pointer: fine)").matches)).toBe(
+    true,
+  );
   await expect(assistantActionRow).toHaveCSS("opacity", "0");
   await expect(userActionRow).toHaveCSS("opacity", "0");
 
@@ -149,10 +159,14 @@ test("message actions use viewport and input capability instead of width alone",
 
   await page.setViewportSize({ width: 767, height: 900 });
   await page.reload();
-  await expect(page.getByTestId("assistant-message-action").locator(".."))
-    .toHaveCSS("opacity", "1");
-  await expect(page.getByTestId("user-message-action").locator("..").locator(".."))
-    .toHaveCSS("opacity", "1");
+  await expect(page.getByTestId("assistant-message-action").locator("..")).toHaveCSS(
+    "opacity",
+    "1",
+  );
+  await expect(page.getByTestId("user-message-action").locator("..").locator("..")).toHaveCSS(
+    "opacity",
+    "1",
+  );
 
   const touchContext = await browser.newContext({
     baseURL,
@@ -162,14 +176,19 @@ test("message actions use viewport and input capability instead of width alone",
   try {
     const touchPage = await touchContext.newPage();
     await touchPage.goto("/styles");
-    expect(await touchPage.evaluate(() => ({
-      coarse: matchMedia("(pointer: coarse)").matches,
-      noHover: matchMedia("(hover: none)").matches,
-    }))).toEqual({ coarse: true, noHover: true });
-    await expect(touchPage.getByTestId("assistant-message-action").locator(".."))
-      .toHaveCSS("opacity", "1");
-    await expect(touchPage.getByTestId("user-message-action").locator("..").locator(".."))
-      .toHaveCSS("opacity", "1");
+    expect(
+      await touchPage.evaluate(() => ({
+        coarse: matchMedia("(pointer: coarse)").matches,
+        noHover: matchMedia("(hover: none)").matches,
+      })),
+    ).toEqual({ coarse: true, noHover: true });
+    await expect(touchPage.getByTestId("assistant-message-action").locator("..")).toHaveCSS(
+      "opacity",
+      "1",
+    );
+    await expect(
+      touchPage.getByTestId("user-message-action").locator("..").locator(".."),
+    ).toHaveCSS("opacity", "1");
   } finally {
     await touchContext.close();
   }
@@ -178,7 +197,10 @@ test("message actions use viewport and input capability instead of width alone",
 test("global dark surfaces, fonts, terminal, and scrollbar rules compile into browser styles", async ({
   page,
 }, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop-chromium", "desktop baseline; mobile overrides have a separate test");
+  test.skip(
+    testInfo.project.name !== "desktop-chromium",
+    "desktop baseline; mobile overrides have a separate test",
+  );
   await page.goto("/styles");
 
   const styles = await page.evaluate(async () => {
@@ -188,9 +210,8 @@ test("global dark surfaces, fonts, terminal, and scrollbar rules compile into br
     ]);
     const root = getComputedStyle(document.documentElement);
     const appRoot = getComputedStyle(document.getElementById("root")!);
-    const read = (testId: string) => getComputedStyle(
-      document.querySelector(`[data-testid="${testId}"]`)!,
-    );
+    const read = (testId: string) =>
+      getComputedStyle(document.querySelector(`[data-testid="${testId}"]`)!);
     const scrollHost = document.querySelector('[data-testid="scroll-host"]')!;
     const scrollbar = getComputedStyle(scrollHost, "::-webkit-scrollbar");
     const track = getComputedStyle(scrollHost, "::-webkit-scrollbar-track");
@@ -230,8 +251,9 @@ test("global dark surfaces, fonts, terminal, and scrollbar rules compile into br
         radiusMd: root.getPropertyValue("--radius-md").trim(),
         radiusSm: root.getPropertyValue("--radius-sm").trim(),
       },
-      fontsReady: document.fonts.check('400 16px "FiraCode Nerd Font"')
-        && document.fonts.check('700 16px "FiraCode Nerd Font"'),
+      fontsReady:
+        document.fonts.check('400 16px "FiraCode Nerd Font"') &&
+        document.fonts.check('700 16px "FiraCode Nerd Font"'),
       sidebarBackground: read("sidebar-glass").backgroundColor,
       panelBackground: read("panel-surface").backgroundColor,
       dragRegion: read("drag-region").getPropertyValue("-webkit-app-region"),
@@ -258,7 +280,8 @@ test("global dark surfaces, fonts, terminal, and scrollbar rules compile into br
         trackBackground: track.backgroundColor,
         thumbBackground: thumb.backgroundColor,
         thumbRadius: thumb.borderRadius,
-        hoverRule: compiledRules.find((rule) => rule.includes("::-webkit-scrollbar-thumb:hover")) ?? "",
+        hoverRule:
+          compiledRules.find((rule) => rule.includes("::-webkit-scrollbar-thumb:hover")) ?? "",
       },
       documentContainment: {
         htmlHeight: root.height,

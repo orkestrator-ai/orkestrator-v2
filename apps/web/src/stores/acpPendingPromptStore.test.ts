@@ -1,10 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import type { AcpSessionSnapshot } from "@/lib/acp-client";
 import { EMPTY_NATIVE_AGENT_COMPOSER_STATE } from "@orkestrator/protocol/native-agent";
-import {
-  transcriptHasUserMessage,
-  useAcpPendingPromptStore,
-} from "./acpPendingPromptStore";
+import { transcriptHasUserMessage, useAcpPendingPromptStore } from "./acpPendingPromptStore";
 
 function snapshot(roles: Array<"user" | "assistant">): AcpSessionSnapshot {
   return {
@@ -55,7 +52,11 @@ describe("transcriptHasUserMessage", () => {
 });
 
 describe("useAcpPendingPromptStore", () => {
-  const prompt = { text: "Implement the billing export", createdAt: "2026-08-14T00:00:00.000Z", isNaming: true };
+  const prompt = {
+    text: "Implement the billing export",
+    createdAt: "2026-08-14T00:00:00.000Z",
+    isNaming: true,
+  };
 
   test("keeps prompts isolated per session key", () => {
     const { setPendingPrompt } = useAcpPendingPromptStore.getState();

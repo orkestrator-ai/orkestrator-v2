@@ -4,20 +4,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
 import { PR_MONITOR_CHANGED_EVENT } from "@orkestrator/protocol/pr-monitor";
-import type {
-  BuildPipelineProvider,
-  ProviderStatus,
-} from "./build-pipeline-provider.js";
+import type { BuildPipelineProvider, ProviderStatus } from "./build-pipeline-provider.js";
 import {
   createCommandRegistry,
   shutdownPrMonitorTracking,
   type CommandContext,
 } from "./commands.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
-import {
-  NativeAgentService,
-  nativeAgentSessionStorageKey,
-} from "./native-agent-service.js";
+import { NativeAgentService, nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import { StorageService } from "./storage.js";
 
 const PR_URL = "https://github.com/acme/repo/pull/7";
@@ -36,9 +30,7 @@ async function waitForCondition(
 }
 
 test("agent completion immediately rechecks and clears a resolved conflict", async () => {
-  const testRoot = await fs.mkdtemp(
-    path.join(tmpdir(), "orkestrator-pr-completion-integration-"),
-  );
+  const testRoot = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-pr-completion-integration-"));
   const dataDir = path.join(testRoot, "data");
   const worktreePath = path.join(testRoot, "worktree");
   const fakeBinDir = path.join(testRoot, "bin");
@@ -93,13 +85,10 @@ printf '%s\\n' '{"url":"${PR_URL}","state":"OPEN","mergeable":"MERGEABLE"}'
       toolchainBinDir: "",
       environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
     } as CommandContext;
-    const invoke = async <T>(
-      command: string,
-      args: Record<string, unknown> = {},
-    ): Promise<T> => {
+    const invoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
       const handler = commands.get(command);
       if (!handler) throw new Error(`Command not registered: ${command}`);
-      return await handler(args, context) as T;
+      return (await handler(args, context)) as T;
     };
 
     let activity: AgentActivityState = "working";
@@ -132,8 +121,9 @@ printf '%s\\n' '{"url":"${PR_URL}","state":"OPEN","mergeable":"MERGEABLE"}'
     await invoke("arm_pr_refresh_after_agent_completion", {
       environmentId: "env-1",
     });
-    expect((await storage.getEnvironment("env-1"))
-      ?.prRecheckAfterAgentCompletionArmedAt).toEqual(expect.any(String));
+    expect((await storage.getEnvironment("env-1"))?.prRecheckAfterAgentCompletionArmedAt).toEqual(
+      expect.any(String),
+    );
 
     await nativeAgents.reconcileAgentActivity();
     expect(await fs.readFile(ghLogPath, "utf8").catch(() => "")).toBe("");
@@ -143,8 +133,10 @@ printf '%s\\n' '{"url":"${PR_URL}","state":"OPEN","mergeable":"MERGEABLE"}'
 
     await waitForCondition(async () => {
       const environment = await storage.getEnvironment("env-1");
-      return environment?.hasMergeConflicts === false
-        && environment.prRecheckAfterAgentCompletionArmedAt === undefined;
+      return (
+        environment?.hasMergeConflicts === false &&
+        environment.prRecheckAfterAgentCompletionArmedAt === undefined
+      );
     }, "the immediate PR recheck to persist mergeability");
 
     expect(await fs.readFile(ghLogPath, "utf8")).toContain(
@@ -187,12 +179,12 @@ printf '%s\\n' '[{"url":"${PR_URL}","state":"OPEN","mergeable":"MERGEABLE","upda
 
       await waitForCondition(async () => {
         const environment = await storage.getEnvironment("env-1");
-        return environment?.prUrl === PR_URL
-          && events.some((event) => event.event === PR_MONITOR_CHANGED_EVENT);
+        return (
+          environment?.prUrl === PR_URL &&
+          events.some((event) => event.event === PR_MONITOR_CHANGED_EVENT)
+        );
       }, "the probe to persist and announce the PR the agent created");
-      expect(await ghLog()).toContain(
-        "pr list --head feature/agent-created --state all",
-      );
+      expect(await ghLog()).toContain("pr list --head feature/agent-created --state all");
       expect(await storage.getEnvironment("env-1")).toMatchObject({
         prUrl: PR_URL,
         prState: "open",
@@ -200,8 +192,9 @@ printf '%s\\n' '[{"url":"${PR_URL}","state":"OPEN","mergeable":"MERGEABLE","upda
       });
       // A found PR is announced, so a client that was never mounted for this
       // environment still learns about it.
-      expect(events.filter((event) => event.event === PR_MONITOR_CHANGED_EVENT))
-        .not.toHaveLength(0);
+      expect(events.filter((event) => event.event === PR_MONITOR_CHANGED_EVENT)).not.toHaveLength(
+        0,
+      );
     },
   );
 });
@@ -227,8 +220,7 @@ printf '%s\\n' '[]'
       // The entry was never announced, so its silent retirement must not
       // announce anything either: one flashed monitor entry per idle agent is
       // exactly what the probe exists to avoid.
-      expect(events.filter((event) => event.event === PR_MONITOR_CHANGED_EVENT))
-        .toEqual([]);
+      expect(events.filter((event) => event.event === PR_MONITOR_CHANGED_EVENT)).toEqual([]);
       expect(await storage.getEnvironment("env-1")).toMatchObject({ prUrl: null });
     },
   );
@@ -249,9 +241,7 @@ async function withProbeHarness(
     ghLog: () => Promise<string>;
   }) => Promise<void>,
 ): Promise<void> {
-  const testRoot = await fs.mkdtemp(
-    path.join(tmpdir(), "orkestrator-pr-probe-integration-"),
-  );
+  const testRoot = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-pr-probe-integration-"));
   const dataDir = path.join(testRoot, "data");
   const worktreePath = path.join(testRoot, "worktree");
   const fakeBinDir = path.join(testRoot, "bin");
@@ -299,13 +289,10 @@ async function withProbeHarness(
       toolchainBinDir: "",
       environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
     } as CommandContext;
-    const invoke = async <T>(
-      command: string,
-      args: Record<string, unknown> = {},
-    ): Promise<T> => {
+    const invoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
       const handler = commands.get(command);
       if (!handler) throw new Error(`Command not registered: ${command}`);
-      return await handler(args, context) as T;
+      return (await handler(args, context)) as T;
     };
 
     await run({

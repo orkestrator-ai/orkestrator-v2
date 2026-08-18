@@ -173,16 +173,16 @@ describe("projectStore", () => {
 
       expect(applyProjectSnapshot([replacement], snapshotVersion)).toBe(false);
       expect(useProjectStore.getState().projects.some((project) => project.id === "stale")).toBe(
-        false
+        false,
       );
     };
 
     assertMutationRejectsSnapshot(() =>
-      useProjectStore.getState().addProject({ ...original, id: "added", name: "added", order: 1 })
+      useProjectStore.getState().addProject({ ...original, id: "added", name: "added", order: 1 }),
     );
     assertMutationRejectsSnapshot(() => useProjectStore.getState().removeProject("original"));
     assertMutationRejectsSnapshot(() =>
-      useProjectStore.getState().updateProject("original", { name: "updated" })
+      useProjectStore.getState().updateProject("original", { name: "updated" }),
     );
     assertMutationRejectsSnapshot(() => useProjectStore.getState().reorderProjects(["original"]));
     assertMutationRejectsSnapshot(() => useProjectStore.getState().setProjects([]));

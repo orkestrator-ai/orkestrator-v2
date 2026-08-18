@@ -2,13 +2,12 @@
   "name": "orkestrator-ai",
   "version": "2.10.8",
   "private": true,
-  "type": "module",
-  "packageManager": "bun@1.3.14",
   "workspaces": [
     "apps/*",
     "bridges/*",
     "packages/*"
   ],
+  "type": "module",
   "main": "apps/desktop/dist/electron/main.js",
   "scripts": {
     "dev": "turbo --cwd . run dev --filter=@orkestrator/desktop --cache-dir .turbo",
@@ -50,6 +49,11 @@
     "test:all": "ORKESTRATOR_INCLUDE_IOS=1 bun scripts/test-all.ts",
     "test:logged": "bun scripts/run-logged.ts",
     "typecheck": "turbo --cwd . run typecheck --cache-dir .turbo",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
+    "lint": "oxlint .",
+    "lint:fix": "oxlint --fix .",
+    "check": "bun run format:check && bun run lint && bun run typecheck",
     "test:browser": "bunx tsc --noEmit -p e2e/tsconfig.json && playwright test --config e2e/playwright.config.ts",
     "test:agent:browser": "playwright test --config e2e/agent-testing/playwright.browser.config.ts",
     "test:agent:docker": "ORKESTRATOR_AGENT_TEST_DOCKER=1 playwright test --config e2e/agent-testing/playwright.browser.config.ts --grep 'Docker fixture'",
@@ -64,6 +68,33 @@
     "package": "bun install --frozen-lockfile && bun run download:bun && bun run build:all && bunx electron-builder --dir && bun scripts/install-packaged-app.ts",
     "package:release": "bun install --frozen-lockfile && bun run download:bun && bun run build:all && bunx electron-builder --config electron-builder.release.config.ts && bun scripts/install-packaged-app.ts"
   },
+  "devDependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@happy-dom/global-registrator": "^20.1.0",
+    "@orkestrator/protocol": "workspace:*",
+    "@playwright/test": "^1.61.0",
+    "@testing-library/dom": "10.4.1",
+    "@testing-library/react": "^16.3.1",
+    "@types/bun": "^1.3.12",
+    "@types/node": "^25.9.3",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "electron": "^42.4.1",
+    "electron-builder": "^26.15.3",
+    "happy-dom": "^20.1.0",
+    "oxfmt": "^0.63.0",
+    "oxlint": "^1.78.0",
+    "playwright": "^1.61.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-virtuoso": "^4.18.4",
+    "turbo": "^2.8.20",
+    "typescript": "~5.8.3"
+  },
+  "packageManager": "bun@1.3.14",
   "build": {
     "appId": "com.orkestrator.v2",
     "productName": "OrkestratorV2",
@@ -145,29 +176,5 @@
     "linux": {
       "icon": "icons"
     }
-  },
-  "devDependencies": {
-    "@dnd-kit/core": "^6.3.1",
-    "@dnd-kit/sortable": "^10.0.0",
-    "@happy-dom/global-registrator": "^20.1.0",
-    "@orkestrator/protocol": "workspace:*",
-    "@playwright/test": "^1.61.0",
-    "@testing-library/dom": "10.4.1",
-    "@testing-library/react": "^16.3.1",
-    "@types/bun": "^1.3.12",
-    "@types/node": "^25.9.3",
-    "@types/react": "^19.1.8",
-    "@types/react-dom": "^19.1.6",
-    "@xterm/addon-fit": "^0.11.0",
-    "@xterm/xterm": "^6.0.0",
-    "electron": "^42.4.1",
-    "electron-builder": "^26.15.3",
-    "happy-dom": "^20.1.0",
-    "playwright": "^1.61.0",
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0",
-    "react-virtuoso": "^4.18.4",
-    "turbo": "^2.8.20",
-    "typescript": "~5.8.3"
   }
 }

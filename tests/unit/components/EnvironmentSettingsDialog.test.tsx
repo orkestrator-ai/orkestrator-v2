@@ -60,22 +60,24 @@ let extensionHandler: (
 ) => Promise<AgentExtensionCatalog[]> = async () => defaultExtensionCatalogs();
 
 let mockSection = "agent";
-const mockUpdateEnvironmentAgentSettings = mock(async (
-  environmentId: string,
-  defaultAgent: string | null,
-  claudeMode: string | null,
-  claudeNativeBackend: string | null,
-  opencodeMode: string | null,
-  codexMode: string | null,
-) => ({
-  ...makeEnvironment(),
-  id: environmentId,
-  defaultAgent: defaultAgent ?? undefined,
-  claudeMode: claudeMode ?? undefined,
-  claudeNativeBackend: claudeNativeBackend ?? undefined,
-  opencodeMode: opencodeMode ?? undefined,
-  codexMode: codexMode ?? undefined,
-}));
+const mockUpdateEnvironmentAgentSettings = mock(
+  async (
+    environmentId: string,
+    defaultAgent: string | null,
+    claudeMode: string | null,
+    claudeNativeBackend: string | null,
+    opencodeMode: string | null,
+    codexMode: string | null,
+  ) => ({
+    ...makeEnvironment(),
+    id: environmentId,
+    defaultAgent: defaultAgent ?? undefined,
+    claudeMode: claudeMode ?? undefined,
+    claudeNativeBackend: claudeNativeBackend ?? undefined,
+    opencodeMode: opencodeMode ?? undefined,
+    codexMode: codexMode ?? undefined,
+  }),
+);
 const mockGetEnvironmentExtensions = mock(
   (environmentId: string, options?: { refresh?: boolean }) =>
     extensionHandler(environmentId, options),
@@ -83,13 +85,15 @@ const mockGetEnvironmentExtensions = mock(
 const mockListEnvironmentAgentSkills = mock(
   async (environmentId: string, provider: AgentSkillProvider) => ({
     provider,
-    roots: [{
-      path: `/workspace/.${provider}/skills`,
-      label: `./.${provider}/skills`,
-      scope: "project" as const,
-      exists: true,
-      skillCount: 1,
-    }],
+    roots: [
+      {
+        path: `/workspace/.${provider}/skills`,
+        label: `./.${provider}/skills`,
+        scope: "project" as const,
+        exists: true,
+        skillCount: 1,
+      },
+    ],
     skills: [`${provider}-skill`, `${provider}-second`].map((name) => ({
       id: `/workspace/.${provider}/skills/${name}/SKILL.md`,
       name,
@@ -154,7 +158,8 @@ mock.module("@/components/settings/FullscreenSettingsLayout", () => ({
   },
 }));
 
-const { EnvironmentSettingsDialog } = await import("../../../apps/web/src/components/environments/EnvironmentSettingsDialog");
+const { EnvironmentSettingsDialog } =
+  await import("../../../apps/web/src/components/environments/EnvironmentSettingsDialog");
 
 function makeEnvironment(overrides: Partial<Environment> = {}): Environment {
   return {
@@ -238,7 +243,7 @@ describe("EnvironmentSettingsDialog", () => {
         onOpenChange={() => {}}
         environment={makeEnvironment()}
         onUpdate={onUpdate}
-      />
+      />,
     );
 
     const codexSection = screen.getByText("Codex Mode").parentElement;
@@ -266,7 +271,7 @@ describe("EnvironmentSettingsDialog", () => {
     expect(onUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
         codexMode: "terminal",
-      })
+      }),
     );
   });
 
@@ -278,7 +283,7 @@ describe("EnvironmentSettingsDialog", () => {
         onOpenChange={() => {}}
         environment={makeEnvironment()}
         onUpdate={() => {}}
-      />
+      />,
     );
 
     expect(
@@ -303,7 +308,7 @@ describe("EnvironmentSettingsDialog", () => {
         onOpenChange={() => {}}
         environment={makeEnvironment()}
         onUpdate={() => {}}
-      />
+      />,
     );
 
     await waitFor(() => {
@@ -363,7 +368,9 @@ describe("EnvironmentSettingsDialog", () => {
         new Set(["claude", "codex", "cursor", "grok", "opencode"]),
       );
     });
-    expect(screen.queryByRole("button", { name: "Reveal skill in file manager" }) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Reveal skill in file manager" }) === null).toBe(
+      true,
+    );
     expect(mockGetEnvironmentExtensions).toHaveBeenCalledWith("env-1", {});
   });
 
@@ -376,14 +383,16 @@ describe("EnvironmentSettingsDialog", () => {
         onOpenChange={() => {}}
         environment={makeEnvironment()}
         onUpdate={() => {}}
-      />
+      />,
     );
 
     await waitFor(() => expect(screen.getByRole("button", { name: /claude-second/ })).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: /claude-second/ }));
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: /claude-second/ }).getAttribute("aria-current"))
-        .toBe("true"));
+      expect(
+        screen.getByRole("button", { name: /claude-second/ }).getAttribute("aria-current"),
+      ).toBe("true"),
+    );
 
     clickAgentTab("Codex");
     await waitFor(() => expect(screen.getByRole("button", { name: /codex-skill/ })).toBeTruthy());
@@ -393,10 +402,14 @@ describe("EnvironmentSettingsDialog", () => {
     // container, so returning to a tab must reuse what it already has rather
     // than re-running the scan and dropping the user back to the first skill.
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: /claude-second/ }).getAttribute("aria-current"))
-        .toBe("true"));
-    expect(mockListEnvironmentAgentSkills.mock.calls.map(([, provider]) => provider))
-      .toEqual(["claude", "codex"]);
+      expect(
+        screen.getByRole("button", { name: /claude-second/ }).getAttribute("aria-current"),
+      ).toBe("true"),
+    );
+    expect(mockListEnvironmentAgentSkills.mock.calls.map(([, provider]) => provider)).toEqual([
+      "claude",
+      "codex",
+    ]);
   });
 
   test("rescans an agent's skills on demand", async () => {
@@ -408,7 +421,7 @@ describe("EnvironmentSettingsDialog", () => {
         onOpenChange={() => {}}
         environment={makeEnvironment()}
         onUpdate={() => {}}
-      />
+      />,
     );
 
     await waitFor(() => expect(screen.getAllByText("claude-skill").length).toBeGreaterThan(0));
@@ -417,8 +430,11 @@ describe("EnvironmentSettingsDialog", () => {
     // Reusing a completed scan is what makes the Rescan button the only way to
     // pick up a skill written since the pane opened.
     await waitFor(() =>
-      expect(mockListEnvironmentAgentSkills.mock.calls.map(([, provider]) => provider))
-        .toEqual(["claude", "claude"]));
+      expect(mockListEnvironmentAgentSkills.mock.calls.map(([, provider]) => provider)).toEqual([
+        "claude",
+        "claude",
+      ]),
+    );
   });
 
   test("labels each item with its source, falling back to its status", async () => {
@@ -442,7 +458,7 @@ describe("EnvironmentSettingsDialog", () => {
         onOpenChange={() => {}}
         environment={makeEnvironment()}
         onUpdate={() => {}}
-      />
+      />,
     );
 
     await waitFor(() => expect(screen.getByText("with-source")).toBeTruthy());
@@ -469,7 +485,7 @@ describe("EnvironmentSettingsDialog", () => {
         onOpenChange={() => {}}
         environment={makeEnvironment()}
         onUpdate={() => {}}
-      />
+      />,
     );
 
     await waitFor(() => expect(screen.getByText("only-one")).toBeTruthy());
@@ -496,7 +512,7 @@ describe("EnvironmentSettingsDialog", () => {
           onOpenChange={() => {}}
           environment={makeEnvironment()}
           onUpdate={() => {}}
-        />
+        />,
       );
 
       await waitFor(() => {
@@ -525,7 +541,7 @@ describe("EnvironmentSettingsDialog", () => {
           onOpenChange={() => {}}
           environment={makeEnvironment()}
           onUpdate={() => {}}
-        />
+        />,
       );
 
       await waitFor(() => {
@@ -556,7 +572,7 @@ describe("EnvironmentSettingsDialog", () => {
         onOpenChange={() => {}}
         environment={makeEnvironment()}
         onUpdate={() => {}}
-      />
+      />,
     );
 
     await waitFor(() => {
@@ -582,7 +598,7 @@ describe("EnvironmentSettingsDialog", () => {
         onOpenChange={() => {}}
         environment={makeEnvironment()}
         onUpdate={() => {}}
-      />
+      />,
     );
 
     await waitFor(() => expect(screen.getByText("claude-docs")).toBeTruthy());
@@ -614,7 +630,7 @@ describe("EnvironmentSettingsDialog", () => {
         onOpenChange={() => {}}
         environment={makeEnvironment()}
         onUpdate={() => {}}
-      />
+      />,
     );
 
     expect(screen.getByText(/Reading each agent's configuration/)).toBeTruthy();
@@ -638,7 +654,7 @@ describe("EnvironmentSettingsDialog", () => {
         onOpenChange={() => {}}
         environment={makeEnvironment()}
         onUpdate={() => {}}
-      />
+      />,
     );
 
     await waitFor(() => expect(screen.getByText("claude-docs")).toBeTruthy());
@@ -661,7 +677,7 @@ describe("EnvironmentSettingsDialog", () => {
         onOpenChange={() => {}}
         environment={makeEnvironment()}
         onUpdate={() => {}}
-      />
+      />,
     );
     await waitFor(() => expect(screen.getByText("claude-docs")).toBeTruthy());
 
@@ -699,7 +715,7 @@ describe("EnvironmentSettingsDialog", () => {
         onOpenChange={() => {}}
         environment={makeEnvironment()}
         onUpdate={() => {}}
-      />
+      />,
     );
 
     rerender(
@@ -708,7 +724,7 @@ describe("EnvironmentSettingsDialog", () => {
         onOpenChange={() => {}}
         environment={makeEnvironment()}
         onUpdate={() => {}}
-      />
+      />,
     );
 
     // The first environment's response lands after the dialog was closed.
@@ -733,7 +749,7 @@ describe("EnvironmentSettingsDialog", () => {
         onOpenChange={() => {}}
         environment={makeEnvironment({ id: "env-2" })}
         onUpdate={() => {}}
-      />
+      />,
     );
 
     expect(screen.queryByText("env-1-only-server") === null).toBe(true);
@@ -768,7 +784,7 @@ describe("EnvironmentSettingsDialog", () => {
           onOpenChange={() => {}}
           environment={makeEnvironment()}
           onUpdate={() => {}}
-        />
+        />,
       );
 
       rerender(
@@ -777,7 +793,7 @@ describe("EnvironmentSettingsDialog", () => {
           onOpenChange={() => {}}
           environment={makeEnvironment()}
           onUpdate={() => {}}
-        />
+        />,
       );
 
       await act(async () => {
@@ -792,7 +808,7 @@ describe("EnvironmentSettingsDialog", () => {
           onOpenChange={() => {}}
           environment={makeEnvironment({ id: "env-2" })}
           onUpdate={() => {}}
-        />
+        />,
       );
 
       // The abandoned failure must not paint an error over the new load.
@@ -812,7 +828,7 @@ describe("EnvironmentSettingsDialog", () => {
         onOpenChange={() => {}}
         environment={makeEnvironment()}
         onUpdate={() => {}}
-      />
+      />,
     );
     await waitFor(() => expect(screen.getByText("claude-docs")).toBeTruthy());
 
@@ -822,7 +838,7 @@ describe("EnvironmentSettingsDialog", () => {
         onOpenChange={() => {}}
         environment={makeEnvironment({ id: "env-2" })}
         onUpdate={() => {}}
-      />
+      />,
     );
 
     await waitFor(() => {
@@ -839,7 +855,7 @@ describe("EnvironmentSettingsDialog", () => {
         onOpenChange={() => {}}
         environment={makeEnvironment()}
         onUpdate={() => {}}
-      />
+      />,
     );
     await waitFor(() => expect(screen.getByText("claude-docs")).toBeTruthy());
     expect(capturedMenuItems.map((item) => item.id)).toContain("extensions");
@@ -855,7 +871,7 @@ describe("EnvironmentSettingsDialog", () => {
           containerId: null,
         })}
         onUpdate={() => {}}
-      />
+      />,
     );
     await waitFor(() => expect(screen.getByText("claude-docs")).toBeTruthy());
     const localMenu = capturedMenuItems.map((item) => item.id);

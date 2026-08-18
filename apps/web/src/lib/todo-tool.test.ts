@@ -78,9 +78,7 @@ describe("todo-tool", () => {
       }),
     );
 
-    expect(todos).toEqual([
-      { content: "Take args todos", status: "completed" },
-    ]);
+    expect(todos).toEqual([{ content: "Take args todos", status: "completed" }]);
   });
 
   test("normalizes TaskUpdate input into a todo-style task item", () => {
@@ -93,9 +91,7 @@ describe("todo-tool", () => {
       "TaskUpdate",
     );
 
-    expect(todos).toEqual([
-      { content: "Task #2", status: "completed" },
-    ]);
+    expect(todos).toEqual([{ content: "Task #2", status: "completed" }]);
   });
 
   test("normalizes TaskCreate task arrays into todo-style task items", () => {
@@ -228,9 +224,7 @@ describe("todo-tool", () => {
       "TaskGet",
     );
 
-    expect(todos).toEqual([
-      { content: "#1 Fix PR #1 merge conflict", status: "pending" },
-    ]);
+    expect(todos).toEqual([{ content: "#1 Fix PR #1 merge conflict", status: "pending" }]);
   });
 
   test("does not double-prefix content that already starts with task ID", () => {
@@ -240,15 +234,17 @@ describe("todo-tool", () => {
       "TaskGet",
     );
 
-    expect(todos).toEqual([
-      { content: "#1 Already prefixed subject", status: "pending" },
-    ]);
+    expect(todos).toEqual([{ content: "#1 Already prefixed subject", status: "pending" }]);
   });
 
   test("skips placeholder-style labels in favour of richer fields", () => {
     // "task1" (no space) is a placeholder — activeForm wins
     expect(
-      getTodoItems({ id: "5", content: "task1", activeForm: "Real description" }, undefined, "TaskGet"),
+      getTodoItems(
+        { id: "5", content: "task1", activeForm: "Real description" },
+        undefined,
+        "TaskGet",
+      ),
     ).toEqual([{ content: "#5 Real description", status: "pending" }]);
 
     // bare number is a placeholder — title wins
@@ -258,13 +254,17 @@ describe("todo-tool", () => {
 
     // "task#1" is a placeholder — subject wins
     expect(
-      getTodoItems({ id: "1", content: "task#1", subject: "Migrate auth module" }, undefined, "TaskGet"),
+      getTodoItems(
+        { id: "1", content: "task#1", subject: "Migrate auth module" },
+        undefined,
+        "TaskGet",
+      ),
     ).toEqual([{ content: "#1 Migrate auth module", status: "pending" }]);
 
     // "task" alone (no digit) is NOT a placeholder and is used as content
-    expect(
-      getTodoItems({ id: "7", content: "task" }, undefined, "TaskGet"),
-    ).toEqual([{ content: "#7 task", status: "pending" }]);
+    expect(getTodoItems({ id: "7", content: "task" }, undefined, "TaskGet")).toEqual([
+      { content: "#7 task", status: "pending" },
+    ]);
   });
 
   test("parses Grok todo_write args with ids into todo items", () => {
@@ -319,39 +319,29 @@ describe("todo-tool", () => {
       "TodoWrite",
     );
 
-    expect(todos).toEqual([
-      { content: "Typecheck & test", status: "in_progress" },
-    ]);
+    expect(todos).toEqual([{ content: "Typecheck & test", status: "in_progress" }]);
   });
 
   test("parses snake-case new_todos output", () => {
     expect(
       parseTodosFromOutput(
         JSON.stringify({
-          new_todos: [
-            { content: "Review snake-case payload", status: "pending" },
-          ],
+          new_todos: [{ content: "Review snake-case payload", status: "pending" }],
         }),
       ),
-    ).toEqual([
-      { content: "Review snake-case payload", status: "pending" },
-    ]);
+    ).toEqual([{ content: "Review snake-case payload", status: "pending" }]);
   });
 
   test("parses task items output alias", () => {
     const todos = getTodoItems(
       undefined,
       JSON.stringify({
-        items: [
-          { id: "8", title: "Read items payload", status: "running" },
-        ],
+        items: [{ id: "8", title: "Read items payload", status: "running" }],
       }),
       "TaskList",
     );
 
-    expect(todos).toEqual([
-      { content: "#8 Read items payload", status: "in_progress" },
-    ]);
+    expect(todos).toEqual([{ content: "#8 Read items payload", status: "in_progress" }]);
   });
 
   test("parses a nested single task output", () => {
@@ -367,9 +357,7 @@ describe("todo-tool", () => {
       "TaskGet",
     );
 
-    expect(todos).toEqual([
-      { content: "#9 Read nested task payload", status: "completed" },
-    ]);
+    expect(todos).toEqual([{ content: "#9 Read nested task payload", status: "completed" }]);
   });
 
   describe("isTaskTodoTool", () => {

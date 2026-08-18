@@ -96,68 +96,68 @@ import { StorageBase } from "./storage-base.ts";
 
 export type StorageLayerTypes = [
   AgentInteractionOrigin,
-    AgentInteractionPolicy,
-    AgentInteractionResolutionJournal,
-    StoredDesktopConnections,
-    FeaturePlanningRecord,
-    BuildPipelineAgent,
-    PaneLayoutMergeInput,
-    PaneLayoutSelectionIntent,
-    ConditionalResourceSnapshot<unknown>,
-    ResourceChange,
-    ResourceKind,
-    ResourceManifestKind,
-    ResourceRevisionManifest,
-    ResourceRevisionMap,
-    ResourceSnapshotRevision,
-    AgentModel,
-    AgentActivityState,
-    AgentActivitySource,
-    AgentModelCatalogCache,
-    AgentModelConfigKey,
-    AppConfig,
-    ClaudeModelCatalogSnapshot,
-    ClaudeModelCatalogEntry,
-    CodexModelCatalogEntry,
-    CodexReasoningEffort,
-    Environment,
-    EnvironmentStatus,
-    EnvironmentType,
-    OpenCodeModelCatalogEntry,
-    OpenCodeModelCatalogSnapshot,
-    PortMapping,
-    PrState,
-    Project,
-    PersistedPaneLayout,
-    PersistedLoopedReviewWorkflow,
-    PersistedMultiReviewWorkflow,
-    PersistedBuildPipeline,
-    PersistedNativeAgentSession,
-    PersistedNativeAgentPendingDispatch,
-    PersistedComposeDraft,
-    PersistedFileDraft,
-    PersistedPromptQueue,
-    PersistedAgentHandoff,
-    RepositoryConfig,
-    Session,
-    SessionType,
-    JsonRecord,
-    KanbanComment,
-    KanbanImage,
-    KanbanStatus,
-    MutablePaneLayoutLeaf,
-    KanbanTask,
-    ProjectNotes,
-    FeaturePlanStatus,
-    FeaturePlanMessage,
-    FeatureStoryCard,
-    FeaturePlan,
-    LinearAuth,
-    LinearCompletionComment,
-    GitHubCompletionComment,
-    LoadedNativeAgentSessions,
-    PersistedOpenCodeModelCatalogStore,
-    ResourceChangeListener
+  AgentInteractionPolicy,
+  AgentInteractionResolutionJournal,
+  StoredDesktopConnections,
+  FeaturePlanningRecord,
+  BuildPipelineAgent,
+  PaneLayoutMergeInput,
+  PaneLayoutSelectionIntent,
+  ConditionalResourceSnapshot<unknown>,
+  ResourceChange,
+  ResourceKind,
+  ResourceManifestKind,
+  ResourceRevisionManifest,
+  ResourceRevisionMap,
+  ResourceSnapshotRevision,
+  AgentModel,
+  AgentActivityState,
+  AgentActivitySource,
+  AgentModelCatalogCache,
+  AgentModelConfigKey,
+  AppConfig,
+  ClaudeModelCatalogSnapshot,
+  ClaudeModelCatalogEntry,
+  CodexModelCatalogEntry,
+  CodexReasoningEffort,
+  Environment,
+  EnvironmentStatus,
+  EnvironmentType,
+  OpenCodeModelCatalogEntry,
+  OpenCodeModelCatalogSnapshot,
+  PortMapping,
+  PrState,
+  Project,
+  PersistedPaneLayout,
+  PersistedLoopedReviewWorkflow,
+  PersistedMultiReviewWorkflow,
+  PersistedBuildPipeline,
+  PersistedNativeAgentSession,
+  PersistedNativeAgentPendingDispatch,
+  PersistedComposeDraft,
+  PersistedFileDraft,
+  PersistedPromptQueue,
+  PersistedAgentHandoff,
+  RepositoryConfig,
+  Session,
+  SessionType,
+  JsonRecord,
+  KanbanComment,
+  KanbanImage,
+  KanbanStatus,
+  MutablePaneLayoutLeaf,
+  KanbanTask,
+  ProjectNotes,
+  FeaturePlanStatus,
+  FeaturePlanMessage,
+  FeatureStoryCard,
+  FeaturePlan,
+  LinearAuth,
+  LinearCompletionComment,
+  GitHubCompletionComment,
+  LoadedNativeAgentSessions,
+  PersistedOpenCodeModelCatalogStore,
+  ResourceChangeListener,
 ];
 
 export abstract class StorageProjects extends StorageBase {
@@ -207,7 +207,10 @@ export abstract class StorageProjects extends StorageBase {
     return (await this.loadProjects()).find((project) => project.id === projectId) ?? null;
   }
 
-  async updateProject(projectId: string, updates: Partial<Pick<Project, "name" | "localPath">>): Promise<Project> {
+  async updateProject(
+    projectId: string,
+    updates: Partial<Pick<Project, "name" | "localPath">>,
+  ): Promise<Project> {
     const project = await this.enqueueProjectMutation(async () => {
       const projects = await this.loadProjects();
       const project = projects.find((candidate) => candidate.id === projectId);
@@ -243,7 +246,10 @@ export abstract class StorageProjects extends StorageBase {
   }
 
   async loadEnvironments(): Promise<Environment[]> {
-    const environments = await this.loadJsonCached<Environment[]>(this.environmentsFile(), () => []);
+    const environments = await this.loadJsonCached<Environment[]>(
+      this.environmentsFile(),
+      () => [],
+    );
     // One-release migration for records written before setupPhase existed.
     // The backend remains authoritative even before the next mutation persists
     // the normalized fields.
@@ -274,14 +280,12 @@ export abstract class StorageProjects extends StorageBase {
   ): Promise<void> {
     for (let index = 1; index <= MAX_JSON_BACKUPS; index += 1) {
       const backup = this.backupPath(this.environmentsFile(), index);
-      if (!await exists(backup)) continue;
+      if (!(await exists(backup))) continue;
       try {
         const parsed = JSON.parse(await fs.readFile(backup, "utf8")) as unknown;
         if (!Array.isArray(parsed)) throw new Error("Backup is not an array");
         const sanitized = removeEnvironment
-          ? parsed.filter((candidate) =>
-              !isRecord(candidate) || candidate.id !== environmentId
-            )
+          ? parsed.filter((candidate) => !isRecord(candidate) || candidate.id !== environmentId)
           : parsed.map((candidate) => {
               if (!isRecord(candidate) || candidate.id !== environmentId) {
                 return candidate;
@@ -290,12 +294,7 @@ export abstract class StorageProjects extends StorageBase {
               delete copy.initialPromptAttachments;
               return copy;
             });
-        await this.writeAtomic(
-          backup,
-          `${JSON.stringify(sanitized, null, 2)}\n`,
-          false,
-          0o600,
-        );
+        await this.writeAtomic(backup, `${JSON.stringify(sanitized, null, 2)}\n`, false, 0o600);
       } catch {
         // A corrupt backup cannot be proven free of the removed payload.
         await fs.rm(backup, { force: true });
@@ -304,18 +303,28 @@ export abstract class StorageProjects extends StorageBase {
   }
 
   async getEnvironmentsByProject(projectId: string): Promise<Environment[]> {
-    return (await this.loadEnvironments()).filter((environment) => environment.projectId === projectId);
+    return (await this.loadEnvironments()).filter(
+      (environment) => environment.projectId === projectId,
+    );
   }
 
   async getEnvironment(environmentId: string): Promise<Environment | null> {
-    return (await this.loadEnvironments()).find((environment) => environment.id === environmentId) ?? null;
+    return (
+      (await this.loadEnvironments()).find((environment) => environment.id === environmentId) ??
+      null
+    );
   }
 
   async addEnvironment(environment: Environment): Promise<Environment> {
     return this.enqueueEnvironmentMutation(async () => {
       const environments = await this.loadEnvironments();
       environment.order =
-        Math.max(-1, ...environments.filter((item) => item.projectId === environment.projectId).map((item) => item.order)) + 1;
+        Math.max(
+          -1,
+          ...environments
+            .filter((item) => item.projectId === environment.projectId)
+            .map((item) => item.order),
+        ) + 1;
       environments.push(environment);
       await this.saveEnvironments(environments);
       this.announce("environment", environment.id, environment.projectId);
@@ -351,18 +360,21 @@ export abstract class StorageProjects extends StorageBase {
 
       if (isNonBlankString(updates.name)) environment.name = updates.name;
       if (isNonBlankString(updates.branch)) environment.branch = updates.branch;
-      if ("status" in updates && isOneOf(updates.status, ["running", "stopped", "error", "creating", "stopping"])) {
+      if (
+        "status" in updates &&
+        isOneOf(updates.status, ["running", "stopped", "error", "creating", "stopping"])
+      ) {
         environment.status = updates.status;
         if (updates.status === "stopped" || updates.status === "error") {
           // Idempotent: re-stopping an environment whose activity is already
           // fully cleared must not bump the activity token, or the repeated
           // update could never take the equality bail-out below.
           const alreadyCleared =
-            environment.agentActivityState === "idle"
-            && isRecord(environment.agentActivitySources)
-            && Object.keys(environment.agentActivitySources).length === 0
-            && isRecord(environment.frontendAgentActivityObservers)
-            && Object.keys(environment.frontendAgentActivityObservers).length === 0;
+            environment.agentActivityState === "idle" &&
+            isRecord(environment.agentActivitySources) &&
+            Object.keys(environment.agentActivitySources).length === 0 &&
+            isRecord(environment.frontendAgentActivityObservers) &&
+            Object.keys(environment.frontendAgentActivityObservers).length === 0;
           if (!alreadyCleared) {
             environment.agentActivityState = "idle";
             environment.agentActivitySources = {};
@@ -373,7 +385,10 @@ export abstract class StorageProjects extends StorageBase {
           }
         }
       }
-      if ("environmentType" in updates && isOneOf(updates.environmentType, ["containerized", "local"])) {
+      if (
+        "environmentType" in updates &&
+        isOneOf(updates.environmentType, ["containerized", "local"])
+      ) {
         environment.environmentType = updates.environmentType;
       }
 
@@ -416,14 +431,17 @@ export abstract class StorageProjects extends StorageBase {
         if (updates.lifecycleOperation == null) {
           environment.lifecycleOperation = undefined;
         } else if (
-          updates.lifecycleOperation === "deleting"
-          || updates.lifecycleOperation === "merging"
+          updates.lifecycleOperation === "deleting" ||
+          updates.lifecycleOperation === "merging"
         ) {
           environment.lifecycleOperation = updates.lifecycleOperation;
         }
       }
 
-      if ("containerId" in updates && (updates.containerId == null || typeof updates.containerId === "string")) {
+      if (
+        "containerId" in updates &&
+        (updates.containerId == null || typeof updates.containerId === "string")
+      ) {
         environment.containerId = updates.containerId ?? null;
       }
       if ("prUrl" in updates && (updates.prUrl == null || typeof updates.prUrl === "string")) {
@@ -431,13 +449,18 @@ export abstract class StorageProjects extends StorageBase {
       }
       if ("prState" in updates) {
         if (updates.prState == null) environment.prState = null;
-        else if (isOneOf(updates.prState, ["open", "merged", "closed"])) environment.prState = updates.prState;
+        else if (isOneOf(updates.prState, ["open", "merged", "closed"]))
+          environment.prState = updates.prState;
       }
       if ("hasMergeConflicts" in updates) {
         if (updates.hasMergeConflicts == null) environment.hasMergeConflicts = null;
-        else if (typeof updates.hasMergeConflicts === "boolean") environment.hasMergeConflicts = updates.hasMergeConflicts;
+        else if (typeof updates.hasMergeConflicts === "boolean")
+          environment.hasMergeConflicts = updates.hasMergeConflicts;
       }
-      if ("allowedDomains" in updates) environment.allowedDomains = Array.isArray(updates.allowedDomains) ? updates.allowedDomains.filter((value): value is string => typeof value === "string") : undefined;
+      if ("allowedDomains" in updates)
+        environment.allowedDomains = Array.isArray(updates.allowedDomains)
+          ? updates.allowedDomains.filter((value): value is string => typeof value === "string")
+          : undefined;
       if ("portMappings" in updates) {
         if (updates.portMappings == null) environment.portMappings = undefined;
         else if (Array.isArray(updates.portMappings) && updates.portMappings.every(isPortMapping)) {
@@ -487,7 +510,10 @@ export abstract class StorageProjects extends StorageBase {
           environment.setupScriptsComplete = updates.setupScriptsComplete;
         }
       }
-      if ("setupPhase" in updates && isOneOf(updates.setupPhase, ["pending", "running", "ready", "failed"])) {
+      if (
+        "setupPhase" in updates &&
+        isOneOf(updates.setupPhase, ["pending", "running", "ready", "failed"])
+      ) {
         environment.setupPhase = updates.setupPhase;
       }
       if ("setupOverride" in updates && typeof updates.setupOverride === "boolean") {
@@ -497,14 +523,19 @@ export abstract class StorageProjects extends StorageBase {
         const intents = updates.tabTeardownIntents;
         if (intents === undefined || intents === null) {
           environment.tabTeardownIntents = undefined;
-        } else if (isRecord(intents) && Object.values(intents).every((intent) =>
-          isRecord(intent)
-          && isNonBlankString(intent.tabId)
-          && isTabTeardownKind(intent.kind)
-          && isNonBlankString(intent.createdAt)
-          && (intent.sessionId === undefined || typeof intent.sessionId === "string")
-          && (intent.persistentSessionId === undefined || typeof intent.persistentSessionId === "string")
-        )) {
+        } else if (
+          isRecord(intents) &&
+          Object.values(intents).every(
+            (intent) =>
+              isRecord(intent) &&
+              isNonBlankString(intent.tabId) &&
+              isTabTeardownKind(intent.kind) &&
+              isNonBlankString(intent.createdAt) &&
+              (intent.sessionId === undefined || typeof intent.sessionId === "string") &&
+              (intent.persistentSessionId === undefined ||
+                typeof intent.persistentSessionId === "string"),
+          )
+        ) {
           environment.tabTeardownIntents = intents as Environment["tabTeardownIntents"];
         } else {
           throw new Error("Tab teardown intents are malformed");
@@ -517,8 +548,8 @@ export abstract class StorageProjects extends StorageBase {
         if (updates.initialPromptAttachments == null) {
           environment.initialPromptAttachments = undefined;
         } else if (
-          Array.isArray(updates.initialPromptAttachments)
-          && updates.initialPromptAttachments.every(isInitialPromptImageAttachment)
+          Array.isArray(updates.initialPromptAttachments) &&
+          updates.initialPromptAttachments.every(isInitialPromptImageAttachment)
         ) {
           const serialized = JSON.stringify(updates.initialPromptAttachments);
           if (Buffer.byteLength(serialized, "utf8") > 32 * 1024 * 1024) {
@@ -547,28 +578,36 @@ export abstract class StorageProjects extends StorageBase {
           environment.claudeModelCatalog = updates.claudeModelCatalog;
         }
       }
-      if ("networkAccessMode" in updates && (updates.networkAccessMode === "full" || updates.networkAccessMode === "restricted")) {
+      if (
+        "networkAccessMode" in updates &&
+        (updates.networkAccessMode === "full" || updates.networkAccessMode === "restricted")
+      ) {
         environment.networkAccessMode = updates.networkAccessMode;
       }
       if ("defaultAgent" in updates) {
         if (updates.defaultAgent == null) environment.defaultAgent = undefined;
-        else if (isAgentPlatform(updates.defaultAgent)) environment.defaultAgent = updates.defaultAgent;
+        else if (isAgentPlatform(updates.defaultAgent))
+          environment.defaultAgent = updates.defaultAgent;
       }
       if ("claudeMode" in updates) {
         if (updates.claudeMode == null) environment.claudeMode = undefined;
-        else if (isOneOf(updates.claudeMode, ["terminal", "native"])) environment.claudeMode = updates.claudeMode;
+        else if (isOneOf(updates.claudeMode, ["terminal", "native"]))
+          environment.claudeMode = updates.claudeMode;
       }
       if ("claudeNativeBackend" in updates) {
         if (updates.claudeNativeBackend == null) environment.claudeNativeBackend = undefined;
-        else if (isOneOf(updates.claudeNativeBackend, ["sdk", "tmux"])) environment.claudeNativeBackend = updates.claudeNativeBackend;
+        else if (isOneOf(updates.claudeNativeBackend, ["sdk", "tmux"]))
+          environment.claudeNativeBackend = updates.claudeNativeBackend;
       }
       if ("opencodeMode" in updates) {
         if (updates.opencodeMode == null) environment.opencodeMode = undefined;
-        else if (isOneOf(updates.opencodeMode, ["terminal", "native"])) environment.opencodeMode = updates.opencodeMode;
+        else if (isOneOf(updates.opencodeMode, ["terminal", "native"]))
+          environment.opencodeMode = updates.opencodeMode;
       }
       if ("codexMode" in updates) {
         if (updates.codexMode == null) environment.codexMode = undefined;
-        else if (isOneOf(updates.codexMode, ["terminal", "native"])) environment.codexMode = updates.codexMode;
+        else if (isOneOf(updates.codexMode, ["terminal", "native"]))
+          environment.codexMode = updates.codexMode;
       }
 
       // A merge that changed nothing persists nothing. Rewriting the whole
@@ -604,14 +643,11 @@ export abstract class StorageProjects extends StorageBase {
     intent: NonNullable<Environment["tabTeardownIntents"]>[string],
   ): Promise<Environment> {
     if (
-      !isNonBlankString(intent.tabId)
-      || !isTabTeardownKind(intent.kind)
-      || !isNonBlankString(intent.createdAt)
-      || (intent.sessionId !== undefined && !isNonBlankString(intent.sessionId))
-      || (
-        intent.persistentSessionId !== undefined
-        && !isNonBlankString(intent.persistentSessionId)
-      )
+      !isNonBlankString(intent.tabId) ||
+      !isTabTeardownKind(intent.kind) ||
+      !isNonBlankString(intent.createdAt) ||
+      (intent.sessionId !== undefined && !isNonBlankString(intent.sessionId)) ||
+      (intent.persistentSessionId !== undefined && !isNonBlankString(intent.persistentSessionId))
     ) {
       throw new Error("Tab teardown intent is malformed");
     }
@@ -643,9 +679,7 @@ export abstract class StorageProjects extends StorageBase {
       if (!current || current.createdAt !== expectedCreatedAt) return environment;
       const intents = { ...environment.tabTeardownIntents };
       delete intents[tabId];
-      environment.tabTeardownIntents = Object.keys(intents).length > 0
-        ? intents
-        : undefined;
+      environment.tabTeardownIntents = Object.keys(intents).length > 0 ? intents : undefined;
       await this.saveEnvironments(environments);
       this.announce("environment", environmentId, environment.projectId);
       return environment;
@@ -666,10 +700,11 @@ export abstract class StorageProjects extends StorageBase {
       const environment = environments.find((candidate) => candidate.id === environmentId);
       if (!environment) throw new Error(`Environment not found: ${environmentId}`);
       if (
-        !environment.prUrl
-        || environment.prState !== "open"
-        || environment.hasMergeConflicts !== true
-      ) return { environment, armedAt: null };
+        !environment.prUrl ||
+        environment.prState !== "open" ||
+        environment.hasMergeConflicts !== true
+      )
+        return { environment, armedAt: null };
 
       const now = Date.now();
       const previous = environment.prRecheckAfterAgentCompletionArmedAt
@@ -722,8 +757,8 @@ export abstract class StorageProjects extends StorageBase {
       const startupSession = environment.startupAgentSession;
       if (!startupSession) return environment;
       if (
-        providerSessionId !== undefined
-        && startupSession.providerSessionId !== providerSessionId
+        providerSessionId !== undefined &&
+        startupSession.providerSessionId !== providerSessionId
       ) {
         return environment;
       }
@@ -794,12 +829,8 @@ export abstract class StorageProjects extends StorageBase {
       );
     }
     if (
-      observerId !== undefined
-      && (
-        source !== "frontend"
-        || !isNonBlankString(observerId)
-        || observerId.length > 256
-      )
+      observerId !== undefined &&
+      (source !== "frontend" || !isNonBlankString(observerId) || observerId.length > 256)
     ) {
       throw new Error(
         "observerId must be a non-blank string of at most 256 characters for frontend activity",
@@ -815,32 +846,22 @@ export abstract class StorageProjects extends StorageBase {
 
       const referenceTime = Date.now();
       const sources = readAgentActivitySources(environment, referenceTime);
-      const observers = readFrontendAgentActivityObservers(
-        environment,
-        referenceTime,
-      );
+      const observers = readFrontendAgentActivityObservers(environment, referenceTime);
 
-      const observerKey = observerId
-        ? frontendAgentActivityObserverKey(observerId)
-        : undefined;
+      const observerKey = observerId ? frontendAgentActivityObserverKey(observerId) : undefined;
       if (
-        observerKey
-        && !observers[observerKey]
-        && Object.keys(observers).length >= MAX_FRONTEND_AGENT_ACTIVITY_OBSERVERS
+        observerKey &&
+        !observers[observerKey] &&
+        Object.keys(observers).length >= MAX_FRONTEND_AGENT_ACTIVITY_OBSERVERS
       ) {
         throw new Error("too many frontend agent activity observers");
       }
-      const previousSource = observerKey
-        ? observers[observerKey]
-        : sources[source];
+      const previousSource = observerKey ? observers[observerKey] : sources[source];
       const previousTime = previousSource
         ? Date.parse(previousSource.updatedAt)
         : observerKey
           ? Number.NEGATIVE_INFINITY
-          : parseUsableAgentActivityTime(
-            environment.agentActivityUpdatedAt,
-            referenceTime,
-          );
+          : parseUsableAgentActivityTime(environment.agentActivityUpdatedAt, referenceTime);
       let acceptedOccurredTime = occurredTime;
       if (Number.isFinite(previousTime) && previousTime >= occurredTime) {
         if (source === "frontend" || previousTime > occurredTime) {
@@ -858,9 +879,7 @@ export abstract class StorageProjects extends StorageBase {
         observers[observerKey] = {
           state,
           updatedAt: normalizedOccurredAt,
-          leaseExpiresAt: new Date(
-            referenceTime + FRONTEND_AGENT_ACTIVITY_LEASE_MS,
-          ).toISOString(),
+          leaseExpiresAt: new Date(referenceTime + FRONTEND_AGENT_ACTIVITY_LEASE_MS).toISOString(),
         };
       } else {
         sources[source] = {
@@ -872,36 +891,36 @@ export abstract class StorageProjects extends StorageBase {
 
       environment.agentActivitySources = sources;
       environment.frontendAgentActivityObservers = observers;
-      environment.agentActivityState = aggregateEnvironmentAgentActivity(
-        sources,
-        observers,
-      );
+      environment.agentActivityState = aggregateEnvironmentAgentActivity(sources, observers);
       const nextAggregate = environment.agentActivityState;
       const aggregateTime = parseUsableAgentActivityTime(
         environment.agentActivityUpdatedAt,
         referenceTime,
       );
-      environment.agentActivityUpdatedAt = new Date(Math.max(
-        acceptedOccurredTime,
-        Number.isFinite(aggregateTime)
-          ? aggregateTime
-          : Number.NEGATIVE_INFINITY,
-      )).toISOString();
-      const activityTransition = previousAggregate !== nextAggregate && (
-        nextAggregate === "working"
-        || nextAggregate === "waiting"
-        || (previousAggregate === "working" && nextAggregate === "idle")
-      );
-      const completionTransition = previousAggregate === "working"
-        && (nextAggregate === "idle" || nextAggregate === "waiting");
+      environment.agentActivityUpdatedAt = new Date(
+        Math.max(
+          acceptedOccurredTime,
+          Number.isFinite(aggregateTime) ? aggregateTime : Number.NEGATIVE_INFINITY,
+        ),
+      ).toISOString();
+      const activityTransition =
+        previousAggregate !== nextAggregate &&
+        (nextAggregate === "working" ||
+          nextAggregate === "waiting" ||
+          (previousAggregate === "working" && nextAggregate === "idle"));
+      const completionTransition =
+        previousAggregate === "working" &&
+        (nextAggregate === "idle" || nextAggregate === "waiting");
       if (activityTransition) {
         const previousLastActivityAt = Date.parse(environment.lastActivityAt ?? "");
-        environment.lastActivityAt = new Date(Math.max(
-          acceptedOccurredTime,
-          Number.isFinite(previousLastActivityAt)
-            ? previousLastActivityAt
-            : Number.NEGATIVE_INFINITY,
-        )).toISOString();
+        environment.lastActivityAt = new Date(
+          Math.max(
+            acceptedOccurredTime,
+            Number.isFinite(previousLastActivityAt)
+              ? previousLastActivityAt
+              : Number.NEGATIVE_INFINITY,
+          ),
+        ).toISOString();
       }
       if (completionTransition) environment.hasUnreadWork = true;
       // The lease itself must persist (its expiry is enforced from disk), but
@@ -921,9 +940,7 @@ export abstract class StorageProjects extends StorageBase {
   }
 
   /** Remove expired renderer leases and publish each changed aggregate. */
-  async expireFrontendAgentActivityLeases(
-    referenceTime = Date.now(),
-  ): Promise<string[]> {
+  async expireFrontendAgentActivityLeases(referenceTime = Date.now()): Promise<string[]> {
     // Cheap pre-check outside the cross-process lock: with no observer leases
     // on record there is nothing that could expire, and this sweep runs every
     // 15 seconds forever. The read is stat-validated, so a lease written by
@@ -944,20 +961,14 @@ export abstract class StorageProjects extends StorageBase {
         if (!isRecord(storedObservers) || Object.keys(storedObservers).length === 0) {
           continue;
         }
-        const observers = readFrontendAgentActivityObservers(
-          environment,
-          referenceTime,
-        );
+        const observers = readFrontendAgentActivityObservers(environment, referenceTime);
         if (Object.keys(observers).length === Object.keys(storedObservers).length) {
           continue;
         }
         const sources = readAgentActivitySources(environment, referenceTime);
         environment.agentActivitySources = sources;
         environment.frontendAgentActivityObservers = observers;
-        environment.agentActivityState = aggregateEnvironmentAgentActivity(
-          sources,
-          observers,
-        );
+        environment.agentActivityState = aggregateEnvironmentAgentActivity(sources, observers);
         environment.agentActivityUpdatedAt = nextAgentActivityTimestamp(
           environment.agentActivityUpdatedAt,
           referenceTime,
@@ -987,21 +998,16 @@ export abstract class StorageProjects extends StorageBase {
       const referenceTime = Date.now();
       const changed: string[] = [];
       for (const environment of environments) {
-        const hasLegacyFrontend = Boolean(
-          environment.agentActivitySources?.frontend,
-        );
-        const hasObservers = isRecord(
-          environment.frontendAgentActivityObservers,
-        ) && Object.keys(environment.frontendAgentActivityObservers).length > 0;
+        const hasLegacyFrontend = Boolean(environment.agentActivitySources?.frontend);
+        const hasObservers =
+          isRecord(environment.frontendAgentActivityObservers) &&
+          Object.keys(environment.frontendAgentActivityObservers).length > 0;
         if (!hasLegacyFrontend && !hasObservers) continue;
         const sources = readAgentActivitySources(environment, referenceTime);
         delete sources.frontend;
         environment.agentActivitySources = sources;
         environment.frontendAgentActivityObservers = {};
-        environment.agentActivityState = aggregateEnvironmentAgentActivity(
-          sources,
-          {},
-        );
+        environment.agentActivityState = aggregateEnvironmentAgentActivity(sources, {});
         environment.agentActivityUpdatedAt = nextAgentActivityTimestamp(
           environment.agentActivityUpdatedAt,
           referenceTime,
@@ -1077,9 +1083,10 @@ export abstract class StorageProjects extends StorageBase {
       if (!environment) throw new Error(`Environment not found: ${environmentId}`);
 
       const previousTime = Date.parse(environment.lastActivityAt ?? "");
-      const acceptedTime = Number.isFinite(previousTime) && previousTime >= occurredTime
-        ? previousTime + 1
-        : occurredTime;
+      const acceptedTime =
+        Number.isFinite(previousTime) && previousTime >= occurredTime
+          ? previousTime + 1
+          : occurredTime;
       environment.lastActivityAt = new Date(acceptedTime).toISOString();
       environment.hasUnreadWork = true;
       await this.saveEnvironments(environments);
@@ -1094,9 +1101,9 @@ export abstract class StorageProjects extends StorageBase {
     expectedLastActivityAt?: string | null,
   ): Promise<Environment> {
     if (
-      expectedLastActivityAt !== undefined
-      && expectedLastActivityAt !== null
-      && typeof expectedLastActivityAt !== "string"
+      expectedLastActivityAt !== undefined &&
+      expectedLastActivityAt !== null &&
+      typeof expectedLastActivityAt !== "string"
     ) {
       throw new Error("expectedLastActivityAt must be a string or null");
     }
@@ -1106,9 +1113,9 @@ export abstract class StorageProjects extends StorageBase {
       if (!environment) throw new Error(`Environment not found: ${environmentId}`);
 
       if (
-        !unread
-        && expectedLastActivityAt !== undefined
-        && (environment.lastActivityAt ?? null) !== expectedLastActivityAt
+        !unread &&
+        expectedLastActivityAt !== undefined &&
+        (environment.lastActivityAt ?? null) !== expectedLastActivityAt
       ) {
         return environment;
       }
@@ -1126,13 +1133,16 @@ export abstract class StorageProjects extends StorageBase {
       const environments = await this.loadEnvironments();
       const provided = new Set(environmentIds);
       for (const [index, id] of environmentIds.entries()) {
-        const environment = environments.find((candidate) => candidate.id === id && candidate.projectId === projectId);
+        const environment = environments.find(
+          (candidate) => candidate.id === id && candidate.projectId === projectId,
+        );
         if (environment) environment.order = index;
       }
 
       let order = environmentIds.length;
       for (const environment of environments) {
-        if (environment.projectId === projectId && !provided.has(environment.id)) environment.order = order++;
+        if (environment.projectId === projectId && !provided.has(environment.id))
+          environment.order = order++;
       }
 
       await this.saveEnvironments(environments);
@@ -1145,6 +1155,4 @@ export abstract class StorageProjects extends StorageBase {
       return reordered;
     });
   }
-
-
 }

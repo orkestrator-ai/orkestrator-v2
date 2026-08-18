@@ -9,9 +9,7 @@ import {
   type AgentInteractionResolution,
   type AgentInteractionSnapshot,
 } from "@orkestrator/protocol/agent-interactions";
-import {
-  ProviderUnavailableError,
-} from "./agent-provider-contract.js";
+import { ProviderUnavailableError } from "./agent-provider-contract.js";
 import {
   asRecord,
   assertSdkResponse,
@@ -49,9 +47,7 @@ export class OpenCodeInteractionAdapter {
   ): string {
     const interactionId = `opencode:${category}:${encodeURIComponent(sessionId)}:${id}`;
     if (interactionId.length > AGENT_INTERACTION_LIMITS.maxIdLength) {
-      throw new ProviderUnavailableError(
-        "OpenCode returned an oversized interaction identity",
-      );
+      throw new ProviderUnavailableError("OpenCode returned an oversized interaction identity");
     }
     return interactionId;
   }
@@ -59,15 +55,14 @@ export class OpenCodeInteractionAdapter {
   private mapOpenCodeQuestion(sessionId: string, raw: unknown): AgentInteractionRequest {
     const request = asRecord(raw);
     const providerRequestId = nonEmptyString(request?.id);
-    const rawSessionId = nonEmptyString(request?.sessionID)
-      ?? nonEmptyString(request?.sessionId);
+    const rawSessionId = nonEmptyString(request?.sessionID) ?? nonEmptyString(request?.sessionId);
     const questions = request?.questions;
     if (
-      !providerRequestId
-      || rawSessionId !== sessionId
-      || !Array.isArray(questions)
-      || questions.length === 0
-      || questions.length > AGENT_INTERACTION_LIMITS.maxQuestionsPerRequest
+      !providerRequestId ||
+      rawSessionId !== sessionId ||
+      !Array.isArray(questions) ||
+      questions.length === 0 ||
+      questions.length > AGENT_INTERACTION_LIMITS.maxQuestionsPerRequest
     ) {
       throw new ProviderUnavailableError("OpenCode returned a malformed question request");
     }
@@ -77,10 +72,10 @@ export class OpenCodeInteractionAdapter {
         const options = question?.options;
         const prompt = nonEmptyString(question?.question);
         if (
-          !question
-          || !prompt
-          || !Array.isArray(options)
-          || options.length > AGENT_INTERACTION_LIMITS.maxOptionsPerQuestion
+          !question ||
+          !prompt ||
+          !Array.isArray(options) ||
+          options.length > AGENT_INTERACTION_LIMITS.maxOptionsPerQuestion
         ) {
           throw new ProviderUnavailableError("OpenCode returned a malformed question request");
         }
@@ -96,9 +91,7 @@ export class OpenCodeInteractionAdapter {
             const option = asRecord(entry);
             const label = nonEmptyString(option?.label);
             if (!option || !label) {
-              throw new ProviderUnavailableError(
-                "OpenCode returned a malformed question option",
-              );
+              throw new ProviderUnavailableError("OpenCode returned a malformed question option");
             }
             return {
               id: opaqueOptionId(questionIndex, optionIndex),
@@ -140,14 +133,13 @@ export class OpenCodeInteractionAdapter {
   private mapOpenCodePermission(sessionId: string, raw: unknown): AgentInteractionRequest {
     const request = asRecord(raw);
     const providerRequestId = nonEmptyString(request?.id);
-    const rawSessionId = nonEmptyString(request?.sessionID)
-      ?? nonEmptyString(request?.sessionId);
-    const permission = nonEmptyString(request?.permission)
-      ?? nonEmptyString(request?.action);
+    const rawSessionId = nonEmptyString(request?.sessionID) ?? nonEmptyString(request?.sessionId);
+    const permission = nonEmptyString(request?.permission) ?? nonEmptyString(request?.action);
     const patterns = boundedStringArray(request?.patterns, "permission patterns");
-    const alwaysPatterns = request?.always === undefined
-      ? []
-      : boundedStringArray(request.always, "permission always patterns");
+    const alwaysPatterns =
+      request?.always === undefined
+        ? []
+        : boundedStringArray(request.always, "permission always patterns");
     if (!providerRequestId || rawSessionId !== sessionId || !permission) {
       throw new ProviderUnavailableError("OpenCode returned a malformed permission request");
     }
@@ -188,19 +180,11 @@ export class OpenCodeInteractionAdapter {
     };
   }
 
-  async listPendingInteractions(
-    sessionId: string,
-  ): Promise<AgentInteractionSnapshot> {
+  async listPendingInteractions(sessionId: string): Promise<AgentInteractionSnapshot> {
     try {
       const [questionsResponse, permissionsResponse] = await Promise.all([
-        this.client.question.list(
-          { directory: this.directory },
-          this.requestOptions(),
-        ),
-        this.client.permission.list(
-          { directory: this.directory },
-          this.requestOptions(),
-        ),
+        this.client.question.list({ directory: this.directory }, this.requestOptions()),
+        this.client.permission.list({ directory: this.directory }, this.requestOptions()),
       ]);
       assertSdkResponse(questionsResponse, "OpenCode pending question read");
       assertSdkResponse(permissionsResponse, "OpenCode pending permission read");
@@ -216,13 +200,12 @@ export class OpenCodeInteractionAdapter {
         "OpenCode pending permission read",
       );
       if (
-        serializedByteLength([questions, permissions])
-          > AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes
+        serializedByteLength([questions, permissions]) >
+        AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes
       ) {
         throw new ProviderUnavailableError("OpenCode interaction snapshot is oversized");
       }
-      if (questions.length + permissions.length
-        > AGENT_INTERACTION_LIMITS.maxPendingRequests) {
+      if (questions.length + permissions.length > AGENT_INTERACTION_LIMITS.maxPendingRequests) {
         throw new ProviderUnavailableError("OpenCode returned too many interactions");
       }
       const snapshot = this.interactionTracker.snapshot(sessionId, [
@@ -270,8 +253,8 @@ export class OpenCodeInteractionAdapter {
       return outcome("stale", sessionId, interactionId, snapshot.revision);
     }
     if (
-      (resolution.action === "answer" || resolution.action === "approve-for-session")
-      && identity.actionable === false
+      (resolution.action === "answer" || resolution.action === "approve-for-session") &&
+      identity.actionable === false
     ) {
       return outcome("rejected", sessionId, interactionId, snapshot.revision);
     }
@@ -295,25 +278,37 @@ export class OpenCodeInteractionAdapter {
                 ...(answer.freeText === undefined ? [] : [answer.freeText]),
               ];
             });
-            response = await this.client.question.reply({
-              requestID: providerRequestId,
-              directory: this.directory,
-              answers,
-            }, this.requestOptions());
+            response = await this.client.question.reply(
+              {
+                requestID: providerRequestId,
+                directory: this.directory,
+                answers,
+              },
+              this.requestOptions(),
+            );
           } else {
-            response = await this.client.question.reject({
-              requestID: providerRequestId,
-              directory: this.directory,
-            }, this.requestOptions());
+            response = await this.client.question.reject(
+              {
+                requestID: providerRequestId,
+                directory: this.directory,
+              },
+              this.requestOptions(),
+            );
           }
         } else {
-          response = await this.client.permission.reply({
-            requestID: providerRequestId,
-            directory: this.directory,
-            reply: resolution.action === "approve-for-session"
-              ? "always"
-              : resolution.action === "answer" ? "once" : "reject",
-          }, this.requestOptions());
+          response = await this.client.permission.reply(
+            {
+              requestID: providerRequestId,
+              directory: this.directory,
+              reply:
+                resolution.action === "approve-for-session"
+                  ? "always"
+                  : resolution.action === "answer"
+                    ? "once"
+                    : "reject",
+            },
+            this.requestOptions(),
+          );
         }
         assertSdkResponse(response, "OpenCode interaction response");
       } catch {
@@ -325,12 +320,7 @@ export class OpenCodeInteractionAdapter {
       }
       const reconciled = await this.listPendingInteractions(sessionId).catch(() => null);
       if (!reconciled) {
-        return outcome(
-          "provider-unavailable",
-          sessionId,
-          interactionId,
-          snapshot.revision,
-        );
+        return outcome("provider-unavailable", sessionId, interactionId, snapshot.revision);
       }
       return outcome(
         reconciled.requests.some((item) => item.id === interactionId)
@@ -344,6 +334,4 @@ export class OpenCodeInteractionAdapter {
       this.resolvingInteractions.delete(interactionId);
     }
   }
-
-
 }

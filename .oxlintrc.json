@@ -1,0 +1,27 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn", "oxc", "react", "import", "promise"],
+  "categories": {
+    "correctness": "error"
+  },
+  "env": {
+    "browser": true,
+    "node": true,
+    "es2024": true
+  },
+  "settings": {
+    "react": {
+      "version": "19.1"
+    }
+  },
+  "ignorePatterns": [
+    "bridges/codex-bridge/src/app-server/generated/**",
+    "test-fixtures/**",
+    "output/**",
+    "binaries/**"
+  ],
+  "rules": {
+    "no-unused-vars": "warn",
+    "no-control-regex": "off"
+  }
+}

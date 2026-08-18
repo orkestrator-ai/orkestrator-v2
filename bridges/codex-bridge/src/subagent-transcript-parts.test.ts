@@ -28,14 +28,18 @@ describe("deriveTranscriptSubagentPartsForTurn", () => {
     };
 
     expect(await deriveTranscriptSubagentPartsForTurn(options)).toEqual([]);
-    expect(await deriveTranscriptSubagentPartsForTurn({
-      ...options,
-      threadId: "thread-1",
-    })).toEqual([]);
-    expect(await deriveTranscriptSubagentPartsForTurn({
-      ...options,
-      currentTurnStartedAt: "2026-07-17T17:02:00.000Z",
-    })).toEqual([]);
+    expect(
+      await deriveTranscriptSubagentPartsForTurn({
+        ...options,
+        threadId: "thread-1",
+      }),
+    ).toEqual([]);
+    expect(
+      await deriveTranscriptSubagentPartsForTurn({
+        ...options,
+        currentTurnStartedAt: "2026-07-17T17:02:00.000Z",
+      }),
+    ).toEqual([]);
     expect(loadCount).toBe(0);
   });
 
@@ -172,9 +176,8 @@ describe("deriveTranscriptSubagentPartsForTurn", () => {
     ];
     const common = {
       threadId: "thread-1",
-      loadSessionMeta: async (id: string) => id === "thread-1"
-        ? { transcriptPath: "/tmp/parent.jsonl" }
-        : null,
+      loadSessionMeta: async (id: string) =>
+        id === "thread-1" ? { transcriptPath: "/tmp/parent.jsonl" } : null,
       loadTranscript: async () => transcript(parentRecords),
     };
 
@@ -188,10 +191,12 @@ describe("deriveTranscriptSubagentPartsForTurn", () => {
       currentTurnStartedAt: "2026-08-11T12:00:02.000Z",
     });
 
-    expect(before.map((part) => [part.subagentId, part.subagentPrompt]))
-      .toEqual([["agent-before", "Before steer"]]);
-    expect(after.map((part) => [part.subagentId, part.subagentPrompt]))
-      .toEqual([["agent-after", "After steer"]]);
+    expect(before.map((part) => [part.subagentId, part.subagentPrompt])).toEqual([
+      ["agent-before", "Before steer"],
+    ]);
+    expect(after.map((part) => [part.subagentId, part.subagentPrompt])).toEqual([
+      ["agent-after", "After steer"],
+    ]);
 
     // The ids a row's own items claim override the clock entirely. Both rows
     // are asked with a window that would misattribute the spawn, and both still
@@ -240,27 +245,32 @@ describe("deriveTranscriptSubagentPartsForTurn", () => {
     ];
     const common = {
       threadId: "thread-1",
-      loadSessionMeta: async (id: string) => id === "thread-1"
-        ? { transcriptPath: "/tmp/parent.jsonl" }
-        : null,
+      loadSessionMeta: async (id: string) =>
+        id === "thread-1" ? { transcriptPath: "/tmp/parent.jsonl" } : null,
       loadTranscript: async () => transcript(parentRecords),
     };
 
     // The clock says this spawn belongs below the boundary, so the row above
     // loses it when only the window is consulted.
-    expect(await deriveTranscriptSubagentPartsForTurn({
-      ...common,
-      currentTurnStartedAt: "2026-08-11T12:00:00.000Z",
-      currentTurnEndedAt: "2026-08-11T12:00:05.000Z",
-    })).toEqual([]);
+    expect(
+      await deriveTranscriptSubagentPartsForTurn({
+        ...common,
+        currentTurnStartedAt: "2026-08-11T12:00:00.000Z",
+        currentTurnEndedAt: "2026-08-11T12:00:05.000Z",
+      }),
+    ).toEqual([]);
 
     // Its item is in the row above, so the row above keeps its card.
-    expect((await deriveTranscriptSubagentPartsForTurn({
-      ...common,
-      currentTurnStartedAt: "2026-08-11T12:00:00.000Z",
-      currentTurnEndedAt: "2026-08-11T12:00:05.000Z",
-      ownedSubagentIds: ["agent-raced"],
-    })).map((part) => part.subagentId)).toEqual(["agent-raced"]);
+    expect(
+      (
+        await deriveTranscriptSubagentPartsForTurn({
+          ...common,
+          currentTurnStartedAt: "2026-08-11T12:00:00.000Z",
+          currentTurnEndedAt: "2026-08-11T12:00:05.000Z",
+          ownedSubagentIds: ["agent-raced"],
+        })
+      ).map((part) => part.subagentId),
+    ).toEqual(["agent-raced"]);
   });
 
   test("falls back to the time window when a row cannot name its own spawns", async () => {
@@ -292,9 +302,8 @@ describe("deriveTranscriptSubagentPartsForTurn", () => {
       threadId: "thread-1",
       currentTurnStartedAt: "2026-08-11T12:00:00.000Z",
       ownedSubagentIds: [],
-      loadSessionMeta: async (id: string) => id === "thread-1"
-        ? { transcriptPath: "/tmp/parent.jsonl" }
-        : null,
+      loadSessionMeta: async (id: string) =>
+        id === "thread-1" ? { transcriptPath: "/tmp/parent.jsonl" } : null,
       loadTranscript: async () => transcript(parentRecords),
     });
 
@@ -335,9 +344,8 @@ describe("deriveTranscriptSubagentPartsForTurn", () => {
       loadSessionMeta: async (id: string) => ({
         transcriptPath: id === "thread-1" ? "/tmp/parent.jsonl" : "/tmp/child.jsonl",
       }),
-      loadTranscript: async (path) => path.endsWith("parent.jsonl")
-        ? transcript(parentRecords)
-        : transcript([]),
+      loadTranscript: async (path) =>
+        path.endsWith("parent.jsonl") ? transcript(parentRecords) : transcript([]),
     });
 
     expect(parts).toEqual([
@@ -359,16 +367,19 @@ describe("deriveTranscriptSubagentPartsForTurn", () => {
       loadSessionMeta: async (id: string) => ({
         transcriptPath: id === "thread-1" ? "/tmp/parent.jsonl" : "/tmp/child.jsonl",
       }),
-      loadTranscript: async (path) => path.endsWith("parent.jsonl")
-        ? transcript([])
-        : transcript([{
-            timestamp: "2026-08-11T12:00:01.000Z",
-            type: "session_meta",
-            payload: {
-              id: "agent-native",
-              agent_nickname: "Lovelace",
-            },
-          }]),
+      loadTranscript: async (path) =>
+        path.endsWith("parent.jsonl")
+          ? transcript([])
+          : transcript([
+              {
+                timestamp: "2026-08-11T12:00:01.000Z",
+                type: "session_meta",
+                payload: {
+                  id: "agent-native",
+                  agent_nickname: "Lovelace",
+                },
+              },
+            ]),
     });
 
     expect(parts).toEqual([
@@ -389,9 +400,8 @@ describe("deriveTranscriptSubagentPartsForTurn", () => {
       threadId: "thread-1",
       currentTurnStartedAt: "2026-08-11T12:00:00.000Z",
       ownedSubagentIds: ["019-abcd-thread-uuid"],
-      loadSessionMeta: async (id: string) => id === "thread-1"
-        ? { transcriptPath: "/tmp/parent.jsonl" }
-        : null,
+      loadSessionMeta: async (id: string) =>
+        id === "thread-1" ? { transcriptPath: "/tmp/parent.jsonl" } : null,
       loadTranscript: async () => transcript([]),
     });
 
@@ -425,13 +435,13 @@ describe("deriveTranscriptSubagentPartsForTurn", () => {
       currentTurnStartedAt: "2026-08-11T12:00:00.000Z",
       ownedSubagentIds: ["agent-second"],
       fallbackAgentIdsInSpawnOrder: ["agent-second"],
-      loadSessionMeta: async (id: string) => id === "thread-1"
-        ? { transcriptPath: "/tmp/parent.jsonl" }
-        : null,
-      loadTranscript: async () => transcript([
-        spawn("spawn-first", "2026-08-11T12:00:01.000Z"),
-        spawn("spawn-second", "2026-08-11T12:00:02.000Z"),
-      ]),
+      loadSessionMeta: async (id: string) =>
+        id === "thread-1" ? { transcriptPath: "/tmp/parent.jsonl" } : null,
+      loadTranscript: async () =>
+        transcript([
+          spawn("spawn-first", "2026-08-11T12:00:01.000Z"),
+          spawn("spawn-second", "2026-08-11T12:00:02.000Z"),
+        ]),
     });
 
     // Neither spawn call may claim `agent-second` by position; the only row left
@@ -760,9 +770,10 @@ describe("deriveTranscriptSubagentPartsForTurn", () => {
         loadedIds.push(id);
         return { transcriptPath: `/tmp/${id}.jsonl` };
       },
-      loadTranscript: async (path) => path.endsWith("parent-thread-id.jsonl")
-        ? transcript(parentRecords)
-        : transcript([{ type: "event_msg", payload: { type: "task_complete" } }]),
+      loadTranscript: async (path) =>
+        path.endsWith("parent-thread-id.jsonl")
+          ? transcript(parentRecords)
+          : transcript([{ type: "event_msg", payload: { type: "task_complete" } }]),
     });
 
     expect(loadedIds).toEqual(["parent-thread-id", "fallback-agent", "output-agent"]);
@@ -805,9 +816,8 @@ describe("deriveTranscriptSubagentPartsForTurn", () => {
         loadedIds.push(id);
         return { transcriptPath: `/tmp/${id}.jsonl` };
       },
-      loadTranscript: async (path) => path.endsWith("parent.jsonl")
-        ? transcript(parentRecords)
-        : transcript([]),
+      loadTranscript: async (path) =>
+        path.endsWith("parent.jsonl") ? transcript(parentRecords) : transcript([]),
     });
 
     expect(loadedIds).toEqual(["parent", "agent-two"]);
@@ -818,34 +828,38 @@ describe("deriveTranscriptSubagentPartsForTurn", () => {
   });
 
   test("leaves output-less spawns unresolved when fallbacks are absent or whitespace", async () => {
-    const parentRecords: TranscriptRecord[] = ["call-absent", "call-blank"].map((callId, index) => ({
-      timestamp: `2026-07-17T17:02:0${index + 1}.000Z`,
-      type: "response_item",
-      payload: {
-        type: "function_call",
-        name: "spawn_agent",
-        arguments: JSON.stringify({ message: callId }),
-        call_id: callId,
-      },
-    }));
+    const parentRecords: TranscriptRecord[] = ["call-absent", "call-blank"].map(
+      (callId, index) => ({
+        timestamp: `2026-07-17T17:02:0${index + 1}.000Z`,
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "spawn_agent",
+          arguments: JSON.stringify({ message: callId }),
+          call_id: callId,
+        },
+      }),
+    );
     const childLoads: string[] = [];
 
     const partsWithoutFallbacks = await deriveTranscriptSubagentPartsForTurn({
       threadId: "parent",
       currentTurnStartedAt: "2026-07-17T17:02:00.000Z",
       loadSessionMeta: async (id) => ({ transcriptPath: `/tmp/${id}.jsonl` }),
-      loadTranscript: async (path) => path.endsWith("parent.jsonl")
-        ? transcript(parentRecords)
-        : (childLoads.push(path), transcript([])),
+      loadTranscript: async (path) =>
+        path.endsWith("parent.jsonl")
+          ? transcript(parentRecords)
+          : (childLoads.push(path), transcript([])),
     });
     const partsWithBlankFallbacks = await deriveTranscriptSubagentPartsForTurn({
       threadId: "parent",
       currentTurnStartedAt: "2026-07-17T17:02:00.000Z",
       fallbackAgentIdsInSpawnOrder: ["", "   "],
       loadSessionMeta: async (id) => ({ transcriptPath: `/tmp/${id}.jsonl` }),
-      loadTranscript: async (path) => path.endsWith("parent.jsonl")
-        ? transcript(parentRecords)
-        : (childLoads.push(path), transcript([])),
+      loadTranscript: async (path) =>
+        path.endsWith("parent.jsonl")
+          ? transcript(parentRecords)
+          : (childLoads.push(path), transcript([])),
     });
 
     expect(partsWithoutFallbacks.map((part) => part.subagentId)).toEqual([undefined, undefined]);
@@ -911,9 +925,8 @@ describe("deriveTranscriptSubagentPartsForTurn", () => {
         loadedIds.push(id);
         return { transcriptPath: `/tmp/${id}.jsonl` };
       },
-      loadTranscript: async (path) => path.endsWith("parent.jsonl")
-        ? transcript(parentRecords)
-        : transcript([]),
+      loadTranscript: async (path) =>
+        path.endsWith("parent.jsonl") ? transcript(parentRecords) : transcript([]),
     });
 
     expect(loadedIds).toEqual(["parent", "fallback-agent"]);
@@ -961,11 +974,12 @@ describe("deriveTranscriptSubagentPartsForTurn", () => {
       threadId: "parent",
       currentTurnStartedAt: "2026-07-17T17:02:00.000Z",
       loadSessionMeta: async () => ({ transcriptPath: "/tmp/parent.jsonl" }),
-      loadTranscript: async () => transcript([
-        { timestamp: "2026-07-17T17:01:59.999Z", type: "response_item", payload: {} },
-        { timestamp: "invalid", type: "response_item", payload: {} },
-        { type: "response_item", payload: {} },
-      ]),
+      loadTranscript: async () =>
+        transcript([
+          { timestamp: "2026-07-17T17:01:59.999Z", type: "response_item", payload: {} },
+          { timestamp: "invalid", type: "response_item", payload: {} },
+          { type: "response_item", payload: {} },
+        ]),
     });
 
     expect(parts).toEqual([]);
@@ -988,34 +1002,46 @@ describe("deriveTranscriptSubagentPartsForTurn", () => {
       fallbackAgentIdsInSpawnOrder: ["child"],
     };
 
-    await expect(deriveTranscriptSubagentPartsForTurn({
-      ...options,
-      loadSessionMeta: async () => { throw new Error("parent meta failed"); },
-      loadTranscript: async () => transcript([]),
-    })).rejects.toThrow("parent meta failed");
+    await expect(
+      deriveTranscriptSubagentPartsForTurn({
+        ...options,
+        loadSessionMeta: async () => {
+          throw new Error("parent meta failed");
+        },
+        loadTranscript: async () => transcript([]),
+      }),
+    ).rejects.toThrow("parent meta failed");
 
-    await expect(deriveTranscriptSubagentPartsForTurn({
-      ...options,
-      loadSessionMeta: async () => ({ transcriptPath: "/tmp/parent.jsonl" }),
-      loadTranscript: async () => { throw new Error("parent transcript failed"); },
-    })).rejects.toThrow("parent transcript failed");
+    await expect(
+      deriveTranscriptSubagentPartsForTurn({
+        ...options,
+        loadSessionMeta: async () => ({ transcriptPath: "/tmp/parent.jsonl" }),
+        loadTranscript: async () => {
+          throw new Error("parent transcript failed");
+        },
+      }),
+    ).rejects.toThrow("parent transcript failed");
 
-    await expect(deriveTranscriptSubagentPartsForTurn({
-      ...options,
-      loadSessionMeta: async (id) => {
-        if (id === "child") throw new Error("child meta failed");
-        return { transcriptPath: "/tmp/parent.jsonl" };
-      },
-      loadTranscript: async () => transcript([validSpawn]),
-    })).rejects.toThrow("child meta failed");
+    await expect(
+      deriveTranscriptSubagentPartsForTurn({
+        ...options,
+        loadSessionMeta: async (id) => {
+          if (id === "child") throw new Error("child meta failed");
+          return { transcriptPath: "/tmp/parent.jsonl" };
+        },
+        loadTranscript: async () => transcript([validSpawn]),
+      }),
+    ).rejects.toThrow("child meta failed");
 
-    await expect(deriveTranscriptSubagentPartsForTurn({
-      ...options,
-      loadSessionMeta: async (id) => ({ transcriptPath: `/tmp/${id}.jsonl` }),
-      loadTranscript: async (path) => {
-        if (path.endsWith("child.jsonl")) throw new Error("child transcript failed");
-        return transcript([validSpawn]);
-      },
-    })).rejects.toThrow("child transcript failed");
+    await expect(
+      deriveTranscriptSubagentPartsForTurn({
+        ...options,
+        loadSessionMeta: async (id) => ({ transcriptPath: `/tmp/${id}.jsonl` }),
+        loadTranscript: async (path) => {
+          if (path.endsWith("child.jsonl")) throw new Error("child transcript failed");
+          return transcript([validSpawn]);
+        },
+      }),
+    ).rejects.toThrow("child transcript failed");
   });
 });

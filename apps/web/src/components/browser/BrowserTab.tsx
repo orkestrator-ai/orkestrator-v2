@@ -1,6 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { ArrowLeft, ArrowRight, Code2, Globe2, Loader2, RefreshCw, Server, ShieldCheck, Smartphone } from "lucide-react";
-import type { BrowserPreviewBounds, BrowserPreviewState } from "@orkestrator/protocol/browser-preview";
+import {
+  ArrowLeft,
+  ArrowRight,
+  Code2,
+  Globe2,
+  Loader2,
+  RefreshCw,
+  Server,
+  ShieldCheck,
+  Smartphone,
+} from "lucide-react";
+import type {
+  BrowserPreviewBounds,
+  BrowserPreviewState,
+} from "@orkestrator/protocol/browser-preview";
 import { Button } from "@/components/ui/button";
 import { isGatewayBrowserPreviewSupported } from "@/lib/gateway-url";
 import { cn } from "@/lib/utils";
@@ -41,10 +54,10 @@ function isVisuallyPresent(element: Element): boolean {
     if (current instanceof HTMLElement && current.hidden) return false;
     const style = window.getComputedStyle(current);
     if (
-      style.display === "none"
-      || style.visibility === "hidden"
-      || style.visibility === "collapse"
-      || Number.parseFloat(style.opacity) === 0
+      style.display === "none" ||
+      style.visibility === "hidden" ||
+      style.visibility === "collapse" ||
+      Number.parseFloat(style.opacity) === 0
     ) {
       return false;
     }
@@ -54,8 +67,8 @@ function isVisuallyPresent(element: Element): boolean {
 
 function isBlockingOverlay(element: Element): boolean {
   const isClosing =
-    element.getAttribute("aria-hidden") === "true"
-    || element.getAttribute("data-state") === "closed";
+    element.getAttribute("aria-hidden") === "true" ||
+    element.getAttribute("data-state") === "closed";
   return !isClosing || isVisuallyPresent(element);
 }
 
@@ -118,12 +131,10 @@ export function BrowserTab({
   // authoritative cursor for the handlers that mutate it, so a second click or
   // a submit that lands before React re-renders still reads what the previous
   // one wrote. They are written only from those handlers, never during render.
-  const [history, setHistory] = useState<string[]>(() =>
-    data.history ?? (data.url ? [data.url] : [])
+  const [history, setHistory] = useState<string[]>(
+    () => data.history ?? (data.url ? [data.url] : []),
   );
-  const [historyIndex, setHistoryIndex] = useState(() =>
-    data.historyIndex ?? (data.url ? 0 : -1)
-  );
+  const [historyIndex, setHistoryIndex] = useState(() => data.historyIndex ?? (data.url ? 0 : -1));
   const historyRef = useRef(history);
   const historyIndexRef = useRef(historyIndex);
   const [loadRevision, setLoadRevision] = useState(0);
@@ -137,24 +148,30 @@ export function BrowserTab({
   const [nativeState, setNativeState] = useState<BrowserPreviewState | null>(null);
   const [hasBlockingOverlay, setHasBlockingOverlay] = useState(false);
 
-  const applyNativeSurfaceState = useCallback((state: BrowserPreviewState | null) => {
-    if (!state || state.tabId !== tabId) return;
-    setNativeState(state);
-    setIsLoading(state.loading);
-    setError(state.error);
-  }, [tabId]);
+  const applyNativeSurfaceState = useCallback(
+    (state: BrowserPreviewState | null) => {
+      if (!state || state.tabId !== tabId) return;
+      setNativeState(state);
+      setIsLoading(state.loading);
+      setError(state.error);
+    },
+    [tabId],
+  );
 
-  const applyNativeState = useCallback((state: BrowserPreviewState | null) => {
-    if (!state || state.tabId !== tabId) return;
-    applyNativeSurfaceState(state);
-    const navigatedDisplayUrl = displayUrlFromNativePreview(state.url, currentUrl);
-    if (!navigatedDisplayUrl) return;
-    if (navigatedDisplayUrl === currentUrl) return;
-    setAddress(navigatedDisplayUrl);
-    setCurrentUrl(navigatedDisplayUrl);
-    locallyPersistedUrl.current = navigatedDisplayUrl;
-    updateTabBrowserUrl(tabId, navigatedDisplayUrl, environmentId);
-  }, [applyNativeSurfaceState, currentUrl, environmentId, tabId, updateTabBrowserUrl]);
+  const applyNativeState = useCallback(
+    (state: BrowserPreviewState | null) => {
+      if (!state || state.tabId !== tabId) return;
+      applyNativeSurfaceState(state);
+      const navigatedDisplayUrl = displayUrlFromNativePreview(state.url, currentUrl);
+      if (!navigatedDisplayUrl) return;
+      if (navigatedDisplayUrl === currentUrl) return;
+      setAddress(navigatedDisplayUrl);
+      setCurrentUrl(navigatedDisplayUrl);
+      locallyPersistedUrl.current = navigatedDisplayUrl;
+      updateTabBrowserUrl(tabId, navigatedDisplayUrl, environmentId);
+    },
+    [applyNativeSurfaceState, currentUrl, environmentId, tabId, updateTabBrowserUrl],
+  );
 
   useEffect(() => {
     const followsLocalNavigation = locallyPersistedUrl.current === data.url;
@@ -179,10 +196,12 @@ export function BrowserTab({
     if (refreshChanged && refreshRequestId > 0 && currentUrl) {
       setIsLoading(true);
       if (nativeBrowserPreview && nativeAttachedRef.current) {
-        void reloadBrowserPreview(tabId).then(applyNativeState).catch((reloadError) => {
-          setIsLoading(false);
-          setError(errorMessage(reloadError));
-        });
+        void reloadBrowserPreview(tabId)
+          .then(applyNativeState)
+          .catch((reloadError) => {
+            setIsLoading(false);
+            setError(errorMessage(reloadError));
+          });
       } else if (!nativeBrowserPreview) {
         setLoadRevision((revision) => revision + 1);
       }
@@ -191,7 +210,10 @@ export function BrowserTab({
 
   useEffect(() => {
     if (!nativeBrowserPreview || !browserPreviewSupported) return;
-    return window.orkestrator?.listen<BrowserPreviewState>("browser-preview-state", applyNativeState);
+    return window.orkestrator?.listen<BrowserPreviewState>(
+      "browser-preview-state",
+      applyNativeState,
+    );
   }, [applyNativeState, browserPreviewSupported, nativeBrowserPreview]);
 
   const focusAddressBar = useCallback(() => {
@@ -202,16 +224,13 @@ export function BrowserTab({
   useEffect(() => {
     if (!isActive || !browserPreviewSupported) return;
 
-    return window.orkestrator?.listen<string>(
-      "browser-preview-focus-address",
-      (requestedTabId) => {
-        if (requestedTabId !== tabId) return;
-        if (owningPaneId) {
-          setActivePane(owningPaneId, environmentId);
-        }
-        focusAddressBar();
-      },
-    );
+    return window.orkestrator?.listen<string>("browser-preview-focus-address", (requestedTabId) => {
+      if (requestedTabId !== tabId) return;
+      if (owningPaneId) {
+        setActivePane(owningPaneId, environmentId);
+      }
+      focusAddressBar();
+    });
   }, [
     environmentId,
     focusAddressBar,
@@ -227,10 +246,10 @@ export function BrowserTab({
 
     const handleKeyDown = (event: KeyboardEvent) => {
       const isAddressShortcut =
-        event.key.toLowerCase() === "l"
-        && (event.metaKey || event.ctrlKey)
-        && !event.altKey
-        && !event.shiftKey;
+        event.key.toLowerCase() === "l" &&
+        (event.metaKey || event.ctrlKey) &&
+        !event.altKey &&
+        !event.shiftKey;
       if (!isAddressShortcut) return;
 
       event.preventDefault();
@@ -247,10 +266,7 @@ export function BrowserTab({
     if (!nativeBrowserPreview || !browserPreviewSupported) return;
     const update = () => setHasBlockingOverlay(hasVisuallyBlockingOverlay());
     const updateAfterOverlayMotion = (event: Event) => {
-      if (
-        event.target instanceof Element
-        && event.target.matches(BLOCKING_OVERLAY_SELECTOR)
-      ) {
+      if (event.target instanceof Element && event.target.matches(BLOCKING_OVERLAY_SELECTOR)) {
         update();
       }
     };
@@ -310,94 +326,116 @@ export function BrowserTab({
   const previewSandbox = isDirectPreview
     ? `${OPAQUE_PREVIEW_SANDBOX} allow-same-origin`
     : OPAQUE_PREVIEW_SANDBOX;
-  const navigate = useCallback((nextAddress: string, recordHistory = true) => {
-    let next;
-    try {
-      next = resolveBrowserAddress(nextAddress);
-    } catch (navigationError) {
-      setError(errorMessage(navigationError));
-      return;
-    }
-
-    setError(null);
-    setAddress(next.displayUrl);
-    setCurrentUrl(next.displayUrl);
-    setIsLoading(true);
-    if (!nativeBrowserPreview) setLoadRevision((revision) => revision + 1);
-    locallyPersistedUrl.current = next.displayUrl;
-
-    if (recordHistory && nativeBrowserPreview) {
-      // Chromium recorded this navigation in its own history, so the address is
-      // the only durable part of it.
-      updateTabBrowserUrl(tabId, next.displayUrl, environmentId);
-    } else if (recordHistory) {
-      // Computed outside the state updater on purpose. The updater has to stay
-      // pure: React double-invokes it in development, and a second invocation
-      // that read the cursor the first one advanced would keep the forward
-      // entries this navigation is supposed to truncate.
-      const truncated = historyRef.current.slice(0, historyIndexRef.current + 1);
-      if (truncated[truncated.length - 1] !== next.displayUrl) {
-        truncated.push(next.displayUrl);
+  const navigate = useCallback(
+    (nextAddress: string, recordHistory = true) => {
+      let next;
+      try {
+        next = resolveBrowserAddress(nextAddress);
+      } catch (navigationError) {
+        setError(errorMessage(navigationError));
+        return;
       }
-      const bounded = boundBrowserHistory(truncated, truncated.length - 1);
-      historyRef.current = bounded.history;
-      historyIndexRef.current = bounded.historyIndex;
-      setHistory(bounded.history);
-      setHistoryIndex(bounded.historyIndex);
-      updateTabBrowserUrl(
-        tabId,
-        next.displayUrl,
-        environmentId,
-        bounded.history,
-        bounded.historyIndex,
-      );
-    }
 
-    if (nativeBrowserPreview && nativeAttachedRef.current) {
-      void navigateBrowserPreview(tabId, next.iframeUrl).then(applyNativeState).catch((navigationError) => {
-        setIsLoading(false);
-        setError(errorMessage(navigationError));
-      });
-    }
-  }, [applyNativeState, environmentId, nativeBrowserPreview, tabId, updateTabBrowserUrl]);
+      setError(null);
+      setAddress(next.displayUrl);
+      setCurrentUrl(next.displayUrl);
+      setIsLoading(true);
+      if (!nativeBrowserPreview) setLoadRevision((revision) => revision + 1);
+      locallyPersistedUrl.current = next.displayUrl;
 
-  const handleSubmit = useCallback((event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    navigate(address);
-  }, [address, navigate]);
+      if (recordHistory && nativeBrowserPreview) {
+        // Chromium recorded this navigation in its own history, so the address is
+        // the only durable part of it.
+        updateTabBrowserUrl(tabId, next.displayUrl, environmentId);
+      } else if (recordHistory) {
+        // Computed outside the state updater on purpose. The updater has to stay
+        // pure: React double-invokes it in development, and a second invocation
+        // that read the cursor the first one advanced would keep the forward
+        // entries this navigation is supposed to truncate.
+        const truncated = historyRef.current.slice(0, historyIndexRef.current + 1);
+        if (truncated[truncated.length - 1] !== next.displayUrl) {
+          truncated.push(next.displayUrl);
+        }
+        const bounded = boundBrowserHistory(truncated, truncated.length - 1);
+        historyRef.current = bounded.history;
+        historyIndexRef.current = bounded.historyIndex;
+        setHistory(bounded.history);
+        setHistoryIndex(bounded.historyIndex);
+        updateTabBrowserUrl(
+          tabId,
+          next.displayUrl,
+          environmentId,
+          bounded.history,
+          bounded.historyIndex,
+        );
+      }
 
-  const moveThroughHistory = useCallback((offset: -1 | 1) => {
-    if (nativeBrowserPreview) {
-      // Chromium owns this preview's history. The tracked array only records
-      // address-bar navigations, so an in-preview link click already made the
-      // two diverge; forcing a tracked address back onto the surface would
-      // re-attach it as a fresh load and destroy the real forward entries.
-      // Only the RPC's own surface fields are applied here — the URL is
-      // reconciled by the state event that follows the navigation commit, which
-      // is also what persists it.
-      const action = offset === -1 ? goBackBrowserPreview : goForwardBrowserPreview;
-      void action(tabId).then(applyNativeSurfaceState).catch((navigationError) => {
-        setError(errorMessage(navigationError));
-      });
-      return;
-    }
-    const nextIndex = historyIndexRef.current + offset;
-    const nextAddress = historyRef.current[nextIndex];
-    if (!nextAddress) return;
-    historyIndexRef.current = nextIndex;
-    setHistoryIndex(nextIndex);
-    updateTabBrowserUrl(tabId, nextAddress, environmentId, historyRef.current, nextIndex);
-    navigate(nextAddress, false);
-  }, [applyNativeSurfaceState, environmentId, nativeBrowserPreview, navigate, tabId, updateTabBrowserUrl]);
+      if (nativeBrowserPreview && nativeAttachedRef.current) {
+        void navigateBrowserPreview(tabId, next.iframeUrl)
+          .then(applyNativeState)
+          .catch((navigationError) => {
+            setIsLoading(false);
+            setError(errorMessage(navigationError));
+          });
+      }
+    },
+    [applyNativeState, environmentId, nativeBrowserPreview, tabId, updateTabBrowserUrl],
+  );
+
+  const handleSubmit = useCallback(
+    (event: FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      navigate(address);
+    },
+    [address, navigate],
+  );
+
+  const moveThroughHistory = useCallback(
+    (offset: -1 | 1) => {
+      if (nativeBrowserPreview) {
+        // Chromium owns this preview's history. The tracked array only records
+        // address-bar navigations, so an in-preview link click already made the
+        // two diverge; forcing a tracked address back onto the surface would
+        // re-attach it as a fresh load and destroy the real forward entries.
+        // Only the RPC's own surface fields are applied here — the URL is
+        // reconciled by the state event that follows the navigation commit, which
+        // is also what persists it.
+        const action = offset === -1 ? goBackBrowserPreview : goForwardBrowserPreview;
+        void action(tabId)
+          .then(applyNativeSurfaceState)
+          .catch((navigationError) => {
+            setError(errorMessage(navigationError));
+          });
+        return;
+      }
+      const nextIndex = historyIndexRef.current + offset;
+      const nextAddress = historyRef.current[nextIndex];
+      if (!nextAddress) return;
+      historyIndexRef.current = nextIndex;
+      setHistoryIndex(nextIndex);
+      updateTabBrowserUrl(tabId, nextAddress, environmentId, historyRef.current, nextIndex);
+      navigate(nextAddress, false);
+    },
+    [
+      applyNativeSurfaceState,
+      environmentId,
+      nativeBrowserPreview,
+      navigate,
+      tabId,
+      updateTabBrowserUrl,
+    ],
+  );
 
   const reload = useCallback(() => {
     if (!currentUrl) return;
     setIsLoading(true);
     if (nativeBrowserPreview && nativeAttachedRef.current) {
-      void reloadBrowserPreview(tabId).then(applyNativeState).catch((reloadError) => {
-        setIsLoading(false);
-        setError(errorMessage(reloadError));
-      });
+      void reloadBrowserPreview(tabId)
+        .then(applyNativeState)
+        .catch((reloadError) => {
+          setIsLoading(false);
+          setError(errorMessage(reloadError));
+        });
       return;
     }
     setLoadRevision((revision) => revision + 1);
@@ -437,15 +475,17 @@ export function BrowserTab({
           url: resolved.iframeUrl,
           bounds,
           visible: isActive && !hasBlockingOverlay,
-        }).then((state) => {
-          if (disposed) return;
-          nativeAttachedRef.current = true;
-          applyNativeState(state);
-        }).catch((attachError) => {
-          if (disposed) return;
-          setIsLoading(false);
-          setError(errorMessage(attachError));
-        });
+        })
+          .then((state) => {
+            if (disposed) return;
+            nativeAttachedRef.current = true;
+            applyNativeState(state);
+          })
+          .catch((attachError) => {
+            if (disposed) return;
+            setIsLoading(false);
+            setError(errorMessage(attachError));
+          });
       });
     };
 
@@ -476,25 +516,31 @@ export function BrowserTab({
   const canGoForward = nativeBrowserPreview
     ? Boolean(nativeState?.canGoForward)
     : historyIndex >= 0 && historyIndex < history.length - 1;
-  const isIosClient = window.__orkestratorClientPlatform === "ios-wkwebview"
-    || window.__orkestratorClientPlatform === "ipad-wkwebview"
-    || window.__orkestratorClientPlatform === "iphone-wkwebview";
+  const isIosClient =
+    window.__orkestratorClientPlatform === "ios-wkwebview" ||
+    window.__orkestratorClientPlatform === "ipad-wkwebview" ||
+    window.__orkestratorClientPlatform === "iphone-wkwebview";
 
   if (!browserPreviewSupported) {
     return (
-      <div className={cn(
-        "@container/browser absolute inset-0 grid min-w-0 place-items-center overflow-hidden bg-background p-6",
-        !isActive && "hidden",
-      )}>
+      <div
+        className={cn(
+          "@container/browser absolute inset-0 grid min-w-0 place-items-center overflow-hidden bg-background p-6",
+          !isActive && "hidden",
+        )}
+      >
         <div className="w-full min-w-0 max-w-sm text-center">
           <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-border bg-muted/30 shadow-sm">
             <Smartphone className="h-6 w-6 text-muted-foreground" />
           </div>
           <h2 className="text-base font-semibold text-foreground">
-            {isIosClient ? "Browser tabs aren’t supported on iOS" : "Browser tabs aren’t supported here"}
+            {isIosClient
+              ? "Browser tabs aren’t supported on iOS"
+              : "Browser tabs aren’t supported here"}
           </h2>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            Open this browser tab in the Orkestrator desktop app to view the local development server.
+            Open this browser tab in the Orkestrator desktop app to view the local development
+            server.
           </p>
         </div>
       </div>
@@ -502,7 +548,12 @@ export function BrowserTab({
   }
 
   return (
-    <div className={cn("@container/browser absolute inset-0 flex min-w-0 flex-col overflow-hidden bg-background", !isActive && "hidden")}>
+    <div
+      className={cn(
+        "@container/browser absolute inset-0 flex min-w-0 flex-col overflow-hidden bg-background",
+        !isActive && "hidden",
+      )}
+    >
       <div className="flex min-w-0 shrink-0 flex-wrap items-center gap-1.5 border-b border-border/80 bg-muted/25 px-2 py-1.5 @md/browser:flex-nowrap">
         <Button
           type="button"
@@ -542,10 +593,12 @@ export function BrowserTab({
           className="flex w-full min-w-0 basis-full items-center @md/browser:w-auto @md/browser:basis-0 @md/browser:flex-1"
           onSubmit={handleSubmit}
         >
-          <div className={cn(
-            "flex h-8 min-w-0 flex-1 items-center rounded-md border bg-background shadow-sm transition-colors focus-within:border-primary/60 focus-within:ring-2 focus-within:ring-primary/15",
-            visibleError ? "border-destructive/70" : "border-border",
-          )}>
+          <div
+            className={cn(
+              "flex h-8 min-w-0 flex-1 items-center rounded-md border bg-background shadow-sm transition-colors focus-within:border-primary/60 focus-within:ring-2 focus-within:ring-primary/15",
+              visibleError ? "border-destructive/70" : "border-border",
+            )}
+          >
             <div className="hidden h-full shrink-0 items-center gap-1.5 border-r border-border/70 px-2.5 text-[11px] font-medium text-muted-foreground @lg/browser:flex">
               <Server className="h-3.5 w-3.5 text-primary" />
               Backend
@@ -562,7 +615,9 @@ export function BrowserTab({
               autoCorrect="off"
               spellCheck={false}
             />
-            {visibleLoading && <Loader2 className="mr-2 h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />}
+            {visibleLoading && (
+              <Loader2 className="mr-2 h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
+            )}
           </div>
           <Button type="submit" size="sm" className="ml-1.5 h-8 shrink-0 px-3">
             Go
@@ -578,9 +633,11 @@ export function BrowserTab({
             title="Open preview DevTools"
             disabled={!resolved || !nativeAttachedRef.current}
             onClick={() => {
-              void openBrowserPreviewDevTools(tabId).then(applyNativeState).catch((devToolsError) => {
-                setError(errorMessage(devToolsError));
-              });
+              void openBrowserPreviewDevTools(tabId)
+                .then(applyNativeState)
+                .catch((devToolsError) => {
+                  setError(errorMessage(devToolsError));
+                });
             }}
           >
             <Code2 className="h-4 w-4" />
@@ -589,7 +646,10 @@ export function BrowserTab({
       </div>
 
       {visibleError && (
-        <div role="alert" className="min-w-0 shrink-0 overflow-x-hidden border-b border-destructive/20 bg-destructive/10 px-3 py-1.5 text-xs text-destructive break-words [overflow-wrap:anywhere]">
+        <div
+          role="alert"
+          className="min-w-0 shrink-0 overflow-x-hidden border-b border-destructive/20 bg-destructive/10 px-3 py-1.5 text-xs text-destructive break-words [overflow-wrap:anywhere]"
+        >
           {visibleError}
         </div>
       )}
@@ -620,7 +680,9 @@ export function BrowserTab({
               </div>
               <h2 className="text-base font-semibold text-foreground">Preview a backend service</h2>
               <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                Enter a local address such as <span className="font-mono text-foreground">localhost:3000</span>. The request runs through the backend machine.
+                Enter a local address such as{" "}
+                <span className="font-mono text-foreground">localhost:3000</span>. The request runs
+                through the backend machine.
               </p>
               <div className="mt-4 inline-flex items-center gap-1.5 rounded-full border border-border bg-background/80 px-3 py-1 text-xs text-muted-foreground shadow-sm">
                 <ShieldCheck className="h-3.5 w-3.5 text-primary" />

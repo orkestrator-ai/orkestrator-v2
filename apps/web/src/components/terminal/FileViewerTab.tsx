@@ -1,10 +1,4 @@
-import {
-  lazy,
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-} from "react";
+import { lazy, useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import * as backend from "@/lib/backend";
@@ -41,16 +35,7 @@ const LazyMonacoFileEditor = lazy(async () => ({
 }));
 
 /** Image file extensions that should be rendered as images */
-const IMAGE_EXTENSIONS = new Set([
-  "png",
-  "jpg",
-  "jpeg",
-  "gif",
-  "webp",
-  "svg",
-  "ico",
-  "bmp",
-]);
+const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "ico", "bmp"]);
 
 const MARKDOWN_EXTENSIONS = new Set(["md", "markdown"]);
 
@@ -136,9 +121,9 @@ export function FileViewerTab({
   // This is required by React's rules of hooks
 
   // Get terminal appearance settings from config
-  const terminalAppearance = useConfigStore(
-    (state) => state.config.global.terminalAppearance
-  ) || DEFAULT_TERMINAL_APPEARANCE;
+  const terminalAppearance =
+    useConfigStore((state) => state.config.global.terminalAppearance) ||
+    DEFAULT_TERMINAL_APPEARANCE;
 
   // Internal state to allow switching between diff and file view
   const [showDiff, setShowDiff] = useState(isDiff ?? false);
@@ -146,9 +131,7 @@ export function FileViewerTab({
   // File content state
   const [content, setContent] = useState<string | null>(null);
   const [imageDataUrl, setImageDataUrl] = useState<string | null>(null);
-  const [detectedLanguage, setDetectedLanguage] = useState<string>(
-    language || "plaintext"
-  );
+  const [detectedLanguage, setDetectedLanguage] = useState<string>(language || "plaintext");
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [draftHydrated, setDraftHydrated] = useState(false);
@@ -164,9 +147,7 @@ export function FileViewerTab({
   const setDirtyContent = useFileDirtyStore((state) => state.setContent);
   const hydrateDraft = useFileDirtyStore((state) => state.hydrateDraft);
   const dirtyEntry = useFileDirtyStore((state) => state.dirtyFiles.get(tabId));
-  const dirtyContent = useFileDirtyStore(
-    (state) => state.dirtyFiles.get(tabId)?.content,
-  );
+  const dirtyContent = useFileDirtyStore((state) => state.dirtyFiles.get(tabId)?.content);
 
   const isImage = isImageFile(filePath);
   const isMarkdown = isMarkdownFile(filePath);
@@ -182,86 +163,83 @@ export function FileViewerTab({
     isLocalEnvironment,
   });
 
-  const reportFileDraftError = useCallback((
-    draftError: unknown,
-    context: {
-      environmentId: string;
-      filePath: string;
-      tabId: string;
-    },
-  ): void => {
-    if (!(draftError instanceof DraftRevisionConflictError)) {
-      console.warn("[FileViewerTab] Failed to persist file draft:", draftError);
-      return;
-    }
-    const currentEntry = useFileDirtyStore.getState().dirtyFiles.get(context.tabId);
-    const discarding = !currentEntry
-      || currentEntry.content === currentEntry.originalContent;
-    toast.error("File draft changed in another window", {
-      id: `file-draft-conflict:${context.tabId}`,
-      description: discarding
-        ? "A newer saved draft was preserved. Discard it explicitly to finish clearing this editor."
-        : "Your editor buffer is unchanged. Choose Save mine to replace the other saved draft.",
-      action: {
-        label: discarding ? "Discard saved draft" : "Save mine",
-        onClick: () => {
-          const entry = useFileDirtyStore.getState().dirtyFiles.get(context.tabId);
-          const state = getFileDraftRevisionState(context.tabId);
-          const hasLocalEdit = Boolean(
-            entry && entry.content !== entry.originalContent,
-          );
-          const operation = entry && hasLocalEdit
-            ? resolveFileDraftSaveConflict(
-                context.environmentId,
-                context.filePath,
-                entry.content,
-                entry.originalContent,
-                state,
-              )
-            : resolveFileDraftDiscardConflict(
-                context.environmentId,
-                context.filePath,
-                state,
-              );
-          void operation.catch((retryError) => {
-            reportFileDraftError(retryError, context);
-          });
-        },
+  const reportFileDraftError = useCallback(
+    (
+      draftError: unknown,
+      context: {
+        environmentId: string;
+        filePath: string;
+        tabId: string;
       },
-    });
-  }, []);
+    ): void => {
+      if (!(draftError instanceof DraftRevisionConflictError)) {
+        console.warn("[FileViewerTab] Failed to persist file draft:", draftError);
+        return;
+      }
+      const currentEntry = useFileDirtyStore.getState().dirtyFiles.get(context.tabId);
+      const discarding = !currentEntry || currentEntry.content === currentEntry.originalContent;
+      toast.error("File draft changed in another window", {
+        id: `file-draft-conflict:${context.tabId}`,
+        description: discarding
+          ? "A newer saved draft was preserved. Discard it explicitly to finish clearing this editor."
+          : "Your editor buffer is unchanged. Choose Save mine to replace the other saved draft.",
+        action: {
+          label: discarding ? "Discard saved draft" : "Save mine",
+          onClick: () => {
+            const entry = useFileDirtyStore.getState().dirtyFiles.get(context.tabId);
+            const state = getFileDraftRevisionState(context.tabId);
+            const hasLocalEdit = Boolean(entry && entry.content !== entry.originalContent);
+            const operation =
+              entry && hasLocalEdit
+                ? resolveFileDraftSaveConflict(
+                    context.environmentId,
+                    context.filePath,
+                    entry.content,
+                    entry.originalContent,
+                    state,
+                  )
+                : resolveFileDraftDiscardConflict(context.environmentId, context.filePath, state);
+            void operation.catch((retryError) => {
+              reportFileDraftError(retryError, context);
+            });
+          },
+        },
+      });
+    },
+    [],
+  );
 
   const flushFileDraft = useCallback(() => {
     const context = draftFlushContextRef.current;
     if (!context) return;
     const entry = useFileDirtyStore.getState().dirtyFiles.get(context.tabId);
-    const hasLocalEdit = Boolean(
-      entry && entry.content !== entry.originalContent,
-    );
+    const hasLocalEdit = Boolean(entry && entry.content !== entry.originalContent);
     if (!context.draftHydrated && !hasLocalEdit) return;
-    const fingerprint = hasLocalEdit && entry
-      ? JSON.stringify([
-          context.environmentId,
-          context.filePath,
-          entry.content,
-          entry.originalContent,
-        ])
-      : JSON.stringify([context.environmentId, context.filePath, "discard"]);
+    const fingerprint =
+      hasLocalEdit && entry
+        ? JSON.stringify([
+            context.environmentId,
+            context.filePath,
+            entry.content,
+            entry.originalContent,
+          ])
+        : JSON.stringify([context.environmentId, context.filePath, "discard"]);
     if (lastDraftFlushRef.current === fingerprint) return;
     lastDraftFlushRef.current = fingerprint;
-    const operation = entry && hasLocalEdit
-      ? persistFileDraft(
-          context.environmentId,
-          context.filePath,
-          entry.content,
-          entry.originalContent,
-          getFileDraftRevisionState(context.tabId),
-        )
-      : discardFileDraft(
-          context.environmentId,
-          context.filePath,
-          getFileDraftRevisionState(context.tabId),
-        );
+    const operation =
+      entry && hasLocalEdit
+        ? persistFileDraft(
+            context.environmentId,
+            context.filePath,
+            entry.content,
+            entry.originalContent,
+            getFileDraftRevisionState(context.tabId),
+          )
+        : discardFileDraft(
+            context.environmentId,
+            context.filePath,
+            getFileDraftRevisionState(context.tabId),
+          );
     void operation.catch((draftError) => {
       if (lastDraftFlushRef.current === fingerprint) {
         lastDraftFlushRef.current = null;
@@ -270,26 +248,32 @@ export function FileViewerTab({
     });
   }, [reportFileDraftError]);
 
-  const renderEditorFallback = useCallback((message: string) => (
-    <div
-      className={cn(
-        "absolute inset-0 flex items-center justify-center",
-        !isActive && "pointer-events-none opacity-0",
-      )}
-      style={{ backgroundColor: terminalAppearance.backgroundColor }}
-    >
-      <div className="flex flex-col items-center gap-2 text-muted-foreground">
-        <Loader2 className="h-6 w-6 animate-spin" />
-        <p className="text-sm">{message}</p>
+  const renderEditorFallback = useCallback(
+    (message: string) => (
+      <div
+        className={cn(
+          "absolute inset-0 flex items-center justify-center",
+          !isActive && "pointer-events-none opacity-0",
+        )}
+        style={{ backgroundColor: terminalAppearance.backgroundColor }}
+      >
+        <div className="flex flex-col items-center gap-2 text-muted-foreground">
+          <Loader2 className="h-6 w-6 animate-spin" />
+          <p className="text-sm">{message}</p>
+        </div>
       </div>
-    </div>
-  ), [isActive, terminalAppearance.backgroundColor]);
+    ),
+    [isActive, terminalAppearance.backgroundColor],
+  );
 
   // This tab may be off screen while still mounted, so its editor chunks fail
   // into the tab's own box rather than over the whole application.
-  const renderEditorError = useCallback((details: LazyLoadErrorDetails) => (
-    <LazyLoadInlineErrorFallback {...details} isVisible={isActive} />
-  ), [isActive]);
+  const renderEditorError = useCallback(
+    (details: LazyLoadErrorDetails) => (
+      <LazyLoadInlineErrorFallback {...details} isVisible={isActive} />
+    ),
+    [isActive],
+  );
 
   // An environment switch commonly unmounts this component while the tab and
   // its editor buffer are still real. Do not clear on unmount; explicit tab
@@ -326,9 +310,7 @@ export function FileViewerTab({
           let base64Content: string;
           if (isLocalEnvironment && worktreePath) {
             // Build full path for local filesystem read
-            const fullPath = filePath.startsWith("/")
-              ? filePath
-              : `${worktreePath}/${filePath}`;
+            const fullPath = filePath.startsWith("/") ? filePath : `${worktreePath}/${filePath}`;
             base64Content = await backend.readFileBase64(fullPath);
           } else if (containerId) {
             base64Content = await backend.readContainerFileBase64(containerId, filePath);
@@ -372,9 +354,9 @@ export function FileViewerTab({
               // fires. Its in-memory buffer is newer than any backend snapshot.
               setOriginalContent(tabId, fileContent.content);
             } else if (
-              persistedDraft
-              && persistedDraft.environmentId === environmentId
-              && persistedDraft.filePath === filePath
+              persistedDraft &&
+              persistedDraft.environmentId === environmentId &&
+              persistedDraft.filePath === filePath
             ) {
               // Disk may have changed while the app was closed. Preserve the
               // user's buffer but compare it with the current disk content so
@@ -402,8 +384,19 @@ export function FileViewerTab({
     return () => {
       cancelled = true;
     };
-  // Note: isImage is derived from filePath, so it doesn't need to be in the dependency array
-  }, [containerId, worktreePath, isLocalEnvironment, filePath, language, showDiff, tabId, environmentId, hydrateDraft, setOriginalContent]);
+  }, [
+    containerId,
+    worktreePath,
+    isLocalEnvironment,
+    filePath,
+    isImage,
+    language,
+    showDiff,
+    tabId,
+    environmentId,
+    hydrateDraft,
+    setOriginalContent,
+  ]);
 
   // Write through after a short debounce. The persistence helper serializes
   // save/delete operations per file, preventing an older in-flight save from
@@ -427,6 +420,7 @@ export function FileViewerTab({
     const timer = setTimeout(flushFileDraft, 400);
     return () => clearTimeout(timer);
   }, [
+    dirtyEntry,
     dirtyEntry?.content,
     dirtyEntry?.originalContent,
     draftHydrated,
@@ -477,7 +471,7 @@ export function FileViewerTab({
       <div
         className={cn(
           "absolute inset-0 flex items-center justify-center",
-          !isActive && "pointer-events-none opacity-0"
+          !isActive && "pointer-events-none opacity-0",
         )}
         style={{ backgroundColor: terminalAppearance.backgroundColor }}
       >
@@ -494,7 +488,7 @@ export function FileViewerTab({
       <div
         className={cn(
           "absolute inset-0 flex items-center justify-center",
-          !isActive && "pointer-events-none opacity-0"
+          !isActive && "pointer-events-none opacity-0",
         )}
         style={{ backgroundColor: terminalAppearance.backgroundColor }}
       >
@@ -528,10 +522,7 @@ export function FileViewerTab({
 
   return (
     <div
-      className={cn(
-        "absolute inset-0 flex flex-col",
-        !isActive && "pointer-events-none opacity-0"
-      )}
+      className={cn("absolute inset-0 flex flex-col", !isActive && "pointer-events-none opacity-0")}
       style={{ backgroundColor: terminalAppearance.backgroundColor }}
     >
       {/* File path header - shows which file is being viewed */}

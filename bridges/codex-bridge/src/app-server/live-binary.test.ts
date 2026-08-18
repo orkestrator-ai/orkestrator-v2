@@ -100,8 +100,8 @@ describe("selectCodexBinary", () => {
   test("falls back to the managed toolchain copy of the pinned version", () => {
     const managed = managedBinaryPath(VERSION, BASE);
     expect(managed).toBe(
-      "/home/tester/Library/Application Support/orkestrator-v2/toolchains/codex/"
-      + `${VERSION}/darwin-arm64/codex`,
+      "/home/tester/Library/Application Support/orkestrator-v2/toolchains/codex/" +
+        `${VERSION}/darwin-arm64/codex`,
     );
     const selected = selectCodexBinary(VERSION, {
       ...BASE,
@@ -190,7 +190,7 @@ describe("resolveCodexBinaryUncached", () => {
     const error = await resolveCodexBinaryUncached(
       resolveOptions({
         probeImpl: async () => {
-          throw new Error("Executable not found in $PATH: \"codex\"");
+          throw new Error('Executable not found in $PATH: "codex"');
         },
       }),
     ).catch((caught: unknown) => caught);
@@ -219,9 +219,9 @@ describe("resolveCodexBinaryUncached", () => {
 
   test("surfaces stderr when the probe exits non-zero", async () => {
     const { probe } = probeReturning({ exitCode: 2, stderr: "  permission denied\n" });
-    const error = await resolveCodexBinaryUncached(
-      resolveOptions({ probeImpl: probe }),
-    ).catch((caught: unknown) => caught);
+    const error = await resolveCodexBinaryUncached(resolveOptions({ probeImpl: probe })).catch(
+      (caught: unknown) => caught,
+    );
 
     expect((error as Error).message).toContain("Could not execute codex: permission denied");
     expect((error as Error).message).toContain("pins codex 0.147.0");
@@ -229,9 +229,9 @@ describe("resolveCodexBinaryUncached", () => {
 
   test("describes a signal kill when there is no stderr and no exit code", async () => {
     const { probe } = probeReturning({ exitCode: null, stderr: "" });
-    const error = await resolveCodexBinaryUncached(
-      resolveOptions({ probeImpl: probe }),
-    ).catch((caught: unknown) => caught);
+    const error = await resolveCodexBinaryUncached(resolveOptions({ probeImpl: probe })).catch(
+      (caught: unknown) => caught,
+    );
 
     expect((error as Error).message).toContain("exited with a signal");
   });
@@ -252,9 +252,9 @@ describe("resolveCodexBinaryUncached", () => {
 
   test("says `an unknown version` when the output has no version in it", async () => {
     const { probe } = probeReturning({ stdout: "who knows\n" });
-    const error = await resolveCodexBinaryUncached(
-      resolveOptions({ probeImpl: probe }),
-    ).catch((caught: unknown) => caught);
+    const error = await resolveCodexBinaryUncached(resolveOptions({ probeImpl: probe })).catch(
+      (caught: unknown) => caught,
+    );
 
     expect((error as Error).message).toBe(
       "codex reports an unknown version, but config/codex-version.json pins 0.147.0",
@@ -285,10 +285,7 @@ describe("resolveCodexBinary memoisation", () => {
     });
 
     // Concurrent first, to prove the *promise* is cached rather than the value.
-    const [a, b] = await Promise.all([
-      resolveCodexBinary(options),
-      resolveCodexBinary(options),
-    ]);
+    const [a, b] = await Promise.all([resolveCodexBinary(options), resolveCodexBinary(options)]);
     const c = await resolveCodexBinary(options);
 
     expect([a, b, c]).toEqual(["codex", "codex", "codex"]);

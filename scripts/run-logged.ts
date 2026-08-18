@@ -36,7 +36,9 @@ const artifacts = await finalizeTestLogs(
   status === 0,
 );
 
-console.log(`${status === 0 ? "PASS" : "FAIL"} ${name} (${(elapsedMs / 1_000).toFixed(1)}s, ${result.outputBytes ?? 0} output bytes)`);
+console.log(
+  `${status === 0 ? "PASS" : "FAIL"} ${name} (${(elapsedMs / 1_000).toFixed(1)}s, ${result.outputBytes ?? 0} output bytes)`,
+);
 if (status !== 0 && result.output) console.error(result.output);
 if (status !== 0 && artifacts) console.error(`Failure artifacts: ${artifacts}`);
 process.exitCode = status;

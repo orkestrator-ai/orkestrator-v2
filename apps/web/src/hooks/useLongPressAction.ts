@@ -38,10 +38,7 @@ export interface LongPressAction {
  * changing identity on every render, and timers are cleared on unmount so a
  * pending press cannot fire into an unmounted tree.
  */
-export function useLongPressAction(
-  onLongPress: () => void,
-  enabled = true,
-): LongPressAction {
+export function useLongPressAction(onLongPress: () => void, enabled = true): LongPressAction {
   const pressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const suppressionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const originRef = useRef<{ x: number; y: number } | null>(null);
@@ -59,34 +56,43 @@ export function useLongPressAction(
     originRef.current = null;
   }, []);
 
-  useEffect(() => () => {
-    if (pressTimerRef.current) clearTimeout(pressTimerRef.current);
-    if (suppressionTimerRef.current) clearTimeout(suppressionTimerRef.current);
-  }, []);
+  useEffect(
+    () => () => {
+      if (pressTimerRef.current) clearTimeout(pressTimerRef.current);
+      if (suppressionTimerRef.current) clearTimeout(suppressionTimerRef.current);
+    },
+    [],
+  );
 
-  const onPointerDown = useCallback((event: ReactPointerEvent<HTMLElement>) => {
-    if (event.pointerType === "mouse" || !enabledRef.current) return;
-    cancel();
-    originRef.current = { x: event.clientX, y: event.clientY };
-    pressTimerRef.current = setTimeout(() => {
-      pressTimerRef.current = null;
-      originRef.current = null;
-      suppressClickRef.current = true;
-      suppressionTimerRef.current = setTimeout(() => {
-        suppressClickRef.current = false;
-        suppressionTimerRef.current = null;
-      }, CLICK_SUPPRESSION_MS);
-      onLongPressRef.current();
-    }, LONG_PRESS_MS);
-  }, [cancel]);
-
-  const onPointerMove = useCallback((event: ReactPointerEvent<HTMLElement>) => {
-    const origin = originRef.current;
-    if (!origin) return;
-    if (Math.hypot(event.clientX - origin.x, event.clientY - origin.y) > MOVE_TOLERANCE_PX) {
+  const onPointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLElement>) => {
+      if (event.pointerType === "mouse" || !enabledRef.current) return;
       cancel();
-    }
-  }, [cancel]);
+      originRef.current = { x: event.clientX, y: event.clientY };
+      pressTimerRef.current = setTimeout(() => {
+        pressTimerRef.current = null;
+        originRef.current = null;
+        suppressClickRef.current = true;
+        suppressionTimerRef.current = setTimeout(() => {
+          suppressClickRef.current = false;
+          suppressionTimerRef.current = null;
+        }, CLICK_SUPPRESSION_MS);
+        onLongPressRef.current();
+      }, LONG_PRESS_MS);
+    },
+    [cancel],
+  );
+
+  const onPointerMove = useCallback(
+    (event: ReactPointerEvent<HTMLElement>) => {
+      const origin = originRef.current;
+      if (!origin) return;
+      if (Math.hypot(event.clientX - origin.x, event.clientY - origin.y) > MOVE_TOLERANCE_PX) {
+        cancel();
+      }
+    },
+    [cancel],
+  );
 
   const shouldSuppressClick = useCallback(() => {
     if (!suppressClickRef.current) return false;
@@ -98,15 +104,18 @@ export function useLongPressAction(
     return true;
   }, []);
 
-  return useMemo(() => ({
-    shouldSuppressClick,
-    cancel,
-    handlers: {
-      onPointerDown,
-      onPointerMove,
-      onPointerUp: cancel,
-      onPointerCancel: cancel,
-      onPointerLeave: cancel,
-    },
-  }), [cancel, onPointerDown, onPointerMove, shouldSuppressClick]);
+  return useMemo(
+    () => ({
+      shouldSuppressClick,
+      cancel,
+      handlers: {
+        onPointerDown,
+        onPointerMove,
+        onPointerUp: cancel,
+        onPointerCancel: cancel,
+        onPointerLeave: cancel,
+      },
+    }),
+    [cancel, onPointerDown, onPointerMove, shouldSuppressClick],
+  );
 }

@@ -9,10 +9,7 @@ import {
 export type ReviewJsonSchema = Readonly<Record<string, unknown>>;
 
 const nullableLineSchema = {
-  anyOf: [
-    { type: "integer", minimum: 1 },
-    { type: "null" },
-  ],
+  anyOf: [{ type: "integer", minimum: 1 }, { type: "null" }],
 } as const;
 
 const commitSchema = {
@@ -82,7 +79,8 @@ const reviewIssueSchema = {
     severity: {
       type: "string",
       enum: REVIEW_SEVERITIES,
-      description: "P0 breaks, crashes, loses data, or is a security hole. P1 is a real bug that will bite in practice. P2 is quality or polish.",
+      description:
+        "P0 breaks, crashes, loses data, or is a security hole. P1 is a real bug that will bite in practice. P2 is quality or polish.",
     },
     confidence: {
       type: "integer",
@@ -96,7 +94,8 @@ const reviewIssueSchema = {
     line: nullableLineSchema,
     symbol: {
       type: "string",
-      description: "Enclosing class, method, or function name. Empty string when the issue is module-level.",
+      description:
+        "Enclosing class, method, or function name. Empty string when the issue is module-level.",
     },
     description: {
       type: "string",
@@ -104,10 +103,14 @@ const reviewIssueSchema = {
     },
     evidence: {
       type: "string",
-      description: "The specific code behaviour, diff excerpt, or command output that demonstrates the issue. Never invent evidence.",
+      description:
+        "The specific code behaviour, diff excerpt, or command output that demonstrates the issue. Never invent evidence.",
     },
     suggestion: { type: "string", description: "A concrete fix." },
-    verification: { type: "string", description: "How to verify the fix, such as the command or test to run." },
+    verification: {
+      type: "string",
+      description: "How to verify the fix, such as the command or test to run.",
+    },
     alternativeFixes: {
       anyOf: [
         {
@@ -116,7 +119,8 @@ const reviewIssueSchema = {
         },
         { type: "null" },
       ],
-      description: "Alternative fixes, listed only when they carry meaningful trade-offs. Null otherwise.",
+      description:
+        "Alternative fixes, listed only when they carry meaningful trade-offs. Null otherwise.",
     },
   },
 } as const;
@@ -126,10 +130,14 @@ const coverageGapSchema = {
   additionalProperties: false,
   required: ["file", "untestedBehavior"],
   properties: {
-    file: { type: "string", description: "Repository-relative path of the file whose behaviour lacks coverage." },
+    file: {
+      type: "string",
+      description: "Repository-relative path of the file whose behaviour lacks coverage.",
+    },
     untestedBehavior: {
       type: "string",
-      description: "The changed or affected behaviour that lacks meaningful coverage. Do not report unrelated pre-existing gaps.",
+      description:
+        "The changed or affected behaviour that lacks meaningful coverage. Do not report unrelated pre-existing gaps.",
     },
   },
 } as const;
@@ -177,7 +185,8 @@ export const STRUCTURED_REVIEW_REPORT_JSON_SCHEMA = {
     reviewScope: {
       type: "object",
       additionalProperties: false,
-      description: "What the review actually covered and ran. Never claim a command ran when it did not; record it under commandsNotRun with a reason instead.",
+      description:
+        "What the review actually covered and ran. Never claim a command ran when it did not; record it under commandsNotRun with a reason instead.",
       required: [
         "targetBranch",
         "baseRef",
@@ -226,17 +235,26 @@ export const STRUCTURED_REVIEW_REPORT_JSON_SCHEMA = {
       type: "object",
       additionalProperties: false,
       required: ["overview", "before", "after", "keyCodeChanges", "userImpact"],
-      description: "Plain-language explanation of the change itself, separate from its quality. Never substitute the commit SHA, test results, risk assessment, verdict, or review findings for this explanation.",
+      description:
+        "Plain-language explanation of the change itself, separate from its quality. Never substitute the commit SHA, test results, risk assessment, verdict, or review findings for this explanation.",
       properties: {
         overview: {
           type: "string",
-          description: "Two to four sentences answering what this change does and why, in user or product terms where applicable.",
+          description:
+            "Two to four sentences answering what this change does and why, in user or product terms where applicable.",
         },
-        before: { type: "string", description: "The relevant behaviour or structure before this change." },
-        after: { type: "string", description: "The relevant behaviour or structure after this change." },
+        before: {
+          type: "string",
+          description: "The relevant behaviour or structure before this change.",
+        },
+        after: {
+          type: "string",
+          description: "The relevant behaviour or structure after this change.",
+        },
         keyCodeChanges: {
           type: "array",
-          description: "One to five entries connecting the behaviour to specific implementation changes.",
+          description:
+            "One to five entries connecting the behaviour to specific implementation changes.",
           items: {
             type: "object",
             additionalProperties: false,
@@ -250,7 +268,8 @@ export const STRUCTURED_REVIEW_REPORT_JSON_SCHEMA = {
         },
         userImpact: {
           type: "string",
-          description: "Who or what is affected. When there is no user-visible runtime effect, say so and describe the internal, test, documentation, or build effect instead.",
+          description:
+            "Who or what is affected. When there is no user-visible runtime effect, say so and describe the internal, test, documentation, or build effect instead.",
         },
       },
     },
@@ -288,7 +307,8 @@ export const STRUCTURED_REVIEW_REPORT_JSON_SCHEMA = {
         notRun: {
           type: "integer",
           minimum: 0,
-          description: "Discovered tests not executed, including skipped, todo, pending, or disabled cases.",
+          description:
+            "Discovered tests not executed, including skipped, todo, pending, or disabled cases.",
         },
         failures: {
           type: "array",
@@ -321,12 +341,14 @@ export const STRUCTURED_REVIEW_REPORT_JSON_SCHEMA = {
     },
     issues: {
       type: "array",
-      description: "Findings at confidence 75 or above, most severe first. Empty when nothing meets the threshold.",
+      description:
+        "Findings at confidence 75 or above, most severe first. Empty when nothing meets the threshold.",
       items: reviewIssueSchema,
     },
     testCoverageGaps: {
       type: "array",
-      description: "Coverage gaps introduced by the change or needed to validate affected behaviour.",
+      description:
+        "Coverage gaps introduced by the change or needed to validate affected behaviour.",
       items: coverageGapSchema,
     },
     verdict: {
@@ -337,18 +359,21 @@ export const STRUCTURED_REVIEW_REPORT_JSON_SCHEMA = {
         ready: {
           type: "string",
           enum: REVIEW_VERDICTS,
-          description: "\"yes\" to ship as is, \"with-fixes\" when the listed issues should be addressed first, \"no\" when it is not ready — including when validation could not be run.",
+          description:
+            '"yes" to ship as is, "with-fixes" when the listed issues should be addressed first, "no" when it is not ready — including when validation could not be run.',
         },
         reasoning: { type: "string", description: "One to two sentences supporting the verdict." },
       },
     },
     summaryOfChange: {
       type: "string",
-      description: "One or two paragraphs on what the change does and why, the before and after behaviour, the key implementation path, and the user or system impact. Describe only behaviour evidenced by the reviewed diff.",
+      description:
+        "One or two paragraphs on what the change does and why, the before and after behaviour, the key implementation path, and the user or system impact. Describe only behaviour evidenced by the reviewed diff.",
     },
     reviewSummary: {
       type: "string",
-      description: "One paragraph on the review itself. Do not claim the code is correct, fully secure, production-ready, or adequately tested unless the reviewed evidence supports it; no high-confidence issues found, tests passed, coverage looks adequate, and ready to ship are related but distinct claims.",
+      description:
+        "One paragraph on the review itself. Do not claim the code is correct, fully secure, production-ready, or adequately tested unless the reviewed evidence supports it; no high-confidence issues found, tests passed, coverage looks adequate, and ready to ship are related but distinct claims.",
     },
   },
 } as const satisfies ReviewJsonSchema;
@@ -372,12 +397,7 @@ export const REVIEW_FINDING_POOL_JSON_SCHEMA = {
 export const REVIEW_RECONCILIATION_JSON_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: [
-    "newIssues",
-    "issueUpdates",
-    "newCoverageGaps",
-    "coverageGapUpdates",
-  ],
+  required: ["newIssues", "issueUpdates", "newCoverageGaps", "coverageGapUpdates"],
   properties: {
     newIssues: {
       type: "array",

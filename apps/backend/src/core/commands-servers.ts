@@ -1,17 +1,108 @@
-import { existsSync, path, createHash, randomBytes, APP_VERSION, CLAUDE_BRIDGE_PORT, CODEX_BRIDGE_PORT, CURSOR_ACP_BRIDGE_PORT, CODEX_MAX_CONCURRENT_THREADS_ENV, GROK_ACP_BRIDGE_PORT, OPENCODE_SERVER_PORT, resolveCodexMaxConcurrentThreads, ORKESTRATOR_AGENT_MCP_SERVER_NAME, ORKESTRATOR_AGENT_MCP_TOKEN_ENV, ORKESTRATOR_AGENT_MCP_URL_ENV, runCommand, cleanupEnvironmentTmux, shutdownClaudeStatePolling, AGENT_PLATFORM_LABELS } from "./commands-dependencies.js";
-import { enqueueLocalServerEnvironmentOperation, localServerFields, releaseLocalServerOwnership, terminateLocalServerChild, cancelOpenCodeAgentToolsConfiguration, aggregateRejectedResults, stopLocalServerUnlocked, stopLocalServersForEnvironmentUnlocked } from "./commands-local-server-lifecycle.js";
-import { checkHttpHealth, waitForLocalServerHealth, openCodeHealthHeaders, bearerBridgeHeaders, agentToolConnectionFingerprint } from "./commands-server-health.js";
-import type { ChildProcessWithoutNullStreams, Environment, AgentToolConnection, AgentModel, AgentReasoningOption } from "./commands-dependencies.js";
-import { AGENT_TEST_CURSOR_CREDENTIAL_STORE_ENV, AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV, localServerProcesses, localCodexBridgeTokens, localClaudeBridgeTokens, localOpenCodeServerPasswords, localCursorBridgeTokens, localGrokBridgeTokens, localCursorCredentialFingerprints, openCodeAgentToolsConfigurations, configuredOpenCodeAgentTools, BRIDGE_TOKEN_PATTERN, localServerEnvironmentOperations, containerBridgeOperations, deletingLocalServerEnvironments, mergingEnvironments, mergeCleanupRecoveryTasks, retryableBridgeStartupError, LOCAL_SERVER_KINDS, isLocalServerShutdownRequested, requestLocalServerShutdown, getLocalServerShutdownPromise, setLocalServerShutdownPromise, spawnLocalServerCommandImpl, gitFetchScheduler, diffStatsService, invalidatePendingDiffStatsSync } from "./commands-runtime-state.js";
-import { prMonitorService, invalidatePendingPrMonitorSync, setMergeCleanupScheduler } from "./commands-pr-monitor.js";
+import {
+  existsSync,
+  path,
+  createHash,
+  randomBytes,
+  APP_VERSION,
+  CLAUDE_BRIDGE_PORT,
+  CODEX_BRIDGE_PORT,
+  CURSOR_ACP_BRIDGE_PORT,
+  CODEX_MAX_CONCURRENT_THREADS_ENV,
+  GROK_ACP_BRIDGE_PORT,
+  OPENCODE_SERVER_PORT,
+  resolveCodexMaxConcurrentThreads,
+  ORKESTRATOR_AGENT_MCP_SERVER_NAME,
+  ORKESTRATOR_AGENT_MCP_TOKEN_ENV,
+  ORKESTRATOR_AGENT_MCP_URL_ENV,
+  runCommand,
+  cleanupEnvironmentTmux,
+  shutdownClaudeStatePolling,
+  AGENT_PLATFORM_LABELS,
+} from "./commands-dependencies.js";
+import {
+  enqueueLocalServerEnvironmentOperation,
+  localServerFields,
+  releaseLocalServerOwnership,
+  terminateLocalServerChild,
+  cancelOpenCodeAgentToolsConfiguration,
+  aggregateRejectedResults,
+  stopLocalServerUnlocked,
+  stopLocalServersForEnvironmentUnlocked,
+} from "./commands-local-server-lifecycle.js";
+import {
+  checkHttpHealth,
+  waitForLocalServerHealth,
+  openCodeHealthHeaders,
+  bearerBridgeHeaders,
+  agentToolConnectionFingerprint,
+} from "./commands-server-health.js";
+import type {
+  ChildProcessWithoutNullStreams,
+  Environment,
+  AgentToolConnection,
+  AgentModel,
+  AgentReasoningOption,
+} from "./commands-dependencies.js";
+import {
+  AGENT_TEST_CURSOR_CREDENTIAL_STORE_ENV,
+  AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV,
+  localServerProcesses,
+  localCodexBridgeTokens,
+  localClaudeBridgeTokens,
+  localOpenCodeServerPasswords,
+  localCursorBridgeTokens,
+  localGrokBridgeTokens,
+  localCursorCredentialFingerprints,
+  openCodeAgentToolsConfigurations,
+  configuredOpenCodeAgentTools,
+  BRIDGE_TOKEN_PATTERN,
+  localServerEnvironmentOperations,
+  containerBridgeOperations,
+  deletingLocalServerEnvironments,
+  mergingEnvironments,
+  mergeCleanupRecoveryTasks,
+  retryableBridgeStartupError,
+  LOCAL_SERVER_KINDS,
+  isLocalServerShutdownRequested,
+  requestLocalServerShutdown,
+  getLocalServerShutdownPromise,
+  setLocalServerShutdownPromise,
+  spawnLocalServerCommandImpl,
+  gitFetchScheduler,
+  diffStatsService,
+  invalidatePendingDiffStatsSync,
+} from "./commands-runtime-state.js";
+import {
+  prMonitorService,
+  invalidatePendingPrMonitorSync,
+  setMergeCleanupScheduler,
+} from "./commands-pr-monitor.js";
 import { resolveCursorApiKey, cursorApiKeyFingerprint } from "./commands-validation.js";
-import { resolveCodexBinary, resolveOpenCodeBinary, resolveClaudeBinary, resolveManagedAcpBinary, resolveBunBinary } from "./commands-agent-support.js";
+import {
+  resolveCodexBinary,
+  resolveOpenCodeBinary,
+  resolveClaudeBinary,
+  resolveManagedAcpBinary,
+  resolveBunBinary,
+} from "./commands-agent-support.js";
 import { cleanupTerminalSessionsForEnvironment } from "./commands-terminal.js";
-import { assertDockerContainerOwned, cleanupEnvironmentSetupState, enqueueEnvironmentLifecycleOperation, invalidateEnvironmentStartDedupe, removeLocalWorktree, deleteMergedEnvironmentRemoteBranch } from "./commands-environment.js";
+import {
+  assertDockerContainerOwned,
+  cleanupEnvironmentSetupState,
+  enqueueEnvironmentLifecycleOperation,
+  invalidateEnvironmentStartDedupe,
+  removeLocalWorktree,
+  deleteMergedEnvironmentRemoteBranch,
+} from "./commands-environment.js";
 import { getHostPort } from "./commands-container-exec.js";
 import { dockerExec } from "./commands-container-exec.js";
 import { conciseError, cleanupErrorMessage } from "./commands-error-text.js";
-import { getClaudeOAuthAccessToken, getHostClaudeCredentials, getHostCursorCredentials, syncAgentTestCursorCredentials } from "./commands-files.js";
+import {
+  getClaudeOAuthAccessToken,
+  getHostClaudeCredentials,
+  getHostCursorCredentials,
+  syncAgentTestCursorCredentials,
+} from "./commands-files.js";
 import type { OpenCodeAgentToolsOutcome, LocalServerKind } from "./commands-runtime-state.js";
 import type { CommandContext } from "./commands-context.js";
 
@@ -37,18 +128,28 @@ export async function waitForLocalServerStartup(
     };
     const onError = (error: Error) => complete(error);
     const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-      complete(new Error(`${kind} server exited before becoming healthy (code ${code ?? "null"}, signal ${signal ?? "null"})`));
+      complete(
+        new Error(
+          `${kind} server exited before becoming healthy (code ${code ?? "null"}, signal ${signal ?? "null"})`,
+        ),
+      );
     };
 
     child.once("error", onError);
     child.once("exit", onExit);
-    waitForLocalServerHealth(port, kind, headers).then(() => complete(), (error: unknown) => {
-      complete(error instanceof Error ? error : new Error(String(error)));
-    });
+    waitForLocalServerHealth(port, kind, headers).then(
+      () => complete(),
+      (error: unknown) => {
+        complete(error instanceof Error ? error : new Error(String(error)));
+      },
+    );
   });
 }
 
-export function getBridgePath(context: CommandContext, bridgeName: "claude-bridge" | "codex-bridge" | "acp-bridge"): string {
+export function getBridgePath(
+  context: CommandContext,
+  bridgeName: "claude-bridge" | "codex-bridge" | "acp-bridge",
+): string {
   const devPath = path.join(context.appRoot, "bridges", bridgeName);
   if (process.env.NODE_ENV !== "production" && existsSync(devPath)) return devPath;
   return path.join(context.resourceRoot, bridgeName);
@@ -62,7 +163,10 @@ export function enqueueContainerBridgeOperation<T>(
   const key = `${agent}:${containerId}`;
   const previous = containerBridgeOperations.get(key) ?? Promise.resolve();
   const result = previous.then(operation, operation);
-  const tail = result.then(() => undefined, () => undefined);
+  const tail = result.then(
+    () => undefined,
+    () => undefined,
+  );
   containerBridgeOperations.set(key, tail);
   void tail.finally(() => {
     if (containerBridgeOperations.get(key) === tail) {
@@ -90,7 +194,10 @@ export function localBridgeTokens(kind: LocalServerKind): Map<string, string> {
   return localOpenCodeServerPasswords;
 }
 
-export function localServerPort(environment: Environment | null | undefined, kind: LocalServerKind): number | undefined {
+export function localServerPort(
+  environment: Environment | null | undefined,
+  kind: LocalServerKind,
+): number | undefined {
   if (kind === "opencode") return environment?.localOpencodePort;
   if (kind === "claude") return environment?.localClaudePort;
   if (kind === "codex") return environment?.localCodexPort;
@@ -168,9 +275,7 @@ export async function peekContainerAgentBridge(
   const { containerPort, tokenFile } = CONTAINER_BRIDGE_PEEK[kind];
   const hostPort = await getHostPort(containerId, containerPort);
   if (!hostPort) return null;
-  const authToken = (
-    await dockerExec(containerId, `cat ${tokenFile} 2>/dev/null || true`)
-  ).trim();
+  const authToken = (await dockerExec(containerId, `cat ${tokenFile} 2>/dev/null || true`)).trim();
   if (!BRIDGE_TOKEN_PATTERN.test(authToken)) return null;
   const healthy = await checkHttpHealth(
     hostPort,
@@ -189,11 +294,12 @@ export async function fetchAcpNormalizedModels(
   context: CommandContext,
   kind: "cursor" | "grok",
 ): Promise<AgentModel[]> {
-  const bridge = environment.environmentType === "local"
-    ? await peekLocalAgentBridge(environment.id, context, kind)
-    : environment.containerId
-      ? await peekContainerAgentBridge(environment.containerId, kind)
-      : null;
+  const bridge =
+    environment.environmentType === "local"
+      ? await peekLocalAgentBridge(environment.id, context, kind)
+      : environment.containerId
+        ? await peekContainerAgentBridge(environment.containerId, kind)
+        : null;
   if (!bridge) return [];
   const port = "port" in bridge ? bridge.port : bridge.hostPort;
   try {
@@ -205,7 +311,7 @@ export async function fetchAcpNormalizedModels(
       signal: AbortSignal.timeout(8_000),
     });
     if (!response.ok) return [];
-    const body = await response.json() as { models?: unknown };
+    const body = (await response.json()) as { models?: unknown };
     if (!Array.isArray(body.models)) return [];
     return body.models.flatMap((candidate): AgentModel[] => {
       if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return [];
@@ -213,27 +319,39 @@ export async function fetchAcpNormalizedModels(
       if (typeof model.id !== "string" || model.id.length === 0) return [];
       const reasoning = Array.isArray(model.reasoning)
         ? model.reasoning.flatMap((option): AgentReasoningOption[] => {
-            if (!option || typeof option !== "object" || typeof (option as { id?: unknown }).id !== "string") {
+            if (
+              !option ||
+              typeof option !== "object" ||
+              typeof (option as { id?: unknown }).id !== "string"
+            ) {
               return [];
             }
             const entry = option as { id: string; label?: unknown };
-            return [{
-              id: entry.id,
-              label: typeof entry.label === "string" ? entry.label : entry.id,
-            }];
+            return [
+              {
+                id: entry.id,
+                label: typeof entry.label === "string" ? entry.label : entry.id,
+              },
+            ];
           })
         : undefined;
-      return [{
-        platform: kind,
-        id: model.id,
-        label: typeof model.label === "string" ? model.label : model.id,
-        ...(typeof model.providerLabel === "string" ? { providerLabel: model.providerLabel } : { providerLabel: kind === "cursor" ? "Cursor" : "Grok" }),
-        ...(typeof model.description === "string" ? { description: model.description } : {}),
-        ...(reasoning && reasoning.length > 0 ? { reasoning } : {}),
-        ...(typeof model.defaultReasoningId === "string" ? { defaultReasoningId: model.defaultReasoningId } : {}),
-        supportsSpeed: model.supportsSpeed === true,
-        supportsMode: model.supportsMode === true,
-      }];
+      return [
+        {
+          platform: kind,
+          id: model.id,
+          label: typeof model.label === "string" ? model.label : model.id,
+          ...(typeof model.providerLabel === "string"
+            ? { providerLabel: model.providerLabel }
+            : { providerLabel: kind === "cursor" ? "Cursor" : "Grok" }),
+          ...(typeof model.description === "string" ? { description: model.description } : {}),
+          ...(reasoning && reasoning.length > 0 ? { reasoning } : {}),
+          ...(typeof model.defaultReasoningId === "string"
+            ? { defaultReasoningId: model.defaultReasoningId }
+            : {}),
+          supportsSpeed: model.supportsSpeed === true,
+          supportsMode: model.supportsMode === true,
+        },
+      ];
     });
   } catch {
     return [];
@@ -283,11 +401,7 @@ export async function configureOpenCodeAgentTools(
   }
 
   const payload = await readBoundedOpenCodeResponse(response);
-  if (
-    !payload
-    || typeof payload !== "object"
-    || Array.isArray(payload)
-  ) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     throw new Error("OpenCode returned an invalid MCP status response");
   }
   const status = readOpenCodeAgentToolsStatus(payload);
@@ -298,13 +412,9 @@ export async function configureOpenCodeAgentTools(
     // Treat transitional states as unsuccessful too: startup must not advertise
     // a server whose ticket tools are not usable yet. Do not include the remote
     // error field because it may echo connection configuration or credentials.
-    const safeStatus = typeof status === "string"
-      && /^[a-z][a-z0-9_-]{0,31}$/.test(status)
-      ? status
-      : "invalid";
-    throw new Error(
-      `OpenCode did not connect the Orkestrator agent tools (${safeStatus})`,
-    );
+    const safeStatus =
+      typeof status === "string" && /^[a-z][a-z0-9_-]{0,31}$/.test(status) ? status : "invalid";
+    throw new Error(`OpenCode did not connect the Orkestrator agent tools (${safeStatus})`);
   }
 }
 
@@ -320,9 +430,7 @@ export function readOpenCodeAgentToolsStatus(payload: unknown): string | null {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     return null;
   }
-  const entry = (payload as Record<string, unknown>)[
-    ORKESTRATOR_AGENT_MCP_SERVER_NAME
-  ];
+  const entry = (payload as Record<string, unknown>)[ORKESTRATOR_AGENT_MCP_SERVER_NAME];
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
   const status = (entry as Record<string, unknown>).status;
   return typeof status === "string" ? status : null;
@@ -330,17 +438,12 @@ export function readOpenCodeAgentToolsStatus(payload: unknown): string | null {
 
 export const MAX_OPENCODE_MCP_STATUS_BYTES = 64 * 1024;
 
-export async function readBoundedOpenCodeResponse(
-  response: Response,
-): Promise<unknown> {
+export async function readBoundedOpenCodeResponse(response: Response): Promise<unknown> {
   if (!response.body) {
     throw new Error("OpenCode returned an empty MCP status response");
   }
   const declaredLength = Number(response.headers.get("content-length"));
-  if (
-    Number.isFinite(declaredLength)
-    && declaredLength > MAX_OPENCODE_MCP_STATUS_BYTES
-  ) {
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_OPENCODE_MCP_STATUS_BYTES) {
     await response.body.cancel().catch(() => undefined);
     throw new Error("OpenCode MCP status response is too large");
   }
@@ -375,11 +478,7 @@ export async function readBoundedOpenCodeResponse(
 }
 
 export const OPENCODE_AGENT_TOOLS_RETRY_DELAYS_MS: readonly number[] = [
-  250,
-  500,
-  1_000,
-  2_000,
-  4_000,
+  250, 500, 1_000, 2_000, 4_000,
 ];
 export let openCodeAgentToolsRetryDelaysMs = OPENCODE_AGENT_TOOLS_RETRY_DELAYS_MS;
 
@@ -397,12 +496,9 @@ export let openCodeAgentToolsRetryDelaysMs = OPENCODE_AGENT_TOOLS_RETRY_DELAYS_M
 export const OPENCODE_AGENT_TOOLS_CONNECTED_TTL_MS = 5 * 60_000;
 export const OPENCODE_AGENT_TOOLS_UNAVAILABLE_COOLDOWN_MS = 30_000;
 export let openCodeAgentToolsConnectedTtlMs = OPENCODE_AGENT_TOOLS_CONNECTED_TTL_MS;
-export let openCodeAgentToolsUnavailableCooldownMs =
-  OPENCODE_AGENT_TOOLS_UNAVAILABLE_COOLDOWN_MS;
+export let openCodeAgentToolsUnavailableCooldownMs = OPENCODE_AGENT_TOOLS_UNAVAILABLE_COOLDOWN_MS;
 
-export function openCodeAgentToolsMemoWindowMs(
-  state: OpenCodeAgentToolsOutcome["state"],
-): number {
+export function openCodeAgentToolsMemoWindowMs(state: OpenCodeAgentToolsOutcome["state"]): number {
   return state === "connected"
     ? openCodeAgentToolsConnectedTtlMs
     : openCodeAgentToolsUnavailableCooldownMs;
@@ -473,17 +569,10 @@ export function scheduleOpenCodeAgentToolsConfiguration(
   connection: AgentToolConnection,
   directory: string,
 ): void {
-  const fingerprint = openCodeAgentToolsFingerprint(
-    port,
-    password,
-    connection,
-    directory,
-  );
+  const fingerprint = openCodeAgentToolsFingerprint(port, password, connection, directory);
   const recorded = configuredOpenCodeAgentTools.get(key);
   if (recorded?.fingerprint === fingerprint) {
-    if (
-      Date.now() - recorded.at < openCodeAgentToolsMemoWindowMs(recorded.state)
-    ) {
+    if (Date.now() - recorded.at < openCodeAgentToolsMemoWindowMs(recorded.state)) {
       return;
     }
   } else if (recorded) {
@@ -501,13 +590,7 @@ export function scheduleOpenCodeAgentToolsConfiguration(
   const task = (async () => {
     for (let attempt = 0; attempt <= delays.length; attempt += 1) {
       try {
-        await configureOpenCodeAgentTools(
-          port,
-          password,
-          connection,
-          directory,
-          controller.signal,
-        );
+        await configureOpenCodeAgentTools(port, password, connection, directory, controller.signal);
         if (!controller.signal.aborted) {
           configuredOpenCodeAgentTools.set(key, {
             fingerprint,
@@ -552,8 +635,7 @@ export function scheduleOpenCodeAgentToolsConfiguration(
 export function resetOpenCodeAgentToolsTuning(): void {
   openCodeAgentToolsRetryDelaysMs = OPENCODE_AGENT_TOOLS_RETRY_DELAYS_MS;
   openCodeAgentToolsConnectedTtlMs = OPENCODE_AGENT_TOOLS_CONNECTED_TTL_MS;
-  openCodeAgentToolsUnavailableCooldownMs =
-    OPENCODE_AGENT_TOOLS_UNAVAILABLE_COOLDOWN_MS;
+  openCodeAgentToolsUnavailableCooldownMs = OPENCODE_AGENT_TOOLS_UNAVAILABLE_COOLDOWN_MS;
 }
 
 export function setOpenCodeAgentToolsRetryDelays(delays: readonly number[]): void {
@@ -582,32 +664,35 @@ export async function startLocalServerUnlocked(
   kind: LocalServerKind,
 ): Promise<{ port: number; pid: number; wasRunning: boolean; authToken?: string }> {
   const key = `${kind}:${environmentId}`;
-  const allowCursorCredentials = context.runtimeFlavor !== "agent-test"
-    || context.credentialSources?.has("cursor");
-  const cursorApiKey = kind === "cursor" && allowCursorCredentials
-    ? resolveCursorApiKey((await context.storage.loadConfig()).global).apiKey
-    : undefined;
+  const allowCursorCredentials =
+    context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("cursor");
+  const cursorApiKey =
+    kind === "cursor" && allowCursorCredentials
+      ? resolveCursorApiKey((await context.storage.loadConfig()).global).apiKey
+      : undefined;
   const agentTestHostHome = process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME?.trim();
-  const hostCursorCredentials = kind === "cursor"
-    && context.runtimeFlavor === "agent-test"
-    && allowCursorCredentials
-    && !cursorApiKey
-    && agentTestHostHome
-    ? await getHostCursorCredentials(process.platform, agentTestHostHome)
-    : undefined;
-  const cursorCredentialFingerprint = kind === "cursor"
-    ? createHash("sha256")
-      .update(allowCursorCredentials ? "allowed" : "denied")
-      .update("\0")
-      .update(cursorApiKeyFingerprint(cursorApiKey))
-      .update("\0")
-      .update(hostCursorCredentials?.accessToken ?? "")
-      .update("\0")
-      .update(hostCursorCredentials?.refreshToken ?? "")
-      .update("\0")
-      .update(hostCursorCredentials?.apiKey ?? "")
-      .digest("hex")
-    : undefined;
+  const hostCursorCredentials =
+    kind === "cursor" &&
+    context.runtimeFlavor === "agent-test" &&
+    allowCursorCredentials &&
+    !cursorApiKey &&
+    agentTestHostHome
+      ? await getHostCursorCredentials(process.platform, agentTestHostHome)
+      : undefined;
+  const cursorCredentialFingerprint =
+    kind === "cursor"
+      ? createHash("sha256")
+          .update(allowCursorCredentials ? "allowed" : "denied")
+          .update("\0")
+          .update(cursorApiKeyFingerprint(cursorApiKey))
+          .update("\0")
+          .update(hostCursorCredentials?.accessToken ?? "")
+          .update("\0")
+          .update(hostCursorCredentials?.refreshToken ?? "")
+          .update("\0")
+          .update(hostCursorCredentials?.apiKey ?? "")
+          .digest("hex")
+      : undefined;
   const existing = localServerProcesses.get(key);
   if (existing && !existing.killed && existing.pid) {
     const env = await context.storage.getEnvironment(environmentId);
@@ -621,14 +706,14 @@ export async function startLocalServerUnlocked(
           ? bearerBridgeHeaders(authToken)
           : undefined
       : undefined;
-    const credentialMatches = kind !== "cursor"
-      || localCursorCredentialFingerprints.get(environmentId)
-        === cursorCredentialFingerprint;
+    const credentialMatches =
+      kind !== "cursor" ||
+      localCursorCredentialFingerprints.get(environmentId) === cursorCredentialFingerprint;
     if (
-      credentialMatches
-      && port
-      && authToken
-      && await checkHttpHealth(port, "/global/health", healthHeaders)
+      credentialMatches &&
+      port &&
+      authToken &&
+      (await checkHttpHealth(port, "/global/health", healthHeaders))
     ) {
       if (kind === "opencode" && env?.worktreePath && context.agentTools) {
         scheduleOpenCodeAgentToolsConfiguration(
@@ -733,8 +818,8 @@ export async function startLocalServerUnlocked(
     const managedAcpBinary = resolveManagedAcpBinary(context, kind);
     if (!managedAcpBinary) {
       throw new Error(
-        `${AGENT_PLATFORM_LABELS[kind]} is enabled but not installed yet.`
-        + " Restart Orkestrator to finish downloading it.",
+        `${AGENT_PLATFORM_LABELS[kind]} is enabled but not installed yet.` +
+          " Restart Orkestrator to finish downloading it.",
       );
     }
     env.ACP_AGENT_PATH = managedAcpBinary;
@@ -761,7 +846,8 @@ export async function startLocalServerUnlocked(
   const bridgeEntrypoint = path.join(cwd, "dist", "index.js");
   if (kind !== "opencode") {
     if (!existsSync(cwd)) throw new Error(`${kind} bridge directory not found: ${cwd}`);
-    if (!existsSync(bridgeEntrypoint)) throw new Error(`${kind} bridge entrypoint not found: ${bridgeEntrypoint}`);
+    if (!existsSync(bridgeEntrypoint))
+      throw new Error(`${kind} bridge entrypoint not found: ${bridgeEntrypoint}`);
   }
 
   // Shutdown may have started while this already-admitted operation awaited
@@ -786,9 +872,10 @@ export async function startLocalServerUnlocked(
     tokens.set(environmentId, authToken);
   }
 
-  const args = kind === "opencode"
-    ? ["serve", "--port", String(port), "--hostname", "127.0.0.1"]
-    : [bridgeEntrypoint];
+  const args =
+    kind === "opencode"
+      ? ["serve", "--port", String(port), "--hostname", "127.0.0.1"]
+      : [bridgeEntrypoint];
   let child: ChildProcessWithoutNullStreams;
   try {
     child = spawnLocalServerCommandImpl(command, args, {
@@ -806,10 +893,7 @@ export async function startLocalServerUnlocked(
     throw error;
   }
   if (kind === "cursor" && cursorCredentialFingerprint) {
-    localCursorCredentialFingerprints.set(
-      environmentId,
-      cursorCredentialFingerprint,
-    );
+    localCursorCredentialFingerprints.set(environmentId, cursorCredentialFingerprint);
   }
   localServerProcesses.set(key, child);
   child.stdout.on("data", (data) => console.debug(`[${kind}:${environmentId}] ${data.toString()}`));
@@ -844,7 +928,10 @@ export async function startLocalServerUnlocked(
         environment.worktreePath,
       );
     }
-    await context.storage.updateEnvironment(environmentId, { [field]: port, [pidField]: child.pid });
+    await context.storage.updateEnvironment(environmentId, {
+      [field]: port,
+      [pidField]: child.pid,
+    });
   } catch (error) {
     let terminationError: unknown;
     try {
@@ -852,7 +939,9 @@ export async function startLocalServerUnlocked(
     } catch (caught) {
       terminationError = caught;
     }
-    await context.storage.updateEnvironment(environmentId, { [field]: null, [pidField]: null }).catch(() => undefined);
+    await context.storage
+      .updateEnvironment(environmentId, { [field]: null, [pidField]: null })
+      .catch(() => undefined);
     if (terminationError) {
       throw new AggregateError(
         [error, terminationError],
@@ -891,9 +980,8 @@ export function stopLocalServer(
   context: CommandContext,
   kind: LocalServerKind,
 ): Promise<void> {
-  return enqueueLocalServerEnvironmentOperation(
-    environmentId,
-    () => stopLocalServerUnlocked(environmentId, context, kind),
+  return enqueueLocalServerEnvironmentOperation(environmentId, () =>
+    stopLocalServerUnlocked(environmentId, context, kind),
   );
 }
 
@@ -926,7 +1014,8 @@ export async function deleteEnvironment(
         lifecycleOperationStartedAt: new Date().toISOString(),
       });
       cleanupTerminalSessionsForEnvironment(environmentId);
-      if (environment) await deleteMergedEnvironmentRemoteBranch(environment).catch(() => undefined);
+      if (environment)
+        await deleteMergedEnvironmentRemoteBranch(environment).catch(() => undefined);
       // Before the container is removed and before the worktree is deleted:
       // killing the tmux sessions needs the container alive, and restoring the
       // user's `.claude/settings.local.json` from the tmux-mode backup needs
@@ -939,14 +1028,10 @@ export async function deleteEnvironment(
         // Retire state polling before removing the container, or the next tick
         // execs into something that no longer exists.
         shutdownClaudeStatePolling(environment.containerId);
-        cancelOpenCodeAgentToolsConfiguration(
-          `container:${environment.containerId}`,
-        );
-        await runCommand(
-          "docker",
-          ["rm", "-f", environment.containerId],
-          { timeoutMs: 60_000 },
-        ).catch(() => undefined);
+        cancelOpenCodeAgentToolsConfiguration(`container:${environment.containerId}`);
+        await runCommand("docker", ["rm", "-f", environment.containerId], {
+          timeoutMs: 60_000,
+        }).catch(() => undefined);
       }
       await stopLocalServersForEnvironmentUnlocked(environmentId, context);
       if (environment?.worktreePath) {
@@ -957,10 +1042,7 @@ export async function deleteEnvironment(
       await storage.deleteMultiReviewWorkflowsByEnvironment(environmentId);
       // A pipeline whose environment is gone can never advance again; leaving it
       // behind would resurrect a dead build on the next client that hydrates.
-      await storage.deleteBuildPipelinesByEnvironment(
-        environmentId,
-        environment?.buildPipelineId,
-      );
+      await storage.deleteBuildPipelinesByEnvironment(environmentId, environment?.buildPipelineId);
       // Queued prompts for a deleted environment can never be dispatched.
       await storage.deletePromptQueuesByEnvironment(environmentId);
       // Best-effort, like its siblings: leaving a stale session mapping behind
@@ -973,7 +1055,8 @@ export async function deleteEnvironment(
       // keeps its session record and its pending prompt on disk. The lock's
       // acquire timeout is sized to outlast that holder, so if this still fires
       // it is evidence of something else and must not be invisible.
-      await storage.deleteNativeAgentSessionsByEnvironment(environmentId)
+      await storage
+        .deleteNativeAgentSessionsByEnvironment(environmentId)
         .catch((error: unknown) => {
           console.warn(
             `[backend] native agent session cleanup failed for ${environmentId}:`,
@@ -1004,9 +1087,11 @@ export async function deleteEnvironment(
   } catch (error) {
     const environment = await context.storage.getEnvironment(environmentId).catch(() => null);
     if (environment?.cleanupAfterMergeRequestedAt) {
-      await context.storage.updateEnvironment(environmentId, {
-        cleanupAfterMergeError: cleanupErrorMessage(error),
-      }).catch(() => undefined);
+      await context.storage
+        .updateEnvironment(environmentId, {
+          cleanupAfterMergeError: cleanupErrorMessage(error),
+        })
+        .catch(() => undefined);
     }
     throw error;
   }
@@ -1034,10 +1119,8 @@ export function deleteEnvironmentTask(
   deletingLocalServerEnvironments.add(environmentId);
   invalidateEnvironmentStartDedupe(environmentId);
   try {
-    return enqueueEnvironmentLifecycleOperation(
-      environmentId,
-      context,
-      () => deleteEnvironment(environmentId, context, options),
+    return enqueueEnvironmentLifecycleOperation(environmentId, context, () =>
+      deleteEnvironment(environmentId, context, options),
     ).finally(() => {
       deletingLocalServerEnvironments.delete(environmentId);
     });
@@ -1056,24 +1139,18 @@ export function deleteEnvironmentTask(
 // Registered at module scope: the PR monitor observes merges and hands them
 // back here, without importing this module.
 setMergeCleanupScheduler((environmentId, context) =>
-  scheduleMergeCleanupRecovery(environmentId, context)
+  scheduleMergeCleanupRecovery(environmentId, context),
 );
 
-export function scheduleMergeCleanupRecovery(
-  environmentId: string,
-  context: CommandContext,
-): void {
+export function scheduleMergeCleanupRecovery(environmentId: string, context: CommandContext): void {
   if (mergeCleanupRecoveryTasks.has(environmentId)) return;
 
   const task = (async () => {
     const environment = await context.storage.getEnvironment(environmentId);
     if (
-      !environment?.cleanupAfterMergeRequestedAt
-      || environment.cleanupAfterMergeError
-      || (
-        environment.prState !== "merged"
-        && !environment.deletionRequestedAt
-      )
+      !environment?.cleanupAfterMergeRequestedAt ||
+      environment.cleanupAfterMergeError ||
+      (environment.prState !== "merged" && !environment.deletionRequestedAt)
     ) {
       return;
     }
@@ -1099,9 +1176,7 @@ export async function waitForLocalServerEnvironmentOperations(
 ): Promise<boolean> {
   const drain = async () => {
     while (localServerEnvironmentOperations.size > 0) {
-      await Promise.allSettled([
-        ...new Set(localServerEnvironmentOperations.values()),
-      ]);
+      await Promise.allSettled(new Set(localServerEnvironmentOperations.values()));
     }
   };
 
@@ -1119,10 +1194,7 @@ export async function waitForLocalServerEnvironmentOperations(
     timer.unref?.();
   });
   try {
-    return await Promise.race([
-      drain().then(() => true as const),
-      deadline,
-    ]);
+    return await Promise.race([drain().then(() => true as const), deadline]);
   } finally {
     if (timer) clearTimeout(timer);
   }
@@ -1158,9 +1230,7 @@ export async function shutdownLocalServers(
   requestLocalServerShutdown();
 
   const attempt = (async () => {
-    await waitForLocalServerEnvironmentOperations(
-      options.operationDrainTimeoutMs,
-    );
+    await waitForLocalServerEnvironmentOperations(options.operationDrainTimeoutMs);
     const owned = [...localServerProcesses.entries()];
     const results = await Promise.allSettled(
       owned.map(([key, child]) => terminateLocalServerChild(key, child)),
@@ -1178,7 +1248,11 @@ export async function shutdownLocalServers(
   }
 }
 
-export async function readLocalServerStatus(environmentId: string, context: CommandContext, kind: LocalServerKind): Promise<{
+export async function readLocalServerStatus(
+  environmentId: string,
+  context: CommandContext,
+  kind: LocalServerKind,
+): Promise<{
   running: boolean;
   port: number | null;
   pid: number | null;
@@ -1197,13 +1271,13 @@ export async function readLocalServerStatus(environmentId: string, context: Comm
   const pid = typeof persistedPid === "number" ? persistedPid : undefined;
   const authToken = localBridgeTokens(kind)?.get(environmentId);
   if (
-    kind === "opencode"
-    && child
-    && !child.killed
-    && port
-    && authToken
-    && env?.worktreePath
-    && context.agentTools
+    kind === "opencode" &&
+    child &&
+    !child.killed &&
+    port &&
+    authToken &&
+    env?.worktreePath &&
+    context.agentTools
   ) {
     scheduleOpenCodeAgentToolsConfiguration(
       `local:${environmentId}`,
@@ -1227,7 +1301,11 @@ export async function readLocalServerStatus(environmentId: string, context: Comm
   };
 }
 
-export function getLocalServerStatus(environmentId: string, context: CommandContext, kind: LocalServerKind): Promise<{
+export function getLocalServerStatus(
+  environmentId: string,
+  context: CommandContext,
+  kind: LocalServerKind,
+): Promise<{
   running: boolean;
   port: number | null;
   pid: number | null;
@@ -1238,9 +1316,8 @@ export function getLocalServerStatus(environmentId: string, context: CommandCont
   // Serialize it behind any in-flight start/stop so callers never observe the
   // child and credential before the healthy port has been persisted (or a
   // replacement child paired with the previous child's stale port).
-  return enqueueLocalServerEnvironmentOperation(
-    environmentId,
-    () => readLocalServerStatus(environmentId, context, kind),
+  return enqueueLocalServerEnvironmentOperation(environmentId, () =>
+    readLocalServerStatus(environmentId, context, kind),
   );
 }
 

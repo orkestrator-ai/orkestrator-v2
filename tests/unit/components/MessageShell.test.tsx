@@ -12,8 +12,9 @@ afterEach(() => {
 });
 
 function getUserBubble(container: HTMLElement, content: string): HTMLElement {
-  return Array.from(container.querySelectorAll(".rounded-xl"))
-    .find((element) => element.textContent?.includes(content)) as HTMLElement;
+  return Array.from(container.querySelectorAll(".rounded-xl")).find((element) =>
+    element.textContent?.includes(content),
+  ) as HTMLElement;
 }
 
 function getClassTokens(element: Element | null | undefined): string[] {
@@ -23,11 +24,7 @@ function getClassTokens(element: Element | null | undefined): string[] {
 describe("MessageShell", () => {
   test("renders children and header by default", () => {
     const { container } = render(
-      <MessageShell
-        isUser={false}
-        authorLabel="Claude"
-        timestampLabel="12:00 PM"
-      >
+      <MessageShell isUser={false} authorLabel="Claude" timestampLabel="12:00 PM">
         <p>Hello world</p>
       </MessageShell>,
     );
@@ -56,12 +53,7 @@ describe("MessageShell", () => {
 
   test("omits the screen-reader author label for a user message when showHeader is false", () => {
     render(
-      <MessageShell
-        isUser={true}
-        authorLabel="You"
-        timestampLabel="1:00 PM"
-        showHeader={false}
-      >
+      <MessageShell isUser={true} authorLabel="You" timestampLabel="1:00 PM" showHeader={false}>
         <p>Headerless user content</p>
       </MessageShell>,
     );
@@ -81,8 +73,9 @@ describe("MessageShell", () => {
     const rowDiv = container.querySelector(".justify-end") as HTMLElement;
     expect(rowDiv).not.toBeNull();
 
-    const bubble = Array.from(container.querySelectorAll(".rounded-xl"))
-      .find((element) => element.textContent?.includes("User message")) as HTMLElement;
+    const bubble = Array.from(container.querySelectorAll(".rounded-xl")).find((element) =>
+      element.textContent?.includes("User message"),
+    ) as HTMLElement;
     expect(bubble).not.toBeNull();
     expect(bubble.className).toContain("rounded-xl");
     expect(bubble.className).toContain("bg-zinc-800/80");
@@ -440,7 +433,9 @@ describe("MessageShell", () => {
         timestampLabel="1:00 PM"
         onUserLongPress={onUserLongPress}
       >
-        <button type="button" onClick={onClick}>Clickable content</button>
+        <button type="button" onClick={onClick}>
+          Clickable content
+        </button>
       </MessageShell>,
     );
 
@@ -474,7 +469,9 @@ describe("MessageShell", () => {
         timestampLabel="1:00 PM"
         onUserLongPress={() => {}}
       >
-        <button type="button" onClick={onClick}>Later click</button>
+        <button type="button" onClick={onClick}>
+          Later click
+        </button>
       </MessageShell>,
     );
 
@@ -502,12 +499,18 @@ describe("MessageShell", () => {
   });
 
   test.each([
-    ["synchronous", () => {
-      throw new Error("synchronous long-press failure");
-    }],
-    ["asynchronous", async () => {
-      throw new Error("asynchronous long-press failure");
-    }],
+    [
+      "synchronous",
+      () => {
+        throw new Error("synchronous long-press failure");
+      },
+    ],
+    [
+      "asynchronous",
+      async () => {
+        throw new Error("asynchronous long-press failure");
+      },
+    ],
   ])("reports %s long-press callback failure without leaking a rejection", async (_, callback) => {
     const originalConsoleError = console.error;
     const consoleError = mock(() => {});
@@ -541,9 +544,7 @@ describe("MessageShell", () => {
       await Promise.resolve();
 
       expect(onUserLongPress).toHaveBeenCalledTimes(1);
-      expect(consoleError).toHaveBeenCalledWith(
-        "[MessageShell] User long-press action failed",
-      );
+      expect(consoleError).toHaveBeenCalledWith("[MessageShell] User long-press action failed");
     } finally {
       console.error = originalConsoleError;
     }
@@ -561,8 +562,9 @@ describe("MessageShell", () => {
       </MessageShell>,
     );
 
-    const bubble = Array.from(container.querySelectorAll(".rounded-xl"))
-      .find((element) => element.textContent?.includes("User message")) as HTMLElement;
+    const bubble = Array.from(container.querySelectorAll(".rounded-xl")).find((element) =>
+      element.textContent?.includes("User message"),
+    ) as HTMLElement;
     expect(bubble.textContent).not.toContain("1:00 PM");
 
     const copy = screen.getByRole("button", { name: "Copy" });
@@ -577,12 +579,7 @@ describe("MessageShell", () => {
 
   test("composes the timestamp and duration in user and assistant metadata", () => {
     const user = render(
-      <MessageShell
-        isUser={true}
-        authorLabel="You"
-        timestampLabel="1:00 PM"
-        durationLabel="3s"
-      >
+      <MessageShell isUser={true} authorLabel="You" timestampLabel="1:00 PM" durationLabel="3s">
         <p>Timed user message</p>
       </MessageShell>,
     );
@@ -590,12 +587,7 @@ describe("MessageShell", () => {
     user.unmount();
 
     const assistant = render(
-      <MessageShell
-        isUser={false}
-        authorLabel="Claude"
-        timestampLabel="1:01 PM"
-        durationLabel="4s"
-      >
+      <MessageShell isUser={false} authorLabel="Claude" timestampLabel="1:01 PM" durationLabel="4s">
         <p>Timed assistant message</p>
       </MessageShell>,
     );
@@ -605,11 +597,7 @@ describe("MessageShell", () => {
 
   test("applies full-width content styling for non-user messages", () => {
     const { container } = render(
-      <MessageShell
-        isUser={false}
-        authorLabel="Claude"
-        timestampLabel="1:00 PM"
-      >
+      <MessageShell isUser={false} authorLabel="Claude" timestampLabel="1:00 PM">
         <p>Assistant message</p>
       </MessageShell>,
     );
@@ -669,12 +657,7 @@ describe("MessageShell", () => {
 
   test("hides the assistant footer row entirely when showFooter is false", () => {
     const { container } = render(
-      <MessageShell
-        isUser={false}
-        authorLabel="Claude"
-        timestampLabel="1:00 PM"
-        showFooter={false}
-      >
+      <MessageShell isUser={false} authorLabel="Claude" timestampLabel="1:00 PM" showFooter={false}>
         <p>Content</p>
       </MessageShell>,
     );
@@ -783,10 +766,7 @@ describe("MessageShell", () => {
 describe("MessageErrorAlert", () => {
   test("renders error content and timestamp", () => {
     const { container } = render(
-      <MessageErrorAlert
-        content="Something went wrong"
-        timestampLabel="2:00 PM"
-      />,
+      <MessageErrorAlert content="Something went wrong" timestampLabel="2:00 PM" />,
     );
 
     expect(container.textContent).toContain("Something went wrong");
@@ -794,9 +774,7 @@ describe("MessageErrorAlert", () => {
   });
 
   test("applies responsive padding and min-w-0", () => {
-    const { container } = render(
-      <MessageErrorAlert content="Error" timestampLabel="2:00 PM" />,
-    );
+    const { container } = render(<MessageErrorAlert content="Error" timestampLabel="2:00 PM" />);
 
     const outerDiv = container.firstElementChild as HTMLElement;
     expect(outerDiv.className).toContain("px-2");
@@ -814,9 +792,7 @@ describe("MessageErrorAlert", () => {
       />,
     );
 
-    const errorText = container.querySelector(
-      ".text-destructive.break-words",
-    ) as HTMLElement;
+    const errorText = container.querySelector(".text-destructive.break-words") as HTMLElement;
     expect(errorText).not.toBeNull();
     expect(errorText.textContent).toContain("A very long error message");
   });

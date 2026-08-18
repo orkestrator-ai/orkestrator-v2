@@ -29,10 +29,7 @@ import {
 } from "./errors.js";
 import { FakeReadable, FakeWritable } from "./testing/fake-app-server.js";
 import type { EngineState } from "../engine/types.js";
-import type {
-  InboundNotification,
-  InboundServerRequest,
-} from "./envelope-validation.js";
+import type { InboundNotification, InboundServerRequest } from "./envelope-validation.js";
 import {
   ORKESTRATOR_AGENT_MCP_TOKEN_ENV,
   ORKESTRATOR_AGENT_MCP_URL_ENV,
@@ -62,10 +59,7 @@ class FakeChild extends EventEmitter {
     super();
     // Answer `initialize` as soon as the client writes it.
     const original = this.stdin.write.bind(this.stdin);
-    this.stdin.write = (
-      chunk: string,
-      callback?: (error?: Error | null) => void,
-    ) => {
+    this.stdin.write = (chunk: string, callback?: (error?: Error | null) => void) => {
       const result = original(chunk, callback);
       queueMicrotask(() => this.maybeAnswer(chunk));
       return result;
@@ -93,9 +87,7 @@ class FakeChild extends EventEmitter {
       jsonrpc: "2.0",
       id: message.id,
       result: {
-        userAgent:
-          this.behaviour.userAgent ??
-          "orkestrator/0.145.0 (Mac OS 26.5; arm64)",
+        userAgent: this.behaviour.userAgent ?? "orkestrator/0.145.0 (Mac OS 26.5; arm64)",
         codexHome: "/tmp/codex-home",
         platformFamily: "unix",
         platformOs: "macos",
@@ -153,11 +145,7 @@ interface SupervisorInternals {
   pidOwnershipHeld: boolean;
   acquirePidFileOwnership(instanceId: string): Promise<boolean>;
   reclaimStalePidFile(): Promise<boolean>;
-  updateOwnedPidFile(
-    pid: number,
-    instanceId: string,
-    instanceStartedAt: number,
-  ): Promise<void>;
+  updateOwnedPidFile(pid: number, instanceId: string, instanceStartedAt: number): Promise<void>;
   quarantineObservedPidFile(observedRaw: string): Promise<string>;
   quarantineClaimedPidFile(handle: unknown): Promise<boolean>;
 }
@@ -232,21 +220,20 @@ function harness(
     fingerprintEnvironment: () => currentFingerprint,
     onNotification: (notification, _threadId, generation) =>
       notifications.push({ notification, generation }),
-    onServerRequest: (request, generation) =>
-      serverRequests.push({ request, generation }),
+    onServerRequest: (request, generation) => serverRequests.push({ request, generation }),
     onStateChange: (state, detail) => states.push({ state, detail }),
-    onGenerationReady: (generation, previous) =>
-      generationReady.push({ generation, previous }),
-    spawnProcess: ((_command: string, _args: string[], spawnOptions: {
-      env?: NodeJS.ProcessEnv;
-    }) => {
+    onGenerationReady: (generation, previous) => generationReady.push({ generation, previous }),
+    spawnProcess: ((
+      _command: string,
+      _args: string[],
+      spawnOptions: {
+        env?: NodeJS.ProcessEnv;
+      },
+    ) => {
       const behaviour = options.behaviours?.[spawnIndex] ?? {};
       spawnIndex += 1;
       spawnEnvironments.push({ ...spawnOptions.env });
-      const child = new FakeChild(
-        behaviour.pid ?? 1000 + spawnIndex,
-        behaviour,
-      );
+      const child = new FakeChild(behaviour.pid ?? 1000 + spawnIndex, behaviour);
       children.push(child);
       return child;
     }) as unknown as AppServerSupervisorOptions["spawnProcess"],
@@ -328,11 +315,7 @@ describe("startup", () => {
     const h = harness({
       supervisor: {
         configOverrides: { "features.goals": "true" },
-        spawnProcess: ((
-          command: string,
-          args: string[],
-          spawnOptions: Record<string, unknown>,
-        ) => {
+        spawnProcess: ((command: string, args: string[], spawnOptions: Record<string, unknown>) => {
           spawnCalls.push({ command, args, options: spawnOptions });
           return new FakeChild(4242);
         }) as unknown as AppServerSupervisorOptions["spawnProcess"],
@@ -340,12 +323,7 @@ describe("startup", () => {
     });
     await h.supervisor.ensureReady();
 
-    expect(spawnCalls[0]!.args).toEqual([
-      "app-server",
-      "--stdio",
-      "-c",
-      "features.goals=true",
-    ]);
+    expect(spawnCalls[0]!.args).toEqual(["app-server", "--stdio", "-c", "features.goals=true"]);
     expect(spawnCalls[0]!.options.shell).toBe(false);
     expect(spawnCalls[0]!.options.cwd).toBe("/tmp/workspace");
   });
@@ -375,15 +353,15 @@ describe("startup", () => {
 
     await h.supervisor.ensureReady();
 
-    expect(spawnCalls[0]!.args).toContain("mcp_servers.orkestrator.url=\"http://127.0.0.1:4567/mcp\"");
+    expect(spawnCalls[0]!.args).toContain(
+      'mcp_servers.orkestrator.url="http://127.0.0.1:4567/mcp"',
+    );
     expect(spawnCalls[0]!.args).toContain(
       `mcp_servers.orkestrator.bearer_token_env_var="${ORKESTRATOR_AGENT_MCP_TOKEN_ENV}"`,
     );
     expect(spawnCalls[0]!.args).toContain("features.mcp_2026_07_28=true");
     expect(spawnCalls[0]!.args).toContain("mcp_servers.orkestrator.required=false");
-    expect(spawnCalls[0]!.args).toContain(
-      "mcp_servers.orkestrator.startup_timeout_sec=3",
-    );
+    expect(spawnCalls[0]!.args).toContain("mcp_servers.orkestrator.startup_timeout_sec=3");
     expect(spawnCalls[0]!.args.join(" ")).not.toContain("project-secret");
     expect(spawnCalls[0]!.options.shell).toBe(false);
   });
@@ -434,9 +412,7 @@ describe("startup", () => {
       h.children[0]!.exit(1);
 
       const output = error.mock.calls.flat().map(String).join("\n");
-      expect(output).toMatch(
-        /suppressed 3 stderr line\(s\) \(\d+ bytes of payload\)/,
-      );
+      expect(output).toMatch(/suppressed 3 stderr line\(s\) \(\d+ bytes of payload\)/);
     } finally {
       error.mockRestore();
     }
@@ -536,9 +512,10 @@ describe("startup", () => {
     });
     writeFileSync(pidFilePath, record, "utf8");
 
-    const rejection = await h.supervisor
-      .ensureReady()
-      .then(() => null, (error: unknown) => error);
+    const rejection = await h.supervisor.ensureReady().then(
+      () => null,
+      (error: unknown) => error,
+    );
     expect(rejection).toBeInstanceOf(AppServerOwnershipUnavailableError);
     // Contention is not this bridge's fault: counting it would trip a breaker
     // that nothing resets, locking the workspace out for good.
@@ -550,9 +527,7 @@ describe("startup", () => {
   });
 
   test("atomically admits only one of two simultaneous supervisors", async () => {
-    const codexHome = mkdtempSync(
-      join(tmpdir(), "supervisor-contended-owner-"),
-    );
+    const codexHome = mkdtempSync(join(tmpdir(), "supervisor-contended-owner-"));
     temporaryDirectories.push(codexHome);
     let arrivals = 0;
     let releaseBarrier!: () => void;
@@ -584,12 +559,8 @@ describe("startup", () => {
       second.supervisor.ensureReady(),
     ]);
 
-    expect(
-      results.filter((result) => result.status === "fulfilled"),
-    ).toHaveLength(1);
-    expect(
-      results.filter((result) => result.status === "rejected"),
-    ).toHaveLength(1);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
     expect(first.children.length + second.children.length).toBe(1);
     expect(unsafeSignals).toEqual([]);
 
@@ -601,9 +572,7 @@ describe("startup", () => {
   });
 
   test("two stale-owner reclaimers cannot remove the winning replacement", async () => {
-    const codexHome = mkdtempSync(
-      join(tmpdir(), "supervisor-stale-contention-"),
-    );
+    const codexHome = mkdtempSync(join(tmpdir(), "supervisor-stale-contention-"));
     temporaryDirectories.push(codexHome);
     let arrivals = 0;
     let releaseBarrier!: () => void;
@@ -652,12 +621,8 @@ describe("startup", () => {
       second.supervisor.ensureReady(),
     ]);
 
-    expect(
-      results.filter((result) => result.status === "fulfilled"),
-    ).toHaveLength(1);
-    expect(
-      results.filter((result) => result.status === "rejected"),
-    ).toHaveLength(1);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
     expect(first.children.length + second.children.length).toBe(1);
     expect(unsafeSignals).toEqual([]);
 
@@ -709,16 +674,12 @@ describe("startup", () => {
     const h = harness({
       supervisor: {
         spawnProcess: (() =>
-          new FakeChild(
-            undefined,
-          )) as unknown as AppServerSupervisorOptions["spawnProcess"],
+          new FakeChild(undefined)) as unknown as AppServerSupervisorOptions["spawnProcess"],
         circuitBreakerThreshold: 1,
       },
     });
 
-    await expect(h.supervisor.ensureReady()).rejects.toBeInstanceOf(
-      AppServerCircuitOpenError,
-    );
+    await expect(h.supervisor.ensureReady()).rejects.toBeInstanceOf(AppServerCircuitOpenError);
   });
 
   test("concurrent ensureReady calls share one startup", async () => {
@@ -742,9 +703,7 @@ describe("circuit breaker", () => {
       supervisor: { circuitBreakerThreshold: 3 },
     });
 
-    await expect(h.supervisor.ensureReady()).rejects.toBeInstanceOf(
-      AppServerCircuitOpenError,
-    );
+    await expect(h.supervisor.ensureReady()).rejects.toBeInstanceOf(AppServerCircuitOpenError);
     // Bounded attempts, not an infinite restart loop.
     expect(h.children).toHaveLength(3);
     expect(h.supervisor.getState()).toBe("failed");
@@ -757,13 +716,9 @@ describe("circuit breaker", () => {
       supervisor: { circuitBreakerThreshold: 2 },
     });
 
-    await expect(h.supervisor.ensureReady()).rejects.toBeInstanceOf(
-      AppServerCircuitOpenError,
-    );
+    await expect(h.supervisor.ensureReady()).rejects.toBeInstanceOf(AppServerCircuitOpenError);
     const spawnedAfterFirstFailure = h.children.length;
-    await expect(h.supervisor.ensureReady()).rejects.toBeInstanceOf(
-      AppServerCircuitOpenError,
-    );
+    await expect(h.supervisor.ensureReady()).rejects.toBeInstanceOf(AppServerCircuitOpenError);
     // No further spawn attempts once the breaker is open.
     expect(h.children).toHaveLength(spawnedAfterFirstFailure);
   });
@@ -862,9 +817,7 @@ describe("unexpected exit", () => {
     await h.supervisor.respondToServerRequest(2, "srv-2", {
       decision: "denied",
     });
-    expect(h.children[1]!.stdin.parsed().some((m) => m.id === "srv-2")).toBe(
-      true,
-    );
+    expect(h.children[1]!.stdin.parsed().some((m) => m.id === "srv-2")).toBe(true);
   });
 });
 
@@ -932,9 +885,10 @@ describe("environment fingerprint", () => {
 describe("shutdown", () => {
   test("stop terminates a child whose initialize handshake is still pending", async () => {
     const h = harness({ behaviours: [{ hangInitialize: true }] });
-    const startupResult = h.supervisor
-      .ensureReady()
-      .then(() => null, (error: unknown) => error);
+    const startupResult = h.supervisor.ensureReady().then(
+      () => null,
+      (error: unknown) => error,
+    );
     await flushMicrotasks();
     expect(h.children).toHaveLength(1);
     expect(h.children[0]!.stdin.parsed()[0]?.method).toBe("initialize");
@@ -954,11 +908,9 @@ describe("shutdown", () => {
 
     await h.supervisor.stop();
 
-    expect(
-      child.stdin.writableEnded ||
-        child.exitCode !== null ||
-        child.signalCode !== null,
-    ).toBe(true);
+    expect(child.stdin.writableEnded || child.exitCode !== null || child.signalCode !== null).toBe(
+      true,
+    );
     expect(h.supervisor.getState()).toBe("stopped");
   });
 
@@ -967,9 +919,7 @@ describe("shutdown", () => {
     await h.supervisor.ensureReady();
     await h.supervisor.stop();
 
-    await expect(h.supervisor.request("thread/read")).rejects.toThrow(
-      /stopped/,
-    );
+    await expect(h.supervisor.request("thread/read")).rejects.toThrow(/stopped/);
     expect(h.children).toHaveLength(1);
   });
 
@@ -1079,11 +1029,7 @@ describe("pidfile ownership acquisition", () => {
   test("a vanished pidfile drops the claim so the next start re-acquires it", async () => {
     const codexHome = temporaryCodexHome("supervisor-vanished-pidfile-");
     const h = harness({
-      behaviours: [
-        { pid: UNMAPPED_PID },
-        { pid: UNMAPPED_PID },
-        { pid: UNMAPPED_PID },
-      ],
+      behaviours: [{ pid: UNMAPPED_PID }, { pid: UNMAPPED_PID }, { pid: UNMAPPED_PID }],
       supervisor: {
         codexHome,
         pidFileEnabled: true,
@@ -1171,11 +1117,7 @@ describe("pidfile ownership acquisition", () => {
         now: () => {
           if (hijackOnNextClockRead) {
             hijackOnNextClockRead = false;
-            writeFileSync(
-              pidFilePath,
-              JSON.stringify({ ownerToken: "late-replacement" }),
-              "utf8",
-            );
+            writeFileSync(pidFilePath, JSON.stringify({ ownerToken: "late-replacement" }), "utf8");
           }
           return Date.now();
         },
@@ -1195,9 +1137,7 @@ describe("pidfile ownership acquisition", () => {
     await expect(
       internals(h.supervisor).updateOwnedPidFile(4242, "instance", Date.now()),
     ).rejects.toThrow(/ownership changed before child publication/);
-    expect(JSON.parse(readFileSync(pidFilePath, "utf8")).ownerToken).toBe(
-      "late-replacement",
-    );
+    expect(JSON.parse(readFileSync(pidFilePath, "utf8")).ownerToken).toBe("late-replacement");
     h.children[0]!.exit(0);
   });
 
@@ -1221,11 +1161,7 @@ describe("pidfile ownership acquisition", () => {
       onServerRequest: () => undefined,
       spawnProcess: (() => {
         // Ownership is stolen in the window between spawn and publication.
-        writeFileSync(
-          pidFilePath,
-          JSON.stringify({ ownerToken: "stolen" }),
-          "utf8",
-        );
+        writeFileSync(pidFilePath, JSON.stringify({ ownerToken: "stolen" }), "utf8");
         const child = new FakeChild(UNMAPPED_PID);
         children.push(child);
         return child;
@@ -1233,22 +1169,15 @@ describe("pidfile ownership acquisition", () => {
     });
     pidFilePath = internals(supervisor).pidFilePath();
 
-    await expect(supervisor.ensureReady()).rejects.toBeInstanceOf(
-      AppServerCircuitOpenError,
-    );
+    await expect(supervisor.ensureReady()).rejects.toBeInstanceOf(AppServerCircuitOpenError);
     expect(children).toHaveLength(1);
     // A child left running here would race the next owner over CODEX_HOME.
-    expect(
-      children[0]!.exitCode !== null || children[0]!.signalCode !== null,
-    ).toBe(true);
+    expect(children[0]!.exitCode !== null || children[0]!.signalCode !== null).toBe(true);
   });
 });
 
 describe("reclaimStalePidFile", () => {
-  const makeHarness = (
-    codexHome: string,
-    overrides: Partial<AppServerSupervisorOptions> = {},
-  ) =>
+  const makeHarness = (codexHome: string, overrides: Partial<AppServerSupervisorOptions> = {}) =>
     harness({
       behaviours: [{ pid: UNMAPPED_PID }],
       supervisor: {
@@ -1281,9 +1210,7 @@ describe("reclaimStalePidFile", () => {
       instanceId: "stale-instance",
     });
 
-    await expect(internals(h.supervisor).reclaimStalePidFile()).resolves.toBe(
-      true,
-    );
+    await expect(internals(h.supervisor).reclaimStalePidFile()).resolves.toBe(true);
     expect(signalled).toEqual([4242]);
     expect(existsSync(pidFilePath)).toBe(false);
   });
@@ -1295,9 +1222,7 @@ describe("reclaimStalePidFile", () => {
     // A winner mid-publication looks exactly like this.
     const record = writePidRecord(pidFilePath, { ownerToken: "half-written" });
 
-    await expect(internals(h.supervisor).reclaimStalePidFile()).resolves.toBe(
-      false,
-    );
+    await expect(internals(h.supervisor).reclaimStalePidFile()).resolves.toBe(false);
     expect(readFileSync(pidFilePath, "utf8")).toBe(record);
   });
 
@@ -1310,9 +1235,7 @@ describe("reclaimStalePidFile", () => {
     const longAgo = new Date(Date.now() - 60_000);
     utimesSync(pidFilePath, longAgo, longAgo);
 
-    await expect(internals(h.supervisor).reclaimStalePidFile()).resolves.toBe(
-      true,
-    );
+    await expect(internals(h.supervisor).reclaimStalePidFile()).resolves.toBe(true);
     expect(existsSync(pidFilePath)).toBe(false);
   });
 
@@ -1324,9 +1247,7 @@ describe("reclaimStalePidFile", () => {
     });
 
     // `stat` throwing is the "it is already gone" case.
-    await expect(internals(h.supervisor).reclaimStalePidFile()).resolves.toBe(
-      true,
-    );
+    await expect(internals(h.supervisor).reclaimStalePidFile()).resolves.toBe(true);
   });
 
   test.skipIf(RUNNING_AS_ROOT)(
@@ -1342,9 +1263,7 @@ describe("reclaimStalePidFile", () => {
       chmodSync(pidFilePath, 0o200);
 
       try {
-        await expect(
-          internals(h.supervisor).reclaimStalePidFile(),
-        ).resolves.toBe(false);
+        await expect(internals(h.supervisor).reclaimStalePidFile()).resolves.toBe(false);
       } finally {
         chmodSync(pidFilePath, 0o600);
       }
@@ -1368,9 +1287,7 @@ describe("reclaimStalePidFile", () => {
       signalPidFileProcess: (pid) => signalled.push(pid),
     });
     writePidRecord(internals(matching.supervisor).pidFilePath(), legacyRecord);
-    await expect(
-      internals(matching.supervisor).reclaimStalePidFile(),
-    ).resolves.toBe(true);
+    await expect(internals(matching.supervisor).reclaimStalePidFile()).resolves.toBe(true);
     expect(signalled).toEqual([4242]);
 
     const notMatching = makeHarness(codexHome, {
@@ -1378,13 +1295,8 @@ describe("reclaimStalePidFile", () => {
       matchesLegacyAppServerProcess: async () => false,
       signalPidFileProcess: (pid) => signalled.push(pid),
     });
-    writePidRecord(
-      internals(notMatching.supervisor).pidFilePath(),
-      legacyRecord,
-    );
-    await expect(
-      internals(notMatching.supervisor).reclaimStalePidFile(),
-    ).resolves.toBe(true);
+    writePidRecord(internals(notMatching.supervisor).pidFilePath(), legacyRecord);
+    await expect(internals(notMatching.supervisor).reclaimStalePidFile()).resolves.toBe(true);
     // Still only the first reap: an unidentifiable PID is never signalled.
     expect(signalled).toEqual([4242]);
   });
@@ -1403,9 +1315,7 @@ describe("reclaimStalePidFile", () => {
       startedAt: new Date().toISOString(),
     });
 
-    await expect(internals(h.supervisor).reclaimStalePidFile()).resolves.toBe(
-      false,
-    );
+    await expect(internals(h.supervisor).reclaimStalePidFile()).resolves.toBe(false);
     expect(readFileSync(pidFilePath, "utf8")).toBe(record);
   });
 });
@@ -1434,15 +1344,11 @@ describe("pidfile quarantine", () => {
 
     // We observed a different record than what is on disk now, so the successor
     // must survive even though the restore hardlink fails.
-    await expect(
-      internals(h.supervisor).quarantineObservedPidFile("{}"),
-    ).resolves.toBe("contended");
+    await expect(internals(h.supervisor).quarantineObservedPidFile("{}")).resolves.toBe(
+      "contended",
+    );
     expect(readFileSync(pidFilePath, "utf8")).toBe(successor);
-    expect(
-      existsSync(
-        `${pidFilePath}.${internals(h.supervisor).pidOwnerToken}.stale`,
-      ),
-    ).toBe(false);
+    expect(existsSync(`${pidFilePath}.${internals(h.supervisor).pidOwnerToken}.stale`)).toBe(false);
   });
 
   test("reports the difference between a vanished record and a blocked rename", async () => {
@@ -1452,18 +1358,18 @@ describe("pidfile quarantine", () => {
     mkdirSync(dirname(pidFilePath), { recursive: true });
 
     // Nothing to move: safe to retry the acquisition.
-    await expect(
-      internals(h.supervisor).quarantineObservedPidFile("{}"),
-    ).resolves.toBe("contended");
+    await expect(internals(h.supervisor).quarantineObservedPidFile("{}")).resolves.toBe(
+      "contended",
+    );
 
     if (!RUNNING_AS_ROOT) {
       const record = writePidRecord(pidFilePath, { ownerToken: "stuck" });
       chmodSync(dirname(pidFilePath), 0o500);
       try {
         // The record is still exactly where it was, so retrying would spin.
-        await expect(
-          internals(h.supervisor).quarantineObservedPidFile(record),
-        ).resolves.toBe("blocked");
+        await expect(internals(h.supervisor).quarantineObservedPidFile(record)).resolves.toBe(
+          "blocked",
+        );
       } finally {
         chmodSync(dirname(pidFilePath), 0o700);
       }
@@ -1546,21 +1452,15 @@ describe("matchesAppServerInstance", () => {
   test("darwin accepts a process carrying the instance token", async () => {
     const calls: string[][] = [];
     await expect(
-      __testing.matchesAppServerInstance(
-        4242,
-        instanceId,
-        startedAt,
-        "/opt/codex",
-        {
-          platform: "darwin",
-          runPs: async (args) => {
-            calls.push(args);
-            return args.includes("-Eww")
-              ? `/opt/codex app-server --stdio PATH=/usr/bin ${token}\n`
-              : cLocaleLstart;
-          },
+      __testing.matchesAppServerInstance(4242, instanceId, startedAt, "/opt/codex", {
+        platform: "darwin",
+        runPs: async (args) => {
+          calls.push(args);
+          return args.includes("-Eww")
+            ? `/opt/codex app-server --stdio PATH=/usr/bin ${token}\n`
+            : cLocaleLstart;
         },
-      ),
+      }),
     ).resolves.toBe(true);
     expect(calls[0]).toContain("-Eww");
   });
@@ -1568,20 +1468,14 @@ describe("matchesAppServerInstance", () => {
   test("darwin refuses a sibling app-server with an identical command line", async () => {
     const calls: string[][] = [];
     await expect(
-      __testing.matchesAppServerInstance(
-        4242,
-        instanceId,
-        startedAt,
-        "/opt/codex",
-        {
-          platform: "darwin",
-          runPs: async (args) => {
-            calls.push(args);
-            // Same binary, same arguments, a different environment's token.
-            return "/opt/codex app-server --stdio ORKESTRATOR_APP_SERVER_INSTANCE_ID=other\n";
-          },
+      __testing.matchesAppServerInstance(4242, instanceId, startedAt, "/opt/codex", {
+        platform: "darwin",
+        runPs: async (args) => {
+          calls.push(args);
+          // Same binary, same arguments, a different environment's token.
+          return "/opt/codex app-server --stdio ORKESTRATOR_APP_SERVER_INSTANCE_ID=other\n";
         },
-      ),
+      }),
     ).resolves.toBe(false);
     // The reap is a process-group SIGKILL, so it must stop at the token check.
     expect(calls).toHaveLength(1);
@@ -1589,54 +1483,34 @@ describe("matchesAppServerInstance", () => {
 
   test("darwin refuses a start time it cannot parse", async () => {
     await expect(
-      __testing.matchesAppServerInstance(
-        4242,
-        instanceId,
-        startedAt,
-        "/opt/codex",
-        {
-          platform: "darwin",
-          runPs: async (args) =>
-            args.includes("-Eww")
-              ? `/opt/codex app-server --stdio ${token}\n`
-              : "sam. 25 juil. 17:03:43 2026\n",
-        },
-      ),
+      __testing.matchesAppServerInstance(4242, instanceId, startedAt, "/opt/codex", {
+        platform: "darwin",
+        runPs: async (args) =>
+          args.includes("-Eww")
+            ? `/opt/codex app-server --stdio ${token}\n`
+            : "sam. 25 juil. 17:03:43 2026\n",
+      }),
     ).resolves.toBe(false);
   });
 
   test("darwin refuses a start time outside the window", async () => {
     await expect(
-      __testing.matchesAppServerInstance(
-        4242,
-        instanceId,
-        startedAt - 60_000,
-        "/opt/codex",
-        {
-          platform: "darwin",
-          runPs: async (args) =>
-            args.includes("-Eww")
-              ? `/opt/codex app-server --stdio ${token}\n`
-              : cLocaleLstart,
-        },
-      ),
+      __testing.matchesAppServerInstance(4242, instanceId, startedAt - 60_000, "/opt/codex", {
+        platform: "darwin",
+        runPs: async (args) =>
+          args.includes("-Eww") ? `/opt/codex app-server --stdio ${token}\n` : cLocaleLstart,
+      }),
     ).resolves.toBe(false);
   });
 
   test("darwin refuses to signal when ps fails", async () => {
     await expect(
-      __testing.matchesAppServerInstance(
-        4242,
-        instanceId,
-        startedAt,
-        "/opt/codex",
-        {
-          platform: "darwin",
-          runPs: async () => {
-            throw new Error("ps: no such process");
-          },
+      __testing.matchesAppServerInstance(4242, instanceId, startedAt, "/opt/codex", {
+        platform: "darwin",
+        runPs: async () => {
+          throw new Error("ps: no such process");
         },
-      ),
+      }),
     ).resolves.toBe(false);
   });
 
@@ -1674,30 +1548,19 @@ describe("matchesAppServerInstance", () => {
 
   test("refuses to signal on platforms without an identity check", async () => {
     await expect(
-      __testing.matchesAppServerInstance(
-        4242,
-        instanceId,
-        startedAt,
-        "/opt/codex",
-        { platform: "win32" },
-      ),
+      __testing.matchesAppServerInstance(4242, instanceId, startedAt, "/opt/codex", {
+        platform: "win32",
+      }),
     ).resolves.toBe(false);
   });
 
   test.skipIf(process.platform !== "darwin")(
     "the real ps reports a parseable start time for this process",
     async () => {
-      const output = await __testing.runPs([
-        "-p",
-        String(process.pid),
-        "-o",
-        "lstart=",
-      ]);
+      const output = await __testing.runPs(["-p", String(process.pid), "-o", "lstart="]);
       const parsed = parseProcessStartTime(output);
       expect(parsed).not.toBeNull();
-      expect(Math.abs(Date.now() - (parsed ?? 0))).toBeLessThan(
-        24 * 60 * 60 * 1_000,
-      );
+      expect(Math.abs(Date.now() - (parsed ?? 0))).toBeLessThan(24 * 60 * 60 * 1_000);
     },
   );
 });
@@ -1706,8 +1569,7 @@ describe("matchesLegacyAppServerProcess", () => {
   test("linux requires our binary, our arguments and our working directory", async () => {
     const probe = (cwd: string) => ({
       platform: "linux" as const,
-      readProcFile: async () =>
-        Buffer.from(["/opt/codex", "app-server", "--stdio", ""].join("\0")),
+      readProcFile: async () => Buffer.from(["/opt/codex", "app-server", "--stdio", ""].join("\0")),
       readProcLink: async () => cwd,
     });
 
@@ -1732,33 +1594,22 @@ describe("matchesLegacyAppServerProcess", () => {
 
   test("linux tolerates an unreadable cwd but not a different command", async () => {
     await expect(
-      __testing.matchesLegacyAppServerProcess(
-        4242,
-        "/opt/codex",
-        "/work/env-a",
-        {
-          platform: "linux",
-          readProcFile: async () =>
-            Buffer.from(["/opt/codex", "app-server", "--stdio", ""].join("\0")),
-          readProcLink: async () => {
-            throw new Error("EACCES");
-          },
+      __testing.matchesLegacyAppServerProcess(4242, "/opt/codex", "/work/env-a", {
+        platform: "linux",
+        readProcFile: async () =>
+          Buffer.from(["/opt/codex", "app-server", "--stdio", ""].join("\0")),
+        readProcLink: async () => {
+          throw new Error("EACCES");
         },
-      ),
+      }),
     ).resolves.toBe(true);
 
     await expect(
-      __testing.matchesLegacyAppServerProcess(
-        4242,
-        "/opt/codex",
-        "/work/env-a",
-        {
-          platform: "linux",
-          readProcFile: async () =>
-            Buffer.from(["/usr/bin/node", "server.js", ""].join("\0")),
-          readProcLink: async () => "/work/env-a",
-        },
-      ),
+      __testing.matchesLegacyAppServerProcess(4242, "/opt/codex", "/work/env-a", {
+        platform: "linux",
+        readProcFile: async () => Buffer.from(["/usr/bin/node", "server.js", ""].join("\0")),
+        readProcLink: async () => "/work/env-a",
+      }),
     ).resolves.toBe(false);
   });
 
@@ -1831,9 +1682,7 @@ describe("child stderr metadata", () => {
 
   test("falls back to an unknown level rather than inventing one", () => {
     expect(__testing.describeChildStderrLine("{}")).toContain("level=unknown");
-    expect(__testing.describeChildStderrLine("[1,2,3]")).toContain(
-      "unstructured",
-    );
+    expect(__testing.describeChildStderrLine("[1,2,3]")).toContain("unstructured");
   });
 });
 
@@ -1841,14 +1690,11 @@ describe("request and health plumbing", () => {
   test("requestWithGeneration reports which generation served the call", async () => {
     const h = harness();
     await h.supervisor.ensureReady();
-    const pending = h.supervisor.requestWithGeneration<{ ok: boolean }>(
-      "thread/read",
-      { threadId: "t1" },
-    );
+    const pending = h.supervisor.requestWithGeneration<{ ok: boolean }>("thread/read", {
+      threadId: "t1",
+    });
     await flushMicrotasks();
-    const sent = h.children[0]!.stdin
-      .parsed()
-      .find((message) => message.method === "thread/read");
+    const sent = h.children[0]!.stdin.parsed().find((message) => message.method === "thread/read");
     h.children[0]!.stdout.pushMessage({
       jsonrpc: "2.0",
       id: sent!.id,
@@ -1866,28 +1712,16 @@ describe("request and health plumbing", () => {
     await h.supervisor.ensureReady();
     const firstChild = h.children[0]!;
 
-    await h.supervisor.respondToServerRequestWithError(
-      1,
-      "srv-1",
-      -32603,
-      "refused",
-    );
-    expect(
-      firstChild.stdin.parsed().find((message) => message.id === "srv-1"),
-    ).toMatchObject({ error: { code: -32603, message: "refused" } });
+    await h.supervisor.respondToServerRequestWithError(1, "srv-1", -32603, "refused");
+    expect(firstChild.stdin.parsed().find((message) => message.id === "srv-1")).toMatchObject({
+      error: { code: -32603, message: "refused" },
+    });
 
     firstChild.exit(1);
     await h.supervisor.ensureReady();
     // Generation 1 is gone; app-server has forgotten the request.
-    await h.supervisor.respondToServerRequestWithError(
-      1,
-      "srv-2",
-      -32603,
-      "refused",
-    );
-    expect(
-      h.children[1]!.stdin.parsed().some((message) => message.id === "srv-2"),
-    ).toBe(false);
+    await h.supervisor.respondToServerRequestWithError(1, "srv-2", -32603, "refused");
+    expect(h.children[1]!.stdin.parsed().some((message) => message.id === "srv-2")).toBe(false);
   });
 
   test("surfaces unknown notification and server-request counters through health", async () => {

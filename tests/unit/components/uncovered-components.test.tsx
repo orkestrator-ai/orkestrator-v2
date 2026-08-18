@@ -15,10 +15,16 @@ afterEach(() => {
 describe("previously indirect component contracts", () => {
   test("ContextUsageWheel clamps usage and labels missing snapshots unavailable", () => {
     const { rerender } = render(<ContextUsageWheel usage={null} />);
-    expect(screen.getByRole("button", {
-      name: "Context window usage unavailable",
-    })).toBeTruthy();
-    rerender(<ContextUsageWheel usage={{ percentUsed: 150, usedTokens: 2000, totalTokens: 1000, modelId: "model" }} />);
+    expect(
+      screen.getByRole("button", {
+        name: "Context window usage unavailable",
+      }),
+    ).toBeTruthy();
+    rerender(
+      <ContextUsageWheel
+        usage={{ percentUsed: 150, usedTokens: 2000, totalTokens: 1000, modelId: "model" }}
+      />,
+    );
     expect(screen.getByRole("button", { name: "Context window 100% used" })).toBeTruthy();
   });
 
@@ -26,7 +32,12 @@ describe("previously indirect component contracts", () => {
     const { rerender } = render(<MessageMarkdown content={"- [x] done\n\n**bold**"} />);
     expect(screen.getByText("done")).toBeTruthy();
     expect(screen.getByText("bold").tagName).toBe("STRONG");
-    rerender(<MessageMarkdown content="custom" components={{ p: ({ children }) => <aside>{children}</aside> }} />);
+    rerender(
+      <MessageMarkdown
+        content="custom"
+        components={{ p: ({ children }) => <aside>{children}</aside> }}
+      />,
+    );
     expect(screen.getByText("custom").tagName).toBe("ASIDE");
   });
 
@@ -63,7 +74,11 @@ describe("previously indirect component contracts", () => {
     const switchMode = mock(() => undefined);
     const dismiss = mock(() => undefined);
     const { rerender } = render(
-      <CodexPlanModeCard onApproveAndBuild={approve} onSwitchToBuild={switchMode} onDismiss={dismiss} />,
+      <CodexPlanModeCard
+        onApproveAndBuild={approve}
+        onSwitchToBuild={switchMode}
+        onDismiss={dismiss}
+      />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch To Build" }));
@@ -72,8 +87,17 @@ describe("previously indirect component contracts", () => {
     expect(switchMode).toHaveBeenCalledTimes(1);
     expect(approve).toHaveBeenCalledTimes(1);
 
-    rerender(<CodexPlanModeCard isSubmitting onApproveAndBuild={approve} onSwitchToBuild={switchMode} onDismiss={dismiss} />);
-    expect((screen.getByRole("button", { name: "Approve Plan" }) as HTMLButtonElement).disabled).toBe(true);
+    rerender(
+      <CodexPlanModeCard
+        isSubmitting
+        onApproveAndBuild={approve}
+        onSwitchToBuild={switchMode}
+        onDismiss={dismiss}
+      />,
+    );
+    expect(
+      (screen.getByRole("button", { name: "Approve Plan" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
   });
 
   test("ErrorDetailsDialog renders stored details and closes", () => {
@@ -89,12 +113,21 @@ describe("previously indirect component contracts", () => {
   test("ProjectItem selects and confirms deletion", () => {
     const onSelect = mock(() => undefined);
     const onDelete = mock(() => undefined);
-    render(<ProjectItem
-      project={{ id: "project-1", name: "Project", gitUrl: "https://github.com/acme/project", localPath: null } as never}
-      isSelected
-      onSelect={onSelect}
-      onDelete={onDelete}
-    />);
+    render(
+      <ProjectItem
+        project={
+          {
+            id: "project-1",
+            name: "Project",
+            gitUrl: "https://github.com/acme/project",
+            localPath: null,
+          } as never
+        }
+        isSelected
+        onSelect={onSelect}
+        onDelete={onDelete}
+      />,
+    );
     const buttons = screen.getAllByRole("button");
     fireEvent.click(buttons[0]!);
     expect(onSelect).toHaveBeenCalledWith("project-1");

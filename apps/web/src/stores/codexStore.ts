@@ -21,10 +21,7 @@ import {
 import { deepEqualJson } from "@/lib/chat/message-identity";
 import type { ContextUsageSnapshot } from "@/lib/context-usage";
 import type { FileMention } from "@/types";
-import {
-  codexInteractionDraftKey,
-  usePromptDraftStore,
-} from "./promptDraftStore";
+import { codexInteractionDraftKey, usePromptDraftStore } from "./promptDraftStore";
 import {
   buildClearEnvironmentPatch,
   buildClearSessionPatch,
@@ -80,10 +77,7 @@ export interface CodexUnconfirmedDispatch {
   retryable?: boolean;
 }
 
-export type CodexUnconfirmedDispatchResolution =
-  | "none"
-  | "confirmed"
-  | "retryable";
+export type CodexUnconfirmedDispatchResolution = "none" | "confirmed" | "retryable";
 
 export const CODEX_UNCONFIRMED_DISPATCH_ERROR =
   "Could not confirm whether Codex received the prompt. You can send it again safely.";
@@ -143,10 +137,7 @@ interface CodexState extends CodexChatSlice {
   setSlashCommands: (environmentId: string, commands: CodexSlashCommand[]) => void;
   setSelectedModel: (sessionKey: string, model: string) => void;
   setSelectedMode: (sessionKey: string, mode: CodexConversationMode) => void;
-  setSelectedReasoningEffort: (
-    sessionKey: string,
-    effort: CodexReasoningEffort,
-  ) => void;
+  setSelectedReasoningEffort: (sessionKey: string, effort: CodexReasoningEffort) => void;
   setFastMode: (sessionKey: string, enabled: boolean) => void;
   setSessionPhase: (sessionKey: string, phase: CodexSessionPhase | undefined) => void;
   /** Replaces the whole list — the rehydration path. */
@@ -154,27 +145,12 @@ interface CodexState extends CodexChatSlice {
   /** Adds one, ignoring a duplicate id so an SSE replay cannot double-render. */
   addPendingApproval: (sessionKey: string, approval: CodexApproval) => void;
   removePendingApproval: (sessionKey: string, approvalId: string) => void;
-  setPendingInteractions: (
-    sessionKey: string,
-    interactions: CodexInteraction[],
-  ) => void;
-  addPendingInteraction: (
-    sessionKey: string,
-    interaction: CodexInteraction,
-  ) => void;
-  removePendingInteraction: (
-    sessionKey: string,
-    interactionId: string,
-  ) => void;
-  setContextUsage: (
-    sessionKey: string,
-    usage: ContextUsageSnapshot | null,
-  ) => void;
+  setPendingInteractions: (sessionKey: string, interactions: CodexInteraction[]) => void;
+  addPendingInteraction: (sessionKey: string, interaction: CodexInteraction) => void;
+  removePendingInteraction: (sessionKey: string, interactionId: string) => void;
+  setContextUsage: (sessionKey: string, usage: ContextUsageSnapshot | null) => void;
   getContextUsage: (sessionKey: string) => ContextUsageSnapshot | undefined;
-  setUnconfirmedDispatch: (
-    sessionKey: string,
-    dispatch: CodexUnconfirmedDispatch,
-  ) => void;
+  setUnconfirmedDispatch: (sessionKey: string, dispatch: CodexUnconfirmedDispatch) => void;
   clearUnconfirmedDispatch: (sessionKey: string) => void;
   /** Atomically claims one logical request for a live mount. */
   claimPromptDispatch: (sessionKey: string, requestId: string) => boolean;
@@ -185,9 +161,7 @@ interface CodexState extends CodexChatSlice {
    * A matching server echo removes the optimistic message during `setMessages`,
    * while an unmatched optimistic message survives and becomes a durable retry.
    */
-  settleUnconfirmedDispatch: (
-    sessionKey: string,
-  ) => CodexUnconfirmedDispatchResolution;
+  settleUnconfirmedDispatch: (sessionKey: string) => CodexUnconfirmedDispatchResolution;
   isFastMode: (sessionKey: string) => boolean;
   clearEnvironment: (environmentId: string) => void;
   /** Drop every session-keyed entry for one closed tab. */
@@ -205,43 +179,44 @@ interface CodexState extends CodexChatSlice {
 function isSameApproval(a: CodexApproval, b: CodexApproval | undefined): boolean {
   if (a === b) return true;
   if (!b) return false;
-  return a.approvalId === b.approvalId
-    && a.kind === b.kind
-    && a.method === b.method
-    && a.threadId === b.threadId
-    && a.turnId === b.turnId
-    && a.itemId === b.itemId
-    && a.requestedAt === b.requestedAt
-    && a.expiresAt === b.expiresAt
-    && a.command === b.command
-    && a.cwd === b.cwd
-    && a.reason === b.reason
-    && a.grantRoot === b.grantRoot
-    && a.networkHost === b.networkHost
+  return (
+    a.approvalId === b.approvalId &&
+    a.kind === b.kind &&
+    a.method === b.method &&
+    a.threadId === b.threadId &&
+    a.turnId === b.turnId &&
+    a.itemId === b.itemId &&
+    a.requestedAt === b.requestedAt &&
+    a.expiresAt === b.expiresAt &&
+    a.command === b.command &&
+    a.cwd === b.cwd &&
+    a.reason === b.reason &&
+    a.grantRoot === b.grantRoot &&
+    a.networkHost === b.networkHost &&
     // `actionable` gates the Approve buttons and must fail closed, so a
     // re-report that only flips it has to reach the card rather than being
     // discarded as an interchangeable snapshot.
-    && a.actionable === b.actionable
-    && a.supportsApproveForSession === b.supportsApproveForSession
-    && a.permissions?.network === b.permissions?.network
-    && a.permissions?.fileSystem === b.permissions?.fileSystem
-    && (a.changes?.length ?? 0) === (b.changes?.length ?? 0)
-    && (a.changes ?? []).every(
+    a.actionable === b.actionable &&
+    a.supportsApproveForSession === b.supportsApproveForSession &&
+    a.permissions?.network === b.permissions?.network &&
+    a.permissions?.fileSystem === b.permissions?.fileSystem &&
+    (a.changes?.length ?? 0) === (b.changes?.length ?? 0) &&
+    (a.changes ?? []).every(
       (change, index) =>
         change.path === b.changes?.[index]?.path && change.kind === b.changes?.[index]?.kind,
-    );
+    )
+  );
 }
 
-function isSameSlashCommand(
-  a: CodexSlashCommand,
-  b: CodexSlashCommand | undefined,
-): boolean {
+function isSameSlashCommand(a: CodexSlashCommand, b: CodexSlashCommand | undefined): boolean {
   if (a === b) return true;
   if (!b) return false;
-  return a.name === b.name
-    && a.description === b.description
-    && a.argumentHint === b.argumentHint
-    && a.source === b.source;
+  return (
+    a.name === b.name &&
+    a.description === b.description &&
+    a.argumentHint === b.argumentHint &&
+    a.source === b.source
+  );
 }
 
 /**
@@ -250,21 +225,15 @@ function isSameSlashCommand(
  * cannot drift when the snapshot grows a field the way a hand-written compare
  * would.
  */
-function isSameContextUsage(
-  a: ContextUsageSnapshot,
-  b: ContextUsageSnapshot,
-): boolean {
+function isSameContextUsage(a: ContextUsageSnapshot, b: ContextUsageSnapshot): boolean {
   return deepEqualJson(a, b);
 }
 
-function shouldReplaceCodexMessage(
-  existing: CodexMessage,
-  incoming: CodexMessage,
-): boolean {
+function shouldReplaceCodexMessage(existing: CodexMessage, incoming: CodexMessage): boolean {
   return !(
-    Number.isInteger(existing.revision)
-    && Number.isInteger(incoming.revision)
-    && (incoming.revision as number) < (existing.revision as number)
+    Number.isInteger(existing.revision) &&
+    Number.isInteger(incoming.revision) &&
+    (incoming.revision as number) < (existing.revision as number)
   );
 }
 
@@ -300,12 +269,7 @@ const CODEX_SESSION_KEYED_MAPS = [
 ] as const satisfies ReadonlyArray<keyof CodexState>;
 
 export const useCodexStore = create<CodexState>()((set, get, api) => ({
-  ...createNativeChatStoreSlice<
-    CodexClient,
-    CodexMessage,
-    CodexAttachment,
-    CodexQueuedMessage
-  >({
+  ...createNativeChatStoreSlice<CodexClient, CodexMessage, CodexAttachment, CodexQueuedMessage>({
     mergeMessages: mergeNativeMessagesPreservingClientOnly,
     shouldReplaceMessage: shouldReplaceCodexMessage,
   })(set, get, api),
@@ -324,12 +288,8 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
     set((state) => {
       const session = state.sessions.get(sessionKey);
       if (!session) return state;
-      const existingIndex = session.messages.findIndex(
-        (candidate) => candidate.id === message.id,
-      );
-      const existing = existingIndex < 0
-        ? undefined
-        : session.messages[existingIndex];
+      const existingIndex = session.messages.findIndex((candidate) => candidate.id === message.id);
+      const existing = existingIndex < 0 ? undefined : session.messages[existingIndex];
       if (existing && !shouldReplaceCodexMessage(existing, message)) {
         return state;
       }
@@ -342,10 +302,10 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
         const authoritative = session.messages.filter(
           (candidate) => !isClientOnlyNativeMessage(candidate),
         );
-        messages = mergeNativeMessagesPreservingClientOnly(
-          session.messages,
-          [...authoritative, message],
-        );
+        messages = mergeNativeMessagesPreservingClientOnly(session.messages, [
+          ...authoritative,
+          message,
+        ]);
       } else {
         messages = [...session.messages, message];
       }
@@ -401,9 +361,9 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
       // would rerender every subscriber for a no-op.
       if (commands.length === 0 && !existing) return state;
       if (
-        existing
-        && existing.length === commands.length
-        && existing.every((entry, index) => isSameSlashCommand(entry, commands[index]))
+        existing &&
+        existing.length === commands.length &&
+        existing.every((entry, index) => isSameSlashCommand(entry, commands[index]))
       ) {
         return state;
       }
@@ -460,8 +420,8 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
       // rerender — reconcile calls this on every tick, including with an empty
       // list, so an always-new Map here would rerender the whole tab.
       if (
-        existing.length === approvals.length
-        && existing.every((entry, index) => isSameApproval(entry, approvals[index]))
+        existing.length === approvals.length &&
+        existing.every((entry, index) => isSameApproval(entry, approvals[index]))
       ) {
         return state;
       }
@@ -508,11 +468,11 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
       // rerender the whole tab. `expiresAt` is compared as well as the id because
       // the bridge re-reports a pending interaction with a refreshed deadline.
       if (
-        existing.length === interactions.length
-        && existing.every(
+        existing.length === interactions.length &&
+        existing.every(
           (entry, index) =>
-            entry.interactionId === interactions[index]?.interactionId
-            && entry.expiresAt === interactions[index]?.expiresAt,
+            entry.interactionId === interactions[index]?.interactionId &&
+            entry.expiresAt === interactions[index]?.expiresAt,
         )
       ) {
         return state;
@@ -540,9 +500,7 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
     set((state) => {
       const existing = state.pendingInteractions.get(sessionKey);
       if (!existing?.some((entry) => entry.interactionId === interactionId)) return state;
-      const remaining = existing.filter(
-        (entry) => entry.interactionId !== interactionId,
-      );
+      const remaining = existing.filter((entry) => entry.interactionId !== interactionId);
       const next = new Map(state.pendingInteractions);
       if (remaining.length === 0) next.delete(sessionKey);
       else next.set(sessionKey, remaining);
@@ -550,9 +508,7 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
     });
     // The interaction is resolved, so the in-progress input draft must not
     // survive to a future interaction that happens to reuse this id.
-    usePromptDraftStore
-      .getState()
-      .clearDraft(codexInteractionDraftKey(sessionKey, interactionId));
+    usePromptDraftStore.getState().clearDraft(codexInteractionDraftKey(sessionKey, interactionId));
   },
 
   setContextUsage: (sessionKey, usage) =>
@@ -617,9 +573,8 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
     if (pending.retryable) return "retryable";
 
     const session = state.sessions.get(sessionKey);
-    const optimisticStillPresent = session?.messages.some(
-      (message) => message.id === pending.userMessageId,
-    ) === true;
+    const optimisticStillPresent =
+      session?.messages.some((message) => message.id === pending.userMessageId) === true;
     if (!optimisticStillPresent) {
       state.clearUnconfirmedDispatch(sessionKey);
       return "confirmed";
@@ -629,10 +584,8 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
       const currentPending = latest.unconfirmedDispatches.get(sessionKey);
       const currentSession = latest.sessions.get(sessionKey);
       if (
-        currentPending !== pending
-        || !currentSession?.messages.some(
-          (message) => message.id === pending.userMessageId,
-        )
+        currentPending !== pending ||
+        !currentSession?.messages.some((message) => message.id === pending.userMessageId)
       ) {
         return latest;
       }
@@ -640,9 +593,7 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
       const sessions = new Map(latest.sessions);
       sessions.set(sessionKey, {
         ...currentSession,
-        messages: currentSession.messages.filter(
-          (message) => message.id !== pending.userMessageId,
-        ),
+        messages: currentSession.messages.filter((message) => message.id !== pending.userMessageId),
         error: CODEX_UNCONFIRMED_DISPATCH_ERROR,
       });
       const unconfirmedDispatches = new Map(latest.unconfirmedDispatches);
@@ -652,9 +603,7 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
       });
       return { sessions, unconfirmedDispatches };
     });
-    return get().unconfirmedDispatches.get(sessionKey)?.retryable
-      ? "retryable"
-      : "confirmed";
+    return get().unconfirmedDispatches.get(sessionKey)?.retryable ? "retryable" : "confirmed";
   },
 
   isFastMode: (sessionKey) => get().fastMode.get(sessionKey) ?? false,
@@ -681,12 +630,10 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
   },
 
   clearSession: (sessionKey) => {
-    const sweptDraftKeys = (get().pendingInteractions.get(sessionKey) ?? []).map(
-      (entry) => codexInteractionDraftKey(sessionKey, entry.interactionId),
+    const sweptDraftKeys = (get().pendingInteractions.get(sessionKey) ?? []).map((entry) =>
+      codexInteractionDraftKey(sessionKey, entry.interactionId),
     );
-    set((state) =>
-      buildClearSessionPatch(state, sessionKey, CODEX_SESSION_KEYED_MAPS),
-    );
+    set((state) => buildClearSessionPatch(state, sessionKey, CODEX_SESSION_KEYED_MAPS));
     usePromptDraftStore.getState().clearDrafts(sweptDraftKeys);
   },
 }));

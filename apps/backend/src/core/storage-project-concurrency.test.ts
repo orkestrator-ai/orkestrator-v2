@@ -41,18 +41,22 @@ async function creationLockFiles(dataDir: string): Promise<string[]> {
 
 /** Reaches the private queue map so its cleanup can be asserted directly. */
 function creationQueueSize(storage: StorageService): number {
-  return (storage as unknown as {
-    projectCreationMutationQueues: Map<string, unknown>;
-  }).projectCreationMutationQueues.size;
+  return (
+    storage as unknown as {
+      projectCreationMutationQueues: Map<string, unknown>;
+    }
+  ).projectCreationMutationQueues.size;
 }
 
 describe("StorageService project mutation serialization", () => {
   test("does not lose concurrent additions from backend instances sharing a data directory", async () => {
     await withSharedStorage(async (first, second) => {
       const projects = Array.from({ length: 24 }, (_, index) => project(`project-${index}`));
-      await Promise.all(projects.map((candidate, index) => (
-        (index % 2 === 0 ? first : second).addProject(candidate)
-      )));
+      await Promise.all(
+        projects.map((candidate, index) =>
+          (index % 2 === 0 ? first : second).addProject(candidate),
+        ),
+      );
 
       const stored = await first.loadProjects();
       expect(stored.map((candidate) => candidate.id).sort()).toEqual(
@@ -86,9 +90,13 @@ describe("StorageService project mutation serialization", () => {
   test("coordinates the same creation path across StorageService instances", async () => {
     await withSharedStorage(async (first, second) => {
       let releaseFirst!: () => void;
-      const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+      const firstGate = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
       let markFirstEntered!: () => void;
-      const firstEntered = new Promise<void>((resolve) => { markFirstEntered = resolve; });
+      const firstEntered = new Promise<void>((resolve) => {
+        markFirstEntered = resolve;
+      });
       let secondEntered = false;
 
       const firstOperation = first.withProjectCreationLock("/canonical/project", async () => {
@@ -110,14 +118,17 @@ describe("StorageService project mutation serialization", () => {
 
   test("releases the creation lock when the operation throws", async () => {
     await withSharedStorage(async (first, second, dataDir) => {
-      await expect(first.withProjectCreationLock("/canonical/fails", async () => {
-        throw new Error("creation failed");
-      })).rejects.toThrow("creation failed");
+      await expect(
+        first.withProjectCreationLock("/canonical/fails", async () => {
+          throw new Error("creation failed");
+        }),
+      ).rejects.toThrow("creation failed");
 
       // A failed attempt must not wedge the path: the retry is the whole point
       // of preserving a partially created repository.
-      await expect(second.withProjectCreationLock("/canonical/fails", async () => "retried"))
-        .resolves.toBe("retried");
+      await expect(
+        second.withProjectCreationLock("/canonical/fails", async () => "retried"),
+      ).resolves.toBe("retried");
       expect(await creationLockFiles(dataDir)).toEqual([]);
     });
   });
@@ -138,7 +149,9 @@ describe("StorageService project mutation serialization", () => {
   test("keeps the queue entry while a successor is still waiting", async () => {
     await withSharedStorage(async (first) => {
       let release!: () => void;
-      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
       const held = first.withProjectCreationLock("/canonical/queued", () => gate);
       const queued = first.withProjectCreationLock("/canonical/queued", async () => undefined);
       expect(creationQueueSize(first)).toBe(1);
@@ -159,8 +172,9 @@ describe("StorageService project mutation serialization", () => {
       const staleTime = new Date(Date.now() - 100_000);
       await fs.utimes(lockPath, staleTime, staleTime);
 
-      await expect(first.withProjectCreationLock("/canonical/abandoned", async () => "taken"))
-        .resolves.toBe("taken");
+      await expect(
+        first.withProjectCreationLock("/canonical/abandoned", async () => "taken"),
+      ).resolves.toBe("taken");
     });
   });
 
@@ -207,8 +221,9 @@ describe("StorageService project mutation serialization", () => {
         return calls === 1 ? startedAt : startedAt + 360_001;
       };
       try {
-        await expect(first.withProjectCreationLock("/canonical/busy", async () => undefined))
-          .rejects.toThrow("Timed out waiting for project creation lock");
+        await expect(
+          first.withProjectCreationLock("/canonical/busy", async () => undefined),
+        ).rejects.toThrow("Timed out waiting for project creation lock");
       } finally {
         Date.now = originalNow;
       }
@@ -276,13 +291,12 @@ describe("StorageService.addProject validation", () => {
     await withSharedStorage(async (first) => {
       await first.addProject(project("existing"));
 
-      await expect(first.addProject(
-        project("blocked"),
-        async (projects) => {
+      await expect(
+        first.addProject(project("blocked"), async (projects) => {
           expect(projects.map((candidate) => candidate.id)).toEqual(["existing"]);
           throw new Error("A project already uses this local path");
-        },
-      )).rejects.toThrow("A project already uses this local path");
+        }),
+      ).rejects.toThrow("A project already uses this local path");
 
       expect((await first.loadProjects()).map((candidate) => candidate.id)).toEqual(["existing"]);
     });
@@ -319,7 +333,9 @@ describe("StorageService.addProject validation", () => {
       await first.addProject(project("kept"));
       await expect(first.addProject(project("kept"))).rejects.toThrow("Duplicate project URL");
       await expect(first.removeProject("absent")).rejects.toThrow("Project not found");
-      await expect(first.updateProject("absent", { name: "x" })).rejects.toThrow("Project not found");
+      await expect(first.updateProject("absent", { name: "x" })).rejects.toThrow(
+        "Project not found",
+      );
 
       expect(announced).toEqual(["kept"]);
     });

@@ -57,14 +57,16 @@ beforeEach(() => {
     isOpen: true,
     fileTree: [{ name: "App.tsx", path: "src/App.tsx", isDirectory: false }],
     isLoadingTree: false,
-    changes: [{
-      path: "src/App.tsx",
-      filename: "App.tsx",
-      directory: "src",
-      additions: 2,
-      deletions: 1,
-      status: "M",
-    }],
+    changes: [
+      {
+        path: "src/App.tsx",
+        filename: "App.tsx",
+        directory: "src",
+        additions: 2,
+        deletions: 1,
+        status: "M",
+      },
+    ],
     isLoadingChanges: false,
   });
 });

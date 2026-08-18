@@ -24,26 +24,32 @@ function validChange() {
 
 describe("resolveComparisonRef", () => {
   test("prefers the recorded creation commit over any configured branch", () => {
-    expect(resolveComparisonRef(CREATION_COMMIT, {
-      defaultBranch: "trunk",
-      prBaseBranch: "release",
-    })).toBe(CREATION_COMMIT);
+    expect(
+      resolveComparisonRef(CREATION_COMMIT, {
+        defaultBranch: "trunk",
+        prBaseBranch: "release",
+      }),
+    ).toBe(CREATION_COMMIT);
   });
 
   test("uses the PR base branch when there is no creation commit", () => {
-    expect(resolveComparisonRef(undefined, {
-      defaultBranch: "trunk",
-      prBaseBranch: "release",
-    })).toBe("release");
+    expect(
+      resolveComparisonRef(undefined, {
+        defaultBranch: "trunk",
+        prBaseBranch: "release",
+      }),
+    ).toBe("release");
   });
 
   // A repository on master/trunk would otherwise be measured against a ref that
   // does not exist, and diff stats fail silently, so the badge never appears.
   test("falls back to the repository default branch when the PR base is blank", () => {
-    expect(resolveComparisonRef(undefined, {
-      defaultBranch: "trunk",
-      prBaseBranch: "",
-    })).toBe("trunk");
+    expect(
+      resolveComparisonRef(undefined, {
+        defaultBranch: "trunk",
+        prBaseBranch: "",
+      }),
+    ).toBe("trunk");
   });
 
   test.each([undefined, null])("uses the last-resort ref when config is %p", (config) => {
@@ -51,23 +57,29 @@ describe("resolveComparisonRef", () => {
   });
 
   test("uses the last-resort ref when both configured branches are blank", () => {
-    expect(resolveComparisonRef(null, { defaultBranch: "", prBaseBranch: "" }))
-      .toBe(FALLBACK_COMPARISON_REF);
+    expect(resolveComparisonRef(null, { defaultBranch: "", prBaseBranch: "" })).toBe(
+      FALLBACK_COMPARISON_REF,
+    );
   });
 
   test("treats an empty creation commit as absent", () => {
-    expect(resolveComparisonRef("", { defaultBranch: "trunk", prBaseBranch: "release" }))
-      .toBe("release");
+    expect(resolveComparisonRef("", { defaultBranch: "trunk", prBaseBranch: "release" })).toBe(
+      "release",
+    );
   });
 
   test("trims refs and treats whitespace-only values as absent", () => {
-    expect(resolveComparisonRef("  ", {
-      defaultBranch: " trunk ",
-      prBaseBranch: "\t",
-    })).toBe("trunk");
-    expect(resolveComparisonRef(` ${CREATION_COMMIT} `, {
-      defaultBranch: "trunk",
-    })).toBe(CREATION_COMMIT);
+    expect(
+      resolveComparisonRef("  ", {
+        defaultBranch: " trunk ",
+        prBaseBranch: "\t",
+      }),
+    ).toBe("trunk");
+    expect(
+      resolveComparisonRef(` ${CREATION_COMMIT} `, {
+        defaultBranch: "trunk",
+      }),
+    ).toBe(CREATION_COMMIT);
   });
 
   test("tolerates a config carrying neither branch field", () => {
@@ -116,24 +128,101 @@ describe("diff stats payload guards", () => {
     ["invalid computedAt", { ...validChange(), computedAt: "now" }],
     ["missing stats", { ...validChange(), stats: undefined }],
     ["stats as a string", { ...validChange(), stats: "3" }],
-    ["stringly-typed additions", { ...validChange(), stats: { additions: "1", deletions: 2, filesChanged: 3, truncated: false } }],
-    ["missing truncated", { ...validChange(), stats: { additions: 1, deletions: 2, filesChanged: 3 } }],
-    ["truncated as a string", { ...validChange(), stats: { additions: 1, deletions: 2, filesChanged: 3, truncated: "yes" } }],
-    ["negative additions", { ...validChange(), stats: { additions: -1, deletions: 2, filesChanged: 3, truncated: false } }],
-    ["fractional deletions", { ...validChange(), stats: { additions: 1, deletions: 0.5, filesChanged: 3, truncated: false } }],
-    ["NaN filesChanged", { ...validChange(), stats: { additions: 1, deletions: 2, filesChanged: Number.NaN, truncated: false } }],
-    ["infinite additions", { ...validChange(), stats: { additions: Number.POSITIVE_INFINITY, deletions: 2, filesChanged: 3, truncated: false } }],
-    ["unsafe additions", { ...validChange(), stats: { additions: Number.MAX_SAFE_INTEGER + 1, deletions: 2, filesChanged: 3, truncated: false } }],
+    [
+      "stringly-typed additions",
+      {
+        ...validChange(),
+        stats: { additions: "1", deletions: 2, filesChanged: 3, truncated: false },
+      },
+    ],
+    [
+      "missing truncated",
+      { ...validChange(), stats: { additions: 1, deletions: 2, filesChanged: 3 } },
+    ],
+    [
+      "truncated as a string",
+      {
+        ...validChange(),
+        stats: { additions: 1, deletions: 2, filesChanged: 3, truncated: "yes" },
+      },
+    ],
+    [
+      "negative additions",
+      {
+        ...validChange(),
+        stats: { additions: -1, deletions: 2, filesChanged: 3, truncated: false },
+      },
+    ],
+    [
+      "fractional deletions",
+      {
+        ...validChange(),
+        stats: { additions: 1, deletions: 0.5, filesChanged: 3, truncated: false },
+      },
+    ],
+    [
+      "NaN filesChanged",
+      {
+        ...validChange(),
+        stats: { additions: 1, deletions: 2, filesChanged: Number.NaN, truncated: false },
+      },
+    ],
+    [
+      "infinite additions",
+      {
+        ...validChange(),
+        stats: {
+          additions: Number.POSITIVE_INFINITY,
+          deletions: 2,
+          filesChanged: 3,
+          truncated: false,
+        },
+      },
+    ],
+    [
+      "unsafe additions",
+      {
+        ...validChange(),
+        stats: {
+          additions: Number.MAX_SAFE_INTEGER + 1,
+          deletions: 2,
+          filesChanged: 3,
+          truncated: false,
+        },
+      },
+    ],
   ])("rejects %s", (_label, payload) => {
     expect(isEnvironmentDiffStatsChange(payload)).toBe(false);
   });
 
   test.each([
     ["not an object", null],
-    ["removed is false", { environmentId: "env-1", comparisonRef: "main", computedAt: "2026-07-27T12:00:00.000Z", removed: false }],
-    ["missing id", { comparisonRef: "main", computedAt: "2026-07-27T12:00:00.000Z", removed: true }],
-    ["blank ref", { environmentId: "env-1", comparisonRef: " ", computedAt: "2026-07-27T12:00:00.000Z", removed: true }],
-    ["invalid timestamp", { environmentId: "env-1", comparisonRef: "main", computedAt: "today", removed: true }],
+    [
+      "removed is false",
+      {
+        environmentId: "env-1",
+        comparisonRef: "main",
+        computedAt: "2026-07-27T12:00:00.000Z",
+        removed: false,
+      },
+    ],
+    [
+      "missing id",
+      { comparisonRef: "main", computedAt: "2026-07-27T12:00:00.000Z", removed: true },
+    ],
+    [
+      "blank ref",
+      {
+        environmentId: "env-1",
+        comparisonRef: " ",
+        computedAt: "2026-07-27T12:00:00.000Z",
+        removed: true,
+      },
+    ],
+    [
+      "invalid timestamp",
+      { environmentId: "env-1", comparisonRef: "main", computedAt: "today", removed: true },
+    ],
   ])("rejects malformed removal: %s", (_label, payload) => {
     expect(isEnvironmentDiffStatsRemoval(payload)).toBe(false);
     expect(isEnvironmentDiffStatsEvent(payload)).toBe(false);
@@ -143,8 +232,23 @@ describe("diff stats payload guards", () => {
     ["not an object", null],
     ["missing entries", {}],
     ["entries is not an array", { entries: "nope" }],
-    ["contains malformed entry", { entries: [validChange(), { ...validChange(), environmentId: "" }] }],
-    ["contains removal entry", { entries: [{ environmentId: "env-1", comparisonRef: "main", computedAt: "2026-07-27T12:00:00.000Z", removed: true }] }],
+    [
+      "contains malformed entry",
+      { entries: [validChange(), { ...validChange(), environmentId: "" }] },
+    ],
+    [
+      "contains removal entry",
+      {
+        entries: [
+          {
+            environmentId: "env-1",
+            comparisonRef: "main",
+            computedAt: "2026-07-27T12:00:00.000Z",
+            removed: true,
+          },
+        ],
+      },
+    ],
   ])("rejects malformed snapshot: %s", (_label, payload) => {
     expect(isEnvironmentDiffStatsSnapshot(payload)).toBe(false);
   });

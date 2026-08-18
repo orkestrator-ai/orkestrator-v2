@@ -74,10 +74,12 @@ describe("configToSdkFormat", () => {
 describe("Orkestrator agent MCP injection", () => {
   test("builds the private HTTP server for every supported backend host", () => {
     for (const hostname of ["127.0.0.1", "localhost", "host.docker.internal"]) {
-      expect(getOrkestratorAgentMcpServer({
-        ORKESTRATOR_AGENT_MCP_URL: `http://${hostname}:4567/mcp`,
-        ORKESTRATOR_AGENT_MCP_TOKEN: "project-token",
-      })).toEqual({
+      expect(
+        getOrkestratorAgentMcpServer({
+          ORKESTRATOR_AGENT_MCP_URL: `http://${hostname}:4567/mcp`,
+          ORKESTRATOR_AGENT_MCP_TOKEN: "project-token",
+        }),
+      ).toEqual({
         type: "http",
         url: `http://${hostname}:4567/mcp`,
         headers: { Authorization: "Bearer project-token" },

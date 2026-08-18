@@ -53,10 +53,7 @@ const MAX_IMAGE_SIZE = 8 * 1024 * 1024;
 const MAX_RGBA_SIZE = 32 * 1024 * 1024;
 
 function generateImageFilename(): string {
-  const timestamp = new Date()
-    .toISOString()
-    .replace(/[:.]/g, "-")
-    .slice(0, 19);
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const random = Math.random().toString(36).substring(2, 8);
   return `clipboard-${timestamp}-${random}.png`;
 }
@@ -74,7 +71,9 @@ export function ComposeBar({
   className,
 }: ComposeBarProps) {
   const text = useTerminalSessionStore((state) => state.composeDraftText.get(sessionKey) ?? "");
-  const images = useTerminalSessionStore((state) => state.composeDraftImages.get(sessionKey) ?? EMPTY_IMAGES);
+  const images = useTerminalSessionStore(
+    (state) => state.composeDraftImages.get(sessionKey) ?? EMPTY_IMAGES,
+  );
   const setComposeDraftText = useTerminalSessionStore((state) => state.setComposeDraftText);
   const appendComposeDraftImage = useTerminalSessionStore((state) => state.appendComposeDraftImage);
   const removeComposeDraftImage = useTerminalSessionStore((state) => state.removeComposeDraftImage);
@@ -131,51 +130,56 @@ export function ComposeBar({
       hydrated = true;
       setBackendDraftHydrated(true);
     });
-    void loadComposeDraft<{ text?: unknown; images?: unknown }>(key).then((draft) => {
-      readSucceeded = true;
-      if (
-        cancelled
-        || locallyChanged
-        || !draft
-        || typeof draft.value !== "object"
-        || draft.value === null
-      ) return;
-      const value = draft.value as { text?: unknown; images?: unknown };
-      const store = useTerminalSessionStore.getState();
-      // Local typing that happened while the read was in flight wins.
-      if (
-        store.getComposeDraftText(sessionKey) === ""
-        && store.getComposeDraftImages(sessionKey).length === 0
-      ) {
-        applyingHydration = true;
-        try {
-          if (typeof value.text === "string") store.setComposeDraftText(sessionKey, value.text);
-          if (Array.isArray(value.images)) {
-            store.setComposeDraftImages(
-              sessionKey,
-              value.images.filter((image): image is ImageAttachment =>
-                typeof image === "object"
-                && image !== null
-                && typeof (image as ImageAttachment).id === "string"
-                && typeof (image as ImageAttachment).dataUrl === "string"
-                && typeof (image as ImageAttachment).base64Data === "string"
-                && typeof (image as ImageAttachment).width === "number"
-                && typeof (image as ImageAttachment).height === "number"
-              ),
-            );
+    void loadComposeDraft<{ text?: unknown; images?: unknown }>(key)
+      .then((draft) => {
+        readSucceeded = true;
+        if (
+          cancelled ||
+          locallyChanged ||
+          !draft ||
+          typeof draft.value !== "object" ||
+          draft.value === null
+        )
+          return;
+        const value = draft.value as { text?: unknown; images?: unknown };
+        const store = useTerminalSessionStore.getState();
+        // Local typing that happened while the read was in flight wins.
+        if (
+          store.getComposeDraftText(sessionKey) === "" &&
+          store.getComposeDraftImages(sessionKey).length === 0
+        ) {
+          applyingHydration = true;
+          try {
+            if (typeof value.text === "string") store.setComposeDraftText(sessionKey, value.text);
+            if (Array.isArray(value.images)) {
+              store.setComposeDraftImages(
+                sessionKey,
+                value.images.filter(
+                  (image): image is ImageAttachment =>
+                    typeof image === "object" &&
+                    image !== null &&
+                    typeof (image as ImageAttachment).id === "string" &&
+                    typeof (image as ImageAttachment).dataUrl === "string" &&
+                    typeof (image as ImageAttachment).base64Data === "string" &&
+                    typeof (image as ImageAttachment).width === "number" &&
+                    typeof (image as ImageAttachment).height === "number",
+                ),
+              );
+            }
+          } finally {
+            applyingHydration = false;
           }
-        } finally {
-          applyingHydration = false;
         }
-      }
-    }).catch((error) => {
-      console.warn("[ComposeBar] Failed to restore compose draft:", error);
-    }).finally(() => {
-      if (!cancelled && (readSucceeded || locallyChanged)) {
-        hydrated = true;
-        setBackendDraftHydrated(true);
-      }
-    });
+      })
+      .catch((error) => {
+        console.warn("[ComposeBar] Failed to restore compose draft:", error);
+      })
+      .finally(() => {
+        if (!cancelled && (readSucceeded || locallyChanged)) {
+          hydrated = true;
+          setBackendDraftHydrated(true);
+        }
+      });
     return () => {
       cancelled = true;
       unsubscribe();
@@ -185,14 +189,13 @@ export function ComposeBar({
       if (!hydrated && !locallyChanged) {
         return;
       }
-      const operation = currentText.length > 0 || currentImages.length > 0
-        ? persistComposeDraft(
-            key,
-            "environment",
-            environmentId,
-            { text: currentText, images: currentImages },
-          )
-        : discardComposeDraft(key);
+      const operation =
+        currentText.length > 0 || currentImages.length > 0
+          ? persistComposeDraft(key, "environment", environmentId, {
+              text: currentText,
+              images: currentImages,
+            })
+          : discardComposeDraft(key);
       void operation.catch((error) => {
         console.warn("[ComposeBar] Failed to persist compose draft during cleanup:", error);
       });
@@ -203,9 +206,10 @@ export function ComposeBar({
     if (!environmentId || !backendDraftHydrated) return;
     const key = composeDraftKey("terminal", environmentId, sessionKey);
     const timer = setTimeout(() => {
-      const operation = text.length > 0 || images.length > 0
-        ? persistComposeDraft(key, "environment", environmentId, { text, images })
-        : discardComposeDraft(key);
+      const operation =
+        text.length > 0 || images.length > 0
+          ? persistComposeDraft(key, "environment", environmentId, { text, images })
+          : discardComposeDraft(key);
       void operation.catch((error) => {
         console.warn("[ComposeBar] Failed to persist compose draft:", error);
       });
@@ -227,110 +231,111 @@ export function ComposeBar({
   }, [isOpen]);
 
   // Handle paste events when compose bar is open
-  const handlePaste = useCallback(async (event: ClipboardEvent) => {
-    if (!isOpen || isSendingRef.current) return;
+  const handlePaste = useCallback(
+    async (event: ClipboardEvent) => {
+      if (!isOpen || isSendingRef.current) return;
 
-    // Only handle paste if THIS compose bar's textarea has focus
-    if (document.activeElement !== textareaRef.current) return;
+      // Only handle paste if THIS compose bar's textarea has focus
+      if (document.activeElement !== textareaRef.current) return;
 
-    const pastedBlob = getPastedImageBlob(event);
-    if (pastedBlob) {
-      event.preventDefault();
-      event.stopPropagation();
-    }
-
-    const pasteLifecycle = pasteLifecycleRef.current;
-    pendingPasteCountRef.current += 1;
-    setPendingPasteCount((count) => count + 1);
-
-    // Start decoding immediately so multiple pastes can process concurrently.
-    const processing = (async (): Promise<ImageAttachment | "too-large" | null> => {
-      // Browser/iOS provide a blob on the event; Electron remains the fallback.
-      try {
-        const image = await readImage(pastedBlob);
-        const rgba = await image.rgba();
-        const { width, height } = await image.size();
-
-        // Convert RGBA to PNG via canvas
-        let canvas = document.createElement("canvas");
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return null;
-
-        const imageDataObj = new ImageData(new Uint8ClampedArray(rgba), width, height);
-        ctx.putImageData(imageDataObj, 0, 0);
-
-        canvas = resizeCanvasToMaxDimension(canvas, MAX_IMAGE_DIMENSION);
-        canvas = resizeCanvasIfNeeded(canvas, MAX_RGBA_SIZE);
-
-        const encodedImage = encodeCanvasAsPngWithinSize(canvas, MAX_IMAGE_SIZE);
-        if (!encodedImage) {
-          console.error("[ComposeBar] Image could not be resized below the attachment limit");
-          return "too-large";
-        }
-        canvas = encodedImage.canvas;
-        const { dataUrl, base64Data } = encodedImage;
-
-        // Store final dimensions before cleanup
-        const finalWidth = canvas.width;
-        const finalHeight = canvas.height;
-
-        // Release canvas memory
-        canvas.width = 0;
-        canvas.height = 0;
-
-        return {
-          id: Math.random().toString(36).substring(2, 9),
-          dataUrl,
-          base64Data,
-          width: finalWidth,
-          height: finalHeight,
-        };
-      } catch {
-        // No image in clipboard - this is expected when pasting text.
-        // Let the paste event propagate to native text handling.
-        return null;
-      }
-    })();
-
-    const queuedPaste = pasteQueueRef.current.then(async () => {
-      const result = await processing;
-      const isCurrentPaste =
-        isMountedRef.current &&
-        isOpen &&
-        pasteLifecycleRef.current === pasteLifecycle;
-      if (!isCurrentPaste || !result) return;
-
-      if (result === "too-large") {
-        toast.error("Image too large", {
-          description: "The image could not be resized below the 8MB attachment limit.",
-        });
-        return;
-      }
-
-      // Prevent default behavior when the Electron fallback found an image.
-      if (!pastedBlob) {
+      const pastedBlob = getPastedImageBlob(event);
+      if (pastedBlob) {
         event.preventDefault();
         event.stopPropagation();
       }
-      appendComposeDraftImage(sessionKey, result);
-    });
 
-    pasteQueueRef.current = queuedPaste
-      .catch((error) => {
-        console.error("[ComposeBar] Failed to add pasted image:", error);
-      })
-      .finally(() => {
-        if (pasteLifecycleRef.current !== pasteLifecycle) return;
-        pendingPasteCountRef.current -= 1;
-        if (isMountedRef.current) {
-          setPendingPasteCount((count) => Math.max(0, count - 1));
+      const pasteLifecycle = pasteLifecycleRef.current;
+      pendingPasteCountRef.current += 1;
+      setPendingPasteCount((count) => count + 1);
+
+      // Start decoding immediately so multiple pastes can process concurrently.
+      const processing = (async (): Promise<ImageAttachment | "too-large" | null> => {
+        // Browser/iOS provide a blob on the event; Electron remains the fallback.
+        try {
+          const image = await readImage(pastedBlob);
+          const rgba = await image.rgba();
+          const { width, height } = await image.size();
+
+          // Convert RGBA to PNG via canvas
+          let canvas = document.createElement("canvas");
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext("2d");
+          if (!ctx) return null;
+
+          const imageDataObj = new ImageData(new Uint8ClampedArray(rgba), width, height);
+          ctx.putImageData(imageDataObj, 0, 0);
+
+          canvas = resizeCanvasToMaxDimension(canvas, MAX_IMAGE_DIMENSION);
+          canvas = resizeCanvasIfNeeded(canvas, MAX_RGBA_SIZE);
+
+          const encodedImage = encodeCanvasAsPngWithinSize(canvas, MAX_IMAGE_SIZE);
+          if (!encodedImage) {
+            console.error("[ComposeBar] Image could not be resized below the attachment limit");
+            return "too-large";
+          }
+          canvas = encodedImage.canvas;
+          const { dataUrl, base64Data } = encodedImage;
+
+          // Store final dimensions before cleanup
+          const finalWidth = canvas.width;
+          const finalHeight = canvas.height;
+
+          // Release canvas memory
+          canvas.width = 0;
+          canvas.height = 0;
+
+          return {
+            id: Math.random().toString(36).substring(2, 9),
+            dataUrl,
+            base64Data,
+            width: finalWidth,
+            height: finalHeight,
+          };
+        } catch {
+          // No image in clipboard - this is expected when pasting text.
+          // Let the paste event propagate to native text handling.
+          return null;
         }
+      })();
+
+      const queuedPaste = pasteQueueRef.current.then(async () => {
+        const result = await processing;
+        const isCurrentPaste =
+          isMountedRef.current && isOpen && pasteLifecycleRef.current === pasteLifecycle;
+        if (!isCurrentPaste || !result) return;
+
+        if (result === "too-large") {
+          toast.error("Image too large", {
+            description: "The image could not be resized below the 8MB attachment limit.",
+          });
+          return;
+        }
+
+        // Prevent default behavior when the Electron fallback found an image.
+        if (!pastedBlob) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+        appendComposeDraftImage(sessionKey, result);
       });
 
-    await pasteQueueRef.current;
-  }, [isOpen, sessionKey, appendComposeDraftImage]);
+      pasteQueueRef.current = queuedPaste
+        .catch((error) => {
+          console.error("[ComposeBar] Failed to add pasted image:", error);
+        })
+        .finally(() => {
+          if (pasteLifecycleRef.current !== pasteLifecycle) return;
+          pendingPasteCountRef.current -= 1;
+          if (isMountedRef.current) {
+            setPendingPasteCount((count) => Math.max(0, count - 1));
+          }
+        });
+
+      await pasteQueueRef.current;
+    },
+    [isOpen, sessionKey, appendComposeDraftImage],
+  );
 
   // Listen for paste events
   useEffect(() => {
@@ -395,10 +400,7 @@ export function ComposeBar({
       // Include every paste queued before send began. New paste events are
       // ignored while sending, so clearing cannot race a late attachment.
       await pasteQueueRef.current;
-      if (
-        !isMountedRef.current ||
-        pasteLifecycleRef.current !== sendLifecycle
-      ) {
+      if (!isMountedRef.current || pasteLifecycleRef.current !== sendLifecycle) {
         return;
       }
 
@@ -431,10 +433,7 @@ export function ComposeBar({
         }
       }
 
-      if (
-        !isMountedRef.current ||
-        pasteLifecycleRef.current !== sendLifecycle
-      ) {
+      if (!isMountedRef.current || pasteLifecycleRef.current !== sendLifecycle) {
         return;
       }
 
@@ -455,18 +454,12 @@ export function ComposeBar({
   };
 
   // Calculate textarea height based on content
-  const textareaRows = Math.min(
-    MAX_LINES,
-    Math.max(1, text.split("\n").length)
-  );
+  const textareaRows = Math.min(MAX_LINES, Math.max(1, text.split("\n").length));
 
   if (!isOpen) return null;
 
   return (
-    <div
-      className={cn("absolute bottom-2 left-2 right-2 z-50", className)}
-      data-compose-bar
-    >
+    <div className={cn("absolute bottom-2 left-2 right-2 z-50", className)} data-compose-bar>
       {/* Image previews - floating above the input */}
       {images.length > 0 && (
         <div className="flex flex-wrap gap-2 mb-2 pl-1">
@@ -511,7 +504,7 @@ export function ComposeBar({
             "flex-1 bg-transparent border-none rounded px-2 py-1",
             "text-sm text-foreground placeholder:text-muted-foreground",
             "resize-none outline-none",
-            "transition-colors"
+            "transition-colors",
           )}
           style={{
             minHeight: LINE_HEIGHT,
@@ -534,10 +527,7 @@ export function ComposeBar({
           size="icon-sm"
           variant="default"
           onClick={handleSend}
-          disabled={
-            isSending ||
-            (pendingPasteCount === 0 && images.length === 0 && !text.trim())
-          }
+          disabled={isSending || (pendingPasteCount === 0 && images.length === 0 && !text.trim())}
           className="shrink-0 h-7 w-7"
         >
           <Send className="w-3.5 h-3.5" />

@@ -40,12 +40,7 @@ async function setPaneWidth(pane: Locator, width: number) {
   }, width);
 }
 
-async function pathGeometry(
-  path: Locator,
-  directory: string,
-  separator: string,
-  filename: string,
-) {
+async function pathGeometry(path: Locator, directory: string, separator: string, filename: string) {
   return path.evaluate(
     (element, expected) => {
       // Both renderers delegate to the same TruncatedPath component.
@@ -77,9 +72,8 @@ async function pathGeometry(
       const visualBox = visualPath.getBoundingClientRect();
       const directoryBox = directoryElement.getBoundingClientRect();
       const filenameBox = filenameElement.getBoundingClientRect();
-      const directoryCharacters = Array.from(
-        { length: expected.directory.length },
-        (_, index) => characterBox(directoryElement, index),
+      const directoryCharacters = Array.from({ length: expected.directory.length }, (_, index) =>
+        characterBox(directoryElement, index),
       );
       const directoryLast = directoryCharacters.at(-1)!;
       const separatorBox = characterBox(filenameElement, 0);
@@ -88,8 +82,7 @@ async function pathGeometry(
         filenameElement,
         expected.separator.length + expected.filename.length - 1,
       );
-      const isVisible = (box: DOMRect) =>
-        box.right > visualBox.left && box.left < visualBox.right;
+      const isVisible = (box: DOMRect) => box.right > visualBox.left && box.left < visualBox.right;
 
       return {
         renderedDirectory: directoryElement.textContent,
@@ -103,8 +96,7 @@ async function pathGeometry(
         separatorVisible: isVisible(separatorBox),
         filenameFirstVisible: isVisible(filenameFirst),
         filenameLastVisible: isVisible(filenameLast),
-        directoryIsTruncated:
-          directoryElement.scrollWidth > directoryElement.clientWidth,
+        directoryIsTruncated: directoryElement.scrollWidth > directoryElement.clientWidth,
       };
     },
     { directory, separator, filename },
@@ -154,14 +146,12 @@ async function expectPathLayout({
     .toEqual({
       ...expectedBase,
       directoryIsTruncated: true,
-  });
+    });
 }
 
 async function expectAccessibleFullPath(path: Locator, fullPath: string) {
   const accessibilitySnapshot = await path.ariaSnapshot();
-  expect(accessibilitySnapshot.replaceAll(/\s/g, "")).toContain(
-    fullPath.replaceAll(/\s/g, ""),
-  );
+  expect(accessibilitySnapshot.replaceAll(/\s/g, "")).toContain(fullPath.replaceAll(/\s/g, ""));
 }
 
 async function changedFileTypography(path: Locator) {
@@ -172,10 +162,7 @@ async function changedFileTypography(path: Locator) {
     }
 
     const [directoryElement, filenameElement] = Array.from(visualPath.children);
-    if (
-      !(directoryElement instanceof HTMLElement)
-      || !(filenameElement instanceof HTMLElement)
-    ) {
+    if (!(directoryElement instanceof HTMLElement) || !(filenameElement instanceof HTMLElement)) {
       throw new Error("Expected changed-file directory and filename elements");
     }
 

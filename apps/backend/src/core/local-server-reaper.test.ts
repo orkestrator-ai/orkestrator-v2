@@ -10,10 +10,7 @@ import {
   reapOrphanedLocalServers,
   type ProcessIdentity,
 } from "./local-server-reaper.js";
-import {
-  claudeTmuxRuntimeRootPrefix,
-  tmuxSessionName,
-} from "./tmux.js";
+import { claudeTmuxRuntimeRootPrefix, tmuxSessionName } from "./tmux.js";
 import type { Environment } from "./models.js";
 
 /** A command line that satisfies every marker for the given kind. */
@@ -111,19 +108,19 @@ describe("reapOrphanedLocalServers", () => {
   });
 
   test("leaves a bridge owned by another live backend alone", async () => {
-    const { options, updates, terminated } = makeOptions(
-      [environment({ codexBridgePid: 4242 })],
-      {
-        identities: new Map([
-          [4242, {
+    const { options, updates, terminated } = makeOptions([environment({ codexBridgePid: 4242 })], {
+      identities: new Map([
+        [
+          4242,
+          {
             // Parented to this test process, which is definitely alive.
             parentPid: process.pid,
             processGroupId: 4242,
             commandLine: COMMAND_LINES.codex,
-          }],
-        ]),
-      },
-    );
+          },
+        ],
+      ]),
+    });
 
     const reaped = await reapOrphanedLocalServers(options);
     expect(terminated).toEqual([]);
@@ -134,13 +131,10 @@ describe("reapOrphanedLocalServers", () => {
   });
 
   test("keeps the record when the kill fails so a later startup can retry", async () => {
-    const { options, updates } = makeOptions(
-      [environment({ opencodePid: 900 })],
-      {
-        identities: new Map([[900, orphanedLeader(900, COMMAND_LINES.opencode)]]),
-        terminateResult: false,
-      },
-    );
+    const { options, updates } = makeOptions([environment({ opencodePid: 900 })], {
+      identities: new Map([[900, orphanedLeader(900, COMMAND_LINES.opencode)]]),
+      terminateResult: false,
+    });
 
     const reaped = await reapOrphanedLocalServers(options);
     expect(updates).toEqual([]);
@@ -183,17 +177,14 @@ describe("reapOrphanedLocalServers", () => {
   });
 
   test("refuses to signal a PID that does not lead its own process group", async () => {
-    const { options, updates, terminated } = makeOptions(
-      [environment({ codexBridgePid: 4242 })],
-      {
-        identities: new Map([
-          // Orphaned and marker-matching, but a group member rather than its
-          // leader. `terminateProcessTree` signals `-pid`, which would reach an
-          // unrelated group entirely.
-          [4242, { parentPid: 1, processGroupId: 900, commandLine: COMMAND_LINES.codex }],
-        ]),
-      },
-    );
+    const { options, updates, terminated } = makeOptions([environment({ codexBridgePid: 4242 })], {
+      identities: new Map([
+        // Orphaned and marker-matching, but a group member rather than its
+        // leader. `terminateProcessTree` signals `-pid`, which would reach an
+        // unrelated group entirely.
+        [4242, { parentPid: 1, processGroupId: 900, commandLine: COMMAND_LINES.codex }],
+      ]),
+    });
 
     const reaped = await reapOrphanedLocalServers(options);
     expect(terminated).toEqual([]);
@@ -210,16 +201,13 @@ describe("reapOrphanedLocalServers", () => {
   });
 
   test("does not treat a hand-started opencode process as a reapable server", async () => {
-    const { options, terminated } = makeOptions(
-      [environment({ opencodePid: 900 })],
-      {
-        identities: new Map([
-          // A user's own `opencode` session whose terminal has exited, landing
-          // on a recycled PID. The bare word alone used to be enough to kill it.
-          [900, orphanedLeader(900, "/usr/local/bin/opencode")],
-        ]),
-      },
-    );
+    const { options, terminated } = makeOptions([environment({ opencodePid: 900 })], {
+      identities: new Map([
+        // A user's own `opencode` session whose terminal has exited, landing
+        // on a recycled PID. The bare word alone used to be enough to kill it.
+        [900, orphanedLeader(900, "/usr/local/bin/opencode")],
+      ]),
+    });
 
     const reaped = await reapOrphanedLocalServers(options);
     expect(terminated).toEqual([]);
@@ -227,15 +215,12 @@ describe("reapOrphanedLocalServers", () => {
   });
 
   test("requires every marker, not just the first", async () => {
-    const { options, terminated } = makeOptions(
-      [environment({ claudeBridgePid: 700 })],
-      {
-        identities: new Map([
-          // Mentions claude-bridge (a log tail, an editor) but is not the bridge.
-          [700, orphanedLeader(700, "/usr/bin/tail -f /tmp/claude-bridge.log")],
-        ]),
-      },
-    );
+    const { options, terminated } = makeOptions([environment({ claudeBridgePid: 700 })], {
+      identities: new Map([
+        // Mentions claude-bridge (a log tail, an editor) but is not the bridge.
+        [700, orphanedLeader(700, "/usr/bin/tail -f /tmp/claude-bridge.log")],
+      ]),
+    });
 
     const reaped = await reapOrphanedLocalServers(options);
     expect(terminated).toEqual([]);
@@ -331,12 +316,14 @@ describe("reapOrphanedClaudeTmuxRuntimes", () => {
     }
   }
 
-  function harness(overrides: {
-    environments?: Environment[];
-    sessions?: string[];
-    killFails?: boolean;
-    listFails?: boolean;
-  } = {}) {
+  function harness(
+    overrides: {
+      environments?: Environment[];
+      sessions?: string[];
+      killFails?: boolean;
+      listFails?: boolean;
+    } = {},
+  ) {
     const killed: string[] = [];
     return {
       killed,
@@ -361,7 +348,10 @@ describe("reapOrphanedClaudeTmuxRuntimes", () => {
     const { options, killed } = harness({ sessions: [session, "user-own-work"] });
 
     await withRuntimePrefix([dead], async (prefix) => {
-      const reaped = await reapOrphanedClaudeTmuxRuntimes({ ...options, runtimeRootPrefix: prefix });
+      const reaped = await reapOrphanedClaudeTmuxRuntimes({
+        ...options,
+        runtimeRootPrefix: prefix,
+      });
 
       expect(reaped).toEqual([
         { environmentId: dead, outcome: "reaped", killedSessions: [session] },
@@ -381,7 +371,10 @@ describe("reapOrphanedClaudeTmuxRuntimes", () => {
     });
 
     await withRuntimePrefix([live], async (prefix) => {
-      const reaped = await reapOrphanedClaudeTmuxRuntimes({ ...options, runtimeRootPrefix: prefix });
+      const reaped = await reapOrphanedClaudeTmuxRuntimes({
+        ...options,
+        runtimeRootPrefix: prefix,
+      });
 
       expect(reaped).toEqual([
         { environmentId: live, outcome: "kept-live-environment", killedSessions: [] },
@@ -404,14 +397,15 @@ describe("reapOrphanedClaudeTmuxRuntimes", () => {
     });
 
     await withRuntimePrefix([dead], async (prefix) => {
-      const reaped = await reapOrphanedClaudeTmuxRuntimes({ ...options, runtimeRootPrefix: prefix });
+      const reaped = await reapOrphanedClaudeTmuxRuntimes({
+        ...options,
+        runtimeRootPrefix: prefix,
+      });
 
       expect(killed).toEqual([]);
       // The root is still swept: it is keyed by the *full* id, so it is
       // unambiguously the deleted environment's.
-      expect(reaped).toEqual([
-        { environmentId: dead, outcome: "reaped", killedSessions: [] },
-      ]);
+      expect(reaped).toEqual([{ environmentId: dead, outcome: "reaped", killedSessions: [] }]);
       expect(await fs.readdir(prefix)).toEqual([]);
     });
   });

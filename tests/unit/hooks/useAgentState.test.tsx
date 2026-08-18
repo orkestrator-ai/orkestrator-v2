@@ -11,7 +11,11 @@ afterEach(() => {
   listenMock.mockReset();
   listenMock.mockImplementation(() => Promise.resolve(() => undefined));
   useAgentActivityStore.setState({
-    tabStates: {}, containerStates: {}, containerStateUpdatedAt: {}, containerRefCounts: {}, stateChangeCallbacks: new Map(),
+    tabStates: {},
+    containerStates: {},
+    containerStateUpdatedAt: {},
+    containerRefCounts: {},
+    stateChangeCallbacks: new Map(),
   });
 });
 
@@ -27,7 +31,9 @@ describe("useAgentState", () => {
       ({ containerId }) => useAgentState(containerId, "tab-1"),
       { initialProps: { containerId: "container-1" as string | null } },
     );
-    await waitFor(() => expect(listenMock).toHaveBeenCalledWith("claude-state-container-1", expect.any(Function)));
+    await waitFor(() =>
+      expect(listenMock).toHaveBeenCalledWith("claude-state-container-1", expect.any(Function)),
+    );
 
     act(() => callback?.({ payload: { state: "working" } }));
     expect(useAgentActivityStore.getState().getTabState("tab-1")).toBe("working");
@@ -43,7 +49,12 @@ describe("useAgentState", () => {
   test("disposes a listener that resolves after unmount", async () => {
     const unlisten = mock(() => undefined);
     let resolveListen: ((value: () => void) => void) | undefined;
-    listenMock.mockImplementation(() => new Promise((resolve) => { resolveListen = resolve; }));
+    listenMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveListen = resolve;
+        }),
+    );
     const { unmount } = renderHook(() => useAgentState("container-1", "tab-1"));
     unmount();
     await act(async () => {

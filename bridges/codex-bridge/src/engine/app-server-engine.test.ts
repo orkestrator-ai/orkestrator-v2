@@ -215,9 +215,7 @@ describe("thread lifecycle", () => {
     });
     await h.engine.start();
 
-    expect(
-      (await h.engine.resumeThread("t1", { config: BUILD })).model,
-    ).toBeUndefined();
+    expect((await h.engine.resumeThread("t1", { config: BUILD })).model).toBeUndefined();
   });
 
   test("thread/start passes explicit policy and clears the service tier", async () => {
@@ -606,7 +604,11 @@ describe("reconciliation", () => {
       "thread/read": () => ({
         thread: thread("t1", {
           turns: [
-            { id: "turn-1", status: "completed", items: [{ type: "userMessage", clientId: "req-1" }] },
+            {
+              id: "turn-1",
+              status: "completed",
+              items: [{ type: "userMessage", clientId: "req-1" }],
+            },
           ],
         }),
       }),
@@ -684,7 +686,11 @@ describe("reconciliation", () => {
       "thread/read": () => ({
         thread: thread("t1", {
           turns: [
-            { id: "turn-1", status: "inProgress", items: [{ type: "userMessage", clientId: "req-1" }] },
+            {
+              id: "turn-1",
+              status: "inProgress",
+              items: [{ type: "userMessage", clientId: "req-1" }],
+            },
           ],
         }),
       }),
@@ -748,7 +754,9 @@ describe("interrupt lifecycle", () => {
 
     // Persisted state settled it without needing a restart.
     expect(status).toBe("interrupted");
-    expect(h.child().requests.filter((r) => r.method === "turn/interrupt").length).toBeGreaterThan(0);
+    expect(h.child().requests.filter((r) => r.method === "turn/interrupt").length).toBeGreaterThan(
+      0,
+    );
     expect(h.children).toHaveLength(1);
   });
 
@@ -771,9 +779,9 @@ describe("interrupt lifecycle", () => {
     });
 
     // Saying "idle" here would let a new prompt overlap a live turn.
-    expect(
-      await h.engine.waitForTurnTerminal(started.handle, "turn-1", { timeoutMs: 10 }),
-    ).toBe("unknown");
+    expect(await h.engine.waitForTurnTerminal(started.handle, "turn-1", { timeoutMs: 10 })).toBe(
+      "unknown",
+    );
   });
 
   test("restarts the child only as an explicit last resort", async () => {
@@ -923,7 +931,10 @@ describe("server requests", () => {
     await settle();
     await settle();
 
-    const answer = h.child().stdin.parsed().find((message) => message.id === "srv-1");
+    const answer = h
+      .child()
+      .stdin.parsed()
+      .find((message) => message.id === "srv-1");
     expect(answer).toMatchObject({ result: { decision: "decline" } });
     // The user is told why, instead of watching the turn stall.
     expect(
@@ -965,12 +976,14 @@ describe("server requests", () => {
         threadId: "t1",
         turnId: "turn-1",
         itemId: "item-2",
-        questions: [{
-          id: "q",
-          header: "Choice",
-          question: "Continue?",
-          options: [{ label: "Yes" }],
-        }],
+        questions: [
+          {
+            id: "q",
+            header: "Choice",
+            question: "Continue?",
+            options: [{ label: "Yes" }],
+          },
+        ],
       },
     });
     await settle();
@@ -1013,8 +1026,9 @@ describe("thread operations behind the new session routes", () => {
     // unusable even though the RPC succeeded.
     expect(forked.handle).toBeTruthy();
     expect(forked.model).toBe("gpt-forked");
-    expect(h.child().requests.find((entry) => entry.method === "thread/fork")?.params)
-      .toMatchObject({ threadId: "t1", lastTurnId: "turn-3" });
+    expect(
+      h.child().requests.find((entry) => entry.method === "thread/fork")?.params,
+    ).toMatchObject({ threadId: "t1", lastTurnId: "turn-3" });
   });
 
   test("forkThread omits lastTurnId entirely when forking the whole thread", async () => {
@@ -1043,8 +1057,9 @@ describe("thread operations behind the new session routes", () => {
     await h.engine.start();
     await h.engine.compactThread("t1");
 
-    expect(h.child().requests.find((entry) => entry.method === "thread/compact/start")?.params)
-      .toEqual({ threadId: "t1" });
+    expect(
+      h.child().requests.find((entry) => entry.method === "thread/compact/start")?.params,
+    ).toEqual({ threadId: "t1" });
   });
 
   test("a rejected compaction propagates so the caller can release the busy state", async () => {
@@ -1069,15 +1084,16 @@ describe("thread operations behind the new session routes", () => {
     );
 
     expect(turnId).toBe("turn-1");
-    expect(h.child().requests.find((entry) => entry.method === "turn/steer")?.params)
-      .toMatchObject({
+    expect(h.child().requests.find((entry) => entry.method === "turn/steer")?.params).toMatchObject(
+      {
         threadId: "t1",
         // Without expectedTurnId the steer could land on a turn the user never
         // saw, which is the whole reason the caller reports "mismatch".
         expectedTurnId: "turn-1",
         clientUserMessageId: "req-9",
         input: [{ type: "text", text: "also check the tests" }],
-      });
+      },
+    );
   });
 
   test("steerTurn omits the client id when no request id was supplied", async () => {
@@ -1100,12 +1116,11 @@ describe("thread operations behind the new session routes", () => {
     // The response nests the turn; reading `response.turnId` would silently
     // yield undefined and register an accumulator on nothing.
     expect(review).toEqual({ reviewThreadId: "review-1", turnId: "turn-r" });
-    expect(h.child().requests.find((entry) => entry.method === "review/start")?.params)
-      .toEqual({
-        threadId: "t1",
-        target: { type: "uncommittedChanges" },
-        delivery: "inline",
-      });
+    expect(h.child().requests.find((entry) => entry.method === "review/start")?.params).toEqual({
+      threadId: "t1",
+      target: { type: "uncommittedChanges" },
+      delivery: "inline",
+    });
   });
 
   test("startReview forwards each target shape and the requested delivery", async () => {
@@ -1139,35 +1154,43 @@ describe("runtime health", () => {
       nextCursor: null,
     }),
     "skills/list": () => ({
-      data: [{
-        cwd: "/private/workspace",
-        skills: [{
-          name: "review",
-          description: "Review changes",
-          path: "/private/workspace/.codex/skills/review/SKILL.md",
-          scope: "repo",
-          enabled: true,
-        }],
-        errors: [],
-      }],
+      data: [
+        {
+          cwd: "/private/workspace",
+          skills: [
+            {
+              name: "review",
+              description: "Review changes",
+              path: "/private/workspace/.codex/skills/review/SKILL.md",
+              scope: "repo",
+              enabled: true,
+            },
+          ],
+          errors: [],
+        },
+      ],
     }),
     "hooks/list": () => ({
-      data: [{
-        cwd: "/private/workspace",
-        hooks: [{
-          key: "pre-turn",
-          eventName: "preTurn",
-          handlerType: "command",
-          command: "./hook.sh",
-          sourcePath: "/private/workspace/hooks.json",
-          source: "project",
-          enabled: true,
-          isManaged: false,
-          trustStatus: "trusted",
-        }],
-        warnings: [],
-        errors: [],
-      }],
+      data: [
+        {
+          cwd: "/private/workspace",
+          hooks: [
+            {
+              key: "pre-turn",
+              eventName: "preTurn",
+              handlerType: "command",
+              command: "./hook.sh",
+              sourcePath: "/private/workspace/hooks.json",
+              source: "project",
+              enabled: true,
+              isManaged: false,
+              trustStatus: "trusted",
+            },
+          ],
+          warnings: [],
+          errors: [],
+        },
+      ],
     }),
     "account/rateLimits/read": () => ({ rateLimits: { primary: { usedPercent: 4 } } }),
   };
@@ -1176,14 +1199,15 @@ describe("runtime health", () => {
     const h = harness(HEALTH_HANDLERS);
     await h.engine.start();
 
-    const health = await h.engine.getRuntimeHealth("t1") as Record<string, unknown>;
+    const health = (await h.engine.getRuntimeHealth("t1")) as Record<string, unknown>;
     expect(health.engine).toMatchObject({ state: expect.any(String) });
     expect(health.mcp).toMatchObject({ data: [{ name: "deploy" }] });
     expect(health.skills).toMatchObject({ data: [{ skills: [{ name: "review" }] }] });
     expect(health.hooks).toMatchObject({ data: [{ hooks: [{ eventName: "preTurn" }] }] });
     expect(health.rateLimits).toMatchObject({ rateLimits: { primary: { usedPercent: 4 } } });
-    expect(h.child().requests.find((entry) => entry.method === "mcpServerStatus/list")?.params)
-      .toMatchObject({ threadId: "t1", detail: "full" });
+    expect(
+      h.child().requests.find((entry) => entry.method === "mcpServerStatus/list")?.params,
+    ).toMatchObject({ threadId: "t1", detail: "full" });
   });
 
   /**
@@ -1197,7 +1221,7 @@ describe("runtime health", () => {
     await settle();
     await h.engine.getSupervisor().notificationQueue.drainAll();
 
-    const health = await h.engine.getRuntimeHealth() as {
+    const health = (await h.engine.getRuntimeHealth()) as {
       protocol: {
         unknownNotifications: number;
         unsupportedItems: number;
@@ -1214,9 +1238,9 @@ describe("runtime health", () => {
     await h.engine.start();
     await h.engine.getRuntimeHealth();
 
-    const params = h.child().requests.find(
-      (entry) => entry.method === "mcpServerStatus/list",
-    )?.params;
+    const params = h
+      .child()
+      .requests.find((entry) => entry.method === "mcpServerStatus/list")?.params;
     expect(params && "threadId" in params).toBe(false);
   });
 
@@ -1231,7 +1255,7 @@ describe("runtime health", () => {
     });
     await h.engine.start();
 
-    const health = await h.engine.getRuntimeHealth() as Record<string, unknown>;
+    const health = (await h.engine.getRuntimeHealth()) as Record<string, unknown>;
     expect(health.hooks).toEqual({ error: "Unavailable" });
     expect(health.mcp).toMatchObject({ data: [{ name: "deploy" }] });
     expect(health.skills).toMatchObject({ data: [{ skills: [{ name: "review" }] }] });
@@ -1241,7 +1265,7 @@ describe("runtime health", () => {
     const h = harness();
     await h.engine.start();
 
-    const health = await h.engine.getRuntimeHealth() as Record<string, unknown>;
+    const health = (await h.engine.getRuntimeHealth()) as Record<string, unknown>;
     for (const key of ["mcp", "skills", "hooks", "rateLimits"]) {
       expect(health[key]).toMatchObject({ error: expect.any(String) });
     }
@@ -1252,21 +1276,23 @@ describe("runtime health", () => {
     const h = harness({
       ...HEALTH_HANDLERS,
       "mcpServerStatus/list": () => ({
-        data: [{
-          name: "deploy",
-          authStatus: "bearerToken",
-          serverInfo: {
+        data: [
+          {
             name: "deploy",
-            websiteUrl: "https://deploy.test/api?api_key=abcdef123456",
+            authStatus: "bearerToken",
+            serverInfo: {
+              name: "deploy",
+              websiteUrl: "https://deploy.test/api?api_key=abcdef123456",
+            },
+            headers: { Authorization: "Bearer abcdef1234567890" },
+            tools: { ship: { description: "Ships it" } },
           },
-          headers: { Authorization: "Bearer abcdef1234567890" },
-          tools: { ship: { description: "Ships it" } },
-        }],
+        ],
       }),
     });
     await h.engine.start();
 
-    const health = await h.engine.getRuntimeHealth() as { mcp: { data: unknown[] } };
+    const health = (await h.engine.getRuntimeHealth()) as { mcp: { data: unknown[] } };
     const server = health.mcp.data[0] as Record<string, unknown>;
     // Only explicitly useful inventory fields leave the bridge.
     expect(server.authStatus).toBeUndefined();
@@ -1281,28 +1307,32 @@ describe("runtime health", () => {
     const h = harness({
       ...HEALTH_HANDLERS,
       "hooks/list": () => ({
-        data: [{
-          cwd: "/Users/private/project",
-          hooks: [{
-            key: "pre-turn",
-            eventName: "preTurn",
-            handlerType: "command",
-            command: "curl -H 'Authorization: Bearer ghp_0123456789abcdefghij' https://x.test",
-            env: { OPENAI_API_KEY: "sk-live-0123456789abcdef" },
-            sourcePath: "/Users/private/project/hooks.json",
-            source: "project",
-            enabled: true,
-            isManaged: false,
-            trustStatus: "trusted",
-          }],
-          warnings: ["private warning"],
-          errors: [],
-        }],
+        data: [
+          {
+            cwd: "/Users/private/project",
+            hooks: [
+              {
+                key: "pre-turn",
+                eventName: "preTurn",
+                handlerType: "command",
+                command: "curl -H 'Authorization: Bearer ghp_0123456789abcdefghij' https://x.test",
+                env: { OPENAI_API_KEY: "sk-live-0123456789abcdef" },
+                sourcePath: "/Users/private/project/hooks.json",
+                source: "project",
+                enabled: true,
+                isManaged: false,
+                trustStatus: "trusted",
+              },
+            ],
+            warnings: ["private warning"],
+            errors: [],
+          },
+        ],
       }),
     });
     await h.engine.start();
 
-    const health = await h.engine.getRuntimeHealth() as { hooks: { data: unknown[] } };
+    const health = (await h.engine.getRuntimeHealth()) as { hooks: { data: unknown[] } };
     const hook = (health.hooks.data[0] as { hooks: Record<string, unknown>[] }).hooks[0]!;
     expect(hook.eventName).toBe("preTurn");
     expect(hook.env).toBeUndefined();
@@ -1336,7 +1366,7 @@ describe("runtime health", () => {
     });
     await h.engine.start();
 
-    const health = await h.engine.getRuntimeHealth() as Record<string, unknown>;
+    const health = (await h.engine.getRuntimeHealth()) as Record<string, unknown>;
     const serialized = JSON.stringify(health);
     expect(health.engine).toEqual({
       state: "ready",
@@ -1361,12 +1391,7 @@ describe("runtime health", () => {
   });
 
   test("invalid rate-limit durations are omitted at the runtime-health boundary", async () => {
-    const invalidDurations: unknown[] = [
-      -1,
-      Number.NaN,
-      Number.POSITIVE_INFINITY,
-      "10080",
-    ];
+    const invalidDurations: unknown[] = [-1, Number.NaN, Number.POSITIVE_INFINITY, "10080"];
 
     for (const windowDurationMins of invalidDurations) {
       const h = harness({
@@ -1382,7 +1407,7 @@ describe("runtime health", () => {
       });
       await h.engine.start();
 
-      const health = await h.engine.getRuntimeHealth() as {
+      const health = (await h.engine.getRuntimeHealth()) as {
         rateLimits: {
           rateLimits: {
             primary: Record<string, unknown>;
@@ -1403,7 +1428,7 @@ describe("runtime notices", () => {
     for (const [method, params] of notifications) h.child().notify(method, params);
     await settle();
     await h.engine.getSupervisor().notificationQueue.drainAll();
-    const health = await h.engine.getRuntimeHealth() as {
+    const health = (await h.engine.getRuntimeHealth()) as {
       notices: Array<{ method: string; message: string }>;
     };
     return health.notices;
@@ -1467,7 +1492,10 @@ describe("runtime notices", () => {
 
   test("the notice ring keeps only the most recent 100", async () => {
     const captured = await noticesFor(
-      Array.from({ length: 130 }, (_, index) => ["warning", { message: `w${index}` }] as [string, unknown]),
+      Array.from(
+        { length: 130 },
+        (_, index) => ["warning", { message: `w${index}` }] as [string, unknown],
+      ),
     );
     expect(captured).toHaveLength(100);
     expect(captured.every((notice) => notice.message === "Codex reported warning")).toBe(true);
@@ -1475,11 +1503,14 @@ describe("runtime notices", () => {
 
   test("credentials in a startup error are redacted at capture, not on the way out", async () => {
     const captured = await noticesFor([
-      ["mcpServer/startupStatus/updated", {
-        error:
-          "deploy failed: GET https://svc:hunter2@api.test/v1?api_key=abcdef123456 "
-          + "(Authorization: Bearer ghp_0123456789abcdefghij)",
-      }],
+      [
+        "mcpServer/startupStatus/updated",
+        {
+          error:
+            "deploy failed: GET https://svc:hunter2@api.test/v1?api_key=abcdef123456 " +
+            "(Authorization: Bearer ghp_0123456789abcdefghij)",
+        },
+      ],
     ]);
 
     const message = captured[0]!.message;
@@ -1507,7 +1538,7 @@ describe("runtime notices", () => {
     await settle();
     await h.engine.getSupervisor().notificationQueue.drainAll();
 
-    const health = await h.engine.getRuntimeHealth() as {
+    const health = (await h.engine.getRuntimeHealth()) as {
       notices: Array<{ method: string }>;
     };
     expect(health.notices.map((notice) => notice.method)).toEqual(["configWarning"]);
@@ -1515,9 +1546,13 @@ describe("runtime notices", () => {
 
   test("absolute paths, identity, and private filenames never leave runtime health", async () => {
     const captured = await noticesFor([
-      ["warning", {
-        message: "Failed reading /Users/alice/private-client-name/config.json for alice@example.test",
-      }],
+      [
+        "warning",
+        {
+          message:
+            "Failed reading /Users/alice/private-client-name/config.json for alice@example.test",
+        },
+      ],
     ]);
     const serialized = JSON.stringify(captured);
     expect(serialized).not.toContain("/Users/alice");

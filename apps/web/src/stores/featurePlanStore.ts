@@ -20,12 +20,7 @@ import {
   type FeaturePlanningRecord,
 } from "@orkestrator/protocol/feature-planning";
 
-export type {
-  FeaturePlan,
-  FeaturePlanMessage,
-  FeaturePlanStatus,
-  FeatureStoryCard,
-};
+export type { FeaturePlan, FeaturePlanMessage, FeaturePlanStatus, FeatureStoryCard };
 
 export type {
   FeaturePlanningKind,
@@ -48,18 +43,20 @@ interface FeaturePlanState {
   createFeature: (projectId: string) => Promise<string | undefined>;
   updateFeature: (
     featureId: string,
-    updates: Partial<Pick<
-      FeaturePlan,
-      | "title"
-      | "status"
-      | "summary"
-      | "messages"
-      | "stories"
-      | "codexEnvironmentId"
-      | "codexSessionId"
-      | "buildTaskId"
-      | "buildPipelineId"
-    >>,
+    updates: Partial<
+      Pick<
+        FeaturePlan,
+        | "title"
+        | "status"
+        | "summary"
+        | "messages"
+        | "stories"
+        | "codexEnvironmentId"
+        | "codexSessionId"
+        | "buildTaskId"
+        | "buildPipelineId"
+      >
+    >,
   ) => Promise<FeaturePlan | undefined>;
   claimFeatureBuild: (
     featureId: string,
@@ -147,8 +144,8 @@ export const useFeaturePlanStore = create<FeaturePlanState>()((set, get) => ({
     try {
       const features = await getFeaturePlans(projectId);
       if (
-        get().currentProjectId === projectId
-        && latestFeatureLoadRequestByProject.get(projectId) === requestId
+        get().currentProjectId === projectId &&
+        latestFeatureLoadRequestByProject.get(projectId) === requestId
       ) {
         set({ features, isLoading: false });
         return true;
@@ -157,8 +154,8 @@ export const useFeaturePlanStore = create<FeaturePlanState>()((set, get) => ({
     } catch (error) {
       console.error("[FeaturePlanStore] Failed to load features:", error);
       if (
-        get().currentProjectId === projectId
-        && latestFeatureLoadRequestByProject.get(projectId) === requestId
+        get().currentProjectId === projectId &&
+        latestFeatureLoadRequestByProject.get(projectId) === requestId
       ) {
         set({ isLoading: false });
       }

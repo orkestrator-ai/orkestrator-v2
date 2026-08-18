@@ -1,12 +1,7 @@
 // Claude tmux mode chat tab.
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import {
-  ArrowDown,
-  History,
-  Sparkles,
-  Terminal as TerminalIcon,
-} from "lucide-react";
+import { ArrowDown, History, Sparkles, Terminal as TerminalIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useVirtuosoScrollState } from "@/hooks";
 import { Button } from "@/components/ui/button";
@@ -62,7 +57,10 @@ import {
   type TmuxAttachment,
   type TmuxQueuedMessage,
 } from "@/stores/claudeTmuxStore";
-import { findPreviousNativeMessage, normalizeClaudeMessagesForDisplay } from "@/lib/chat/native-message-adapters";
+import {
+  findPreviousNativeMessage,
+  normalizeClaudeMessagesForDisplay,
+} from "@/lib/chat/native-message-adapters";
 import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
 import { pinNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import { applyTmuxAgentUsageSummaries } from "@/lib/claude-tmux-usage";
@@ -181,9 +179,7 @@ export function ClaudeTmuxChatTab({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [interactiveMode, setInteractiveMode] = useState(false);
-  const sdkModels = useClaudeStore(
-    (s) => s.modelCatalogs.get(environmentId)?.models ?? s.models,
-  );
+  const sdkModels = useClaudeStore((s) => s.modelCatalogs.get(environmentId)?.models ?? s.models);
   const setModels = useClaudeStore((s) => s.setModels);
   const setModelCatalog = useClaudeStore((s) => s.setModelCatalog);
   const availableModels = useMemo(() => tmuxModelList(sdkModels), [sdkModels]);
@@ -221,17 +217,20 @@ export function ClaudeTmuxChatTab({
   const permissionModeEventVersionRef = useRef(0);
   const fastModeMutationVersionRef = useRef(0);
   const submitPromptRef = useRef<
-    ((
-      text: string,
-      attachments: TmuxAttachment[],
-      clearDraftOnSuccess: boolean,
-    ) => Promise<boolean>) | null
+    | ((
+        text: string,
+        attachments: TmuxAttachment[],
+        clearDraftOnSuccess: boolean,
+      ) => Promise<boolean>)
+    | null
   >(null);
 
   // Auto-start unless the user is presented with a choice (no initial prompt
   // and there are prior sessions to resume — they should pick first).
   const hasInitialPrompt = Boolean(initialPrompt?.trim());
-  const messages = tabState?.messages ?? [];
+  // Both memoised for identity: the `?? []` fallbacks otherwise handed the
+  // transcript memos a fresh array on every render.
+  const messages = useMemo(() => tabState?.messages ?? [], [tabState?.messages]);
   const pendingApprovals = tabState?.pendingApprovals ?? [];
   const pendingQuestions = tabState?.pendingQuestions ?? [];
   const pendingPlans = tabState?.pendingPlans ?? [];
@@ -252,7 +251,10 @@ export function ClaudeTmuxChatTab({
       pendingElicitations.length >
     0;
   const visibleSelectionPrompt = hasPendingHookCards ? null : selectionPrompt;
-  const agentUsageSummaries = tabState?.observation.usage ?? [];
+  const agentUsageSummaries = useMemo(
+    () => tabState?.observation.usage ?? [],
+    [tabState?.observation.usage],
+  );
   const transcriptMessages = useMemo(
     () =>
       applyTmuxAgentUsageSummaries(
@@ -267,17 +269,8 @@ export function ClaudeTmuxChatTab({
   );
   const hasMessageHistory = displayMessages.length > 0;
   const centerCompose =
-    showStartScreen &&
-    !hasPendingHookCards &&
-    !hasMessageHistory &&
-    !running &&
-    !isThinking;
-  const showAddressAll = Boolean(
-    isReviewTab &&
-      running &&
-      !isThinking &&
-      messages.length > 0,
-  );
+    showStartScreen && !hasPendingHookCards && !hasMessageHistory && !running && !isThinking;
+  const showAddressAll = Boolean(isReviewTab && running && !isThinking && messages.length > 0);
   const [elapsedSeconds, setElapsedSeconds] = useState<number | null>(null);
   const { isAtBottom, scrollToBottom, virtuosoRef, scrollProps } = useVirtuosoScrollState({
     isActive: isActive && !interactiveMode,
@@ -286,35 +279,25 @@ export function ClaudeTmuxChatTab({
     stickToBottomOnActivation: true,
   });
   const queueLength = useClaudeTmuxStore(
-    useCallback(
-      (state) => state.messageQueue.get(storeKey)?.length ?? 0,
-      [storeKey],
-    ),
+    useCallback((state) => state.messageQueue.get(storeKey)?.length ?? 0, [storeKey]),
   );
 
   const setEffortLevel = useClaudeTmuxStore((s) => s.setEffortLevel);
   const selectedEffort = useClaudeTmuxStore(
-    useCallback(
-      (state) => state.effortLevels.get(storeKey) ?? DEFAULT_EFFORT,
-      [storeKey],
-    ),
+    useCallback((state) => state.effortLevels.get(storeKey) ?? DEFAULT_EFFORT, [storeKey]),
   );
   const selectedModelObj = useMemo(
     () => getTmuxModel(selectedModel, availableModels),
     [selectedModel, availableModels],
   );
-  const effortOptions = useMemo(
-    () => supportedEffortLevels(selectedModelObj),
-    [selectedModelObj],
-  );
+  const effortOptions = useMemo(() => supportedEffortLevels(selectedModelObj), [selectedModelObj]);
   // Claude Code silently downgrades unsupported levels, so mirror that in the
   // UI when e.g. an "xhigh" preference meets a model without xhigh support.
   const effectiveEffort =
     effortOptions.length > 0 && !effortOptions.includes(selectedEffort)
       ? fallbackEffort(effortOptions)
       : selectedEffort;
-  const settingsSwitching =
-    modelSwitching || effortSwitching || fastModeSwitching || modeSwitching;
+  const settingsSwitching = modelSwitching || effortSwitching || fastModeSwitching || modeSwitching;
   const applyFastMode = useCallback((enabled: boolean | null) => {
     fastModeMutationVersionRef.current += 1;
     setFastModeEnabled(enabled);
@@ -346,9 +329,7 @@ export function ClaudeTmuxChatTab({
     const preferredModel = initialLaunchModelPendingRef.current
       ? initialLaunchModel
       : persistedClaudeModel;
-    setSelectedModel(
-      resolveTmuxModelPreference(preferredModel, availableModels),
-    );
+    setSelectedModel(resolveTmuxModelPreference(preferredModel, availableModels));
     // `availableModels` can never be empty — `tmuxModelList` substitutes the
     // bundled fallback list — so its length cannot signal "the live catalog has
     // not arrived yet". A one-shot model that exists only in the SDK catalog
@@ -358,10 +339,10 @@ export function ClaudeTmuxChatTab({
     // the pending flag until either the model is honourable or the live catalog
     // has actually landed.
     if (
-      initialLaunchModelPendingRef.current
-      && initialLaunchModel
-      && sdkModels.length === 0
-      && !tmuxModelIsAvailable(initialLaunchModel, availableModels)
+      initialLaunchModelPendingRef.current &&
+      initialLaunchModel &&
+      sdkModels.length === 0 &&
+      !tmuxModelIsAvailable(initialLaunchModel, availableModels)
     ) {
       return;
     }
@@ -415,18 +396,13 @@ export function ClaudeTmuxChatTab({
         for (let attempt = 0; attempt < 3; attempt += 1) {
           const permissionModeVersion = permissionModeEventVersionRef.current;
           const fastModeMutationVersion = fastModeMutationVersionRef.current;
-          const tabStateBeforeAttempt =
-            useClaudeTmuxStore.getState().tabs.get(storeKey);
+          const tabStateBeforeAttempt = useClaudeTmuxStore.getState().tabs.get(storeKey);
           const status = await getStatus(tabId, environmentId);
           if (cancelled) return;
 
           let lines: Awaited<ReturnType<typeof getTranscript>> = [];
           let hooks: TmuxPendingHook[] = [];
-          if (
-            status &&
-            status.environment_id === environmentId &&
-            status.session_id
-          ) {
+          if (status && status.environment_id === environmentId && status.session_id) {
             [lines, hooks] = await Promise.all([
               getTranscript(tabId, environmentId),
               getPendingHooks(tabId, environmentId),
@@ -435,8 +411,7 @@ export function ClaudeTmuxChatTab({
           }
 
           const liveStateChanged =
-            useClaudeTmuxStore.getState().tabs.get(storeKey) !==
-              tabStateBeforeAttempt ||
+            useClaudeTmuxStore.getState().tabs.get(storeKey) !== tabStateBeforeAttempt ||
             permissionModeEventVersionRef.current !== permissionModeVersion ||
             fastModeMutationVersionRef.current !== fastModeMutationVersion;
           if (liveStateChanged) {
@@ -464,31 +439,28 @@ export function ClaudeTmuxChatTab({
             if (status.session_id) {
               replaceTranscript(storeKey, lines);
               for (const line of lines) {
-                if (
-                  line.type === "permission-mode" &&
-                  typeof line.permissionMode === "string"
-                ) {
+                if (line.type === "permission-mode" && typeof line.permissionMode === "string") {
                   setPlanMode(line.permissionMode === "plan");
                 }
               }
-              const hooksToRender = hooks.filter(
-                (hook) => !shouldAutoAllowPermissionHook(hook),
-              );
+              const hooksToRender = hooks.filter((hook) => !shouldAutoAllowPermissionHook(hook));
               replacePendingHooks(
                 storeKey,
                 pendingSnapshotFromHooks(hooksToRender, status.info_events),
               );
               for (const hook of hooks) {
                 if (shouldAutoAllowPermissionHook(hook)) {
-                  void autoAllowPermissionHook(tabId, environmentId, hook.id, hook.payload).catch((e) => {
-                    if (!cancelled) {
-                      addPendingPermission(
-                        storeKey,
-                        payloadToPermission(hook.id, hook.payload, hookTiming(hook)),
-                      );
-                      setError(String(e));
-                    }
-                  });
+                  void autoAllowPermissionHook(tabId, environmentId, hook.id, hook.payload).catch(
+                    (e) => {
+                      if (!cancelled) {
+                        addPendingPermission(
+                          storeKey,
+                          payloadToPermission(hook.id, hook.payload, hookTiming(hook)),
+                        );
+                        setError(String(e));
+                      }
+                    },
+                  );
                 }
               }
             } else {
@@ -544,16 +516,12 @@ export function ClaudeTmuxChatTab({
   // native tab has ever mounted for this environment.
   useEffect(() => {
     if (!backendHydrated) return;
-    const requestGeneration =
-      (claudeCatalogRequestGenerations.get(environmentId) ?? 0) + 1;
+    const requestGeneration = (claudeCatalogRequestGenerations.get(environmentId) ?? 0) + 1;
     claudeCatalogRequestGenerations.set(environmentId, requestGeneration);
 
     void getClaudeModelCatalog(environmentId, refreshRequestId > 0)
       .then((catalog) => {
-        if (
-          claudeCatalogRequestGenerations.get(environmentId)
-          !== requestGeneration
-        ) {
+        if (claudeCatalogRequestGenerations.get(environmentId) !== requestGeneration) {
           return;
         }
         setModelCatalog(catalog);
@@ -565,23 +533,14 @@ export function ClaudeTmuxChatTab({
         }
       })
       .catch((catalogError) => {
-        if (
-          claudeCatalogRequestGenerations.get(environmentId)
-          === requestGeneration
-        ) {
+        if (claudeCatalogRequestGenerations.get(environmentId) === requestGeneration) {
           console.debug(
             "[ClaudeTmuxChatTab] Claude model catalog unavailable; using bundled fallback",
             catalogError,
           );
         }
       });
-  }, [
-    backendHydrated,
-    environmentId,
-    refreshRequestId,
-    setModelCatalog,
-    setModels,
-  ]);
+  }, [backendHydrated, environmentId, refreshRequestId, setModelCatalog, setModels]);
 
   // 1. Subscribe to backend events (one listener for the whole tab).
   useEffect(() => {
@@ -662,13 +621,15 @@ export function ClaudeTmuxChatTab({
             }
           } else if (ev.event_kind === "PermissionRequest") {
             if (isQuestionPermissionPayload(ev.payload)) {
-              void autoAllowPermissionHook(tabId, environmentId, ev.event_id, ev.payload).catch((e) => {
-                addPendingPermission(
-                  storeKey,
-                  payloadToPermission(ev.event_id, ev.payload, timing),
-                );
-                setError(String(e));
-              });
+              void autoAllowPermissionHook(tabId, environmentId, ev.event_id, ev.payload).catch(
+                (e) => {
+                  addPendingPermission(
+                    storeKey,
+                    payloadToPermission(ev.event_id, ev.payload, timing),
+                  );
+                  setError(String(e));
+                },
+              );
               removePendingPermission(storeKey, ev.event_id);
             } else {
               addPendingPermission(storeKey, payloadToPermission(ev.event_id, ev.payload, timing));
@@ -676,17 +637,19 @@ export function ClaudeTmuxChatTab({
           } else if (ev.event_kind === "Elicitation") {
             addPendingElicitation(storeKey, payloadToElicitation(ev.event_id, ev.payload, timing));
           } else if (ev.event_kind === "Notification" || ev.event_kind === "Stop") {
-            const payload = ev.payload && typeof ev.payload === "object"
-              ? ev.payload as Record<string, unknown>
-              : undefined;
+            const payload =
+              ev.payload && typeof ev.payload === "object"
+                ? (ev.payload as Record<string, unknown>)
+                : undefined;
             pushInfoEvent(storeKey, {
               id: ev.event_id,
               kind: ev.event_kind,
-              message: typeof payload?.message === "string"
-                ? payload.message
-                : ev.event_kind === "Stop"
-                  ? "Claude finished responding"
-                  : "Claude sent a notification",
+              message:
+                typeof payload?.message === "string"
+                  ? payload.message
+                  : ev.event_kind === "Stop"
+                    ? "Claude finished responding"
+                    : "Claude sent a notification",
               receivedAt: new Date(ev.requested_at ?? Date.now()).toISOString(),
             });
           }
@@ -753,16 +716,14 @@ export function ClaudeTmuxChatTab({
         initialPrompt,
         model: selectedModel,
         effort: effortOptions.length > 0 ? effectiveEffort : undefined,
-        fastMode:
-          selectedModelObj.supportsFastMode === true && fastModeEnabled === true,
+        fastMode: selectedModelObj.supportsFastMode === true && fastModeEnabled === true,
         resumeSessionId,
         replaceExisting,
-      })
-        .catch((e) => {
-          // Re-arm so the user can retry from the start screen.
-          startedRef.current = false;
-          setError(String(e));
-        });
+      }).catch((e) => {
+        // Re-arm so the user can retry from the start screen.
+        startedRef.current = false;
+        setError(String(e));
+      });
     },
     [
       tabId,
@@ -798,12 +759,7 @@ export function ClaudeTmuxChatTab({
     // `isThinking` covers the post-HTTP window where Claude is still
     // processing but `sending` has already reset; without it a user could
     // submit a second message before the first turn finishes.
-    if (
-      (!text && attachments.length === 0) ||
-      sending ||
-      isThinking ||
-      settingsSwitching
-    ) {
+    if ((!text && attachments.length === 0) || sending || isThinking || settingsSwitching) {
       return false;
     }
     setSending(true);
@@ -840,10 +796,7 @@ export function ClaudeTmuxChatTab({
     }
   };
 
-  const handleSubmit = async (
-    text: string,
-    attachments: TmuxAttachment[] = [],
-  ) => {
+  const handleSubmit = async (text: string, attachments: TmuxAttachment[] = []) => {
     return submitPrompt(text, attachments, true);
   };
 
@@ -860,9 +813,7 @@ export function ClaudeTmuxChatTab({
         });
       } catch (error) {
         setError(
-          `Failed to queue prompt: ${
-            error instanceof Error ? error.message : "Unknown error"
-          }`,
+          `Failed to queue prompt: ${error instanceof Error ? error.message : "Unknown error"}`,
         );
         throw error;
       }
@@ -883,8 +834,7 @@ export function ClaudeTmuxChatTab({
   const promoteNextQueuedPromptToDraft = useCallback(async () => {
     const store = useClaudeTmuxStore.getState();
     const hasCurrentDraft =
-      store.getDraftText(storeKey).trim().length > 0 ||
-      store.getAttachments(storeKey).length > 0;
+      store.getDraftText(storeKey).trim().length > 0 || store.getAttachments(storeKey).length > 0;
     if (hasCurrentDraft) return;
 
     const head = store.getQueuedMessages(storeKey)[0];
@@ -922,10 +872,7 @@ export function ClaudeTmuxChatTab({
     }
   };
 
-  const handleApproval = async (
-    eventId: string,
-    decision: "approve" | "block",
-  ) => {
+  const handleApproval = async (eventId: string, decision: "approve" | "block") => {
     try {
       await answerPreToolUse(tabId, eventId, decision, undefined, environmentId);
       removePendingApproval(storeKey, eventId);
@@ -1086,8 +1033,7 @@ export function ClaudeTmuxChatTab({
   const clampEffortToModel = useCallback(
     (modelId: string) => {
       const levels = supportedEffortLevels(getTmuxModel(modelId, availableModels));
-      const current =
-        useClaudeTmuxStore.getState().effortLevels.get(storeKey) ?? DEFAULT_EFFORT;
+      const current = useClaudeTmuxStore.getState().effortLevels.get(storeKey) ?? DEFAULT_EFFORT;
       if (levels.length > 0 && !levels.includes(current)) {
         setEffortLevel(storeKey, fallbackEffort(levels));
       }
@@ -1211,8 +1157,7 @@ export function ClaudeTmuxChatTab({
       setElapsedSeconds(null);
       return;
     }
-    const update = () =>
-      setElapsedSeconds(Math.floor((Date.now() - busyStartedAt) / 1000));
+    const update = () => setElapsedSeconds(Math.floor((Date.now() - busyStartedAt) / 1000));
     update();
     const id = setInterval(update, 1000);
     return () => clearInterval(id);
@@ -1231,9 +1176,7 @@ export function ClaudeTmuxChatTab({
           />
           <span>Claude (tmux)</span>
           {tabState?.sessionId && (
-            <span className="font-mono opacity-60">
-              {tabState.sessionId.slice(0, 8)}
-            </span>
+            <span className="font-mono opacity-60">{tabState.sessionId.slice(0, 8)}</span>
           )}
           {resumedSession && (
             <span
@@ -1325,119 +1268,113 @@ export function ClaudeTmuxChatTab({
                       onStartFresh={() => launchSession(undefined, true)}
                       onPickResume={() => setResumeDialogOpen(true)}
                       selectedModel={selectedModelObj.name}
-                      effortLabel={
-                        effortOptions.length > 0
-                          ? EFFORT_LABELS[effectiveEffort]
-                          : null
-                      }
+                      effortLabel={effortOptions.length > 0 ? EFFORT_LABELS[effectiveEffort] : null}
                       planMode={planMode}
                     />
                   ) : (
                     <div className="text-xs text-muted-foreground italic py-8 text-center">
-                      {running
-                        ? "Waiting for Claude..."
-                        : "Starting Claude under tmux..."}
+                      {running ? "Waiting for Claude..." : "Starting Claude under tmux..."}
                     </div>
                   )
                 ) : undefined
               }
               footer={
-              /*
+                /*
                 `space-y-3` supplies the gap that the shared BlockingPromptCard
                 deliberately dropped: in the native tabs the compose dock spaces
                 these cards, but this footer stacks them itself.
               */
-              <div className="max-w-3xl mx-auto min-w-0 px-2 @sm:px-4 py-3 space-y-3">
-                {pendingApprovals.map((a) => (
-                  <ApprovalCard
-                    key={a.eventId}
-                    approval={a}
-                    onApprove={() => handleApproval(a.eventId, "approve")}
-                    onDeny={() => handleApproval(a.eventId, "block")}
-                  />
-                ))}
+                <div className="max-w-3xl mx-auto min-w-0 px-2 @sm:px-4 py-3 space-y-3">
+                  {pendingApprovals.map((a) => (
+                    <ApprovalCard
+                      key={a.eventId}
+                      approval={a}
+                      onApprove={() => handleApproval(a.eventId, "approve")}
+                      onDeny={() => handleApproval(a.eventId, "block")}
+                    />
+                  ))}
 
-                {pendingQuestions.map((q) => (
-                  <ClaudeQuestionCard
-                    key={q.eventId}
-                    question={{
-                      id: q.eventId,
-                      sessionId: tabState?.sessionId ?? tabId,
-                      questions: q.questions,
-                      toolUseId: q.eventId,
-                      expiresAt: q.expiresAt,
-                    }}
-                    onSubmitAnswers={(answers) => handleQuestionAnswer(q, answers)}
-                    onDismiss={() => handleQuestionReject(q)}
-                    // Cleared by claudeTmuxStore when the question resolves.
-                    draftKey={tmuxQuestionDraftKey(storeKey, q.eventId)}
-                  />
-                ))}
+                  {pendingQuestions.map((q) => (
+                    <ClaudeQuestionCard
+                      key={q.eventId}
+                      question={{
+                        id: q.eventId,
+                        sessionId: tabState?.sessionId ?? tabId,
+                        questions: q.questions,
+                        toolUseId: q.eventId,
+                        expiresAt: q.expiresAt,
+                      }}
+                      onSubmitAnswers={(answers) => handleQuestionAnswer(q, answers)}
+                      onDismiss={() => handleQuestionReject(q)}
+                      // Cleared by claudeTmuxStore when the question resolves.
+                      draftKey={tmuxQuestionDraftKey(storeKey, q.eventId)}
+                    />
+                  ))}
 
-                {pendingPlans.map((p) => (
-                  <TmuxPlanCard
-                    key={p.eventId}
-                    plan={p}
-                    sessionKey={storeKey}
-                    onRespond={(approved, feedback) =>
-                      handlePlanResponse(p, approved, feedback)
-                    }
-                  />
-                ))}
+                  {pendingPlans.map((p) => (
+                    <TmuxPlanCard
+                      key={p.eventId}
+                      plan={p}
+                      sessionKey={storeKey}
+                      onRespond={(approved, feedback) => handlePlanResponse(p, approved, feedback)}
+                    />
+                  ))}
 
-                {pendingPermissions.map((p) => (
-                  <TmuxPermissionCard
-                    key={p.eventId}
-                    permission={p}
-                    onRespond={(allow, updatedPermissions) =>
-                      handlePermissionResponse(p, allow, updatedPermissions)
-                    }
-                  />
-                ))}
+                  {pendingPermissions.map((p) => (
+                    <TmuxPermissionCard
+                      key={p.eventId}
+                      permission={p}
+                      onRespond={(allow, updatedPermissions) =>
+                        handlePermissionResponse(p, allow, updatedPermissions)
+                      }
+                    />
+                  ))}
 
-                {pendingElicitations.map((e) => (
-                  <TmuxElicitationCard
-                    key={e.eventId}
-                    elicitation={e}
-                    sessionKey={storeKey}
-                    onRespond={(action, content) =>
-                      handleElicitationResponse(e, action, content)
-                    }
-                  />
-                ))}
+                  {pendingElicitations.map((e) => (
+                    <TmuxElicitationCard
+                      key={e.eventId}
+                      elicitation={e}
+                      sessionKey={storeKey}
+                      onRespond={(action, content) => handleElicitationResponse(e, action, content)}
+                    />
+                  ))}
 
-                {visibleSelectionPrompt && tabState && (
-                  <ClaudeQuestionCard
-                    key={selectionPromptKey(visibleSelectionPrompt)}
-                    question={selectionPromptToQuestion(visibleSelectionPrompt, storeKey)}
-                    initialAnswers={[selectionPromptInitialAnswer(visibleSelectionPrompt)]}
-                    allowCustomAnswer={false}
-                    allowOptionDeselect={false}
-                    hideDismiss
-                    onSubmitAnswers={(answers) =>
-                      handleSelectionPromptAnswers(tabState.observation, visibleSelectionPrompt, answers)
-                    }
-                  />
-                )}
+                  {visibleSelectionPrompt && tabState && (
+                    <ClaudeQuestionCard
+                      key={selectionPromptKey(visibleSelectionPrompt)}
+                      question={selectionPromptToQuestion(visibleSelectionPrompt, storeKey)}
+                      initialAnswers={[selectionPromptInitialAnswer(visibleSelectionPrompt)]}
+                      allowCustomAnswer={false}
+                      allowOptionDeselect={false}
+                      hideDismiss
+                      onSubmitAnswers={(answers) =>
+                        handleSelectionPromptAnswers(
+                          tabState.observation,
+                          visibleSelectionPrompt,
+                          answers,
+                        )
+                      }
+                    />
+                  )}
 
-                {/* Claude's thinking indicator matches the native tab. It is shown only
+                  {/* Claude's thinking indicator matches the native tab. It is shown only
                     while running so a freshly mounted tab without a session does not
                     flash a misleading busy state. */}
-                {isThinking && running && (
-                  <div className="py-2">
-                    <div className="flex items-center gap-2 text-muted-foreground">
-                      <AgentThinkingIndicator agentName="Claude" />
-                      {elapsedSeconds !== null && elapsedSeconds > 0 && (
-                        <span className="text-xs text-muted-foreground/50">
-                          {formatElapsed(elapsedSeconds)}
-                        </span>
-                      )}
+                  {isThinking && running && (
+                    <div className="py-2">
+                      <div className="flex items-center gap-2 text-muted-foreground">
+                        <AgentThinkingIndicator agentName="Claude" />
+                        {elapsedSeconds !== null && elapsedSeconds > 0 && (
+                          <span className="text-xs text-muted-foreground/50">
+                            {formatElapsed(elapsedSeconds)}
+                          </span>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )}
 
-                <div className="h-32" aria-hidden="true" />
-              </div>
+                  <div className="h-32" aria-hidden="true" />
+                </div>
               }
               scrollProps={scrollProps}
               virtuosoRef={virtuosoRef}
@@ -1446,7 +1383,6 @@ export function ClaudeTmuxChatTab({
                 getSearchText: getNativeMessageSearchText,
               }}
             />
-
           </div>
 
           {/* Compose bar — stays "busy" for the full turn (HTTP submit + Claude
@@ -1529,17 +1465,10 @@ export function ClaudeTmuxChatTab({
               onTogglePlanMode={(enabled) => {
                 void handleSelectPlanMode(enabled);
               }}
-              modelDisabled={
-                (hasStarted && !running) ||
-                sending ||
-                isThinking ||
-                settingsSwitching
-              }
+              modelDisabled={(hasStarted && !running) || sending || isThinking || settingsSwitching}
               modelSwitching={modelSwitching}
               effortSwitching={effortSwitching}
-              planLocked={
-                !running || sending || isThinking || settingsSwitching
-              }
+              planLocked={!running || sending || isThinking || settingsSwitching}
               layout={centerCompose ? "centered" : "bottom"}
             />
           </NativeComposeDock>

@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 
 async function loadNativeEvents() {
-  return import("../../../apps/web/src/lib/native/events.ts?real") as Promise<typeof import("../../../apps/web/src/lib/native/events")>;
+  return import("../../../apps/web/src/lib/native/events.ts?real") as Promise<
+    typeof import("../../../apps/web/src/lib/native/events")
+  >;
 }
 
 afterEach(() => {
@@ -29,7 +31,10 @@ describe("native event wrapper", () => {
 
   test("returns a no-op unlisten function without a preload bridge", async () => {
     const { listen } = await loadNativeEvents();
-    const unlisten = await listen("event", mock(() => undefined));
+    const unlisten = await listen(
+      "event",
+      mock(() => undefined),
+    );
     expect(unlisten()).toBeUndefined();
   });
 
@@ -38,9 +43,10 @@ describe("native event wrapper", () => {
     const unlisten = mock(() => undefined);
     let resolveReady: (() => void) | undefined;
     const eventStreamReady = mock(
-      () => new Promise<void>((resolve) => {
-        resolveReady = resolve;
-      }),
+      () =>
+        new Promise<void>((resolve) => {
+          resolveReady = resolve;
+        }),
     );
     window.orkestrator = {
       listen: mock(() => unlisten),
@@ -48,11 +54,13 @@ describe("native event wrapper", () => {
     } as never;
 
     let settled = false;
-    const pending = listen("terminal-output-session-1", mock(() => undefined))
-      .then((value) => {
-        settled = true;
-        return value;
-      });
+    const pending = listen(
+      "terminal-output-session-1",
+      mock(() => undefined),
+    ).then((value) => {
+      settled = true;
+      return value;
+    });
     await Promise.resolve();
     expect(settled).toBe(false);
     expect(eventStreamReady).toHaveBeenCalledWith("terminal-output-session-1");
@@ -74,7 +82,10 @@ describe("native event wrapper", () => {
     } as never;
 
     await expect(
-      listen("terminal-output-session-1", mock(() => undefined)),
+      listen(
+        "terminal-output-session-1",
+        mock(() => undefined),
+      ),
     ).rejects.toThrow("stream unavailable");
     expect(unlisten).toHaveBeenCalledTimes(1);
   });

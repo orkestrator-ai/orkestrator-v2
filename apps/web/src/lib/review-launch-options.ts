@@ -1,4 +1,8 @@
-import type { ReviewModelCatalog, ReviewModelOption, ReviewTabType } from "@/components/review/ReviewLaunchDialog";
+import type {
+  ReviewModelCatalog,
+  ReviewModelOption,
+  ReviewTabType,
+} from "@/components/review/ReviewLaunchDialog";
 import { CODEX_MODELS } from "@/lib/codex-client";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
@@ -62,9 +66,7 @@ const OPENCODE_DEFAULT_MODEL: ReviewModelOption = {
   reasoningEfforts: [],
 };
 
-export function includeOpenCodeDefaultModel(
-  models: ReviewModelOption[],
-): ReviewModelOption[] {
+export function includeOpenCodeDefaultModel(models: ReviewModelOption[]): ReviewModelOption[] {
   return [
     OPENCODE_DEFAULT_MODEL,
     ...models.filter((model) => model.id !== OPENCODE_DEFAULT_MODEL.id),
@@ -99,9 +101,7 @@ export function includeMissingOpenCodeModels(
     });
   }
   if (extras.length === 0) return models;
-  const withoutPlaceholder = models.length === 1 && models[0]?.id === "default"
-    ? []
-    : models;
+  const withoutPlaceholder = models.length === 1 && models[0]?.id === "default" ? [] : models;
   return [...withoutPlaceholder, ...extras];
 }
 
@@ -112,37 +112,35 @@ export function buildReviewModelCatalog(
     id: model.id,
     name: model.name,
     description: model.description,
-    reasoningEfforts:
-      model.supportedEffortLevels?.length
-        ? [...model.supportedEffortLevels]
-        : model.supportsEffort
-          ? ["low", "medium", "high"]
-          : [],
+    reasoningEfforts: model.supportedEffortLevels?.length
+      ? [...model.supportedEffortLevels]
+      : model.supportsEffort
+        ? ["low", "medium", "high"]
+        : [],
     ...(model.resolvedModel ? { resolvedModel: model.resolvedModel } : {}),
   }));
-  const claude = liveClaudeModels.length > 0
-    ? liveClaudeModels
-    : CLAUDE_FALLBACK_MODELS;
+  const claude = liveClaudeModels.length > 0 ? liveClaudeModels : CLAUDE_FALLBACK_MODELS;
 
   const codexModels = useCodexStore.getState().models;
   const codex = (codexModels.length > 0 ? codexModels : CODEX_MODELS).map((model) => ({
-      id: model.id,
-      name: model.name,
-      description: model.description,
-      reasoningEfforts: [...(model.reasoningEfforts ?? ["medium", "high"])],
-    }));
+    id: model.id,
+    name: model.name,
+    description: model.description,
+    reasoningEfforts: [...(model.reasoningEfforts ?? ["medium", "high"])],
+  }));
 
   const openCodeState = useOpenCodeStore.getState();
-  const liveOpenCodeModels = environmentId === null
-    ? []
-    : environmentId
-      ? openCodeState.getModels(environmentId)
-      : Array.from(openCodeState.models.values())
-        .flat()
-        .filter(
-          (model, index, models) =>
-            models.findIndex((candidate) => candidate.id === model.id) === index,
-        );
+  const liveOpenCodeModels =
+    environmentId === null
+      ? []
+      : environmentId
+        ? openCodeState.getModels(environmentId)
+        : Array.from(openCodeState.models.values())
+            .flat()
+            .filter(
+              (model, index, models) =>
+                models.findIndex((candidate) => candidate.id === model.id) === index,
+            );
   const opencode = liveOpenCodeModels.map((model) => ({
     id: model.id,
     name: openCodeModelDisplayLabel(model.id, model.name),
@@ -156,11 +154,9 @@ export function buildReviewModelCatalog(
       id: model.id,
       name: model.label,
       description: model.description,
-      reasoningEfforts: Array.from(new Set(
-        model.reasoning
-          ?.map((option) => option.id)
-          .filter((id) => id !== "default") ?? [],
-      )),
+      reasoningEfforts: Array.from(
+        new Set(model.reasoning?.map((option) => option.id).filter((id) => id !== "default") ?? []),
+      ),
     }));
   const cursor = toLaunchOptions(cachedAcpCatalog.cursorModels);
   const grok = toLaunchOptions(cachedAcpCatalog.grokModels);
@@ -168,24 +164,24 @@ export function buildReviewModelCatalog(
   return {
     claude: claude.length > 0 ? claude : CLAUDE_FALLBACK_MODELS,
     codex,
-    cursor: cursor.length > 0
-      ? cursor
-      : [{ id: "default", name: "Cursor automatic", reasoningEfforts: [] }],
-    grok: grok.length > 0
-      ? grok
-      : [{ id: "default", name: "Grok Build default", reasoningEfforts: [] }],
-    opencode: opencode.length > 0
-      ? opencode
-      : [{ id: "default", name: "Default", reasoningEfforts: [] }],
+    cursor:
+      cursor.length > 0
+        ? cursor
+        : [{ id: "default", name: "Cursor automatic", reasoningEfforts: [] }],
+    grok:
+      grok.length > 0
+        ? grok
+        : [{ id: "default", name: "Grok Build default", reasoningEfforts: [] }],
+    opencode:
+      opencode.length > 0 ? opencode : [{ id: "default", name: "Default", reasoningEfforts: [] }],
   };
 }
 
 export function resolveDefaultReviewTabType(options: {
   defaultAgent: DefaultAgent;
-  environment: Pick<
-    Environment,
-    "claudeMode" | "claudeNativeBackend" | "opencodeMode" | "codexMode"
-  > | undefined;
+  environment:
+    | Pick<Environment, "claudeMode" | "claudeNativeBackend" | "opencodeMode" | "codexMode">
+    | undefined;
   global: GlobalConfig;
   repositoryConfig?: RepositoryConfig;
 }): ReviewTabType {

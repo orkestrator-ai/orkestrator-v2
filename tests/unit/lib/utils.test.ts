@@ -25,9 +25,7 @@ describe("cn utility", () => {
     const isActive = true;
     const isDisabled = false;
 
-    expect(cn("base", isActive && "active", isDisabled && "disabled")).toBe(
-      "base active"
-    );
+    expect(cn("base", isActive && "active", isDisabled && "disabled")).toBe("base active");
   });
 
   test("handles array of classes", () => {
@@ -40,9 +38,9 @@ describe("cn utility", () => {
   });
 
   test("handles mixed inputs", () => {
-    expect(
-      cn("base", ["flex", "items-center"], { "text-red-500": true, hidden: false })
-    ).toBe("base flex items-center text-red-500");
+    expect(cn("base", ["flex", "items-center"], { "text-red-500": true, hidden: false })).toBe(
+      "base flex items-center text-red-500",
+    );
   });
 
   test("handles no inputs", () => {

@@ -82,6 +82,6 @@ export const useFilesPanelStore = create<FilesPanelState>()(
         panelWidth: state.panelWidth,
         expandedFolders: state.expandedFolders,
       }),
-    }
-  )
+    },
+  ),
 );

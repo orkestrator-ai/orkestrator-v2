@@ -76,7 +76,10 @@ function environment(overrides: Partial<Environment> = {}): Environment {
   } as Environment;
 }
 
-function persisted(root: PaneNode, containerId: string | null = "container-1"): PersistedPaneLayout {
+function persisted(
+  root: PaneNode,
+  containerId: string | null = "container-1",
+): PersistedPaneLayout {
   return {
     version: PANE_LAYOUT_VERSION,
     environmentId: "env-1",
@@ -127,10 +130,16 @@ describe("collectPaneDependencyIds", () => {
     // user has split their layout, and it is invisible to a leaf-only scan.
     const root = split(
       split(
-        leaf("a", [{ id: "b1", type: "claude-build", buildTabData: { pipelineId: "deep-pipeline" } }]),
-        leaf("b", [{ id: "r1", type: "looped-review", loopedReviewTabData: { workflowId: "deep-workflow" } }]),
+        leaf("a", [
+          { id: "b1", type: "claude-build", buildTabData: { pipelineId: "deep-pipeline" } },
+        ]),
+        leaf("b", [
+          { id: "r1", type: "looped-review", loopedReviewTabData: { workflowId: "deep-workflow" } },
+        ]),
       ),
-      leaf("c", [{ id: "b2", type: "claude-build", buildTabData: { pipelineId: "other-pipeline" } }]),
+      leaf("c", [
+        { id: "b2", type: "claude-build", buildTabData: { pipelineId: "other-pipeline" } },
+      ]),
     );
 
     expect(collectPaneDependencyIds(root)).toEqual({
@@ -168,19 +177,21 @@ describe("collectPaneDependencyIds", () => {
     expect(collectPaneDependencyIds({ kind: "leaf", tabs: "nope" })).toEqual(empty);
     expect(collectPaneDependencyIds({ kind: "split", children: "nope" })).toEqual(empty);
     expect(collectPaneDependencyIds({ kind: "mystery", tabs: [] })).toEqual(empty);
-    expect(collectPaneDependencyIds({
-      kind: "leaf",
-      tabs: [
-        null,
-        "tab",
-        ["tab"],
-        { id: "a", buildTabData: "nope" },
-        { id: "b", buildTabData: { pipelineId: 7 } },
-        { id: "c", buildTabData: { pipelineId: "   " } },
-        { id: "d", loopedReviewTabData: [] },
-        { id: "e", loopedReviewTabData: { workflowId: "" } },
-      ],
-    })).toEqual(empty);
+    expect(
+      collectPaneDependencyIds({
+        kind: "leaf",
+        tabs: [
+          null,
+          "tab",
+          ["tab"],
+          { id: "a", buildTabData: "nope" },
+          { id: "b", buildTabData: { pipelineId: 7 } },
+          { id: "c", buildTabData: { pipelineId: "   " } },
+          { id: "d", loopedReviewTabData: [] },
+          { id: "e", loopedReviewTabData: { workflowId: "" } },
+        ],
+      }),
+    ).toEqual(empty);
   });
 });
 
@@ -196,7 +207,11 @@ describe("hydratePaneLayoutDependencies", () => {
         { id: "b2", type: "claude-build", buildTabData: { pipelineId: "missing-pipeline" } },
       ]),
       leaf("b", [
-        { id: "r1", type: "looped-review", loopedReviewTabData: { workflowId: "missing-workflow" } },
+        {
+          id: "r1",
+          type: "looped-review",
+          loopedReviewTabData: { workflowId: "missing-workflow" },
+        },
         { id: "m1", type: "multi-review", multiReviewTabData: { workflowId: "missing-multi" } },
       ]),
     );
@@ -238,16 +253,14 @@ describe("reconcileAuthoritativePaneLayout", () => {
     const current = paneState(leaf("default", [{ id: "tab-2", type: "plain" }]));
     current.root = { ...current.root, activeTabId: "tab-2" } as PaneNode;
 
-    const restored = reconcileAuthoritativePaneLayout(
-      "env-1",
-      persisted(plainRoot),
-      current,
-    );
+    const restored = reconcileAuthoritativePaneLayout("env-1", persisted(plainRoot), current);
 
     expect(restored).not.toBeNull();
     expect(restored!.backendRevision).toBe(4);
-    expect((restored!.root as { tabs: Array<{ id: string }> }).tabs.map(({ id }) => id))
-      .toEqual(["tab-1", "tab-2"]);
+    expect((restored!.root as { tabs: Array<{ id: string }> }).tabs.map(({ id }) => id)).toEqual([
+      "tab-1",
+      "tab-2",
+    ]);
     expect((restored!.root as { activeTabId: string }).activeTabId).toBe("tab-1");
   });
 
@@ -271,29 +284,31 @@ describe("reconcileAuthoritativePaneLayout", () => {
   test("refuses a snapshot for an environment this client no longer has", () => {
     useEnvironmentStore.setState({ environments: [] });
 
-    expect(reconcileAuthoritativePaneLayout(
-      "env-1",
-      persisted(plainRoot),
-      paneState(plainRoot),
-    )).toBeNull();
+    expect(
+      reconcileAuthoritativePaneLayout("env-1", persisted(plainRoot), paneState(plainRoot)),
+    ).toBeNull();
   });
 
   test("refuses a snapshot from another container generation", () => {
     // The pane state still points at the old container, so its tabs address
     // sessions that no longer exist.
-    expect(reconcileAuthoritativePaneLayout(
-      "env-1",
-      persisted(plainRoot),
-      paneState(plainRoot, "container-old"),
-    )).toBeNull();
+    expect(
+      reconcileAuthoritativePaneLayout(
+        "env-1",
+        persisted(plainRoot),
+        paneState(plainRoot, "container-old"),
+      ),
+    ).toBeNull();
   });
 
   test("refuses a snapshot reconciliation rejects", () => {
-    expect(reconcileAuthoritativePaneLayout(
-      "env-1",
-      { ...persisted(plainRoot), version: PANE_LAYOUT_VERSION + 1 },
-      paneState(plainRoot),
-    )).toBeNull();
+    expect(
+      reconcileAuthoritativePaneLayout(
+        "env-1",
+        { ...persisted(plainRoot), version: PANE_LAYOUT_VERSION + 1 },
+        paneState(plainRoot),
+      ),
+    ).toBeNull();
   });
 
   test("drops a tab whose backing record the backend no longer has", () => {
@@ -302,15 +317,12 @@ describe("reconcileAuthoritativePaneLayout", () => {
       { id: "build", type: "claude-build", buildTabData: { pipelineId: "gone" } },
     ]);
 
-    const restored = reconcileAuthoritativePaneLayout(
-      "env-1",
-      persisted(root),
-      paneState(root),
-    );
+    const restored = reconcileAuthoritativePaneLayout("env-1", persisted(root), paneState(root));
 
     expect(restored).not.toBeNull();
-    expect((restored!.root as { tabs: Array<{ id: string }> }).tabs.map(({ id }) => id))
-      .toEqual(["plain"]);
+    expect((restored!.root as { tabs: Array<{ id: string }> }).tabs.map(({ id }) => id)).toEqual([
+      "plain",
+    ]);
   });
 
   test("restores a Multi Review tab only while its authoritative workflow exists", () => {
@@ -318,31 +330,39 @@ describe("reconcileAuthoritativePaneLayout", () => {
       { id: "plain", type: "plain" },
       { id: "multi", type: "multi-review", multiReviewTabData: { workflowId: "multi-1" } },
     ]);
-    useMultiReviewStore.setState({ workflows: new Map([["multi-1", {
-      id: "multi-1",
-    } as never]]) });
+    useMultiReviewStore.setState({
+      workflows: new Map([
+        [
+          "multi-1",
+          {
+            id: "multi-1",
+          } as never,
+        ],
+      ]),
+    });
 
-    const restored = reconcileAuthoritativePaneLayout(
-      "env-1", persisted(root), paneState(root),
-    );
-    expect((restored!.root as { tabs: Array<{ id: string }> }).tabs.map(({ id }) => id))
-      .toEqual(["plain", "multi"]);
+    const restored = reconcileAuthoritativePaneLayout("env-1", persisted(root), paneState(root));
+    expect((restored!.root as { tabs: Array<{ id: string }> }).tabs.map(({ id }) => id)).toEqual([
+      "plain",
+      "multi",
+    ]);
 
     useMultiReviewStore.setState({ workflows: new Map() });
-    const dropped = reconcileAuthoritativePaneLayout(
-      "env-1", persisted(root), paneState(root),
-    );
-    expect((dropped!.root as { tabs: Array<{ id: string }> }).tabs.map(({ id }) => id))
-      .toEqual(["plain"]);
+    const dropped = reconcileAuthoritativePaneLayout("env-1", persisted(root), paneState(root));
+    expect((dropped!.root as { tabs: Array<{ id: string }> }).tabs.map(({ id }) => id)).toEqual([
+      "plain",
+    ]);
   });
 
   test("resolves a local environment against a null container", () => {
     useEnvironmentStore.setState({
-      environments: [environment({
-        environmentType: "local",
-        containerId: null,
-        worktreePath: "/tmp/worktree",
-      })],
+      environments: [
+        environment({
+          environmentType: "local",
+          containerId: null,
+          worktreePath: "/tmp/worktree",
+        }),
+      ],
     });
     const root = leaf("default", [
       { id: "file", type: "file", fileData: { filePath: "src/index.ts" } },

@@ -106,13 +106,8 @@ function splitAtUtf8Boundaries(
     const codePoint = character.codePointAt(0)!;
     // for...of keeps valid surrogate pairs together. Lone surrogates reach
     // TextEncoder as U+FFFD, which is also three UTF-8 bytes.
-    const characterBytes = codePoint <= 0x7f
-      ? 1
-      : codePoint <= 0x7ff
-        ? 2
-        : codePoint <= 0xffff
-          ? 3
-          : 4;
+    const characterBytes =
+      codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
     if (characterBytes > maxBytes) {
       throw new RangeError("maxBufferBytes cannot contain one UTF-8 code point");
     }
@@ -153,7 +148,8 @@ export class TerminalHttpInputBatcher {
     private readonly sendTimeoutMs = TERMINAL_HTTP_INPUT_SEND_TIMEOUT_MS,
   ) {
     if (typeof send !== "function") throw new TypeError("send must be a function");
-    if (!Number.isFinite(delayMs) || delayMs < 0) throw new RangeError("delayMs must be non-negative");
+    if (!Number.isFinite(delayMs) || delayMs < 0)
+      throw new RangeError("delayMs must be non-negative");
     if (!Number.isSafeInteger(maxBufferBytes) || maxBufferBytes < 1) {
       throw new RangeError("maxBufferBytes must be a positive integer");
     }
@@ -167,9 +163,9 @@ export class TerminalHttpInputBatcher {
 
   enqueue(request: TerminalInputRequest): Promise<void> {
     if (
-      (request?.command !== "terminal_write" && request?.command !== "local_terminal_write")
-      || typeof request.sessionId !== "string"
-      || typeof request.data !== "string"
+      (request?.command !== "terminal_write" && request?.command !== "local_terminal_write") ||
+      typeof request.sessionId !== "string" ||
+      typeof request.data !== "string"
     ) {
       return Promise.reject(new TypeError("Invalid terminal input request"));
     }
@@ -183,9 +179,11 @@ export class TerminalHttpInputBatcher {
 
     const incomingBytes = this.encoder.encode(request.data).byteLength;
     if (incomingBytes > this.maxQueuedBytes) {
-      return Promise.reject(new RangeError(
-        `Terminal HTTP input of ${incomingBytes} bytes exceeds the ${this.maxQueuedBytes}-byte terminal queue limit`,
-      ));
+      return Promise.reject(
+        new RangeError(
+          `Terminal HTTP input of ${incomingBytes} bytes exceeds the ${this.maxQueuedBytes}-byte terminal queue limit`,
+        ),
+      );
     }
 
     let chunks: Array<{ data: string; bytes: number }>;
@@ -221,7 +219,10 @@ export class TerminalHttpInputBatcher {
 
     // Strictly ordered admission: once anything is parked, everything parks, so
     // a later keystroke can never overtake a queued paste.
-    if (state.admission.length === 0 && state.outstandingBytes + incomingBytes <= this.maxQueuedBytes) {
+    if (
+      state.admission.length === 0 &&
+      state.outstandingBytes + incomingBytes <= this.maxQueuedBytes
+    ) {
       state.outstandingBytes += incomingBytes;
       this.acceptChunks(key, state, chunks, request.data, waiter);
       return waiter.promise;
@@ -265,9 +266,9 @@ export class TerminalHttpInputBatcher {
 
   /** Flushes all input already handed to every terminal. */
   flushAll(): Promise<void> {
-    const completions = [...this.pending.values()].map((state) => (
-      state.failed ? Promise.reject(state.failure) : this.flushState(state)
-    ));
+    const completions = [...this.pending.values()].map((state) =>
+      state.failed ? Promise.reject(state.failure) : this.flushState(state),
+    );
     return Promise.all(completions).then(() => undefined);
   }
 
@@ -278,9 +279,11 @@ export class TerminalHttpInputBatcher {
     // admissions would arm a fresh typing timer and stall the flush behind it.
     state.flushing += 1;
     this.markReady(state);
-    return Promise.all(completions).then(() => undefined).finally(() => {
-      state.flushing -= 1;
-    });
+    return Promise.all(completions)
+      .then(() => undefined)
+      .finally(() => {
+        state.flushing -= 1;
+      });
   }
 
   /**
@@ -300,7 +303,7 @@ export class TerminalHttpInputBatcher {
 
   /** Aborts and forgets every queue, for gateway teardown or reconnection. */
   resetAll(reason: unknown = new Error("Terminal HTTP input queues reset")): void {
-    for (const [key, state] of [...this.pending]) this.retire(key, state, reason);
+    for (const [key, state] of Array.from(this.pending)) this.retire(key, state, reason);
   }
 
   dispose(reason?: unknown): void {
@@ -445,7 +448,10 @@ export class TerminalHttpInputBatcher {
     );
   }
 
-  private sendWithTimeout(request: TerminalInputRequest, controller: AbortController): Promise<void> {
+  private sendWithTimeout(
+    request: TerminalInputRequest,
+    controller: AbortController,
+  ): Promise<void> {
     let timer: ReturnType<typeof setTimeout> | null = null;
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
@@ -455,16 +461,14 @@ export class TerminalHttpInputBatcher {
       }, this.sendTimeoutMs);
     });
     const operation = Promise.resolve().then(() => this.send(request, controller.signal));
-    return Promise.race([operation, timeout]).then(() => undefined).finally(() => {
-      if (timer) clearTimeout(timer);
-    });
+    return Promise.race([operation, timeout])
+      .then(() => undefined)
+      .finally(() => {
+        if (timer) clearTimeout(timer);
+      });
   }
 
-  private completeBatch(
-    key: string,
-    state: PendingInput,
-    inFlight: InFlightBatch,
-  ): void {
+  private completeBatch(key: string, state: PendingInput, inFlight: InFlightBatch): void {
     if (state.retired || state.inFlight !== inFlight || this.pending.get(key) !== state) return;
     state.inFlight = null;
     state.outstandingBytes -= inFlight.batch.bytes;
@@ -479,12 +483,12 @@ export class TerminalHttpInputBatcher {
     this.releaseAdmission(state);
     this.pump(key, state);
     if (
-      !state.inFlight
-      && state.batches.length === 0
-      && state.waiters.size === 0
-      && state.admission.length === 0
-      && state.outstandingBytes === 0
-      && !state.timer
+      !state.inFlight &&
+      state.batches.length === 0 &&
+      state.waiters.size === 0 &&
+      state.admission.length === 0 &&
+      state.outstandingBytes === 0 &&
+      !state.timer
     ) {
       this.pending.delete(key);
     }

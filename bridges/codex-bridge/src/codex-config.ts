@@ -1,5 +1,4 @@
-export const CODEX_MAX_CONCURRENT_THREADS_ENV =
-  "CODEX_MAX_CONCURRENT_THREADS_PER_SESSION";
+export const CODEX_MAX_CONCURRENT_THREADS_ENV = "CODEX_MAX_CONCURRENT_THREADS_PER_SESSION";
 export const DEFAULT_CODEX_MAX_CONCURRENT_THREADS = 5;
 export const ORKESTRATOR_AGENT_MCP_URL_ENV = "ORKESTRATOR_AGENT_MCP_URL";
 export const ORKESTRATOR_AGENT_MCP_TOKEN_ENV = "ORKESTRATOR_AGENT_MCP_TOKEN";
@@ -10,16 +9,10 @@ export const ORKESTRATOR_AGENT_MCP_TOKEN_ENV = "ORKESTRATOR_AGENT_MCP_TOKEN";
  */
 export const MAX_CODEX_CONCURRENT_THREADS = Number.MAX_SAFE_INTEGER - 1;
 
-export function resolveCodexMaxConcurrentThreads(
-  value: string | undefined,
-): number {
+export function resolveCodexMaxConcurrentThreads(value: string | undefined): number {
   if (!value?.trim()) return DEFAULT_CODEX_MAX_CONCURRENT_THREADS;
   const parsed = Number(value);
-  return (
-    Number.isSafeInteger(parsed)
-    && parsed >= 1
-    && parsed <= MAX_CODEX_CONCURRENT_THREADS
-  )
+  return Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= MAX_CODEX_CONCURRENT_THREADS
     ? parsed
     : DEFAULT_CODEX_MAX_CONCURRENT_THREADS;
 }
@@ -27,9 +20,7 @@ export function resolveCodexMaxConcurrentThreads(
 export function codexAppServerConfigOverrides(
   env: NodeJS.ProcessEnv = process.env,
 ): Record<string, string> {
-  const childLimit = resolveCodexMaxConcurrentThreads(
-    env[CODEX_MAX_CONCURRENT_THREADS_ENV],
-  );
+  const childLimit = resolveCodexMaxConcurrentThreads(env[CODEX_MAX_CONCURRENT_THREADS_ENV]);
   const overrides: Record<string, string> = {
     "features.goals": "true",
     // Codex 0.147+ negotiates the stateless MCP 2026-07-28 protocol and falls
@@ -40,9 +31,7 @@ export function codexAppServerConfigOverrides(
     // V2 prefers this root-inclusive key whenever it is present in config.toml.
     // Supplying both CLI overrides makes the Orkestrator setting authoritative
     // regardless of which multi-agent implementation Codex selects.
-    "features.multi_agent_v2.max_concurrent_threads_per_session": String(
-      childLimit + 1,
-    ),
+    "features.multi_agent_v2.max_concurrent_threads_per_session": String(childLimit + 1),
   };
   const rawUrl = env[ORKESTRATOR_AGENT_MCP_URL_ENV]?.trim();
   const token = env[ORKESTRATOR_AGENT_MCP_TOKEN_ENV]?.trim();
@@ -50,17 +39,18 @@ export function codexAppServerConfigOverrides(
     try {
       const url = new URL(rawUrl);
       if (
-        url.protocol === "http:"
-        && ["127.0.0.1", "localhost", "host.docker.internal"].includes(url.hostname)
-        && url.pathname === "/mcp"
-        && !url.username
-        && !url.password
+        url.protocol === "http:" &&
+        ["127.0.0.1", "localhost", "host.docker.internal"].includes(url.hostname) &&
+        url.pathname === "/mcp" &&
+        !url.username &&
+        !url.password
       ) {
         overrides["mcp_servers.orkestrator.url"] = JSON.stringify(url.toString());
         // The token stays in the child environment rather than argv/config,
         // where process listings and diagnostics could expose its value.
-        overrides["mcp_servers.orkestrator.bearer_token_env_var"] =
-          JSON.stringify(ORKESTRATOR_AGENT_MCP_TOKEN_ENV);
+        overrides["mcp_servers.orkestrator.bearer_token_env_var"] = JSON.stringify(
+          ORKESTRATOR_AGENT_MCP_TOKEN_ENV,
+        );
         // Ticket tools are useful but must never delay an app-server becoming
         // ready. Codex 0.147 starts optional MCP servers in the background.
         overrides["mcp_servers.orkestrator.required"] = "false";

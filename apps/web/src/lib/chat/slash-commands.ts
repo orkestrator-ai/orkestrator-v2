@@ -14,9 +14,7 @@ function normalizeCommandName(name: string): string {
  * Commands arrive from the Claude SDK as strings like "/compact" or "/clear".
  * Custom commands may carry a description in the form "/name - description".
  */
-export function parseSlashCommands(
-  commandStrings: string[] | undefined,
-): SlashCommand[] {
+export function parseSlashCommands(commandStrings: string[] | undefined): SlashCommand[] {
   if (!commandStrings || commandStrings.length === 0) {
     return [];
   }
@@ -42,7 +40,5 @@ export function parseSlashCommands(
     }
   }
 
-  return Array.from(commandMap.values()).sort((a, b) =>
-    a.name.localeCompare(b.name),
-  );
+  return Array.from(commandMap.values()).sort((a, b) => a.name.localeCompare(b.name));
 }

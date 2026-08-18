@@ -32,13 +32,7 @@ export type SessionTitleSource = "codex" | PersistedSessionTitleSource;
  * `running`: reporting them as idle would let the pipeline advance a phase, or a
  * tab start a new prompt, while the previous turn may still be executing.
  */
-export type SessionPhase =
-  | "starting"
-  | "running"
-  | "cancelling"
-  | "recovering"
-  | "idle"
-  | "failed";
+export type SessionPhase = "starting" | "running" | "cancelling" | "recovering" | "idle" | "failed";
 
 export type ExternalSessionStatus = "idle" | "running" | "error";
 
@@ -345,9 +339,7 @@ export class ThreadRegistry {
         unsubscribed: false,
         materialized: false,
         modelId: options.modelId,
-        confirmedModelsByTurn: new Map(
-          Object.entries(session?.confirmedModelsByTurn ?? {}),
-        ),
+        confirmedModelsByTurn: new Map(Object.entries(session?.confirmedModelsByTurn ?? {})),
         cwd: options.cwd,
         name: options.name ?? null,
       };
@@ -360,9 +352,7 @@ export class ThreadRegistry {
       }
       context.unsubscribed = false;
       if (options.modelId) context.modelId = options.modelId;
-      for (const [turnId, modelId] of Object.entries(
-        session?.confirmedModelsByTurn ?? {},
-      )) {
+      for (const [turnId, modelId] of Object.entries(session?.confirmedModelsByTurn ?? {})) {
         // The loaded context is canonical. A restored tab can carry an older
         // copy of the same turn overlay, so joining it must never overwrite a
         // confirmation already observed by the live thread. Non-conflicting
@@ -375,9 +365,7 @@ export class ThreadRegistry {
     }
 
     if (session && context.confirmedModelsByTurn.size > 0) {
-      session.confirmedModelsByTurn = Object.fromEntries(
-        context.confirmedModelsByTurn,
-      );
+      session.confirmedModelsByTurn = Object.fromEntries(context.confirmedModelsByTurn);
     }
     context.bridgeSessionIds.add(sessionId);
     return context;
@@ -488,17 +476,17 @@ export class ThreadRegistry {
   assertNoActiveTurn(context: ThreadContext | undefined): void {
     if (!context) return;
     const busy =
-      context.activeTurn !== null
-      || context.dispatchInFlight
+      context.activeTurn !== null ||
+      context.dispatchInFlight ||
       // Compaction rewrites the thread's context in the background. A turn
       // dispatched into that window races the rewrite.
-      || context.compacting
-      || context.phase === "running"
-      || context.phase === "starting"
+      context.compacting ||
+      context.phase === "running" ||
+      context.phase === "starting" ||
       // Between the interrupt response and the terminal event the turn may still
       // be executing, so accepting a new one here could overlap them.
-      || context.phase === "cancelling"
-      || context.phase === "recovering";
+      context.phase === "cancelling" ||
+      context.phase === "recovering";
     if (busy) throw new OverlappingTurnError(context.threadId);
   }
 
@@ -508,9 +496,9 @@ export class ThreadRegistry {
       // restart the timer from the client's observation time.
       context.turnStartedAt = new Date(this.now()).toISOString();
     } else if (
-      (phase === "running" || phase === "cancelling" || phase === "recovering")
-      && context.turnStartedAt === undefined
-      && context.activeTurn
+      (phase === "running" || phase === "cancelling" || phase === "recovering") &&
+      context.turnStartedAt === undefined &&
+      context.activeTurn
     ) {
       // Recovery can reconstruct an active accumulator without passing through
       // `starting` in this process. Its timestamp is still backend-owned.
@@ -539,9 +527,7 @@ export class ThreadRegistry {
    * must use this broader set so an inactive tab cannot retain a stale reroute.
    */
   boundSessionsForThread(threadId: string): BridgeSession[] {
-    return [...this.sessions.values()].filter(
-      (session) => session.threadId === threadId,
-    );
+    return [...this.sessions.values()].filter((session) => session.threadId === threadId);
   }
 
   /**

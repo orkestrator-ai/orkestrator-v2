@@ -1,7 +1,12 @@
 import { invoke } from "@/lib/native/backend";
-import type { Environment, EnvironmentStatus, DomainTestResult, PreferredEditor, ClaudeModelCatalogSnapshot } from "@/types";
+import type {
+  Environment,
+  EnvironmentStatus,
+  DomainTestResult,
+  PreferredEditor,
+  ClaudeModelCatalogSnapshot,
+} from "@/types";
 /** PR detection result containing URL, state, and merge conflict status */
-
 
 export async function checkDocker(): Promise<boolean> {
   return invoke<boolean>("check_docker");
@@ -27,9 +32,7 @@ export async function dockerRemoveContainer(containerId: string): Promise<void> 
   return invoke("docker_remove_container", { containerId });
 }
 
-export async function dockerContainerStatus(
-  containerId: string
-): Promise<EnvironmentStatus> {
+export async function dockerContainerStatus(containerId: string): Promise<EnvironmentStatus> {
   return invoke<EnvironmentStatus>("docker_container_status", { containerId });
 }
 
@@ -106,7 +109,7 @@ export async function cleanupOrphanedContainers(): Promise<number> {
 export async function reattachContainer(
   projectId: string,
   containerId: string,
-  name?: string
+  name?: string,
 ): Promise<Environment> {
   return invoke<Environment>("reattach_container", { projectId, containerId, name });
 }
@@ -148,7 +151,10 @@ export async function streamContainerLogs(containerId: string): Promise<void> {
 }
 
 /** Get the host port mapped to a specific container port */
-export async function getContainerHostPort(containerId: string, containerPort: number): Promise<number | null> {
+export async function getContainerHostPort(
+  containerId: string,
+  containerPort: number,
+): Promise<number | null> {
   return invoke<number | null>("get_container_host_port", { containerId, containerPort });
 }
 
@@ -213,10 +219,9 @@ export async function getOpencodeModelPreferences(): Promise<OpenCodeModelPrefer
 export async function getCachedOpenCodeModelCatalog(
   projectId: string,
 ): Promise<OpenCodeModelCatalogSnapshot | null> {
-  return invoke<OpenCodeModelCatalogSnapshot | null>(
-    "get_opencode_model_catalog_cache",
-    { projectId },
-  );
+  return invoke<OpenCodeModelCatalogSnapshot | null>("get_opencode_model_catalog_cache", {
+    projectId,
+  });
 }
 
 const finiteNumber = (value: unknown): number | undefined =>
@@ -230,13 +235,9 @@ const finiteNumber = (value: unknown): number | undefined =>
  * makes the wire contract explicit: a field added to `OpenCodeModel` later
  * cannot start failing the command's strict key check.
  */
-function toCachedOpenCodeModel(
-  model: CachedOpenCodeModel,
-): CachedOpenCodeModel {
+function toCachedOpenCodeModel(model: CachedOpenCodeModel): CachedOpenCodeModel {
   const variants = Array.isArray(model.variants)
-    ? model.variants.filter(
-        (variant) => typeof variant === "string" && variant.trim().length > 0,
-      )
+    ? model.variants.filter((variant) => typeof variant === "string" && variant.trim().length > 0)
     : undefined;
   const inputCost = finiteNumber(model.inputCost);
   const outputCost = finiteNumber(model.outputCost);
@@ -465,35 +466,31 @@ export async function getGitRemoteUrl(path: string): Promise<string | null> {
 
 // --- Network Commands ---
 
-export async function testDomainResolution(
-  domains: string[]
-): Promise<DomainTestResult[]> {
+export async function testDomainResolution(domains: string[]): Promise<DomainTestResult[]> {
   return invoke<DomainTestResult[]>("test_domain_resolution", { domains });
 }
 
-export async function validateDomains(
-  domains: string[]
-): Promise<DomainTestResult[]> {
+export async function validateDomains(domains: string[]): Promise<DomainTestResult[]> {
   return invoke<DomainTestResult[]>("validate_domains", { domains });
 }
 
 export async function addEnvironmentDomains(
   environmentId: string,
-  domains: string[]
+  domains: string[],
 ): Promise<string> {
   return invoke<string>("add_environment_domains", { environmentId, domains });
 }
 
 export async function removeEnvironmentDomains(
   environmentId: string,
-  domains: string[]
+  domains: string[],
 ): Promise<string> {
   return invoke<string>("remove_environment_domains", { environmentId, domains });
 }
 
 export async function updateEnvironmentAllowedDomains(
   environmentId: string,
-  domains: string[]
+  domains: string[],
 ): Promise<Environment> {
   return invoke<Environment>("update_environment_allowed_domains", { environmentId, domains });
 }
@@ -501,18 +498,12 @@ export async function updateEnvironmentAllowedDomains(
 // --- Editor Commands ---
 
 /** Open an editor (VS Code or Cursor) attached to a running container */
-export async function openInEditor(
-  containerId: string,
-  editor: PreferredEditor
-): Promise<void> {
+export async function openInEditor(containerId: string, editor: PreferredEditor): Promise<void> {
   return invoke("open_in_editor", { containerId, editor });
 }
 
 /** Open an editor (VS Code or Cursor) for a local directory path */
-export async function openLocalInEditor(
-  path: string,
-  editor: PreferredEditor
-): Promise<void> {
+export async function openLocalInEditor(path: string, editor: PreferredEditor): Promise<void> {
   return invoke("open_local_in_editor", { path, editor });
 }
 

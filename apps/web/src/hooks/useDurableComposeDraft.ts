@@ -73,58 +73,49 @@ export function useDurableComposeDraft<T>({
   isEmptyRef.current = isEmpty;
   isValidRef.current = isValid;
 
-  const persistValue = useCallback((
-    draftKey: string,
-    nextValue: T,
-  ): Promise<void> => (
-    clearedKeyRef.current === draftKey || isEmptyRef.current(nextValue)
-      ? discardComposeDraft(draftKey, revisionState)
-      : persistComposeDraft(
-          draftKey,
-          ownerType,
-          ownerId,
-          nextValue,
-          revisionState,
-        )
-  ), [ownerId, ownerType, revisionState]);
+  const persistValue = useCallback(
+    (draftKey: string, nextValue: T): Promise<void> =>
+      clearedKeyRef.current === draftKey || isEmptyRef.current(nextValue)
+        ? discardComposeDraft(draftKey, revisionState)
+        : persistComposeDraft(draftKey, ownerType, ownerId, nextValue, revisionState),
+    [ownerId, ownerType, revisionState],
+  );
 
-  const reportPersistenceError = useCallback((
-    error: unknown,
-    draftKey: string,
-  ): void => {
-    if (!(error instanceof DraftRevisionConflictError)) {
-      console.warn(`[${namespace}] Failed to persist draft:`, error);
-      return;
-    }
-    const discarding = clearedKeyRef.current === draftKey
-      || isEmptyRef.current(valueRef.current);
-    toast.error("Draft changed in another window", {
-      id: `compose-draft-conflict:${draftKey}`,
-      description: discarding
-        ? "A newer saved draft was preserved. Discard it explicitly to finish clearing this input."
-        : "Your input is still here. Choose Save mine to replace the other saved draft.",
-      action: {
-        label: discarding ? "Discard saved draft" : "Save mine",
-        onClick: () => {
-          const latest = valueRef.current;
-          const operation = (
-            clearedKeyRef.current === draftKey || isEmptyRef.current(latest)
-          )
-            ? resolveComposeDraftDiscardConflict(draftKey, revisionState)
-            : resolveComposeDraftSaveConflict(
-                draftKey,
-                ownerType,
-                ownerId,
-                latest,
-                revisionState,
-              );
-          void operation.catch((retryError) => {
-            reportPersistenceError(retryError, draftKey);
-          });
+  const reportPersistenceError = useCallback(
+    (error: unknown, draftKey: string): void => {
+      if (!(error instanceof DraftRevisionConflictError)) {
+        console.warn(`[${namespace}] Failed to persist draft:`, error);
+        return;
+      }
+      const discarding = clearedKeyRef.current === draftKey || isEmptyRef.current(valueRef.current);
+      toast.error("Draft changed in another window", {
+        id: `compose-draft-conflict:${draftKey}`,
+        description: discarding
+          ? "A newer saved draft was preserved. Discard it explicitly to finish clearing this input."
+          : "Your input is still here. Choose Save mine to replace the other saved draft.",
+        action: {
+          label: discarding ? "Discard saved draft" : "Save mine",
+          onClick: () => {
+            const latest = valueRef.current;
+            const operation =
+              clearedKeyRef.current === draftKey || isEmptyRef.current(latest)
+                ? resolveComposeDraftDiscardConflict(draftKey, revisionState)
+                : resolveComposeDraftSaveConflict(
+                    draftKey,
+                    ownerType,
+                    ownerId,
+                    latest,
+                    revisionState,
+                  );
+            void operation.catch((retryError) => {
+              reportPersistenceError(retryError, draftKey);
+            });
+          },
         },
-      },
-    });
-  }, [namespace, ownerId, ownerType, revisionState]);
+      });
+    },
+    [namespace, ownerId, ownerType, revisionState],
+  );
 
   useEffect(() => {
     if (!enabled) {
@@ -142,10 +133,10 @@ export function useDurableComposeDraft<T>({
       .then((persisted) => {
         loadSucceeded = true;
         if (
-          disposed
-          || !persisted
-          || !isValidRef.current(persisted.value)
-          || editRevisionRef.current !== revisionAtRequest
+          disposed ||
+          !persisted ||
+          !isValidRef.current(persisted.value) ||
+          editRevisionRef.current !== revisionAtRequest
         ) {
           return;
         }
@@ -164,7 +155,7 @@ export function useDurableComposeDraft<T>({
 
     return () => {
       disposed = true;
-      setHydratedKey((current) => current === key ? null : current);
+      setHydratedKey((current) => (current === key ? null : current));
       // A completed hydration or any local edit makes valueRef authoritative.
       // Flush immediately because the ordinary debounce is cancelled by this
       // same unmount/key-change cleanup.
@@ -174,13 +165,7 @@ export function useDurableComposeDraft<T>({
         });
       }
     };
-  }, [
-    enabled,
-    key,
-    persistValue,
-    reportPersistenceError,
-    revisionState,
-  ]);
+  }, [enabled, key, namespace, persistValue, reportPersistenceError, revisionState]);
 
   useEffect(() => {
     if (!enabled || hydratedKey !== key) return;
@@ -190,26 +175,20 @@ export function useDurableComposeDraft<T>({
       });
     }, debounceMs);
     return () => clearTimeout(timer);
-  }, [
-    debounceMs,
-    enabled,
-    hydratedKey,
-    key,
-    persistValue,
-    reportPersistenceError,
-    value,
-  ]);
+  }, [debounceMs, enabled, hydratedKey, key, persistValue, reportPersistenceError, value]);
 
-  const setDraftValue = useCallback<Dispatch<SetStateAction<T>>>((action) => {
-    const nextValue = typeof action === "function"
-      ? (action as (previous: T) => T)(valueRef.current)
-      : action;
-    editRevisionRef.current += 1;
-    clearedKeyRef.current = null;
-    valueRef.current = nextValue;
-    setValue(nextValue);
-    setHydratedKey(key);
-  }, [key]);
+  const setDraftValue = useCallback<Dispatch<SetStateAction<T>>>(
+    (action) => {
+      const nextValue =
+        typeof action === "function" ? (action as (previous: T) => T)(valueRef.current) : action;
+      editRevisionRef.current += 1;
+      clearedKeyRef.current = null;
+      valueRef.current = nextValue;
+      setValue(nextValue);
+      setHydratedKey(key);
+    },
+    [key],
+  );
 
   const clear = useCallback(async () => {
     editRevisionRef.current += 1;

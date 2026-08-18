@@ -8,12 +8,8 @@ import {
 
 describe("openCodeModelRefToId", () => {
   test("normalizes string references including nested model ids", () => {
-    expect(openCodeModelRefToId("  openrouter / openai / gpt-5  ")).toBe(
-      "openrouter/openai/gpt-5",
-    );
-    expect(openCodeModelRefToId("anthropic/claude-sonnet")).toBe(
-      "anthropic/claude-sonnet",
-    );
+    expect(openCodeModelRefToId("  openrouter / openai / gpt-5  ")).toBe("openrouter/openai/gpt-5");
+    expect(openCodeModelRefToId("anthropic/claude-sonnet")).toBe("anthropic/claude-sonnet");
   });
 
   test("normalizes object references and trims both fields", () => {
@@ -47,15 +43,9 @@ describe("openCodeModelRefToId", () => {
   });
 
   test("rejects blank object fields and undefined", () => {
-    expect(
-      openCodeModelRefToId({ providerID: "", modelID: "model" }),
-    ).toBeUndefined();
-    expect(
-      openCodeModelRefToId({ providerID: "provider", modelID: " " }),
-    ).toBeUndefined();
-    expect(
-      openCodeModelRefToId({ providerID: "/", modelID: "/" }),
-    ).toBeUndefined();
+    expect(openCodeModelRefToId({ providerID: "", modelID: "model" })).toBeUndefined();
+    expect(openCodeModelRefToId({ providerID: "provider", modelID: " " })).toBeUndefined();
+    expect(openCodeModelRefToId({ providerID: "/", modelID: "/" })).toBeUndefined();
     expect(
       openCodeModelRefToId({
         providerID: undefined,
@@ -142,9 +132,7 @@ describe("normalizeOpenCodeModelPreferences", () => {
 
   test("degrades to empty preferences for a malformed file", () => {
     for (const input of [undefined, null, "", 0, "recent", ["recent"], []]) {
-      expect(normalizeOpenCodeModelPreferences(input)).toEqual(
-        EMPTY_OPENCODE_MODEL_PREFERENCES,
-      );
+      expect(normalizeOpenCodeModelPreferences(input)).toEqual(EMPTY_OPENCODE_MODEL_PREFERENCES);
     }
   });
 

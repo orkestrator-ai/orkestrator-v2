@@ -13,13 +13,10 @@ export function normalizeBackendModelId(value: unknown): string | undefined {
 }
 
 /** Root assistant records are the only ones that may attribute the main turn. */
-export function isRootAssistantRecord(
-  parentToolUseId: unknown,
-  isSidechain?: unknown,
-): boolean {
+export function isRootAssistantRecord(parentToolUseId: unknown, isSidechain?: unknown): boolean {
   const hasNoParent =
-    parentToolUseId == null
-    || (typeof parentToolUseId === "string" && parentToolUseId.trim().length === 0);
+    parentToolUseId == null ||
+    (typeof parentToolUseId === "string" && parentToolUseId.trim().length === 0);
   const isMainChain = isSidechain === undefined || isSidechain === false;
   return hasNoParent && isMainChain;
 }

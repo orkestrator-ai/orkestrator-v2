@@ -19,11 +19,7 @@ import {
   normalizeOpenCodeModelProviders,
   openCodeModelDisplayLabel,
 } from "@orkestrator/protocol/native-agent";
-import {
-  useConfigStore,
-  useEnvironmentStore,
-  useProjectStore,
-} from "@/stores";
+import { useConfigStore, useEnvironmentStore, useProjectStore } from "@/stores";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
@@ -31,21 +27,26 @@ import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 
 function normalizeCachedOpenCodeModels(value: unknown): CachedOpenCodeModel[] | null {
   if (!Array.isArray(value)) return null;
-  if (!value.every((candidate) => {
-    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return false;
-    const record = candidate as Record<string, unknown>;
-    return typeof record.id === "string"
-      && record.id.trim().length > 0
-      && typeof record.name === "string"
-      && record.name.trim().length > 0
-      && typeof record.provider === "string"
-      && record.provider.trim().length > 0
-      && (record.variants === undefined
-        || (Array.isArray(record.variants)
-          && record.variants.every(
-            (variant) => typeof variant === "string" && variant.trim().length > 0,
-          )));
-  })) return null;
+  if (
+    !value.every((candidate) => {
+      if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return false;
+      const record = candidate as Record<string, unknown>;
+      return (
+        typeof record.id === "string" &&
+        record.id.trim().length > 0 &&
+        typeof record.name === "string" &&
+        record.name.trim().length > 0 &&
+        typeof record.provider === "string" &&
+        record.provider.trim().length > 0 &&
+        (record.variants === undefined ||
+          (Array.isArray(record.variants) &&
+            record.variants.every(
+              (variant) => typeof variant === "string" && variant.trim().length > 0,
+            )))
+      );
+    })
+  )
+    return null;
   return value as CachedOpenCodeModel[];
 }
 
@@ -72,7 +73,10 @@ export function useProjectModelCatalog(projectId: string, enabled: boolean) {
   useEffect(() => {
     let cancelled = false;
     setCachedOpenCodeCatalog(null);
-    if (!enabled || !projectId) return () => { cancelled = true; };
+    if (!enabled || !projectId)
+      return () => {
+        cancelled = true;
+      };
     void getCachedOpenCodeModelCatalog(projectId)
       .then((snapshot) => {
         const models = normalizeCachedOpenCodeModels(snapshot?.models);
@@ -83,7 +87,9 @@ export function useProjectModelCatalog(projectId: string, enabled: boolean) {
       .catch((error) => {
         console.warn("[useProjectModelCatalog] Failed to load cached OpenCode models:", error);
       });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [enabled, projectId]);
 
   // OpenCode catalogs are repository-scoped. A live catalog may supersede the
@@ -97,9 +103,8 @@ export function useProjectModelCatalog(projectId: string, enabled: boolean) {
     const live = Array.from(projectEnvironmentIds)
       .filter((environmentId) => openCodeModelSources.get(environmentId) === "server")
       .flatMap((environmentId) => openCodeModels.get(environmentId) ?? []);
-    const cached = cachedOpenCodeCatalog?.projectId === projectId
-      ? cachedOpenCodeCatalog.models
-      : [];
+    const cached =
+      cachedOpenCodeCatalog?.projectId === projectId ? cachedOpenCodeCatalog.models : [];
     const selected = live.length > 0 ? live : cached;
     return selected.filter(
       (model, index, models) =>
@@ -115,18 +120,24 @@ export function useProjectModelCatalog(projectId: string, enabled: boolean) {
     const favoriteOpenCodeIds = (favoriteModels ?? [])
       .filter((favorite) => favorite.platform === "opencode")
       .map((favorite) => favorite.modelId);
-    const mapped = projectOpenCodeModels.length === 0
-      ? baseCatalog.opencode
-      : projectOpenCodeModels.map((model) => ({
-          id: model.id,
-          name: openCodeModelDisplayLabel(model.id, model.name),
-          description: model.provider,
-          reasoningEfforts: [...(model.variants ?? [])],
-        }));
+    const mapped =
+      projectOpenCodeModels.length === 0
+        ? baseCatalog.opencode
+        : projectOpenCodeModels.map((model) => ({
+            id: model.id,
+            name: openCodeModelDisplayLabel(model.id, model.name),
+            description: model.provider,
+            reasoningEfforts: [...(model.variants ?? [])],
+          }));
     return {
       ...baseCatalog,
       opencode: includeMissingOpenCodeModels(mapped, favoriteOpenCodeIds, allowedProviders),
     };
+    // buildReviewModelCatalog reads the Claude/Codex/Cursor/Grok stores through
+    // getState(), which does not subscribe. These selectors are the subscription:
+    // the rule sees them as unused because the body never names them, but dropping
+    // them freezes the catalog at whatever was loaded on first render.
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [
     claudeModels,
     codexModels,
@@ -143,10 +154,13 @@ export function useProjectModelCatalog(projectId: string, enabled: boolean) {
 /** Review keeps an explicit "use OpenCode's last model" choice above the cache. */
 export function useReviewModelCatalog(projectId: string, enabled: boolean) {
   const catalog = useProjectModelCatalog(projectId, enabled);
-  return useMemo(() => ({
-    ...catalog,
-    opencode: includeOpenCodeDefaultModel(catalog.opencode),
-  }), [catalog]);
+  return useMemo(
+    () => ({
+      ...catalog,
+      opencode: includeOpenCodeDefaultModel(catalog.opencode),
+    }),
+    [catalog],
+  );
 }
 
 /** Shared defaults and repository-scoped model catalog for every build launcher. */
@@ -167,25 +181,27 @@ export function useBuildLaunchOptions(projectId: string, enabled: boolean) {
   useEffect(() => {
     let cancelled = false;
     setOpenCodeModelPreferences(EMPTY_OPENCODE_MODEL_PREFERENCES);
-    if (!enabled) return () => { cancelled = true; };
+    if (!enabled)
+      return () => {
+        cancelled = true;
+      };
     void getOpencodeModelPreferences()
       .then((preferences) => {
         if (
-          !cancelled
-          && preferences
-          && Array.isArray(preferences.favorite)
-          && Array.isArray(preferences.recent)
+          !cancelled &&
+          preferences &&
+          Array.isArray(preferences.favorite) &&
+          Array.isArray(preferences.recent)
         ) {
           setOpenCodeModelPreferences(preferences);
         }
       })
       .catch((error) => {
-        console.warn(
-          "[useBuildLaunchOptions] Failed to load OpenCode model preferences:",
-          error,
-        );
+        console.warn("[useBuildLaunchOptions] Failed to load OpenCode model preferences:", error);
       });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [enabled, projectId]);
 
   const favoriteOpenCodeModelIds = useMemo(() => {

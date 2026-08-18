@@ -84,9 +84,7 @@ export const MAX_REPLAY_SSE_BYTES = 4 * 1024 * 1024;
  */
 export const REPLAY_IDLE_RETENTION_MS = 60_000;
 
-export function createReplayBuffer(
-  limits: { maxFrames?: number; maxBytes?: number } = {},
-) {
+export function createReplayBuffer(limits: { maxFrames?: number; maxBytes?: number } = {}) {
   const maxFrames = limits.maxFrames ?? MAX_REPLAY_SSE_FRAMES;
   const maxBytes = limits.maxBytes ?? MAX_REPLAY_SSE_BYTES;
   const frames: ReplayFrame[] = [];
@@ -120,16 +118,11 @@ export function createReplayBuffer(
       }
       const oldest = frames[0]?.revision;
       const resetRequired =
-        since.revision < through
-        && (oldest === undefined || since.revision < oldest - 1);
+        since.revision < through && (oldest === undefined || since.revision < oldest - 1);
       return {
         frames: resetRequired
           ? []
-          : frames.filter(
-              (frame) =>
-                frame.revision > since.revision
-                && frame.revision <= through,
-            ),
+          : frames.filter((frame) => frame.revision > since.revision && frame.revision <= through),
         resetRequired,
       };
     },
@@ -236,9 +229,7 @@ export function parseReplayCursor(value: string | undefined): ReplayCursor | nul
     return null;
   }
   const revision = Number(revisionText);
-  return Number.isSafeInteger(revision) && revision >= 0
-    ? { generation, revision }
-    : null;
+  return Number.isSafeInteger(revision) && revision >= 0 ? { generation, revision } : null;
 }
 
 export function getReplayFrames(
@@ -274,8 +265,7 @@ export function createBoundedSseWriter(
     const frameBytes = Buffer.byteLength(frame.data);
     if (
       pendingFrames > 0 &&
-      (pendingFrames >= maxPendingFrames ||
-        pendingBytes + frameBytes > maxPendingBytes)
+      (pendingFrames >= maxPendingFrames || pendingBytes + frameBytes > maxPendingBytes)
     ) {
       overflowed = true;
       onOverflow();
@@ -305,204 +295,193 @@ export function createEventsRouter(
   } = {},
 ): Hono {
   const events = new Hono();
-  const maxPendingFrames =
-    limits.maxPendingFrames ?? MAX_PENDING_SSE_FRAMES;
-  const maxPendingBytes =
-    limits.maxPendingBytes ?? MAX_PENDING_SSE_BYTES;
-  const keepaliveIntervalMs =
-    limits.keepaliveIntervalMs ?? KEEPALIVE_INTERVAL_MS;
+  const maxPendingFrames = limits.maxPendingFrames ?? MAX_PENDING_SSE_FRAMES;
+  const maxPendingBytes = limits.maxPendingBytes ?? MAX_PENDING_SSE_BYTES;
+  const keepaliveIntervalMs = limits.keepaliveIntervalMs ?? KEEPALIVE_INTERVAL_MS;
 
-events.get("/subscribe", (c) => {
-  const origin = c.req.header("origin");
-  const userAgent = c.req.header("user-agent");
-  console.debug("[events] SSE subscribe request", { origin, userAgent });
-  return streamSSE(c, async (stream) => {
-    const connectedAt = new Date().toISOString();
-    console.debug("[events] SSE connection opened", { connectedAt });
+  events.get("/subscribe", (c) => {
+    const origin = c.req.header("origin");
+    const userAgent = c.req.header("user-agent");
+    console.debug("[events] SSE subscribe request", { origin, userAgent });
+    return streamSSE(c, async (stream) => {
+      const connectedAt = new Date().toISOString();
+      console.debug("[events] SSE connection opened", { connectedAt });
 
-    let isOpen = true;
-    let resolveConnectionClosed!: () => void;
-    const connectionClosed = new Promise<void>((resolve) => {
-      resolveConnectionClosed = resolve;
-    });
-    let resolveRequestAborted!: () => void;
-    const requestAborted = new Promise<void>((resolve) => {
-      resolveRequestAborted = resolve;
-    });
-    const onRequestAbort = () => {
-      console.debug("[events] SSE connection aborted by client");
-      isOpen = false;
-      resolveRequestAborted();
-    };
-    if (c.req.raw.signal.aborted) {
-      isOpen = false;
-      resolveRequestAborted();
-    } else {
-      // Register before the first awaited write. A client can consume
-      // `connected` and abort while replay is still flushing; attaching this
-      // listener afterwards loses that edge and leaks the subscription.
-      c.req.raw.signal.addEventListener("abort", onRequestAbort, { once: true });
-    }
-    const closeConnection = (reason: string) => {
-      if (!isOpen) return;
-      isOpen = false;
-      console.error(`[events] Closing SSE subscriber (${reason})`);
-      resolveConnectionClosed();
-    };
-
-    const writeFrame = createBoundedSseWriter(
-      async (frame) => {
-        if (!isOpen) throw new Error("SSE request aborted");
-        // A stream write may remain backpressured forever after its browser
-        // disappears. Racing the request signal lets the route release its
-        // emitter subscription even when the underlying writer never settles.
-        await Promise.race([
-          stream.writeSSE(frame),
-          requestAborted,
-          connectionClosed,
-        ]);
-        if (!isOpen) throw new Error("SSE request aborted");
-      },
-      () => closeConnection("write backlog exceeded its cap"),
-      { maxPendingFrames, maxPendingBytes },
-    );
-
-    const requestedCursorValue =
-      c.req.header("last-event-id") ?? c.req.query("since");
-    const requestedCursor = parseReplayCursor(requestedCursorValue);
-    const cursorWasSupplied = requestedCursorValue !== undefined;
-    const pendingLiveFrames: ReplayFrame[] = [];
-    let pendingLiveBytes = 0;
-    let replaying = true;
-    let keepaliveInterval: ReturnType<typeof setInterval> | undefined;
-    let unsubscribe = () => {};
-    // Arm ring retention for as long as this connection exists, and for one
-    // reconnect window after it goes away.
-    const releaseReplayRetention = replayRetention.acquire();
-
-    try {
-      // Subscribe before choosing the replay ceiling. Anything emitted during
-      // the handshake is buffered and flushed after the retained replay,
-      // closing the otherwise unavoidable replay/subscribe race.
-      unsubscribe = eventEmitter.subscribe((event, revision) => {
+      let isOpen = true;
+      let resolveConnectionClosed!: () => void;
+      const connectionClosed = new Promise<void>((resolve) => {
+        resolveConnectionClosed = resolve;
+      });
+      let resolveRequestAborted!: () => void;
+      const requestAborted = new Promise<void>((resolve) => {
+        resolveRequestAborted = resolve;
+      });
+      const onRequestAbort = () => {
+        console.debug("[events] SSE connection aborted by client");
+        isOpen = false;
+        resolveRequestAborted();
+      };
+      if (c.req.raw.signal.aborted) {
+        isOpen = false;
+        resolveRequestAborted();
+      } else {
+        // Register before the first awaited write. A client can consume
+        // `connected` and abort while replay is still flushing; attaching this
+        // listener afterwards loses that edge and leaks the subscription.
+        c.req.raw.signal.addEventListener("abort", onRequestAbort, { once: true });
+      }
+      const closeConnection = (reason: string) => {
         if (!isOpen) return;
-        const data = serializeEventData(event);
-        const frame: ReplayFrame = {
-          revision,
-          id: formatReplayCursor(revision),
-          event: event.type,
-          data,
-          bytes: Buffer.byteLength(data) + Buffer.byteLength(event.type),
-        };
-        if (replaying) {
-          if (
-            pendingLiveFrames.length >= maxPendingFrames
-            || pendingLiveBytes + frame.bytes > maxPendingBytes
-          ) {
-            closeConnection("handshake backlog exceeded its cap");
+        isOpen = false;
+        console.error(`[events] Closing SSE subscriber (${reason})`);
+        resolveConnectionClosed();
+      };
+
+      const writeFrame = createBoundedSseWriter(
+        async (frame) => {
+          if (!isOpen) throw new Error("SSE request aborted");
+          // A stream write may remain backpressured forever after its browser
+          // disappears. Racing the request signal lets the route release its
+          // emitter subscription even when the underlying writer never settles.
+          await Promise.race([stream.writeSSE(frame), requestAborted, connectionClosed]);
+          if (!isOpen) throw new Error("SSE request aborted");
+        },
+        () => closeConnection("write backlog exceeded its cap"),
+        { maxPendingFrames, maxPendingBytes },
+      );
+
+      const requestedCursorValue = c.req.header("last-event-id") ?? c.req.query("since");
+      const requestedCursor = parseReplayCursor(requestedCursorValue);
+      const cursorWasSupplied = requestedCursorValue !== undefined;
+      const pendingLiveFrames: ReplayFrame[] = [];
+      let pendingLiveBytes = 0;
+      let replaying = true;
+      let keepaliveInterval: ReturnType<typeof setInterval> | undefined;
+      let unsubscribe = () => {};
+      // Arm ring retention for as long as this connection exists, and for one
+      // reconnect window after it goes away.
+      const releaseReplayRetention = replayRetention.acquire();
+
+      try {
+        // Subscribe before choosing the replay ceiling. Anything emitted during
+        // the handshake is buffered and flushed after the retained replay,
+        // closing the otherwise unavoidable replay/subscribe race.
+        unsubscribe = eventEmitter.subscribe((event, revision) => {
+          if (!isOpen) return;
+          const data = serializeEventData(event);
+          const frame: ReplayFrame = {
+            revision,
+            id: formatReplayCursor(revision),
+            event: event.type,
+            data,
+            bytes: Buffer.byteLength(data) + Buffer.byteLength(event.type),
+          };
+          if (replaying) {
+            if (
+              pendingLiveFrames.length >= maxPendingFrames ||
+              pendingLiveBytes + frame.bytes > maxPendingBytes
+            ) {
+              closeConnection("handshake backlog exceeded its cap");
+              return;
+            }
+            pendingLiveFrames.push(frame);
+            pendingLiveBytes += frame.bytes;
             return;
           }
-          pendingLiveFrames.push(frame);
-          pendingLiveBytes += frame.bytes;
-          return;
-        }
-        void writeFrame(frame).catch((error) => {
-          if (!c.req.raw.signal.aborted) {
-            console.error("[events] Error writing SSE:", error);
-            closeConnection("write failed");
-          }
+          void writeFrame(frame).catch((error) => {
+            if (!c.req.raw.signal.aborted) {
+              console.error("[events] Error writing SSE:", error);
+              closeConnection("write failed");
+            }
+          });
         });
-      });
 
-      const replayCeiling = eventEmitter.currentRevision;
-      const cursor = requestedCursor ?? {
-        generation: cursorWasSupplied ? "invalid" : eventEmitter.generation,
-        revision: replayCeiling,
-      };
-      const replay = getReplayFrames(cursor, replayCeiling);
+        const replayCeiling = eventEmitter.currentRevision;
+        const cursor = requestedCursor ?? {
+          generation: cursorWasSupplied ? "invalid" : eventEmitter.generation,
+          revision: replayCeiling,
+        };
+        const replay = getReplayFrames(cursor, replayCeiling);
 
-      // Echo the client's own cursor. Setting this frame to the latest revision
-      // would make EventSource skip replay frames if the connection died halfway
-      // through the handshake.
-      await writeFrame({
-        id: `${cursor.generation}:${cursor.revision}`,
-        event: "connected",
-        data: JSON.stringify({
-          status: "connected",
-          timestamp: connectedAt,
-          replayed: replay.frames.length,
-          resetRequired: replay.resetRequired,
-        }),
-      });
-      if (replay.resetRequired) {
+        // Echo the client's own cursor. Setting this frame to the latest revision
+        // would make EventSource skip replay frames if the connection died halfway
+        // through the handshake.
         await writeFrame({
-          id: formatReplayCursor(replayCeiling),
-          event: "replay.required",
-          data: JSON.stringify({ through: formatReplayCursor(replayCeiling) }),
+          id: `${cursor.generation}:${cursor.revision}`,
+          event: "connected",
+          data: JSON.stringify({
+            status: "connected",
+            timestamp: connectedAt,
+            replayed: replay.frames.length,
+            resetRequired: replay.resetRequired,
+          }),
         });
-      } else {
-        for (const frame of replay.frames) await writeFrame(frame);
-      }
-      // Queue the whole drain in one synchronous turn. The bounded writer
-      // chains strictly FIFO, so enqueue order *is* wire order: awaiting each
-      // buffered frame in turn would let a live frame emitted during one of
-      // those awaits take the `void writeFrame(...)` path and land *between*
-      // two buffered frames. A browser adopts every `id:` it sees, so that
-      // reorders revisions and regresses the client's stored cursor — and an
-      // out-of-order `message.patched` fails the revision guard, forcing the
-      // full transcript refetch the replay ring exists to avoid.
-      //
-      // Every buffered frame is past `replayCeiling` by construction: the
-      // subscription above and the ceiling read below are separated by no
-      // await, so nothing can be emitted in between.
-      const drained = pendingLiveFrames.splice(0);
-      pendingLiveBytes = 0;
-      replaying = false;
-      const drainWrites = drained.map((frame) => writeFrame(frame));
-      // `allSettled` leaves no unhandled rejection behind, but a failed drain
-      // must still reach the handler's catch and close the connection rather
-      // than being swallowed — same semantics as awaiting each write.
-      for (const settled of await Promise.allSettled(drainWrites)) {
-        if (settled.status === "rejected") throw settled.reason;
-      }
-
-      // Send a keepalive on an interval to prevent connection timeout
-      keepaliveInterval = setInterval(() => {
-        if (!isOpen) {
-          if (keepaliveInterval) clearInterval(keepaliveInterval);
-          return;
+        if (replay.resetRequired) {
+          await writeFrame({
+            id: formatReplayCursor(replayCeiling),
+            event: "replay.required",
+            data: JSON.stringify({ through: formatReplayCursor(replayCeiling) }),
+          });
+        } else {
+          for (const frame of replay.frames) await writeFrame(frame);
         }
-        void writeFrame({
-          event: "keepalive",
-          data: JSON.stringify({ timestamp: new Date().toISOString() }),
-        }).catch((error) => {
-          if (!c.req.raw.signal.aborted) {
-            console.debug("[events] Keepalive failed, closing connection:", error);
-            closeConnection("keepalive failed");
-          }
-        });
-      }, keepaliveIntervalMs);
+        // Queue the whole drain in one synchronous turn. The bounded writer
+        // chains strictly FIFO, so enqueue order *is* wire order: awaiting each
+        // buffered frame in turn would let a live frame emitted during one of
+        // those awaits take the `void writeFrame(...)` path and land *between*
+        // two buffered frames. A browser adopts every `id:` it sees, so that
+        // reorders revisions and regresses the client's stored cursor — and an
+        // out-of-order `message.patched` fails the revision guard, forcing the
+        // full transcript refetch the replay ring exists to avoid.
+        //
+        // Every buffered frame is past `replayCeiling` by construction: the
+        // subscription above and the ceiling read below are separated by no
+        // await, so nothing can be emitted in between.
+        const drained = pendingLiveFrames.splice(0);
+        pendingLiveBytes = 0;
+        replaying = false;
+        const drainWrites = drained.map((frame) => writeFrame(frame));
+        // `allSettled` leaves no unhandled rejection behind, but a failed drain
+        // must still reach the handler's catch and close the connection rather
+        // than being swallowed — same semantics as awaiting each write.
+        for (const settled of await Promise.allSettled(drainWrites)) {
+          if (settled.status === "rejected") throw settled.reason;
+        }
 
-      // Wait until the client disconnects or the writer declares the consumer
-      // dead; returning ends the response and the client reconnects.
-      await Promise.race([
-        connectionClosed,
-        requestAborted,
-      ]);
-    } catch (error) {
-      if (!c.req.raw.signal.aborted) {
-        console.error("[events] SSE handshake failed:", error);
+        // Send a keepalive on an interval to prevent connection timeout
+        keepaliveInterval = setInterval(() => {
+          if (!isOpen) {
+            if (keepaliveInterval) clearInterval(keepaliveInterval);
+            return;
+          }
+          void writeFrame({
+            event: "keepalive",
+            data: JSON.stringify({ timestamp: new Date().toISOString() }),
+          }).catch((error) => {
+            if (!c.req.raw.signal.aborted) {
+              console.debug("[events] Keepalive failed, closing connection:", error);
+              closeConnection("keepalive failed");
+            }
+          });
+        }, keepaliveIntervalMs);
+
+        // Wait until the client disconnects or the writer declares the consumer
+        // dead; returning ends the response and the client reconnects.
+        await Promise.race([connectionClosed, requestAborted]);
+      } catch (error) {
+        if (!c.req.raw.signal.aborted) {
+          console.error("[events] SSE handshake failed:", error);
+        }
+      } finally {
+        console.debug("[events] SSE connection cleanup");
+        isOpen = false;
+        c.req.raw.signal.removeEventListener("abort", onRequestAbort);
+        if (keepaliveInterval) clearInterval(keepaliveInterval);
+        unsubscribe();
+        releaseReplayRetention();
       }
-    } finally {
-      console.debug("[events] SSE connection cleanup");
-      isOpen = false;
-      c.req.raw.signal.removeEventListener("abort", onRequestAbort);
-      if (keepaliveInterval) clearInterval(keepaliveInterval);
-      unsubscribe();
-      releaseReplayRetention();
-    }
+    });
   });
-});
 
   return events;
 }

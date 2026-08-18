@@ -76,7 +76,9 @@ import {
   truncateUtf8,
 } from "./acp-transcript.js";
 
-export async function listNormalizedModels(signal?: AbortSignal): Promise<NativeAgentComposerState["models"]> {
+export async function listNormalizedModels(
+  signal?: AbortSignal,
+): Promise<NativeAgentComposerState["models"]> {
   const live = mergeComposerCatalog(provider, [
     ...(catalogCache ? [catalogCache] : []),
     ...[...sessions.values()].map((state) => state.sessionConfig.composer),
@@ -149,7 +151,11 @@ export function restoreSessionConfig(candidate: JsonObject): AcpNormalizedSessio
 export function restorePersistedUsage(value: unknown): PersistedUsage | null {
   if (!isObject(value)) return null;
   const turn = parseAcpTurnUsage(value.turn);
-  if (!turn || typeof value.updatedAt !== "string" || !Number.isFinite(Date.parse(value.updatedAt))) {
+  if (
+    !turn ||
+    typeof value.updatedAt !== "string" ||
+    !Number.isFinite(Date.parse(value.updatedAt))
+  ) {
     return null;
   }
   return {
@@ -188,9 +194,9 @@ export async function restorePersistedState(): Promise<void> {
     );
     const file = stateFile;
     if (!file) return;
-    await fs.rename(file, `${file}.corrupt-${process.pid}`).catch(() =>
-      fs.rm(file, { force: true }).catch(() => undefined)
-    );
+    await fs
+      .rename(file, `${file}.corrupt-${process.pid}`)
+      .catch(() => fs.rm(file, { force: true }).catch(() => undefined));
   }
 }
 
@@ -212,17 +218,22 @@ export async function loadPersistedState(): Promise<void> {
   } catch {
     throw new Error("ACP persisted state is malformed");
   }
-  if (!isObject(parsed)
-    || (parsed.version !== 1 && parsed.version !== 2 && parsed.version !== 3)
-    || parsed.provider !== provider
-    || !Array.isArray(parsed.sessions)) {
+  if (
+    !isObject(parsed) ||
+    (parsed.version !== 1 && parsed.version !== 2 && parsed.version !== 3) ||
+    parsed.provider !== provider ||
+    !Array.isArray(parsed.sessions)
+  ) {
     throw new Error("ACP persisted state is incompatible");
   }
   for (const candidate of parsed.sessions.slice(0, MAX_SESSIONS)) {
-    if (!isObject(candidate)
-      || typeof candidate.id !== "string"
-      || typeof candidate.acpSessionId !== "string"
-      || !Array.isArray(candidate.messages)) continue;
+    if (
+      !isObject(candidate) ||
+      typeof candidate.id !== "string" ||
+      typeof candidate.acpSessionId !== "string" ||
+      !Array.isArray(candidate.messages)
+    )
+      continue;
     const messages = candidate.messages
       .flatMap((message) => {
         const normalized = normalizeBridgeMessage(message);
@@ -235,9 +246,10 @@ export async function loadPersistedState(): Promise<void> {
     // failure, `boundTranscript` below re-applies the bound to whatever was
     // persisted, and the status is otherwise unclearable: the tab renders it as
     // a connection failure whose only control reads the same state back.
-    const healed = candidate.status === "error"
-      && typeof candidate.error === "string"
-      && candidate.error.endsWith("output exceeded the transcript limit");
+    const healed =
+      candidate.status === "error" &&
+      typeof candidate.error === "string" &&
+      candidate.error.endsWith("output exceeded the transcript limit");
     const state: SessionState = {
       id: candidate.id.slice(0, 128),
       ...(typeof candidate.clientSessionKey === "string"
@@ -257,31 +269,36 @@ export async function loadPersistedState(): Promise<void> {
       historyMessageIds: new Map(),
       child: null,
       revision: Number.isSafeInteger(candidate.revision) ? Number(candidate.revision) : 0,
-      structured: new Map(Array.isArray(candidate.structured)
-        ? candidate.structured.filter((entry): entry is [string, unknown] =>
-            isStringTuple(entry)
-            && Buffer.byteLength(JSON.stringify(entry[1])) <= MAX_STRUCTURED_RESULT_BYTES
-          ).slice(-MAX_STRUCTURED_RESULTS)
-        : []),
+      structured: new Map(
+        Array.isArray(candidate.structured)
+          ? candidate.structured
+              .filter(
+                (entry): entry is [string, unknown] =>
+                  isStringTuple(entry) &&
+                  Buffer.byteLength(JSON.stringify(entry[1])) <= MAX_STRUCTURED_RESULT_BYTES,
+              )
+              .slice(-MAX_STRUCTURED_RESULTS)
+          : [],
+      ),
       promptJournal: new Map(),
       approvals: new Map(),
       outputTruncated: false,
       uncheckedTranscriptBytes: 0,
       currentTurnOutput: null,
       promptSequence: 0,
-      droppedMessages: Number.isSafeInteger(candidate.droppedMessages)
-        && Number(candidate.droppedMessages) >= 0
-        ? Number(candidate.droppedMessages)
-        : 0,
-      droppedParts: Number.isSafeInteger(candidate.droppedParts)
-        && Number(candidate.droppedParts) >= 0
-        ? Number(candidate.droppedParts)
-        : 0,
-      transcriptTruncated: candidate.transcriptTruncated === true
-        || (Number.isSafeInteger(candidate.droppedMessages)
-          && Number(candidate.droppedMessages) > 0)
-        || (Number.isSafeInteger(candidate.droppedParts)
-          && Number(candidate.droppedParts) > 0),
+      droppedMessages:
+        Number.isSafeInteger(candidate.droppedMessages) && Number(candidate.droppedMessages) >= 0
+          ? Number(candidate.droppedMessages)
+          : 0,
+      droppedParts:
+        Number.isSafeInteger(candidate.droppedParts) && Number(candidate.droppedParts) >= 0
+          ? Number(candidate.droppedParts)
+          : 0,
+      transcriptTruncated:
+        candidate.transcriptTruncated === true ||
+        (Number.isSafeInteger(candidate.droppedMessages) &&
+          Number(candidate.droppedMessages) > 0) ||
+        (Number.isSafeInteger(candidate.droppedParts) && Number(candidate.droppedParts) > 0),
       sessionConfig: restoreSessionConfig(candidate),
       dispatching: false,
       historyReplay: false,
@@ -294,12 +311,18 @@ export async function loadPersistedState(): Promise<void> {
       for (const rawEntry of candidate.promptJournal.slice(-MAX_PROMPT_JOURNAL)) {
         if (!isObject(rawEntry) || typeof rawEntry.requestId !== "string") continue;
         const journalState = rawEntry.state;
-        if (journalState !== "prepared" && journalState !== "accepted" && journalState !== "completed" && journalState !== "failed" && journalState !== "ambiguous") continue;
+        if (
+          journalState !== "prepared" &&
+          journalState !== "accepted" &&
+          journalState !== "completed" &&
+          journalState !== "failed" &&
+          journalState !== "ambiguous"
+        )
+          continue;
         const entry: PromptJournalEntry = {
           requestId: rawEntry.requestId.slice(0, 512),
-          state: journalState === "prepared" || journalState === "accepted"
-            ? "ambiguous"
-            : journalState,
+          state:
+            journalState === "prepared" || journalState === "accepted" ? "ambiguous" : journalState,
           acceptedAt: Number.isSafeInteger(rawEntry.acceptedAt) ? Number(rawEntry.acceptedAt) : 0,
         };
         state.promptJournal.set(entry.requestId, entry);
@@ -314,24 +337,27 @@ export async function loadPersistedState(): Promise<void> {
   }
 }
 export function normalizeBridgeMessage(value: unknown): BridgeMessage | null {
-  if (!(isObject(value)
-    && typeof value.id === "string"
-    && (value.role === "user" || value.role === "assistant")
-    && typeof value.content === "string"
-    && Array.isArray(value.parts)
-    && typeof value.createdAt === "string")) return null;
+  if (
+    !(
+      isObject(value) &&
+      typeof value.id === "string" &&
+      (value.role === "user" || value.role === "assistant") &&
+      typeof value.content === "string" &&
+      Array.isArray(value.parts) &&
+      typeof value.createdAt === "string"
+    )
+  )
+    return null;
   const messageId = value.id.slice(0, 256);
   const modelId = boundedModelId(value.modelId);
   return {
     id: messageId,
     role: value.role,
     content: truncateUtf8(value.content, MAX_MESSAGE_TEXT_BYTES),
-    parts: value.parts
-      .slice(-MAX_PARTS_PER_MESSAGE)
-      .flatMap((part, index) => {
-        const normalized = normalizeBridgePart(part, index, messageId);
-        return normalized ? [normalized] : [];
-      }),
+    parts: value.parts.slice(-MAX_PARTS_PER_MESSAGE).flatMap((part, index) => {
+      const normalized = normalizeBridgePart(part, index, messageId);
+      return normalized ? [normalized] : [];
+    }),
     createdAt: value.createdAt.slice(0, 64),
     ...(modelId ? { modelId } : {}),
   };
@@ -343,22 +369,24 @@ export function normalizeBridgePart(
   messageId: string,
 ): BridgeMessagePart | null {
   if (!isObject(value)) return null;
-  const sourcePartId = typeof value.sourcePartId === "string"
-    ? value.sourcePartId.slice(0, 1024)
-    : `${messageId}:${index}`;
-  const sourceMessageId = typeof value.sourceMessageId === "string"
-    ? value.sourceMessageId.slice(0, 256)
-    : messageId;
-  const createdAt = typeof value.createdAt === "string" && Number.isFinite(Date.parse(value.createdAt))
-    ? value.createdAt.slice(0, 64)
-    : undefined;
+  const sourcePartId =
+    typeof value.sourcePartId === "string"
+      ? value.sourcePartId.slice(0, 1024)
+      : `${messageId}:${index}`;
+  const sourceMessageId =
+    typeof value.sourceMessageId === "string" ? value.sourceMessageId.slice(0, 256) : messageId;
+  const createdAt =
+    typeof value.createdAt === "string" && Number.isFinite(Date.parse(value.createdAt))
+      ? value.createdAt.slice(0, 64)
+      : undefined;
 
   if (value.type === "text" || value.type === "reasoning" || value.type === "thinking") {
-    const content = typeof value.content === "string"
-      ? value.content
-      : typeof value.text === "string"
-        ? value.text
-        : undefined;
+    const content =
+      typeof value.content === "string"
+        ? value.content
+        : typeof value.text === "string"
+          ? value.text
+          : undefined;
     if (content === undefined) return null;
     const parentTaskUseId = boundedString(value.parentTaskUseId, MAX_TOOL_ID_BYTES)?.trim();
     return {
@@ -388,16 +416,16 @@ export function normalizeBridgePart(
   if (value.type !== "tool-invocation" || typeof value.toolUseId !== "string") return null;
   const toolUseId = truncateUtf8(value.toolUseId, MAX_TOOL_ID_BYTES);
   if (!toolUseId) return null;
-  const toolState = value.toolState === "success"
-    || value.toolState === "failure"
-    || value.toolState === "pending"
-    ? value.toolState
-    : undefined;
-  const agentState = value.agentState === "active"
-    || value.agentState === "finished"
-    || value.agentState === "failed"
-    ? value.agentState
-    : undefined;
+  const toolState =
+    value.toolState === "success" || value.toolState === "failure" || value.toolState === "pending"
+      ? value.toolState
+      : undefined;
+  const agentState =
+    value.agentState === "active" ||
+    value.agentState === "finished" ||
+    value.agentState === "failed"
+      ? value.agentState
+      : undefined;
   const toolOutput = boundedString(value.toolOutput, MAX_TOOL_OUTPUT_BYTES);
   const toolError = boundedString(value.toolError, MAX_TOOL_OUTPUT_BYTES);
   const toolDiff = normalizeBridgeToolDiff(value.toolDiff);
@@ -428,19 +456,29 @@ export function normalizeBridgeToolDiff(value: unknown): BridgeToolDiff | undefi
   const filePath = boundedString(value.filePath, MAX_TOOL_PATH_BYTES);
   const rawBefore = typeof value.before === "string" ? value.before : undefined;
   const rawAfter = typeof value.after === "string" ? value.after : undefined;
-  const keepInline = Buffer.byteLength(rawBefore ?? "") <= MAX_TOOL_INLINE_FILE_BYTES
-    && Buffer.byteLength(rawAfter ?? "") <= MAX_TOOL_INLINE_FILE_BYTES;
+  const keepInline =
+    Buffer.byteLength(rawBefore ?? "") <= MAX_TOOL_INLINE_FILE_BYTES &&
+    Buffer.byteLength(rawAfter ?? "") <= MAX_TOOL_INLINE_FILE_BYTES;
   const before = keepInline ? rawBefore : undefined;
   const after = keepInline ? rawAfter : undefined;
-  const additions = Number.isSafeInteger(value.additions) && Number(value.additions) >= 0
-    ? Number(value.additions)
-    : undefined;
-  const deletions = Number.isSafeInteger(value.deletions) && Number(value.deletions) >= 0
-    ? Number(value.deletions)
-    : undefined;
+  const additions =
+    Number.isSafeInteger(value.additions) && Number(value.additions) >= 0
+      ? Number(value.additions)
+      : undefined;
+  const deletions =
+    Number.isSafeInteger(value.deletions) && Number(value.deletions) >= 0
+      ? Number(value.deletions)
+      : undefined;
   const diff = boundedString(value.diff, MAX_TOOL_DIFF_BYTES);
-  if (!filePath && additions === undefined && deletions === undefined
-    && before === undefined && after === undefined && diff === undefined) return undefined;
+  if (
+    !filePath &&
+    additions === undefined &&
+    deletions === undefined &&
+    before === undefined &&
+    after === undefined &&
+    diff === undefined
+  )
+    return undefined;
   return {
     ...(filePath ? { filePath } : {}),
     ...(additions !== undefined ? { additions } : {}),

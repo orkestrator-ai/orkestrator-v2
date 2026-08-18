@@ -13,7 +13,6 @@ import {
   writeRolloutWithTurns,
 } from "./app-server-runtime-test-harness.js";
 
-
 describe("same thread in two tabs", () => {
   test("both tabs share one canonical transcript", async () => {
     const h = await harness({
@@ -118,8 +117,6 @@ describe("same thread in two tabs", () => {
   });
 });
 
-
-
 describe("environment refresh", () => {
   test("re-resumes an idle loaded thread before dispatching on a controlled restart", async () => {
     let fingerprint = "sha256:one";
@@ -145,11 +142,15 @@ describe("environment refresh", () => {
     expect(h.runtime.getStatus(sessionId)?.phase).toBe("idle");
 
     fingerprint = "sha256:two";
-    expect((await h.runtime.prompt(sessionId, {
-      prompt: "after refresh",
-      requestId: "req-after-refresh",
-      attachments: [],
-    })).ok).toBe(true);
+    expect(
+      (
+        await h.runtime.prompt(sessionId, {
+          prompt: "after refresh",
+          requestId: "req-after-refresh",
+          attachments: [],
+        })
+      ).ok,
+    ).toBe(true);
 
     expect(h.children).toHaveLength(2);
     const replacementMethods = h.child().requests.map((request) => request.method);
@@ -184,13 +185,15 @@ describe("environment refresh", () => {
     fingerprint = "sha256:two";
 
     let settled = false;
-    const pending = h.runtime.prompt(second!.sessionId, {
-      prompt: "next task",
-      requestId: "req-b",
-      attachments: [],
-    }).finally(() => {
-      settled = true;
-    });
+    const pending = h.runtime
+      .prompt(second!.sessionId, {
+        prompt: "next task",
+        requestId: "req-b",
+        attachments: [],
+      })
+      .finally(() => {
+        settled = true;
+      });
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(settled).toBe(false);
     expect(h.children).toHaveLength(1);
@@ -441,8 +444,6 @@ describe("environment refresh", () => {
   });
 });
 
-
-
 describe("models", () => {
   test("publishes app-server's resolved and rerouted model on the assistant message", async () => {
     let turnNumber = 0;
@@ -466,8 +467,9 @@ describe("models", () => {
       attachments: [],
     });
 
-    let assistant = (await h.runtime.getMessages(sessionId))
-      ?.find((message) => message.role === "assistant");
+    let assistant = (await h.runtime.getMessages(sessionId))?.find(
+      (message) => message.role === "assistant",
+    );
     expect(assistant?.modelId).toBe("gpt-resolved");
     const secondTab = await h.runtime.resumeSession({
       threadId: "thread-1",
@@ -480,8 +482,9 @@ describe("models", () => {
       threadSettings: { model: "gpt-settings-confirmed" },
     });
     await h.drain();
-    assistant = (await h.runtime.getMessages(sessionId))
-      ?.find((message) => message.role === "assistant");
+    assistant = (await h.runtime.getMessages(sessionId))?.find(
+      (message) => message.role === "assistant",
+    );
     expect(assistant?.modelId).toBe("gpt-settings-confirmed");
 
     h.child().notify("model/rerouted", {
@@ -492,8 +495,9 @@ describe("models", () => {
       reason: "highRiskCyber",
     });
     await h.drain();
-    assistant = (await h.runtime.getMessages(sessionId))
-      ?.find((message) => message.role === "assistant");
+    assistant = (await h.runtime.getMessages(sessionId))?.find(
+      (message) => message.role === "assistant",
+    );
     expect(assistant?.modelId).toBe("gpt-rerouted");
 
     // Thread settings describe the default for future turns. They must not
@@ -503,17 +507,18 @@ describe("models", () => {
       threadSettings: { model: "gpt-settings-confirmed" },
     });
     await h.drain();
-    assistant = (await h.runtime.getMessages(sessionId))
-      ?.find((message) => message.role === "assistant");
+    assistant = (await h.runtime.getMessages(sessionId))?.find(
+      (message) => message.role === "assistant",
+    );
     expect(assistant?.modelId).toBe("gpt-rerouted");
 
     const rerouteRecipients = new Set(
       h.events
-        .filter((event) =>
-          event.type === "message.updated"
-          && (
-            event.data as { message?: { modelId?: string } } | undefined
-          )?.message?.modelId === "gpt-rerouted"
+        .filter(
+          (event) =>
+            event.type === "message.updated" &&
+            (event.data as { message?: { modelId?: string } } | undefined)?.message?.modelId ===
+              "gpt-rerouted",
         )
         .map((event) => event.sessionId),
     );
@@ -530,8 +535,9 @@ describe("models", () => {
       attachments: [],
     });
 
-    let assistants = (await h.runtime.getMessages(sessionId))
-      ?.filter((message) => message.role === "assistant");
+    let assistants = (await h.runtime.getMessages(sessionId))?.filter(
+      (message) => message.role === "assistant",
+    );
     expect(assistants?.[1]?.modelId).toBe("gpt-settings-confirmed");
 
     h.child().notify("turn/completed", {
@@ -539,17 +545,20 @@ describe("models", () => {
       turn: { id: "turn-2", status: "completed" },
     });
     await h.drain();
-    expect(await h.runtime.updateConfig(sessionId, {
-      mode: "build",
-      model: "gpt-new-request",
-    })).toBe("updated");
+    expect(
+      await h.runtime.updateConfig(sessionId, {
+        mode: "build",
+        model: "gpt-new-request",
+      }),
+    ).toBe("updated");
     await h.runtime.prompt(sessionId, {
       prompt: "Wait for the new confirmation",
       requestId: "req-model-3",
       attachments: [],
     });
-    assistants = (await h.runtime.getMessages(sessionId))
-      ?.filter((message) => message.role === "assistant");
+    assistants = (await h.runtime.getMessages(sessionId))?.filter(
+      (message) => message.role === "assistant",
+    );
     expect(assistants?.[2]?.modelId).toBeUndefined();
   });
 
@@ -568,12 +577,7 @@ describe("models", () => {
       attachments: [],
     });
     expect(
-      await h.runtime.steerSession(
-        sessionId,
-        "Also inspect tests",
-        "turn-1",
-        "req-reroute-steer",
-      ),
+      await h.runtime.steerSession(sessionId, "Also inspect tests", "turn-1", "req-reroute-steer"),
     ).toBe("accepted");
 
     h.child().notify("model/rerouted", {
@@ -619,20 +623,21 @@ describe("models", () => {
       turn: { id: "turn-1", status: "completed" },
     });
     await h.drain();
-    writeRolloutWithTurns("thread-1", [{
-      turnId: "turn-1",
-      user: "Persist the reroute",
-      assistant: "Done",
-      model: "gpt-start",
-    }]);
+    writeRolloutWithTurns("thread-1", [
+      {
+        turnId: "turn-1",
+        user: "Persist the reroute",
+        assistant: "Done",
+        model: "gpt-start",
+      },
+    ]);
 
     clock += 60_000;
     expect(await h.runtime.sweepIdle()).toMatchObject({ detached: 1 });
     expect(h.runtime.getRegistry().getThread("thread-1")).toBeUndefined();
 
     const messages = await h.runtime.getMessages(sessionId);
-    expect(messages?.find((message) => message.role === "assistant")?.modelId)
-      .toBe("gpt-rerouted");
+    expect(messages?.find((message) => message.role === "assistant")?.modelId).toBe("gpt-rerouted");
   });
 
   test("persists reroutes for inactive sessions across a stale-first restart", async () => {
@@ -661,9 +666,9 @@ describe("models", () => {
       attachments: [],
     });
     // session-inactive is restored in the registry but has never attached.
-    expect(
-      first.runtime.getRegistry().getThread("thread-shared-model")?.bridgeSessionIds,
-    ).toEqual(new Set(["session-active"]));
+    expect(first.runtime.getRegistry().getThread("thread-shared-model")?.bridgeSessionIds).toEqual(
+      new Set(["session-active"]),
+    );
 
     first.child().notify("model/rerouted", {
       threadId: "thread-shared-model",
@@ -676,19 +681,20 @@ describe("models", () => {
       turn: { id: "turn-1", status: "completed" },
     });
     await first.drain();
-    writeRolloutWithTurns("thread-shared-model", [{
-      turnId: "turn-1",
-      user: "Persist for both tabs",
-      assistant: "Done",
-      model: "gpt-start",
-    }]);
+    writeRolloutWithTurns("thread-shared-model", [
+      {
+        turnId: "turn-1",
+        user: "Persist for both tabs",
+        assistant: "Done",
+        model: "gpt-start",
+      },
+    ]);
     await first.runtime.stop();
 
     expect(
-      (await store.load()).map((record) => [
-        record.bridgeSessionId,
-        record.confirmedModelsByTurn?.["turn-1"],
-      ]).sort(),
+      (await store.load())
+        .map((record) => [record.bridgeSessionId, record.confirmedModelsByTurn?.["turn-1"]])
+        .sort(),
     ).toEqual([
       ["session-active", "gpt-rerouted"],
       ["session-inactive", "gpt-rerouted"],
@@ -703,8 +709,9 @@ describe("models", () => {
     // Reopen the formerly inactive tab first, then join the formerly active one.
     for (const sessionId of ["session-inactive", "session-active"]) {
       expect(
-        (await restarted.runtime.getMessages(sessionId))
-          ?.find((message) => message.role === "assistant")?.modelId,
+        (await restarted.runtime.getMessages(sessionId))?.find(
+          (message) => message.role === "assistant",
+        )?.modelId,
       ).toBe("gpt-rerouted");
     }
   });
@@ -751,37 +758,31 @@ describe("models", () => {
 
     const initial = await h.runtime.getMessages("session-first");
     expect(
-      initial?.find(
-        (message) => message.role === "assistant" && message.turnId === "turn-1",
-      )?.modelId,
-    )
-      .toBe("gpt-first-reroute");
+      initial?.find((message) => message.role === "assistant" && message.turnId === "turn-1")
+        ?.modelId,
+    ).toBe("gpt-first-reroute");
     expect(
-      initial?.find(
-        (message) => message.role === "assistant" && message.turnId === "turn-2",
-      )?.modelId,
-    )
-      .toBe("gpt-rollout");
-    const revisionBeforeJoin =
-      h.runtime.getStatus("session-first")?.messageRevision ?? 0;
+      initial?.find((message) => message.role === "assistant" && message.turnId === "turn-2")
+        ?.modelId,
+    ).toBe("gpt-rollout");
+    const revisionBeforeJoin = h.runtime.getStatus("session-first")?.messageRevision ?? 0;
     h.events.length = 0;
 
     const joined = await h.runtime.getMessages("session-second");
     expect(
-      joined?.find(
-        (message) => message.role === "assistant" && message.turnId === "turn-2",
-      )?.modelId,
-    )
-      .toBe("gpt-second-reroute");
-    expect(h.runtime.getStatus("session-first")?.messageRevision)
-      .toBeGreaterThan(revisionBeforeJoin);
+      joined?.find((message) => message.role === "assistant" && message.turnId === "turn-2")
+        ?.modelId,
+    ).toBe("gpt-second-reroute");
+    expect(h.runtime.getStatus("session-first")?.messageRevision).toBeGreaterThan(
+      revisionBeforeJoin,
+    );
     const recipients = new Set(
       h.events
-        .filter((event) =>
-          event.type === "message.updated"
-          && (
-            event.data as { message?: { turnId?: string; modelId?: string } }
-          ).message?.turnId === "turn-2"
+        .filter(
+          (event) =>
+            event.type === "message.updated" &&
+            (event.data as { message?: { turnId?: string; modelId?: string } }).message?.turnId ===
+              "turn-2",
         )
         .map((event) => event.sessionId),
     );
@@ -789,8 +790,8 @@ describe("models", () => {
     expect(
       (await store.load()).every(
         (record) =>
-          record.confirmedModelsByTurn?.["turn-1"] === "gpt-first-reroute"
-          && record.confirmedModelsByTurn?.["turn-2"] === "gpt-second-reroute",
+          record.confirmedModelsByTurn?.["turn-1"] === "gpt-first-reroute" &&
+          record.confirmedModelsByTurn?.["turn-2"] === "gpt-second-reroute",
       ),
     ).toBe(true);
   });
@@ -836,11 +837,13 @@ describe("models", () => {
   });
 
   test("uses resume-confirmed models for the next turn", async () => {
-    writeRolloutWithTurns("thread-resume-model", [{
-      turnId: "old-turn",
-      user: "Old",
-      assistant: "History",
-    }]);
+    writeRolloutWithTurns("thread-resume-model", [
+      {
+        turnId: "old-turn",
+        user: "Old",
+        assistant: "History",
+      },
+    ]);
     const h = await harness({
       "thread/resume": () => ({
         thread: threadPayload("thread-resume-model"),
@@ -1027,8 +1030,7 @@ describe("models", () => {
     const result = await h.runtime.listModels();
     expect(result.models[0]!.defaultReasoningEffort).toBe("high");
     // The default must always be a selectable option.
-    expect(result.models[0]!.reasoningEfforts)
-      .toContain(result.models[0]!.defaultReasoningEffort);
+    expect(result.models[0]!.reasoningEfforts).toContain(result.models[0]!.defaultReasoningEffort);
   });
 
   test("keeps app-server's default when the model advertises no efforts", async () => {
@@ -1063,8 +1065,6 @@ describe("models", () => {
     expect(await h.runtime.listModels()).toMatchObject({ source: "cache" });
   });
 });
-
-
 
 describe("titles", () => {
   test("a generated title is dual-written to Codex and the bridge index", async () => {
@@ -1120,20 +1120,29 @@ describe("titles", () => {
       cwd: "/tmp/ws",
     });
     let records = await store.load();
-    await waitUntil(async () => {
-      records = await store.load();
-      return [first.sessionId, second!.sessionId].every((sessionId) =>
-        records.some((record) =>
-          record.bridgeSessionId === sessionId
-          && record.title === "Shared Generated Title"
-          && record.titleSource === "generated"
-        )
-      );
-    }, "generated title was not persisted for both tabs", 2_000);
-    expect(records.find((record) => record.bridgeSessionId === first.sessionId))
-      .toMatchObject({ title: "Shared Generated Title", titleSource: "generated" });
-    expect(records.find((record) => record.bridgeSessionId === second!.sessionId))
-      .toMatchObject({ title: "Shared Generated Title", titleSource: "generated" });
+    await waitUntil(
+      async () => {
+        records = await store.load();
+        return [first.sessionId, second!.sessionId].every((sessionId) =>
+          records.some(
+            (record) =>
+              record.bridgeSessionId === sessionId &&
+              record.title === "Shared Generated Title" &&
+              record.titleSource === "generated",
+          ),
+        );
+      },
+      "generated title was not persisted for both tabs",
+      2_000,
+    );
+    expect(records.find((record) => record.bridgeSessionId === first.sessionId)).toMatchObject({
+      title: "Shared Generated Title",
+      titleSource: "generated",
+    });
+    expect(records.find((record) => record.bridgeSessionId === second!.sessionId)).toMatchObject({
+      title: "Shared Generated Title",
+      titleSource: "generated",
+    });
   });
 
   /**
@@ -1144,17 +1153,20 @@ describe("titles", () => {
   test("a superseded title generation does not overwrite the newer title", async () => {
     let resolveFirst!: (title: string) => void;
     let calls = 0;
-    const h = await harness({}, {
-      generateTitle: async () => {
-        calls += 1;
-        if (calls === 1) {
-          return new Promise<string>((resolve) => {
-            resolveFirst = resolve;
-          });
-        }
-        return "Second Title";
+    const h = await harness(
+      {},
+      {
+        generateTitle: async () => {
+          calls += 1;
+          if (calls === 1) {
+            return new Promise<string>((resolve) => {
+              resolveFirst = resolve;
+            });
+          }
+          return "Second Title";
+        },
       },
-    });
+    );
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     await h.runtime.prompt(sessionId, { prompt: "first", requestId: "req-1", attachments: [] });
     h.child().notify("turn/completed", {
@@ -1189,17 +1201,24 @@ describe("titles", () => {
   test("a prompt fallback title is emitted immediately", async () => {
     const h = await harness();
     const { sessionId } = h.runtime.createSession({ mode: "build" });
-    await h.runtime.prompt(sessionId, { prompt: "Fix the parser", requestId: "req-1", attachments: [] });
+    await h.runtime.prompt(sessionId, {
+      prompt: "Fix the parser",
+      requestId: "req-1",
+      attachments: [],
+    });
 
     expect(h.events.some((event) => event.type === "session.title-updated")).toBe(true);
   });
 
   test("a rejected title generation keeps the prompt fallback and clears its token", async () => {
-    const h = await harness({}, {
-      generateTitle: async () => {
-        throw new Error("title service unavailable");
+    const h = await harness(
+      {},
+      {
+        generateTitle: async () => {
+          throw new Error("title service unavailable");
+        },
       },
-    });
+    );
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     await h.runtime.prompt(sessionId, {
       prompt: "Fix the parser",
@@ -1214,8 +1233,6 @@ describe("titles", () => {
     expect(session.titleGenerationToken).toBeUndefined();
   });
 });
-
-
 
 describe("forking", () => {
   const FORK_HANDLERS = {
@@ -1270,8 +1287,7 @@ describe("forking", () => {
     const invalidationsBefore = getTranscriptCatalogInvalidationCountForTesting();
     const forked = await h.runtime.forkSession(sessionId);
     expect(forked).toMatchObject({ outcome: "created", threadId: "fork-of-thread-1" });
-    expect(getTranscriptCatalogInvalidationCountForTesting())
-      .toBe(invalidationsBefore + 1);
+    expect(getTranscriptCatalogInvalidationCountForTesting()).toBe(invalidationsBefore + 1);
     const params = h.child().requests.find((request) => request.method === "thread/fork")?.params;
     expect(params && "lastTurnId" in params).toBe(false);
   });
@@ -1350,8 +1366,9 @@ describe("forking", () => {
     // come from.
     const messages = (await h.runtime.getMessages(resumed!.sessionId))!;
     expect(messages[0]?.turnId).toBe("turn-a");
-    expect(await h.runtime.forkSession(resumed!.sessionId, messages[0]!.id))
-      .toMatchObject({ outcome: "created" });
+    expect(await h.runtime.forkSession(resumed!.sessionId, messages[0]!.id)).toMatchObject({
+      outcome: "created",
+    });
   });
 
   test("a message with no resolvable turn reports no-fork-point, not a 409", async () => {
@@ -1374,7 +1391,9 @@ describe("forking", () => {
           type: "response_item",
           payload: { type: "message", role: "user", content: [{ type: "input_text", text: "b" }] },
         },
-      ].map((record) => JSON.stringify(record)).join("\n")}\n`,
+      ]
+        .map((record) => JSON.stringify(record))
+        .join("\n")}\n`,
       "utf8",
     );
     const h = await harness({
@@ -1421,7 +1440,9 @@ describe("forking", () => {
             content: [{ type: "output_text", text: "b" }],
           },
         },
-      ].map((record) => JSON.stringify(record)).join("\n")}\n`,
+      ]
+        .map((record) => JSON.stringify(record))
+        .join("\n")}\n`,
       "utf8",
     );
     const h = await harness({
@@ -1492,10 +1513,9 @@ describe("forking", () => {
     const before = h.runtime.getRegistry().listSessions().length;
     // Fails *after* `registry.attach`, which is the window where a rejection used
     // to leave a child session bound to a fork no client was ever told about.
-    (h.runtime as unknown as { persistSession: () => Promise<void> }).persistSession =
-      async () => {
-        throw new Error("session store is unwritable");
-      };
+    (h.runtime as unknown as { persistSession: () => Promise<void> }).persistSession = async () => {
+      throw new Error("session store is unwritable");
+    };
 
     expect(await h.runtime.forkSession(sessionId)).toEqual({ outcome: "unavailable" });
     expect(h.runtime.getRegistry().listSessions()).toHaveLength(before);
@@ -1507,8 +1527,6 @@ describe("forking", () => {
     );
   });
 });
-
-
 
 describe("compaction", () => {
   const COMPACT_HANDLERS = { "thread/compact/start": () => ({}) };
@@ -1589,11 +1607,13 @@ describe("compaction", () => {
     expect(await h.runtime.compactSession(sessionId)).toBe("unavailable");
     expect(h.runtime.getStatus(sessionId)?.status).toBe("error");
     // The next prompt is accepted: the failed compaction holds nothing.
-    expect(await h.runtime.prompt(sessionId, {
-      prompt: "next",
-      requestId: "req-2",
-      attachments: [],
-    })).toMatchObject({ ok: true });
+    expect(
+      await h.runtime.prompt(sessionId, {
+        prompt: "next",
+        requestId: "req-2",
+        attachments: [],
+      }),
+    ).toMatchObject({ ok: true });
   });
 
   test("a missing compacted notification is released by the deadline", async () => {
@@ -1628,11 +1648,13 @@ describe("compaction", () => {
     await h.runtime.abort(sessionId);
 
     expect(h.runtime.getStatus(sessionId)).toMatchObject({ status: "idle" });
-    expect(await h.runtime.prompt(sessionId, {
-      prompt: "next",
-      requestId: "req-2",
-      attachments: [],
-    })).toMatchObject({ ok: true });
+    expect(
+      await h.runtime.prompt(sessionId, {
+        prompt: "next",
+        requestId: "req-2",
+        attachments: [],
+      }),
+    ).toMatchObject({ ok: true });
   });
 
   /**
@@ -1651,12 +1673,16 @@ describe("compaction", () => {
 
     for (const id of [sessionId, second!.sessionId]) {
       const forSession = h.events.filter((event) => event.sessionId === id);
-      expect(forSession.some(
-        (event) => event.type === "session.updated" && event.data?.status === "idle",
-      )).toBe(true);
-      expect(forSession.some(
-        (event) => event.data?.compacted === true && event.data?.compacting === false,
-      )).toBe(true);
+      expect(
+        forSession.some(
+          (event) => event.type === "session.updated" && event.data?.status === "idle",
+        ),
+      ).toBe(true);
+      expect(
+        forSession.some(
+          (event) => event.data?.compacted === true && event.data?.compacting === false,
+        ),
+      ).toBe(true);
       expect(forSession.some((event) => event.type === "session.idle")).toBe(true);
     }
   });
@@ -1722,8 +1748,6 @@ describe("compaction", () => {
   });
 });
 
-
-
 describe("native review", () => {
   const REVIEW_HANDLERS = {
     "review/start": () => ({ reviewThreadId: "review-1", turn: { id: "turn-review" } }),
@@ -1748,14 +1772,18 @@ describe("native review", () => {
   test("reports not-found before the session has a thread", async () => {
     const h = await harness(REVIEW_HANDLERS);
     const { sessionId } = h.runtime.createSession({ mode: "build" });
-    expect(await h.runtime.startNativeReview(sessionId, { type: "uncommittedChanges" }))
-      .toEqual({ outcome: "not-found" });
+    expect(await h.runtime.startNativeReview(sessionId, { type: "uncommittedChanges" })).toEqual({
+      outcome: "not-found",
+    });
   });
 
   test("starts the review turn and streams into its assistant message", async () => {
-    const { h, sessionId } = await reviewableSession({}, {
-      now: () => Date.parse("2026-08-01T12:34:56.000Z"),
-    });
+    const { h, sessionId } = await reviewableSession(
+      {},
+      {
+        now: () => Date.parse("2026-08-01T12:34:56.000Z"),
+      },
+    );
 
     const started = await h.runtime.startNativeReview(sessionId, {
       type: "baseBranch",
@@ -1777,8 +1805,9 @@ describe("native review", () => {
         turnStartedAt: "2026-08-01T12:34:56.000Z",
       },
     });
-    expect(h.child().requests.find((request) => request.method === "review/start")?.params)
-      .toMatchObject({ target: { type: "baseBranch", branch: "main" }, delivery: "inline" });
+    expect(
+      h.child().requests.find((request) => request.method === "review/start")?.params,
+    ).toMatchObject({ target: { type: "baseBranch", branch: "main" }, delivery: "inline" });
 
     h.child().notify("item/completed", {
       threadId: "thread-1",
@@ -1805,8 +1834,9 @@ describe("native review", () => {
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     await h.runtime.prompt(sessionId, { prompt: "go", requestId: "req-1", attachments: [] });
 
-    expect(await h.runtime.startNativeReview(sessionId, { type: "uncommittedChanges" }))
-      .toEqual({ outcome: "running" });
+    expect(await h.runtime.startNativeReview(sessionId, { type: "uncommittedChanges" })).toEqual({
+      outcome: "running",
+    });
   });
 
   /**
@@ -1861,16 +1891,15 @@ describe("native review", () => {
     const revisionBefore = h.runtime.getStatus(sessionId)!.messageRevision;
     const messagesBefore = (await h.runtime.getMessages(sessionId))!.length;
 
-    expect(await h.runtime.startNativeReview(sessionId, { type: "uncommittedChanges" }))
-      .toEqual({ outcome: "unavailable" });
+    expect(await h.runtime.startNativeReview(sessionId, { type: "uncommittedChanges" })).toEqual({
+      outcome: "unavailable",
+    });
 
     expect((await h.runtime.getMessages(sessionId))!).toHaveLength(messagesBefore);
     // Without the second bump a reconciling tab has no signal to refetch and
     // keeps a permanently blank assistant bubble.
     expect(h.runtime.getStatus(sessionId)!.messageRevision).toBeGreaterThan(revisionBefore + 1);
-    expect(
-      h.events.some((event) => typeof event.data?.removedMessageId === "string"),
-    ).toBe(true);
+    expect(h.events.some((event) => typeof event.data?.removedMessageId === "string")).toBe(true);
   });
 
   test("a failed review does not mark the whole session errored", async () => {
@@ -1888,25 +1917,32 @@ describe("native review", () => {
     // The failure is still surfaced, just as an error event rather than a phase.
     expect(h.events.some((event) => event.type === "session.error")).toBe(true);
     // And the thread accepts work again immediately.
-    expect(await h.runtime.prompt(sessionId, {
-      prompt: "next",
-      requestId: "req-2",
-      attachments: [],
-    })).toMatchObject({ ok: true });
+    expect(
+      await h.runtime.prompt(sessionId, {
+        prompt: "next",
+        requestId: "req-2",
+        attachments: [],
+      }),
+    ).toMatchObject({ ok: true });
   });
 
   test("a native review reattaches by turn id after an app-server restart", async () => {
-    const { h, sessionId } = await reviewableSession({
-      "thread/read": () => ({
-        thread: threadPayload("thread-1", {
-          turns: [{ id: "turn-review", status: "inProgress", items: [] }],
+    const { h, sessionId } = await reviewableSession(
+      {
+        "thread/read": () => ({
+          thread: threadPayload("thread-1", {
+            turns: [{ id: "turn-review", status: "inProgress", items: [] }],
+          }),
         }),
-      }),
-    }, {
-      now: () => Date.parse("2026-08-01T12:34:56.000Z"),
+      },
+      {
+        now: () => Date.parse("2026-08-01T12:34:56.000Z"),
+      },
+    );
+    expect(await h.runtime.startNativeReview(sessionId, { type: "uncommittedChanges" })).toEqual({
+      outcome: "accepted",
+      turnId: "turn-review",
     });
-    expect(await h.runtime.startNativeReview(sessionId, { type: "uncommittedChanges" }))
-      .toEqual({ outcome: "accepted", turnId: "turn-review" });
 
     h.child().exit(1);
     await h.engine.getSupervisor().ensureReady();
@@ -1921,11 +1957,14 @@ describe("native review", () => {
   });
 
   test("review-start rejection after a child crash preserves the recovering phase", async () => {
-    const { h, sessionId } = await reviewableSession({
-      "review/start": () => NO_RESPONSE,
-    }, {
-      now: () => Date.parse("2026-08-01T12:34:56.000Z"),
-    });
+    const { h, sessionId } = await reviewableSession(
+      {
+        "review/start": () => NO_RESPONSE,
+      },
+      {
+        now: () => Date.parse("2026-08-01T12:34:56.000Z"),
+      },
+    );
     const review = h.runtime.startNativeReview(sessionId, {
       type: "uncommittedChanges",
     });
@@ -1941,19 +1980,19 @@ describe("native review", () => {
   });
 });
 
-
-
 describe("interactions", () => {
   const QUESTION_PARAMS = {
     threadId: "thread-1",
     turnId: "turn-1",
     itemId: "item-1",
-    questions: [{
-      id: "language",
-      header: "Language",
-      question: "Which language?",
-      options: [{ label: "TypeScript" }],
-    }],
+    questions: [
+      {
+        id: "language",
+        header: "Language",
+        question: "Which language?",
+        options: [{ label: "TypeScript" }],
+      },
+    ],
   };
 
   async function askingSession(params: Record<string, unknown> = QUESTION_PARAMS) {
@@ -1994,10 +2033,9 @@ describe("interactions", () => {
 
     const requested = h.events.filter((event) => event.type === "session.interaction-requested");
     expect(requested).toHaveLength(1);
-    expect(h.events.findLastIndex((event) => event.type === "message.patched"))
-      .toBeLessThan(
-        h.events.findIndex((event) => event.type === "session.interaction-requested"),
-      );
+    expect(h.events.findLastIndex((event) => event.type === "message.patched")).toBeLessThan(
+      h.events.findIndex((event) => event.type === "session.interaction-requested"),
+    );
     // The authoritative rehydration path: a tab that was unmounted for the SSE
     // frame must still be able to ask.
     const listed = h.runtime.listInteractions(sessionId);
@@ -2030,10 +2068,12 @@ describe("interactions", () => {
     const { h, sessionId } = await askingSession();
     const interactionId = h.runtime.listInteractions(sessionId)[0]!.interactionId;
 
-    expect(h.runtime.respondToInteraction(sessionId, interactionId, {
-      action: "accept",
-      answers: { language: ["TypeScript"] },
-    })).toBe("applied");
+    expect(
+      h.runtime.respondToInteraction(sessionId, interactionId, {
+        action: "accept",
+        answers: { language: ["TypeScript"] },
+      }),
+    ).toBe("applied");
     await h.drain();
 
     expect(h.child().stdin.lines.join("")).toContain('"language":{"answers":["TypeScript"]}');
@@ -2043,8 +2083,9 @@ describe("interactions", () => {
 
   test("an unknown interaction id reports unknown rather than throwing", async () => {
     const { h, sessionId } = await askingSession();
-    expect(h.runtime.respondToInteraction(sessionId, "ask-nope", { action: "cancel" }))
-      .toBe("unknown");
+    expect(h.runtime.respondToInteraction(sessionId, "ask-nope", { action: "cancel" })).toBe(
+      "unknown",
+    );
   });
 
   test("another session cannot answer this thread's card", async () => {
@@ -2054,8 +2095,9 @@ describe("interactions", () => {
       h.runtime.getRegistry().listSessions()[0]!.id,
     )[0]!.interactionId;
 
-    expect(h.runtime.respondToInteraction(other.sessionId, interactionId, { action: "cancel" }))
-      .toBe("wrong-session");
+    expect(
+      h.runtime.respondToInteraction(other.sessionId, interactionId, { action: "cancel" }),
+    ).toBe("wrong-session");
   });
 
   /**
@@ -2075,10 +2117,12 @@ describe("interactions", () => {
       { language: [1] },
       { language: { answers: ["TypeScript"] } },
     ]) {
-      expect(h.runtime.respondToInteraction(sessionId, interactionId, {
-        action: "accept",
-        answers: answers as never,
-      })).toBe("invalid");
+      expect(
+        h.runtime.respondToInteraction(sessionId, interactionId, {
+          action: "accept",
+          answers: answers as never,
+        }),
+      ).toBe("invalid");
     }
     // Still answerable: a rejected answer must not consume the card.
     expect(h.runtime.listInteractions(sessionId)).toHaveLength(1);
@@ -2094,20 +2138,27 @@ describe("interactions", () => {
     });
     const interactionId = h.runtime.listInteractions(sessionId)[0]!.interactionId;
 
-    expect(h.runtime.respondToInteraction(sessionId, interactionId, { action: "accept" }))
-      .toBe("invalid");
-    expect(h.runtime.respondToInteraction(sessionId, interactionId, {
-      action: "accept",
-      answers: { language: ["ts"] },
-    })).toBe("invalid");
-    expect(h.runtime.respondToInteraction(sessionId, interactionId, {
-      action: "accept",
-      answers: { language: ["ts"], framework: ["bun"], extra: ["nope"] },
-    })).toBe("invalid");
-    expect(h.runtime.respondToInteraction(sessionId, interactionId, {
-      action: "accept",
-      answers: { language: ["ts"], framework: ["bun"] },
-    })).toBe("applied");
+    expect(h.runtime.respondToInteraction(sessionId, interactionId, { action: "accept" })).toBe(
+      "invalid",
+    );
+    expect(
+      h.runtime.respondToInteraction(sessionId, interactionId, {
+        action: "accept",
+        answers: { language: ["ts"] },
+      }),
+    ).toBe("invalid");
+    expect(
+      h.runtime.respondToInteraction(sessionId, interactionId, {
+        action: "accept",
+        answers: { language: ["ts"], framework: ["bun"], extra: ["nope"] },
+      }),
+    ).toBe("invalid");
+    expect(
+      h.runtime.respondToInteraction(sessionId, interactionId, {
+        action: "accept",
+        answers: { language: ["ts"], framework: ["bun"] },
+      }),
+    ).toBe("applied");
   });
 
   test.each(["decline", "cancel"] as const)(
@@ -2116,8 +2167,7 @@ describe("interactions", () => {
       const { h, sessionId } = await askingSession();
       const interactionId = h.runtime.listInteractions(sessionId)[0]!.interactionId;
 
-      expect(h.runtime.respondToInteraction(sessionId, interactionId, { action }))
-        .toBe("applied");
+      expect(h.runtime.respondToInteraction(sessionId, interactionId, { action })).toBe("applied");
       await h.drain();
       expect(h.runtime.listInteractions(sessionId)).toEqual([]);
     },
@@ -2147,15 +2197,19 @@ describe("interactions", () => {
     const interactionId = h.runtime.listInteractions(sessionId)[0]!.interactionId;
 
     for (const content of [undefined, null, "eu-west-1", 7, ["eu-west-1"]]) {
-      expect(h.runtime.respondToInteraction(sessionId, interactionId, {
-        action: "accept",
-        content,
-      })).toBe("invalid");
+      expect(
+        h.runtime.respondToInteraction(sessionId, interactionId, {
+          action: "accept",
+          content,
+        }),
+      ).toBe("invalid");
     }
-    expect(h.runtime.respondToInteraction(sessionId, interactionId, {
-      action: "accept",
-      content: { region: "eu-west-1" },
-    })).toBe("applied");
+    expect(
+      h.runtime.respondToInteraction(sessionId, interactionId, {
+        action: "accept",
+        content: { region: "eu-west-1" },
+      }),
+    ).toBe("applied");
   });
 
   test("a url elicitation may accept with nothing, but not with an arbitrary scalar", async () => {
@@ -2172,13 +2226,16 @@ describe("interactions", () => {
     // There is no form to fill, so an empty accept is legitimate — but arbitrary
     // content must not pass straight through to the MCP server.
     for (const content of ["done", 7, ["done"]]) {
-      expect(h.runtime.respondToInteraction(sessionId, listed.interactionId, {
-        action: "accept",
-        content,
-      })).toBe("invalid");
+      expect(
+        h.runtime.respondToInteraction(sessionId, listed.interactionId, {
+          action: "accept",
+          content,
+        }),
+      ).toBe("invalid");
     }
-    expect(h.runtime.respondToInteraction(sessionId, listed.interactionId, { action: "accept" }))
-      .toBe("applied");
+    expect(
+      h.runtime.respondToInteraction(sessionId, listed.interactionId, { action: "accept" }),
+    ).toBe("applied");
   });
 
   test("a card the router has already forgotten is dropped, not served forever", async () => {
@@ -2189,12 +2246,15 @@ describe("interactions", () => {
     h.engine.abandonThreadApprovals("thread-1");
     // `onInteractionResolved` normally clears our copy; re-add it to model a
     // notification that never landed.
-    (h.runtime as unknown as {
-      pendingInteractions: Map<string, unknown>;
-    }).pendingInteractions.set(interactionId, { request: { threadId: "thread-1" } });
+    (
+      h.runtime as unknown as {
+        pendingInteractions: Map<string, unknown>;
+      }
+    ).pendingInteractions.set(interactionId, { request: { threadId: "thread-1" } });
 
-    expect(h.runtime.respondToInteraction(sessionId, interactionId, { action: "cancel" }))
-      .toBe("unknown");
+    expect(h.runtime.respondToInteraction(sessionId, interactionId, { action: "cancel" })).toBe(
+      "unknown",
+    );
     // Mirrors the approval path: a card no client can ever resolve must not stay
     // in the rehydration snapshot.
     expect(h.runtime.listInteractions(sessionId)).toEqual([]);

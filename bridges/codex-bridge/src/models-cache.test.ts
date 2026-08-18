@@ -112,11 +112,13 @@ describe("parseModelCatalog", () => {
 
 describe("normalizeReasoningOptions", () => {
   test("deduplicates effort levels and fills missing descriptions", () => {
-    expect(normalizeReasoningOptions([
-      { effort: "max" },
-      { effort: "max", description: "Duplicate" },
-      { effort: "ultra", description: "Delegates work" },
-    ])).toEqual([
+    expect(
+      normalizeReasoningOptions([
+        { effort: "max" },
+        { effort: "max", description: "Duplicate" },
+        { effort: "ultra", description: "Delegates work" },
+      ]),
+    ).toEqual([
       {
         effort: "max",
         label: "Max",

@@ -1,5 +1,24 @@
-import { existsSync, fs, os, path, pathToFileURL, randomUUID, CODEX_BACKGROUND_TASK_MODEL, CODEX_BACKGROUND_TASK_REASONING_EFFORT, sanitizeBranchName, sanitizeEnvironmentName, commandExists, runCommand, ENVIRONMENT_AGENT_SKILLS_SCRIPT } from "./commands-dependencies.js";
-import type { Environment, AgentSkillProvider, AgentExtensionId, ExtensionCommandRunner } from "./commands-dependencies.js";
+import {
+  existsSync,
+  fs,
+  os,
+  path,
+  pathToFileURL,
+  randomUUID,
+  CODEX_BACKGROUND_TASK_MODEL,
+  CODEX_BACKGROUND_TASK_REASONING_EFFORT,
+  sanitizeBranchName,
+  sanitizeEnvironmentName,
+  commandExists,
+  runCommand,
+  ENVIRONMENT_AGENT_SKILLS_SCRIPT,
+} from "./commands-dependencies.js";
+import type {
+  Environment,
+  AgentSkillProvider,
+  AgentExtensionId,
+  ExtensionCommandRunner,
+} from "./commands-dependencies.js";
 import { dockerExec } from "./commands-container-exec.js";
 import type { AcpLocalServerKind } from "./commands-runtime-state.js";
 import type { CommandContext } from "./commands-context.js";
@@ -63,7 +82,9 @@ export function validateGitRefName(value: string, name = "git ref"): string {
     trimmed.includes("..") ||
     trimmed.includes("//") ||
     /[\x00-\x20\x7f~^:?*[\\]/.test(trimmed) ||
-    trimmed.split("/").some((part) => part.length === 0 || part.startsWith(".") || part.endsWith(".lock"))
+    trimmed
+      .split("/")
+      .some((part) => part.length === 0 || part.startsWith(".") || part.endsWith(".lock"))
   ) {
     throw new Error(`Invalid ${name}: ${value}`);
   }
@@ -133,7 +154,11 @@ export function sanitizeGeneratedEnvironmentName(rawName: string): string {
   return name.split("-").filter(Boolean).slice(0, 3).join("-");
 }
 
-export function makeUniqueEnvironmentSlug(baseSlug: string, existingEnvironments: Environment[], extraBranches: string[] = []): string {
+export function makeUniqueEnvironmentSlug(
+  baseSlug: string,
+  existingEnvironments: Environment[],
+  extraBranches: string[] = [],
+): string {
   const used = new Set<string>();
   for (const environment of existingEnvironments) {
     used.add(environment.name);
@@ -194,7 +219,7 @@ export function resolveManagedAcpBinary(
   kind: AcpLocalServerKind,
 ): string | undefined {
   return kind === "cursor"
-    ? resolveManagedBinary(context, "cursor-agent") ?? resolveManagedBinary(context, "cursor")
+    ? (resolveManagedBinary(context, "cursor-agent") ?? resolveManagedBinary(context, "cursor"))
     : resolveManagedBinary(context, "grok");
 }
 
@@ -206,10 +231,7 @@ export function extensionCliName(agent: AgentExtensionId): string {
   return agent === "cursor" ? "cursor-agent" : agent;
 }
 
-export function resolveAgentBinary(
-  context: CommandContext,
-  agent: AgentExtensionId,
-): string {
+export function resolveAgentBinary(context: CommandContext, agent: AgentExtensionId): string {
   if (agent === "claude") return resolveClaudeBinary(context);
   if (agent === "codex") return resolveCodexBinary(context);
   if (agent === "cursor" || agent === "grok") {
@@ -235,18 +257,14 @@ export function createExtensionCommandRunner(
 ): ExtensionCommandRunner {
   if (environment.environmentType === "local" && environment.worktreePath) {
     return async (agent, args) => {
-      const { stdout } = await run(
-        resolveAgentBinary(context, agent),
-        args,
-        {
-          cwd: environment.worktreePath,
-          env: {
-            ...envWithManagedBinaries(context),
-            NO_COLOR: "1",
-          },
-          timeoutMs: EXTENSION_DISCOVERY_TIMEOUT_MS,
+      const { stdout } = await run(resolveAgentBinary(context, agent), args, {
+        cwd: environment.worktreePath,
+        env: {
+          ...envWithManagedBinaries(context),
+          NO_COLOR: "1",
         },
-      );
+        timeoutMs: EXTENSION_DISCOVERY_TIMEOUT_MS,
+      });
       return stdout;
     };
   }
@@ -313,13 +331,13 @@ export function parseOpenCodeEnvironmentSkills(output: string): OpenCodeEnvironm
     // skills only.
     if (record.location === "<built-in>") continue;
     if (
-      typeof record.name !== "string"
-      || typeof record.location !== "string"
-      || (record.description !== undefined && typeof record.description !== "string")
-      || record.name.trim().length === 0
-      || !path.isAbsolute(record.location)
-      || path.basename(path.normalize(record.location)) !== "SKILL.md"
-      || record.location.length > MAX_ENVIRONMENT_SKILL_PATH_CHARS
+      typeof record.name !== "string" ||
+      typeof record.location !== "string" ||
+      (record.description !== undefined && typeof record.description !== "string") ||
+      record.name.trim().length === 0 ||
+      !path.isAbsolute(record.location) ||
+      path.basename(path.normalize(record.location)) !== "SKILL.md" ||
+      record.location.length > MAX_ENVIRONMENT_SKILL_PATH_CHARS
     ) {
       throw new Error("OpenCode returned an invalid skill entry");
     }
@@ -346,14 +364,18 @@ export async function runEnvironmentAgentSkills(
   filePath = "",
   run: typeof runCommand = runCommand,
 ): Promise<unknown> {
-  const scannerInput = provider === "opencode"
-    ? JSON.stringify(parseOpenCodeEnvironmentSkills(
-        await createExtensionCommandRunner(environment, context, run)(
-          "opencode",
-          ["debug", "skill"],
-        ),
-      ))
-    : undefined;
+  const scannerInput =
+    provider === "opencode"
+      ? JSON.stringify(
+          parseOpenCodeEnvironmentSkills(
+            await createExtensionCommandRunner(
+              environment,
+              context,
+              run,
+            )("opencode", ["debug", "skill"]),
+          ),
+        )
+      : undefined;
   let stdout: string;
   if (environment.environmentType === "local" && environment.worktreePath) {
     ({ stdout } = await run(
@@ -399,14 +421,15 @@ export async function runEnvironmentAgentSkills(
 }
 
 export function hasPackagedOrPathBinary(context: CommandContext, name: string): Promise<boolean> {
-  return resolveManagedBinary(context, name)
-    ? Promise.resolve(true)
-    : commandExists(name);
+  return resolveManagedBinary(context, name) ? Promise.resolve(true) : commandExists(name);
 }
 
 // Resolution is synchronous, but every sibling probe answers with a promise and
 // the registry hands these straight to callers that await them.
-export function hasManagedAcpBinary(context: CommandContext, kind: AcpLocalServerKind): Promise<boolean> {
+export function hasManagedAcpBinary(
+  context: CommandContext,
+  kind: AcpLocalServerKind,
+): Promise<boolean> {
   return Promise.resolve(resolveManagedAcpBinary(context, kind) !== undefined);
 }
 
@@ -420,7 +443,10 @@ export function managedBinaryPathEntries(context: CommandContext): string[] {
   return dirs.filter((dir, index) => existsSync(dir) && dirs.indexOf(dir) === index);
 }
 
-export function envWithManagedBinaries(context: CommandContext, env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+export function envWithManagedBinaries(
+  context: CommandContext,
+  env: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
   const entries = managedBinaryPathEntries(context);
   if (entries.length === 0) return { ...env };
   const currentPath = env.PATH ?? "";
@@ -443,30 +469,37 @@ export function resolveBunBinary(context: CommandContext): string {
   return candidates.find((candidate) => existsSync(candidate)) ?? "bun";
 }
 
-export async function generateEnvironmentNameWithCodexExec(prompt: string, context: CommandContext): Promise<string> {
+export async function generateEnvironmentNameWithCodexExec(
+  prompt: string,
+  context: CommandContext,
+): Promise<string> {
   const trimmedPrompt = prompt.trim();
   if (!trimmedPrompt) throw new Error("Prompt cannot be empty");
 
   const outputPath = path.join(os.tmpdir(), `orkestrator-name-${randomUUID()}.txt`);
   try {
-    const { stdout } = await runCommand(resolveCodexBinary(context), [
-      "--model",
-      CODEX_BACKGROUND_TASK_MODEL,
-      "--config",
-      `model_reasoning_effort="${CODEX_BACKGROUND_TASK_REASONING_EFFORT}"`,
-      "--sandbox",
-      "read-only",
-      "--cd",
-      os.tmpdir(),
-      "exec",
-      "--skip-git-repo-check",
-      "--ephemeral",
-      "--ignore-user-config",
-      "--ignore-rules",
-      "--output-last-message",
-      outputPath,
-      buildSlugGenerationPrompt(trimmedPrompt),
-    ], { timeoutMs: 90_000 });
+    const { stdout } = await runCommand(
+      resolveCodexBinary(context),
+      [
+        "--model",
+        CODEX_BACKGROUND_TASK_MODEL,
+        "--config",
+        `model_reasoning_effort="${CODEX_BACKGROUND_TASK_REASONING_EFFORT}"`,
+        "--sandbox",
+        "read-only",
+        "--cd",
+        os.tmpdir(),
+        "exec",
+        "--skip-git-repo-check",
+        "--ephemeral",
+        "--ignore-user-config",
+        "--ignore-rules",
+        "--output-last-message",
+        outputPath,
+        buildSlugGenerationPrompt(trimmedPrompt),
+      ],
+      { timeoutMs: 90_000 },
+    );
 
     const response = await fs.readFile(outputPath, "utf8").catch(() => stdout);
     return sanitizeGeneratedEnvironmentName(parseSlugFromResponse(response.trim()));
@@ -475,13 +508,22 @@ export async function generateEnvironmentNameWithCodexExec(prompt: string, conte
   }
 }
 
-export async function listGitBranchesAtPath(repoPath: string, fetchFirst: boolean): Promise<string[]> {
+export async function listGitBranchesAtPath(
+  repoPath: string,
+  fetchFirst: boolean,
+): Promise<string[]> {
   if (fetchFirst) {
-    await runCommand("git", ["-C", repoPath, "fetch", "origin", "--prune"], { timeoutMs: 60_000 }).catch(() => undefined);
+    await runCommand("git", ["-C", repoPath, "fetch", "origin", "--prune"], {
+      timeoutMs: 60_000,
+    }).catch(() => undefined);
   }
 
   try {
-    const { stdout } = await runCommand("git", ["-C", repoPath, "branch", "-a", "--format=%(refname:short)"], { timeoutMs: 30_000 });
+    const { stdout } = await runCommand(
+      "git",
+      ["-C", repoPath, "branch", "-a", "--format=%(refname:short)"],
+      { timeoutMs: 30_000 },
+    );
     const branches = stdout
       .split("\n")
       .map((branch) => branch.trim())
@@ -505,10 +547,18 @@ export async function listGitBranchesAtPath(repoPath: string, fetchFirst: boolea
  * (e.g. a stopped or not-yet-provisioned container) the branch is materialized from storage
  * at provision time, so the stored branch may be advanced freely.
  */
-export async function renameLiveGitBranch(environment: Environment, oldBranch: string, newBranch: string): Promise<boolean> {
+export async function renameLiveGitBranch(
+  environment: Environment,
+  oldBranch: string,
+  newBranch: string,
+): Promise<boolean> {
   if (environment.worktreePath) {
     try {
-      await runCommand("git", ["-C", environment.worktreePath, "branch", "-m", "--", oldBranch, newBranch], { timeoutMs: 30_000 });
+      await runCommand(
+        "git",
+        ["-C", environment.worktreePath, "branch", "-m", "--", oldBranch, newBranch],
+        { timeoutMs: 30_000 },
+      );
     } catch (error) {
       console.warn("[ElectronBackend] Failed to rename local git branch:", error);
       return false;
@@ -518,12 +568,22 @@ export async function renameLiveGitBranch(environment: Environment, oldBranch: s
       await configureSameNamedOriginPush(environment.worktreePath);
       await clearStaleLocalBranchUpstream(environment.worktreePath, newBranch);
     } catch (error) {
-      console.warn("[ElectronBackend] Renamed local git branch but failed to configure its pushes:", error);
+      console.warn(
+        "[ElectronBackend] Renamed local git branch but failed to configure its pushes:",
+        error,
+      );
       try {
-        await runCommand("git", ["-C", environment.worktreePath, "branch", "-m", "--", newBranch, oldBranch], { timeoutMs: 30_000 });
+        await runCommand(
+          "git",
+          ["-C", environment.worktreePath, "branch", "-m", "--", newBranch, oldBranch],
+          { timeoutMs: 30_000 },
+        );
         return false;
       } catch (rollbackError) {
-        console.warn("[ElectronBackend] Failed to roll back local git branch rename:", rollbackError);
+        console.warn(
+          "[ElectronBackend] Failed to roll back local git branch rename:",
+          rollbackError,
+        );
         const worktreePath = environment.worktreePath;
         return await renameLandedOnNewBranch(
           (branch) => localBranchRefExists(worktreePath, branch),
@@ -549,7 +609,10 @@ export async function renameLiveGitBranch(environment: Environment, oldBranch: s
     try {
       await dockerExec(containerId, containerSameNamedOriginPushCommand(newBranch));
     } catch (error) {
-      console.warn("[ElectronBackend] Renamed container git branch but failed to configure its pushes:", error);
+      console.warn(
+        "[ElectronBackend] Renamed container git branch but failed to configure its pushes:",
+        error,
+      );
       try {
         await dockerExec(
           containerId,
@@ -557,7 +620,10 @@ export async function renameLiveGitBranch(environment: Environment, oldBranch: s
         );
         return false;
       } catch (rollbackError) {
-        console.warn("[ElectronBackend] Failed to roll back container git branch rename:", rollbackError);
+        console.warn(
+          "[ElectronBackend] Failed to roll back container git branch rename:",
+          rollbackError,
+        );
         return await renameLandedOnNewBranch(
           (branch) => containerBranchRefExists(containerId, branch),
           oldBranch,
@@ -589,26 +655,27 @@ export async function renameLiveGitBranch(environment: Environment, oldBranch: s
  * the same settings repeatedly is idempotent.
  */
 export async function configureSameNamedOriginPush(worktreePath: string): Promise<void> {
-  await runCommand(
-    "git",
-    ["-C", worktreePath, "config", "extensions.worktreeConfig", "true"],
-    { timeoutMs: 10_000 },
-  );
-  for (const [key, value] of [["push.default", "current"], ["push.autoSetupRemote", "true"]] as const) {
-    await runCommand(
-      "git",
-      ["-C", worktreePath, "config", "--worktree", key, value],
-      { timeoutMs: 10_000 },
-    );
+  await runCommand("git", ["-C", worktreePath, "config", "extensions.worktreeConfig", "true"], {
+    timeoutMs: 10_000,
+  });
+  for (const [key, value] of [
+    ["push.default", "current"],
+    ["push.autoSetupRemote", "true"],
+  ] as const) {
+    await runCommand("git", ["-C", worktreePath, "config", "--worktree", key, value], {
+      timeoutMs: 10_000,
+    });
   }
 }
 
 /** The container-side equivalent of {@link configureSameNamedOriginPush}. */
 function containerSameNamedOriginPushCommand(branch: string): string {
-  return `git -C /workspace config --local push.default current`
-    + ` && git -C /workspace config --local push.autoSetupRemote true`
-    + ` && { git -C /workspace config --local --unset-all ${quoteShell(`branch.${branch}.merge`)} || true; }`
-    + ` && { git -C /workspace config --local --unset-all ${quoteShell(`branch.${branch}.remote`)} || true; }`;
+  return (
+    `git -C /workspace config --local push.default current` +
+    ` && git -C /workspace config --local push.autoSetupRemote true` +
+    ` && { git -C /workspace config --local --unset-all ${quoteShell(`branch.${branch}.merge`)} || true; }` +
+    ` && { git -C /workspace config --local --unset-all ${quoteShell(`branch.${branch}.remote`)} || true; }`
+  );
 }
 
 /**
@@ -623,11 +690,9 @@ function containerSameNamedOriginPushCommand(branch: string): string {
 async function clearStaleLocalBranchUpstream(worktreePath: string, branch: string): Promise<void> {
   const refName = validateGitRefName(branch, "environment branch");
   for (const key of [`branch.${refName}.merge`, `branch.${refName}.remote`]) {
-    await runCommand(
-      "git",
-      ["-C", worktreePath, "config", "--local", "--unset-all", key],
-      { timeoutMs: 10_000 },
-    ).catch(() => undefined);
+    await runCommand("git", ["-C", worktreePath, "config", "--local", "--unset-all", key], {
+      timeoutMs: 10_000,
+    }).catch(() => undefined);
   }
 }
 
@@ -647,7 +712,10 @@ async function localBranchRefExists(worktreePath: string, branch: string): Promi
     "git",
     ["-C", worktreePath, "rev-parse", "--verify", "--quiet", `refs/heads/${refName}`],
     { timeoutMs: 10_000 },
-  ).then(() => true, () => false);
+  ).then(
+    () => true,
+    () => false,
+  );
 }
 
 async function containerBranchRefExists(containerId: string, branch: string): Promise<boolean> {
@@ -656,8 +724,8 @@ async function containerBranchRefExists(containerId: string, branch: string): Pr
   // as easily mean the container is gone.
   const probe = await dockerExec(
     containerId,
-    `git -C /workspace rev-parse --verify --quiet ${quoteShell(`refs/heads/${branch}`)} >/dev/null 2>&1`
-      + ` && printf '%s' ${quoteShell(BRANCH_REF_EXISTS_SENTINEL)}; true`,
+    `git -C /workspace rev-parse --verify --quiet ${quoteShell(`refs/heads/${branch}`)} >/dev/null 2>&1` +
+      ` && printf '%s' ${quoteShell(BRANCH_REF_EXISTS_SENTINEL)}; true`,
     10_000,
   ).catch(() => null);
   return probe !== null && probe.includes(BRANCH_REF_EXISTS_SENTINEL);
@@ -690,7 +758,7 @@ export async function renameEnvironmentFromPrompt(
   context: CommandContext,
   expectedPendingPrompt?: string,
 ): Promise<void> {
-  if (!await context.storage.getEnvironment(environmentId)) {
+  if (!(await context.storage.getEnvironment(environmentId))) {
     throw new Error(`Environment not found: ${environmentId}`);
   }
 
@@ -705,26 +773,39 @@ export async function renameEnvironmentFromPrompt(
   }
   const oldBranch = environment.branch;
   const project = await context.storage.getProject(environment.projectId);
-  const siblingEnvironments = (await context.storage.getEnvironmentsByProject(environment.projectId))
-    .filter((candidate) => candidate.id !== environmentId);
+  const siblingEnvironments = (
+    await context.storage.getEnvironmentsByProject(environment.projectId)
+  ).filter((candidate) => candidate.id !== environmentId);
   const existingGitBranches = project?.localPath
-    ? (await listGitBranchesAtPath(project.localPath, false)).filter((branch) => branch !== oldBranch)
+    ? (await listGitBranchesAtPath(project.localPath, false)).filter(
+        (branch) => branch !== oldBranch,
+      )
     : [];
-  const newName = makeUniqueEnvironmentSlug(generatedName, siblingEnvironments, existingGitBranches);
+  const newName = makeUniqueEnvironmentSlug(
+    generatedName,
+    siblingEnvironments,
+    existingGitBranches,
+  );
   const newBranch = sanitizeBranchName(newName);
   const branchChanged = oldBranch !== newBranch;
 
   // Rename any live git branch before persisting, and only advance the stored branch
   // (and clear stale PR metadata) when that rename succeeds, so storage never diverges
   // from the real git branch.
-  const persistBranch = branchChanged && (await renameLiveGitBranch(environment, oldBranch, newBranch));
+  const persistBranch =
+    branchChanged && (await renameLiveGitBranch(environment, oldBranch, newBranch));
 
   const updated = await context.storage.updateEnvironment(environmentId, {
     name: newName,
-    ...(persistBranch ? { branch: newBranch, prUrl: null, prState: null, hasMergeConflicts: null } : {}),
+    ...(persistBranch
+      ? { branch: newBranch, prUrl: null, prState: null, hasMergeConflicts: null }
+      : {}),
     ...(environment.pendingRenamePrompt !== undefined ? { pendingRenamePrompt: undefined } : {}),
   });
 
-  context.emit("environment-renamed", { environment_id: updated.id, new_name: updated.name, new_branch: updated.branch });
+  context.emit("environment-renamed", {
+    environment_id: updated.id,
+    new_name: updated.name,
+    new_branch: updated.branch,
+  });
 }
-

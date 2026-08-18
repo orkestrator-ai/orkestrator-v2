@@ -1,11 +1,48 @@
 import { invoke } from "@/lib/native/backend";
-import type { AgentInteractionApplyOutcome, AgentInteractionOrigin, AgentInteractionPolicy, AgentInteractionResolution } from "@orkestrator/protocol/agent-interactions";
-import type { BuildPipeline as BackendBuildPipeline, StartBuildPipelineInput } from "@orkestrator/protocol/build-pipeline";
-import type { LoopedReviewWorkflow as BackendLoopedReviewWorkflow, StartLoopedReviewInput } from "@orkestrator/protocol/review-workflow";
-import type { MultiReviewWorkflow as BackendMultiReviewWorkflow, MultiReviewReviewerTranscript, StartMultiReviewInput } from "@orkestrator/protocol/multi-review";
-import type { Environment, PersistedLoopedReviewWorkflow, PersistedBuildPipeline, PersistedNativeAgentSession, PersistedComposeDraft, PersistedFileDraft, PersistedPromptQueue, PersistedAgentHandoff } from "@/types";
-import { isAwaitBridgeReadyResult, type AgentBridgeKind, type AwaitBridgeReadyResult } from "@orkestrator/protocol/bridge-readiness";
-import type { NativeAgentControlUpdate, NativeAgentSessionAction, NativeAgentSessionActionOutcome, NativeAgentDispatchOutcome, NativeAgentForkOutcome, NativeAgentResumeEntry, NativeAgentSessionProjection, NativeAgentToolDetails } from "@orkestrator/protocol/native-agent";
+import type {
+  AgentInteractionApplyOutcome,
+  AgentInteractionOrigin,
+  AgentInteractionPolicy,
+  AgentInteractionResolution,
+} from "@orkestrator/protocol/agent-interactions";
+import type {
+  BuildPipeline as BackendBuildPipeline,
+  StartBuildPipelineInput,
+} from "@orkestrator/protocol/build-pipeline";
+import type {
+  LoopedReviewWorkflow as BackendLoopedReviewWorkflow,
+  StartLoopedReviewInput,
+} from "@orkestrator/protocol/review-workflow";
+import type {
+  MultiReviewWorkflow as BackendMultiReviewWorkflow,
+  MultiReviewReviewerTranscript,
+  StartMultiReviewInput,
+} from "@orkestrator/protocol/multi-review";
+import type {
+  Environment,
+  PersistedLoopedReviewWorkflow,
+  PersistedBuildPipeline,
+  PersistedNativeAgentSession,
+  PersistedComposeDraft,
+  PersistedFileDraft,
+  PersistedPromptQueue,
+  PersistedAgentHandoff,
+} from "@/types";
+import {
+  isAwaitBridgeReadyResult,
+  type AgentBridgeKind,
+  type AwaitBridgeReadyResult,
+} from "@orkestrator/protocol/bridge-readiness";
+import type {
+  NativeAgentControlUpdate,
+  NativeAgentSessionAction,
+  NativeAgentSessionActionOutcome,
+  NativeAgentDispatchOutcome,
+  NativeAgentForkOutcome,
+  NativeAgentResumeEntry,
+  NativeAgentSessionProjection,
+  NativeAgentToolDetails,
+} from "@orkestrator/protocol/native-agent";
 /** PR detection result containing URL, state, and merge conflict status */
 
 import {
@@ -53,19 +90,17 @@ export async function getLoopedReviewProviderSession(
 export async function getLoopedReviewWorkflow<T = unknown>(
   workflowId: string,
 ): Promise<PersistedLoopedReviewWorkflow<T> | null> {
-  return invoke<PersistedLoopedReviewWorkflow<T> | null>(
-    "get_looped_review_workflow",
-    { workflowId },
-  );
+  return invoke<PersistedLoopedReviewWorkflow<T> | null>("get_looped_review_workflow", {
+    workflowId,
+  });
 }
 
 export async function listLoopedReviewWorkflows<T = unknown>(
   environmentId: string,
 ): Promise<Array<PersistedLoopedReviewWorkflow<T>>> {
-  return invoke<Array<PersistedLoopedReviewWorkflow<T>>>(
-    "list_looped_review_workflows",
-    { environmentId },
-  );
+  return invoke<Array<PersistedLoopedReviewWorkflow<T>>>("list_looped_review_workflows", {
+    environmentId,
+  });
 }
 
 export async function saveLoopedReviewWorkflow<T>(
@@ -76,27 +111,22 @@ export async function saveLoopedReviewWorkflow<T>(
   expectedRevision?: number,
   controllerFence?: { ownerId: string; token: string },
 ): Promise<PersistedLoopedReviewWorkflow<T>> {
-  return invoke<PersistedLoopedReviewWorkflow<T>>(
-    "save_looped_review_workflow",
-    {
-      workflowId,
-      environmentId,
-      version,
-      snapshot,
-      ...(expectedRevision === undefined ? {} : { expectedRevision }),
-      ...(controllerFence
-        ? {
-            controllerOwnerId: controllerFence.ownerId,
-            controllerToken: controllerFence.token,
-          }
-        : {}),
-    },
-  );
+  return invoke<PersistedLoopedReviewWorkflow<T>>("save_looped_review_workflow", {
+    workflowId,
+    environmentId,
+    version,
+    snapshot,
+    ...(expectedRevision === undefined ? {} : { expectedRevision }),
+    ...(controllerFence
+      ? {
+          controllerOwnerId: controllerFence.ownerId,
+          controllerToken: controllerFence.token,
+        }
+      : {}),
+  });
 }
 
-export async function deleteLoopedReviewWorkflow(
-  workflowId: string,
-): Promise<void> {
+export async function deleteLoopedReviewWorkflow(workflowId: string): Promise<void> {
   return invoke("delete_looped_review_workflow", { workflowId });
 }
 
@@ -129,34 +159,36 @@ export async function stopMultiReviewReviewer(
   workflowId: string,
   reviewerId: string,
 ): Promise<BackendMultiReviewWorkflow> {
-  return invoke<BackendMultiReviewWorkflow>(
-    "stop_multi_review_reviewer", { workflowId, reviewerId },
-  );
+  return invoke<BackendMultiReviewWorkflow>("stop_multi_review_reviewer", {
+    workflowId,
+    reviewerId,
+  });
 }
 
 export async function getMultiReviewWorkflow<T = unknown>(
   workflowId: string,
 ): Promise<PersistedLoopedReviewWorkflow<T> | null> {
-  return invoke<PersistedLoopedReviewWorkflow<T> | null>(
-    "get_multi_review_workflow", { workflowId },
-  );
+  return invoke<PersistedLoopedReviewWorkflow<T> | null>("get_multi_review_workflow", {
+    workflowId,
+  });
 }
 
 export async function listMultiReviewWorkflows<T = unknown>(
   environmentId: string,
 ): Promise<Array<PersistedLoopedReviewWorkflow<T>>> {
-  return invoke<Array<PersistedLoopedReviewWorkflow<T>>>(
-    "list_multi_review_workflows", { environmentId },
-  );
+  return invoke<Array<PersistedLoopedReviewWorkflow<T>>>("list_multi_review_workflows", {
+    environmentId,
+  });
 }
 
 export async function getMultiReviewReviewerTranscript(
   workflowId: string,
   reviewerId: string,
 ): Promise<MultiReviewReviewerTranscript> {
-  return invoke<MultiReviewReviewerTranscript>(
-    "get_multi_review_reviewer_transcript", { workflowId, reviewerId },
-  );
+  return invoke<MultiReviewReviewerTranscript>("get_multi_review_reviewer_transcript", {
+    workflowId,
+    reviewerId,
+  });
 }
 
 export async function deleteMultiReviewWorkflow(workflowId: string): Promise<void> {
@@ -187,10 +219,7 @@ export async function ensureNativeAgentSession(input: {
   fastMode?: boolean;
   executionProfileId?: string;
 }): Promise<PersistedNativeAgentSession> {
-  return invoke<PersistedNativeAgentSession>(
-    "ensure_native_agent_session",
-    input,
-  );
+  return invoke<PersistedNativeAgentSession>("ensure_native_agent_session", input);
 }
 
 export async function adoptNativeAgentSession(input: {
@@ -207,10 +236,7 @@ export async function adoptNativeAgentSession(input: {
   fastMode?: boolean;
   executionProfileId?: string;
 }): Promise<PersistedNativeAgentSession> {
-  return invoke<PersistedNativeAgentSession>(
-    "adopt_native_agent_session",
-    input,
-  );
+  return invoke<PersistedNativeAgentSession>("adopt_native_agent_session", input);
 }
 
 export async function getNativeAgentSession(input: {
@@ -218,10 +244,7 @@ export async function getNativeAgentSession(input: {
   agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
   logicalSessionKey: string;
 }): Promise<PersistedNativeAgentSession | null> {
-  return invoke<PersistedNativeAgentSession | null>(
-    "get_native_agent_session",
-    input,
-  );
+  return invoke<PersistedNativeAgentSession | null>("get_native_agent_session", input);
 }
 
 export async function getNativeAgentProjection<TMessage = unknown>(input: {
@@ -348,10 +371,7 @@ export async function dispatchNativeAgentPrompt(input: {
   mode?: "plan" | "build";
   fastMode?: boolean;
 }): Promise<PersistedNativeAgentSession> {
-  return invoke<PersistedNativeAgentSession>(
-    "dispatch_native_agent_prompt",
-    input,
-  );
+  return invoke<PersistedNativeAgentSession>("dispatch_native_agent_prompt", input);
 }
 
 export async function dispatchNativeAgentIntent(input: {
@@ -381,10 +401,7 @@ export async function dispatchNativeAgentIntent(input: {
   includeLocalSettings?: boolean;
   promptSuggestions?: boolean;
 }): Promise<NativeAgentDispatchOutcome> {
-  return invoke<NativeAgentDispatchOutcome>(
-    "dispatch_native_agent_intent",
-    input,
-  );
+  return invoke<NativeAgentDispatchOutcome>("dispatch_native_agent_intent", input);
 }
 
 export async function retryNativeAgentDispatch(input: {
@@ -393,10 +410,7 @@ export async function retryNativeAgentDispatch(input: {
   logicalSessionKey: string;
   requestId: string;
 }): Promise<NativeAgentDispatchOutcome> {
-  return invoke<NativeAgentDispatchOutcome>(
-    "retry_native_agent_dispatch",
-    input,
-  );
+  return invoke<NativeAgentDispatchOutcome>("retry_native_agent_dispatch", input);
 }
 
 export async function discardNativeAgentDispatch(input: {
@@ -405,10 +419,7 @@ export async function discardNativeAgentDispatch(input: {
   logicalSessionKey: string;
   requestId: string;
 }): Promise<{ discarded: boolean }> {
-  return invoke<{ discarded: boolean }>(
-    "discard_native_agent_dispatch",
-    input,
-  );
+  return invoke<{ discarded: boolean }>("discard_native_agent_dispatch", input);
 }
 
 // --- Build Pipeline Persistence ---
@@ -419,21 +430,15 @@ export async function startBuildPipeline(
   return invoke<BackendBuildPipeline>("start_build_pipeline", { ...input });
 }
 
-export async function pauseBuildPipeline(
-  pipelineId: string,
-): Promise<BackendBuildPipeline> {
+export async function pauseBuildPipeline(pipelineId: string): Promise<BackendBuildPipeline> {
   return invoke<BackendBuildPipeline>("pause_build_pipeline", { pipelineId });
 }
 
-export async function resumeBuildPipeline(
-  pipelineId: string,
-): Promise<BackendBuildPipeline> {
+export async function resumeBuildPipeline(pipelineId: string): Promise<BackendBuildPipeline> {
   return invoke<BackendBuildPipeline>("resume_build_pipeline", { pipelineId });
 }
 
-export async function cancelBuildPipeline(
-  pipelineId: string,
-): Promise<BackendBuildPipeline> {
+export async function cancelBuildPipeline(pipelineId: string): Promise<BackendBuildPipeline> {
   return invoke<BackendBuildPipeline>("cancel_build_pipeline", { pipelineId });
 }
 
@@ -447,17 +452,13 @@ export async function sendBuildPipelineMessage(
   });
 }
 
-export async function retryBuildPipelineReview(
-  pipelineId: string,
-): Promise<BackendBuildPipeline> {
+export async function retryBuildPipelineReview(pipelineId: string): Promise<BackendBuildPipeline> {
   return invoke<BackendBuildPipeline>("retry_build_pipeline_review", {
     pipelineId,
   });
 }
 
-export async function retryBuildPipelineStage(
-  pipelineId: string,
-): Promise<BackendBuildPipeline> {
+export async function retryBuildPipelineStage(pipelineId: string): Promise<BackendBuildPipeline> {
   return invoke<BackendBuildPipeline>("retry_build_pipeline_stage", {
     pipelineId,
   });
@@ -474,10 +475,7 @@ export async function retryBuildPipelineInteractionFailure(
 export async function retryBuildPipelineCompletionComment(
   pipelineId: string,
 ): Promise<BackendBuildPipeline> {
-  return invoke<BackendBuildPipeline>(
-    "retry_build_pipeline_completion_comment",
-    { pipelineId },
-  );
+  return invoke<BackendBuildPipeline>("retry_build_pipeline_completion_comment", { pipelineId });
 }
 
 export async function importLegacyBuildPipelines(
@@ -531,31 +529,31 @@ export async function getBuildPipelineConditional<T = unknown>(
     return response as unknown as PersistedBuildPipeline<T>;
   }
   if (
-    response.unchanged === true
-    && Number.isSafeInteger(response.revision)
-    && (response.revision as number) >= 0
+    response.unchanged === true &&
+    Number.isSafeInteger(response.revision) &&
+    (response.revision as number) >= 0
   ) {
     return response as { unchanged: true; revision: number };
   }
   if (
-    response.unchanged !== false
-    || !isRecord(response.record)
-    || typeof response.record.id !== "string"
-    || !Array.isArray(response.messagePatches)
-    || !response.messagePatches.every((value) => {
+    response.unchanged !== false ||
+    !isRecord(response.record) ||
+    typeof response.record.id !== "string" ||
+    !Array.isArray(response.messagePatches) ||
+    !response.messagePatches.every((value) => {
       if (!isRecord(value)) return false;
-      return typeof value.sessionKey === "string"
-        && Number.isSafeInteger(value.startIndex)
-        && (value.startIndex as number) >= 0
-        && Number.isSafeInteger(value.revision)
-        && (value.revision as number) >= 0
-        && (value.baseRevision === undefined
-          || (Number.isSafeInteger(value.baseRevision)
-            && (value.baseRevision as number) >= 0))
-        && (value.baseCount === undefined
-          || (Number.isSafeInteger(value.baseCount)
-            && (value.baseCount as number) >= 0))
-        && Array.isArray(value.messages);
+      return (
+        typeof value.sessionKey === "string" &&
+        Number.isSafeInteger(value.startIndex) &&
+        (value.startIndex as number) >= 0 &&
+        Number.isSafeInteger(value.revision) &&
+        (value.revision as number) >= 0 &&
+        (value.baseRevision === undefined ||
+          (Number.isSafeInteger(value.baseRevision) && (value.baseRevision as number) >= 0)) &&
+        (value.baseCount === undefined ||
+          (Number.isSafeInteger(value.baseCount) && (value.baseCount as number) >= 0)) &&
+        Array.isArray(value.messages)
+      );
     })
   ) {
     throw new Error("Invalid get_build_pipeline response");
@@ -588,13 +586,11 @@ export async function listBuildPipelinesConditional<T = unknown>(
     };
   }
   if (
-    !isRecord(response)
-    || !Array.isArray(response.ids)
-    || !response.ids.every((id) => typeof id === "string")
-    || !Array.isArray(response.records)
-    || !response.records.every((entry) =>
-      isRecord(entry) && typeof entry.id === "string"
-    )
+    !isRecord(response) ||
+    !Array.isArray(response.ids) ||
+    !response.ids.every((id) => typeof id === "string") ||
+    !Array.isArray(response.records) ||
+    !response.records.every((entry) => isRecord(entry) && typeof entry.id === "string")
   ) {
     throw new Error("Invalid list_build_pipelines response");
   }
@@ -767,10 +763,7 @@ export async function transferPromptQueueMessageToComposeDraft<T>(
 export async function retryPromptQueueDispatch<T = unknown>(
   queueKey: string,
 ): Promise<PersistedPromptQueue<T> | null> {
-  return invoke<PersistedPromptQueue<T> | null>(
-    "retry_prompt_queue_dispatch",
-    { queueKey },
-  );
+  return invoke<PersistedPromptQueue<T> | null>("retry_prompt_queue_dispatch", { queueKey });
 }
 
 // --- Unsent drafts ---
@@ -817,9 +810,7 @@ export async function deleteComposeDraft(
   });
 }
 
-export async function getFileDraft(
-  draftKey: string,
-): Promise<PersistedFileDraft | null> {
+export async function getFileDraft(draftKey: string): Promise<PersistedFileDraft | null> {
   return invoke<PersistedFileDraft | null>("get_file_draft", { draftKey });
 }
 
@@ -841,10 +832,7 @@ export async function saveFileDraft(
   });
 }
 
-export async function deleteFileDraft(
-  draftKey: string,
-  expectedRevision?: number,
-): Promise<void> {
+export async function deleteFileDraft(draftKey: string, expectedRevision?: number): Promise<void> {
   return invoke("delete_file_draft", {
     draftKey,
     ...(expectedRevision === undefined ? {} : { expectedRevision }),
@@ -945,7 +933,11 @@ export async function writeLocalTerminal(sessionId: string, data: string): Promi
 }
 
 /** Resize a local terminal session */
-export async function resizeLocalTerminal(sessionId: string, cols: number, rows: number): Promise<void> {
+export async function resizeLocalTerminal(
+  sessionId: string,
+  cols: number,
+  rows: number,
+): Promise<void> {
   return invoke("local_terminal_resize", { sessionId, cols, rows });
 }
 

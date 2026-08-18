@@ -12,22 +12,13 @@ import {
   type DragStartEvent,
 } from "@dnd-kit/core";
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
-import {
-  AlertCircle,
-  Github,
-  Loader2,
-  RefreshCw,
-} from "lucide-react";
+import { AlertCircle, Github, Loader2, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useGitHubIssuesStore } from "@/stores/githubIssuesStore";
 import type { GitHubIssue, GitHubIssueStatus } from "@/types/github";
-import {
-  GITHUB_WORKFLOW_STAGES,
-  GitHubIssueCard,
-  getGitHubStageLabel,
-} from "./GitHubIssueCard";
+import { GITHUB_WORKFLOW_STAGES, GitHubIssueCard, getGitHubStageLabel } from "./GitHubIssueCard";
 import { GitHubIssueDetail } from "./GitHubIssueDetail";
 
 function errorMessage(error: unknown, fallback: string): string {
@@ -79,9 +70,7 @@ function GitHubIssueColumn({
               issue={issue}
               onOpen={() => onOpen(issue)}
               onStatusChange={(status) => onStatusChange(issue, status)}
-              statusPending={mutations.has(
-                `status:${projectId}:${issue.number}`,
-              )}
+              statusPending={mutations.has(`status:${projectId}:${issue.number}`)}
             />
           ))}
         </div>
@@ -105,36 +94,26 @@ export function resolveGitHubIssueDrop(
   destination: unknown,
 ): { issue: GitHubIssue; status: GitHubIssueStatus } | null {
   if (
-    typeof issueNumber !== "number"
-    || !GITHUB_WORKFLOW_STAGES.some((stage) => stage.id === destination)
+    typeof issueNumber !== "number" ||
+    !GITHUB_WORKFLOW_STAGES.some((stage) => stage.id === destination)
   ) {
     return null;
   }
   const issue = issues.find((candidate) => candidate.number === issueNumber);
-  return issue
-    ? { issue, status: destination as GitHubIssueStatus }
-    : null;
+  return issue ? { issue, status: destination as GitHubIssueStatus } : null;
 }
 
 export function GitHubIssuesView({ projectId }: GitHubIssuesViewProps) {
   const snapshot = useGitHubIssuesStore((state) => state.snapshots.get(projectId));
-  const loading = useGitHubIssuesStore((state) =>
-    state.loadingProjects.has(projectId),
-  );
-  const loadError = useGitHubIssuesStore((state) =>
-    state.projectErrors.get(projectId),
-  );
+  const loading = useGitHubIssuesStore((state) => state.loadingProjects.has(projectId));
+  const loadError = useGitHubIssuesStore((state) => state.projectErrors.get(projectId));
   const mutationErrors = useGitHubIssuesStore((state) => state.mutationErrors);
   const statusMutating = useGitHubIssuesStore((state) =>
-    Array.from(state.mutations).some((key) =>
-      key.startsWith(`status:${projectId}:`),
-    ),
+    Array.from(state.mutations).some((key) => key.startsWith(`status:${projectId}:`)),
   );
   const loadIssues = useGitHubIssuesStore((state) => state.loadIssues);
   const changeStatus = useGitHubIssuesStore((state) => state.changeStatus);
-  const [selectedIssueNumber, setSelectedIssueNumber] = useState<number | null>(
-    null,
-  );
+  const [selectedIssueNumber, setSelectedIssueNumber] = useState<number | null>(null);
   const [activeIssueNumber, setActiveIssueNumber] = useState<number | null>(null);
 
   const sensors = useSensors(
@@ -184,10 +163,7 @@ export function GitHubIssuesView({ projectId }: GitHubIssuesViewProps) {
         toast.success(`Moved #${issue.number} to ${getGitHubStageLabel(status)}`);
       } catch (error) {
         toast.error("Status change failed", {
-          description: errorMessage(
-            error,
-            "The issue was reloaded from GitHub. Try again.",
-          ),
+          description: errorMessage(error, "The issue was reloaded from GitHub. Try again."),
         });
       }
     },
@@ -204,11 +180,7 @@ export function GitHubIssuesView({ projectId }: GitHubIssuesViewProps) {
       setActiveIssueNumber(null);
       const issueNumber = event.active.data.current?.issueNumber;
       const destination = event.over?.data.current?.status;
-      const drop = resolveGitHubIssueDrop(
-        snapshot?.issues ?? [],
-        issueNumber,
-        destination,
-      );
+      const drop = resolveGitHubIssueDrop(snapshot?.issues ?? [], issueNumber, destination);
       if (!drop) return;
       void handleStatusChange(drop.issue, drop.status);
     },
@@ -295,8 +267,7 @@ export function GitHubIssuesView({ projectId }: GitHubIssuesViewProps) {
             <Github className="mx-auto h-7 w-7 text-muted-foreground" />
             <h3 className="mt-3 text-sm font-semibold">No open issues</h3>
             <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-              New open issues from {snapshot.repository.fullName} will appear here
-              after refresh.
+              New open issues from {snapshot.repository.fullName} will appear here after refresh.
             </p>
           </div>
         </div>
@@ -316,18 +287,14 @@ export function GitHubIssuesView({ projectId }: GitHubIssuesViewProps) {
                 },
                 onDragOver({ active, over }) {
                   const issueNumber = active.data.current?.issueNumber;
-                  const status = over?.data.current?.status as
-                    | GitHubIssueStatus
-                    | undefined;
+                  const status = over?.data.current?.status as GitHubIssueStatus | undefined;
                   return status
                     ? `Issue ${issueNumber ?? ""} is over ${getGitHubStageLabel(status)}`
                     : `Issue ${issueNumber ?? ""} is no longer over a stage`;
                 },
                 onDragEnd({ active, over }) {
                   const issueNumber = active.data.current?.issueNumber;
-                  const status = over?.data.current?.status as
-                    | GitHubIssueStatus
-                    | undefined;
+                  const status = over?.data.current?.status as GitHubIssueStatus | undefined;
                   return status
                     ? `Moved issue ${issueNumber ?? ""} to ${getGitHubStageLabel(status)}`
                     : `Stopped moving issue ${issueNumber ?? ""}`;
@@ -346,9 +313,7 @@ export function GitHubIssuesView({ projectId }: GitHubIssuesViewProps) {
                   issues={issuesByStage[stage.id]}
                   projectId={projectId}
                   onOpen={(issue) => setSelectedIssueNumber(issue.number)}
-                  onStatusChange={(issue, status) =>
-                    void handleStatusChange(issue, status)
-                  }
+                  onStatusChange={(issue, status) => void handleStatusChange(issue, status)}
                 />
               ))}
             </div>

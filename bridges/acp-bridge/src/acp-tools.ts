@@ -108,10 +108,11 @@ export function commitToolPartMutation(
   const serializedBytes = Buffer.byteLength(JSON.stringify(part));
   state.uncheckedTranscriptBytes += Math.max(0, serializedBytes - (source.chargedBytes ?? 0));
   source.chargedBytes = serializedBytes;
-  const transcriptTruncated = state.messages.length > MAX_MESSAGES
-    || state.uncheckedTranscriptBytes >= TRANSCRIPT_CHECK_INTERVAL_BYTES
-    ? boundTranscript(state)
-    : false;
+  const transcriptTruncated =
+    state.messages.length > MAX_MESSAGES ||
+    state.uncheckedTranscriptBytes >= TRANSCRIPT_CHECK_INTERVAL_BYTES
+      ? boundTranscript(state)
+      : false;
   if (transcriptTruncated && turnRequiresCompleteOutput(state)) {
     failTranscriptLimit(state);
     return false;
@@ -133,12 +134,13 @@ export function applyToolCallUpdate(
   // message. Tool updates therefore upsert there as well; mutating an older
   // message would be authoritative in the bridge but invisible to a mounted tab.
   let owner = state.messages.at(-1);
-  let part = owner?.role === "assistant"
-    ? owner.parts.find(
-      (messagePart): messagePart is BridgeToolPart =>
-        messagePart.type === "tool-invocation" && messagePart.toolUseId === toolCallId,
-    )
-    : undefined;
+  let part =
+    owner?.role === "assistant"
+      ? owner.parts.find(
+          (messagePart): messagePart is BridgeToolPart =>
+            messagePart.type === "tool-invocation" && messagePart.toolUseId === toolCallId,
+        )
+      : undefined;
 
   // A background child can outlive the turn and message that launched it.
   // Terminal Cursor updates must target that launch part wherever it remains,
@@ -172,8 +174,7 @@ export function applyToolCallUpdate(
     if (todoToolNameFromUpdate(update)) {
       const synthetic = owner.parts.find(
         (messagePart): messagePart is BridgeToolPart =>
-          messagePart.type === "tool-invocation"
-          && messagePart.toolUseId === ACP_PLAN_TOOL_USE_ID,
+          messagePart.type === "tool-invocation" && messagePart.toolUseId === ACP_PLAN_TOOL_USE_ID,
       );
       if (synthetic) {
         synthetic.toolUseId = toolCallId;
@@ -231,11 +232,13 @@ export function applyToolCallUpdate(
   // spawn another replay process of its own, and a structured turn is excluded
   // because the join re-bounds the transcript without failing it — see
   // `applyReplayToolMetadata`.
-  if (state.historyReplay === false
-    && state.status === "running"
-    && !turnRequiresCompleteOutput(state)
-    && isSettledToolPart(part)
-    && isGenericCursorToolPart(part)) {
+  if (
+    state.historyReplay === false &&
+    state.status === "running" &&
+    !turnRequiresCompleteOutput(state) &&
+    isSettledToolPart(part) &&
+    isGenericCursorToolPart(part)
+  ) {
     scheduleCursorToolMetadataReconcile(state);
   }
 }
@@ -279,9 +282,8 @@ export function collectReplayToolMetadata(
     candidate.contentOutputHash = replayOutputHash(toolCallContentText(update.content));
   }
   if ("rawOutput" in update) {
-    const rawOutput = update.rawOutput === null
-      ? undefined
-      : stringifyToolPayload(update.rawOutput);
+    const rawOutput =
+      update.rawOutput === null ? undefined : stringifyToolPayload(update.rawOutput);
     candidate.rawOutputHash = replayOutputHash(rawOutput);
   }
   candidate.retainedBytes = replayToolMetadataBytes(candidate);
@@ -325,14 +327,16 @@ export function replayOutputHash(value: string | undefined): string | undefined 
 }
 
 export function replayToolMetadataBytes(call: AcpReplayToolMetadata): number {
-  return Buffer.byteLength(JSON.stringify({
-    id: call.id,
-    title: call.title,
-    toolName: call.toolName,
-    toolArgs: call.toolArgs,
-    contentOutputHash: call.contentOutputHash,
-    rawOutputHash: call.rawOutputHash,
-  }));
+  return Buffer.byteLength(
+    JSON.stringify({
+      id: call.id,
+      title: call.title,
+      toolName: call.toolName,
+      toolArgs: call.toolArgs,
+      contentOutputHash: call.contentOutputHash,
+      rawOutputHash: call.rawOutputHash,
+    }),
+  );
 }
 
 export function orderedReplayTools(collector: AcpToolReplayCollector): AcpReplayToolMetadata[] {
@@ -340,9 +344,9 @@ export function orderedReplayTools(collector: AcpToolReplayCollector): AcpReplay
 }
 
 export function transcriptToolParts(state: SessionState): BridgeToolPart[] {
-  return state.messages.flatMap((message) => message.parts.flatMap(
-    (part) => part.type === "tool-invocation" ? [part] : [],
-  ));
+  return state.messages.flatMap((message) =>
+    message.parts.flatMap((part) => (part.type === "tool-invocation" ? [part] : [])),
+  );
 }
 
 export function normalizedToolKind(value: string | undefined): string | undefined {
@@ -356,11 +360,13 @@ export function hasToolArguments(value: JsonObject | undefined): boolean {
 
 export function isGenericCursorToolTitle(value: string | undefined): boolean {
   const normalized = value?.trim().toLowerCase();
-  return normalized === "read file"
-    || normalized === "read lints"
-    || normalized === "edit file"
-    || normalized === "grep"
-    || normalized === "find";
+  return (
+    normalized === "read file" ||
+    normalized === "read lints" ||
+    normalized === "edit file" ||
+    normalized === "grep" ||
+    normalized === "find"
+  );
 }
 
 export function isSettledToolPart(part: BridgeToolPart): boolean {
@@ -442,9 +448,11 @@ export function applyReplayToolMetadata(
       // replay entry the collector dropped for space leaves its neighbour as
       // the only candidate, and the part inherits the wrong file outright.
       const replayHash = replay?.contentOutputHash ?? replay?.rawOutputHash;
-      return !(targetOutputHash !== undefined
-        && replayHash !== undefined
-        && replayHash !== targetOutputHash);
+      return !(
+        targetOutputHash !== undefined &&
+        replayHash !== undefined &&
+        replayHash !== targetOutputHash
+      );
     });
     const targetPath = part.toolDiff?.filePath ?? toolArgumentPath(part.toolArgs);
     const pathMatches = targetPath
@@ -458,11 +466,12 @@ export function applyReplayToolMetadata(
         })
       : [];
     const candidateIndexes = pathMatches.length > 0 ? pathMatches : outputMatches;
-    const replayIndex = candidateIndexes.length === 1
-      ? candidateIndexes[0]
-      : allowKindFallback && sameKind.length === 1
-        ? sameKind[0]
-        : undefined;
+    const replayIndex =
+      candidateIndexes.length === 1
+        ? candidateIndexes[0]
+        : allowKindFallback && sameKind.length === 1
+          ? sameKind[0]
+          : undefined;
     if (replayIndex === undefined) continue;
     const replay = replayed[replayIndex];
     if (!replay) continue;
@@ -476,7 +485,11 @@ export function applyReplayToolMetadata(
       part.toolArgs = replay.toolArgs;
       partChanged = true;
     }
-    if (replay.title && isGenericCursorToolTitle(part.toolTitle) && replay.title !== part.toolTitle) {
+    if (
+      replay.title &&
+      isGenericCursorToolTitle(part.toolTitle) &&
+      replay.title !== part.toolTitle
+    ) {
       const previousTitle = part.toolTitle;
       part.toolTitle = replay.title;
       if (!part.content || part.content === previousTitle) part.content = replay.title;
@@ -505,12 +518,15 @@ export async function reconcileCursorToolMetadata(
   promptSequence: number,
   options: { allowKindFallback?: boolean } = {},
 ): Promise<void> {
-  if (provider !== "cursor"
-    || shuttingDown
-    || sessions.get(state.id) !== state
-    || state.child !== child
-    || state.promptSequence !== promptSequence
-    || targets.length === 0) return;
+  if (
+    provider !== "cursor" ||
+    shuttingDown ||
+    sessions.get(state.id) !== state ||
+    state.child !== child ||
+    state.promptSequence !== promptSequence ||
+    targets.length === 0
+  )
+    return;
   if (activeCursorToolReplays >= MAX_CURSOR_TOOL_REPLAY_PROCESSES) return;
   const capacity = Math.min(targets.length, MAX_REPLAY_RECONCILE_TOOLS);
   if (capacity === 0) return;
@@ -533,11 +549,12 @@ export async function reconcileCursorToolMetadata(
     replayChild.onUpdate = (params) => {
       if (params.sessionId !== state.acpSessionId || !isObject(params.update)) return;
       const update = params.update;
-      const kind = typeof update.sessionUpdate === "string"
-        ? update.sessionUpdate
-        : typeof update.type === "string"
-          ? update.type
-          : "";
+      const kind =
+        typeof update.sessionUpdate === "string"
+          ? update.sessionUpdate
+          : typeof update.type === "string"
+            ? update.type
+            : "";
       if (kind === "tool_call" || kind === "tool_call_update") {
         collectReplayToolMetadata(collector, update, kind === "tool_call");
       }
@@ -562,11 +579,13 @@ export async function reconcileCursorToolMetadata(
     // the newer turn settles into its own replay, and `cursorToolReplayTargets`
     // walks back to the oldest still-generic call, so these parts are picked up
     // there with a window that matches them again.
-    if (!shuttingDown
-      && sessions.get(state.id) === state
-      && state.child === child
-      && state.promptSequence === promptSequence
-      && applyReplayToolMetadata(state, targets, collector, options)) {
+    if (
+      !shuttingDown &&
+      sessions.get(state.id) === state &&
+      state.child === child &&
+      state.promptSequence === promptSequence &&
+      applyReplayToolMetadata(state, targets, collector, options)
+    ) {
       state.revision += 1;
       schedulePersist();
     }
@@ -585,9 +604,8 @@ export async function reconcileCursorToolMetadata(
 
 /** True once this turn has spent its live replay budget. */
 export function liveCursorReplayBudgetExhausted(state: SessionState): boolean {
-  const used = state.cursorToolReplayTurn === state.promptSequence
-    ? state.cursorToolReplayRuns ?? 0
-    : 0;
+  const used =
+    state.cursorToolReplayTurn === state.promptSequence ? (state.cursorToolReplayRuns ?? 0) : 0;
   return used >= MAX_LIVE_CURSOR_TOOL_REPLAYS_PER_TURN;
 }
 
@@ -667,10 +685,7 @@ export function scheduleCursorToolMetadataReconcile(
       });
   };
 
-  state.cursorToolReplayTimer = setTimeout(
-    run,
-    options.final ? 0 : CURSOR_TOOL_REPLAY_DELAY_MS,
-  );
+  state.cursorToolReplayTimer = setTimeout(run, options.final ? 0 : CURSOR_TOOL_REPLAY_DELAY_MS);
   state.cursorToolReplayTimer.unref();
 }
 
@@ -686,10 +701,7 @@ export function cancelCursorToolMetadataReconcile(state: SessionState): void {
  * capture of ids the frontend already groups on.
  */
 export function acpParentTaskUseId(update: JsonObject): string | undefined {
-  const candidates: unknown[] = [
-    update.parentToolCallId,
-    update.parent_tool_call_id,
-  ];
+  const candidates: unknown[] = [update.parentToolCallId, update.parent_tool_call_id];
   if (isObject(update._meta)) {
     candidates.push(update._meta.parentToolCallId, update._meta.parent_tool_call_id);
     const claudeCode = isObject(update._meta.claudeCode) ? update._meta.claudeCode : undefined;
@@ -715,9 +727,7 @@ export function applyAcpToolSourcePatch(source: AcpToolSourceState, update: Json
     source.kind = boundedNullableString(update.kind, MAX_TOOL_NAME_BYTES);
   }
   if ("_meta" in update && isObject(update._meta)) {
-    const toolMeta = isObject(update._meta["x.ai/tool"])
-      ? update._meta["x.ai/tool"]
-      : undefined;
+    const toolMeta = isObject(update._meta["x.ai/tool"]) ? update._meta["x.ai/tool"] : undefined;
     if (toolMeta) {
       source.metadataName = boundedString(toolMeta.name, MAX_TOOL_NAME_BYTES)?.trim();
       source.metadataKind = boundedString(toolMeta.kind, MAX_TOOL_NAME_BYTES)?.trim();
@@ -758,17 +768,13 @@ export function applyAcpToolSourcePatch(source: AcpToolSourceState, update: Json
     source.locationPath = toolCallLocationPath(update.locations);
   }
   if ("rawOutput" in update) {
-    source.rawOutput = update.rawOutput === null
-      ? undefined
-      : stringifyToolPayload(update.rawOutput);
+    source.rawOutput =
+      update.rawOutput === null ? undefined : stringifyToolPayload(update.rawOutput);
   }
 }
 
 export function renderAcpToolSource(part: BridgeToolPart, source: AcpToolSourceState): void {
-  const toolName = source.explicitName
-    ?? source.inputName
-    ?? source.metadataName
-    ?? source.kind;
+  const toolName = source.explicitName ?? source.inputName ?? source.metadataName ?? source.kind;
   setOptionalPartField(part, "toolTitle", source.title);
   setOptionalPartField(part, "toolName", toolName);
   setOptionalPartField(part, "toolArgs", mergeCursorTaskArgs(source.toolArgs, source.cursorTask));
@@ -790,7 +796,7 @@ export function renderAcpToolSource(part: BridgeToolPart, source: AcpToolSourceS
   setOptionalPartField(
     part,
     "toolError",
-    source.toolState === "failure" ? output ?? "Tool call failed" : undefined,
+    source.toolState === "failure" ? (output ?? "Tool call failed") : undefined,
   );
 
   const diff = aggregateAcpToolDiffs(
@@ -809,15 +815,17 @@ export function acpSubagentState(
   const normalizedToolName = toolName?.toLowerCase();
   const normalizedMetadataName = source.metadataName?.toLowerCase();
   const normalizedMetadataKind = source.metadataKind?.toLowerCase();
-  const variant = typeof source.toolArgs?.variant === "string"
-    ? source.toolArgs.variant.toLowerCase()
-    : undefined;
-  const isSubagentTool = normalizedToolName === "task"
-    || normalizedToolName === "agent"
-    || normalizedMetadataName === "spawn_subagent"
-    || normalizedMetadataKind === "task"
-    || variant === "task"
-    || /\bsub[- ]?agent\b/i.test(title ?? "");
+  const variant =
+    typeof source.toolArgs?.variant === "string"
+      ? source.toolArgs.variant.toLowerCase()
+      : undefined;
+  const isSubagentTool =
+    normalizedToolName === "task" ||
+    normalizedToolName === "agent" ||
+    normalizedMetadataName === "spawn_subagent" ||
+    normalizedMetadataKind === "task" ||
+    variant === "task" ||
+    /\bsub[- ]?agent\b/i.test(title ?? "");
   if (!isSubagentTool && source.agentState === undefined) return undefined;
   if (source.toolState === "failure") return "failed";
   // A vendor may send a late tool projection after its dedicated lifecycle
@@ -844,8 +852,8 @@ export function acpSubagentState(
   // through `subagent_finished` — which lands as `source.agentState` and has
   // already returned above. Reading the launch result's status as the child's
   // would settle the card the moment the spawn succeeded.
-  const backgroundLaunch = source.toolArgs?.background === true
-    || source.toolArgs?.run_in_background === true;
+  const backgroundLaunch =
+    source.toolArgs?.background === true || source.toolArgs?.run_in_background === true;
   if (backgroundLaunch) return "active";
   const reportedState = lifecycleStatus(lifecycle);
   const terminal = terminalAgentState(reportedState);
@@ -893,7 +901,7 @@ export function recordCursorTaskPrompt(part: BridgeToolPart, prompt: string): bo
   if (!bounded) return false;
   const source = ensureAcpToolSource(part);
   if (source.cursorTask?.prompt) return false;
-  source.cursorTask = { ...(source.cursorTask ?? {}), prompt: bounded };
+  source.cursorTask = { ...source.cursorTask, prompt: bounded };
   renderAcpToolSource(part, source);
   return true;
 }
@@ -960,8 +968,10 @@ export function activateSubagent(
   descriptor: ActiveSubagentDescriptor,
 ): boolean {
   if (state.subagentLimitExceeded) return false;
-  if (!state.activeSubagentToolIds.has(toolUseId)
-    && state.activeSubagentToolIds.size >= MAX_ACTIVE_SUBAGENTS_PER_SESSION) {
+  if (
+    !state.activeSubagentToolIds.has(toolUseId) &&
+    state.activeSubagentToolIds.size >= MAX_ACTIVE_SUBAGENTS_PER_SESSION
+  ) {
     state.subagentLimitExceeded = true;
     failAllActiveSubagents(state);
     state.status = "error";
@@ -1019,17 +1029,16 @@ export function isCursorBackgroundSpawnDuration(
   // payload reports a terminal lifecycle, its duration is the child's real
   // runtime rather than the launch tool's spawn wall-clock.
   if (terminalAgentState(lifecycleStatus(lifecycle)) !== undefined) return false;
-  const background = source.toolArgs?.background === true
-    || source.toolArgs?.run_in_background === true
-    || lifecycle?.isBackground === true;
+  const background =
+    source.toolArgs?.background === true ||
+    source.toolArgs?.run_in_background === true ||
+    lifecycle?.isBackground === true;
   if (!background) return false;
   const launchDuration = boundedDurationMs(lifecycle?.durationMs);
   return launchDuration === durationMs;
 }
 
-function omitDurationMsField<T extends object>(
-  value: T,
-): Omit<T, "durationMs"> {
+function omitDurationMsField<T extends object>(value: T): Omit<T, "durationMs"> {
   const { durationMs: _durationMs, ...rest } = value as T & { durationMs?: unknown };
   return rest as Omit<T, "durationMs">;
 }
@@ -1044,15 +1053,19 @@ export function omitActiveSpawnDuration(
   source: AcpToolSourceState = ensureAcpToolSource(part),
 ): void {
   if (part.agentState !== "active" && source.agentState !== "active") return;
-  const durationMs = boundedDurationMs(
-    source.cursorTask?.durationMs ?? part.toolArgs?.durationMs,
-  );
+  const durationMs = boundedDurationMs(source.cursorTask?.durationMs ?? part.toolArgs?.durationMs);
   if (durationMs === undefined) return;
-  if (!isCursorBackgroundSpawnDuration({
-    toolArgs: source.toolArgs ?? part.toolArgs,
-    rawOutput: source.rawOutput ?? part.toolOutput,
-    contentOutput: source.contentOutput,
-  }, durationMs)) return;
+  if (
+    !isCursorBackgroundSpawnDuration(
+      {
+        toolArgs: source.toolArgs ?? part.toolArgs,
+        rawOutput: source.rawOutput ?? part.toolOutput,
+        contentOutput: source.contentOutput,
+      },
+      durationMs,
+    )
+  )
+    return;
   if (source.cursorTask) source.cursorTask = omitDurationMsField(source.cursorTask);
   if (source.toolArgs) source.toolArgs = omitDurationMsField(source.toolArgs);
   if (part.toolArgs) {
@@ -1066,25 +1079,27 @@ export function omitActiveSpawnDuration(
  * not report a real completion duration (or only echoed spawn time). A vendor
  * duration that is not the spawn echo is the child's own runtime and is kept.
  */
-export function stampSubagentRuntimeDuration(
-  part: BridgeToolPart,
-  now = Date.now(),
-): void {
+export function stampSubagentRuntimeDuration(part: BridgeToolPart, now = Date.now()): void {
   const source = ensureAcpToolSource(part);
   const projectedDuration = boundedDurationMs(
     source.cursorTask?.durationMs ?? part.toolArgs?.durationMs,
   );
   const lifecycle = toolCallLifecycle(source.rawOutput ?? source.contentOutput);
   const existing = projectedDuration ?? boundedDurationMs(lifecycle?.durationMs);
-  const spawnEcho = existing !== undefined && isCursorBackgroundSpawnDuration({
-    toolArgs: source.toolArgs ?? part.toolArgs,
-    rawOutput: source.rawOutput ?? part.toolOutput,
-    contentOutput: source.contentOutput,
-  }, existing);
+  const spawnEcho =
+    existing !== undefined &&
+    isCursorBackgroundSpawnDuration(
+      {
+        toolArgs: source.toolArgs ?? part.toolArgs,
+        rawOutput: source.rawOutput ?? part.toolOutput,
+        contentOutput: source.contentOutput,
+      },
+      existing,
+    );
   if (existing !== undefined && !spawnEcho) {
     if (projectedDuration === undefined) {
-      source.cursorTask = { ...(source.cursorTask ?? {}), durationMs: existing };
-      source.toolArgs = { ...(source.toolArgs ?? {}), durationMs: existing };
+      source.cursorTask = { ...source.cursorTask, durationMs: existing };
+      source.toolArgs = { ...source.toolArgs, durationMs: existing };
       renderAcpToolSource(part, source);
     }
     return;
@@ -1092,8 +1107,8 @@ export function stampSubagentRuntimeDuration(
   const startedAt = part.createdAt ? Date.parse(part.createdAt) : Number.NaN;
   if (!Number.isFinite(startedAt) || startedAt < 0) return;
   const elapsed = Math.max(0, Math.floor(now - startedAt));
-  source.cursorTask = { ...(source.cursorTask ?? {}), durationMs: elapsed };
-  source.toolArgs = { ...(source.toolArgs ?? {}), durationMs: elapsed };
+  source.cursorTask = { ...source.cursorTask, durationMs: elapsed };
+  source.toolArgs = { ...source.toolArgs, durationMs: elapsed };
   renderAcpToolSource(part, source);
 }
 
@@ -1108,11 +1123,12 @@ export function stampSubagentRuntimeDuration(
  * reported duration.
  */
 export function boundedDurationMs(value: unknown): number | undefined {
-  const numeric = typeof value === "number"
-    ? value
-    : typeof value === "string" && value.trim()
-      ? Number(value)
-      : Number.NaN;
+  const numeric =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && value.trim()
+        ? Number(value)
+        : Number.NaN;
   if (!Number.isFinite(numeric) || numeric < 0) return undefined;
   return Math.floor(numeric);
 }
@@ -1143,10 +1159,10 @@ export function preserveTaskLaunchArgs(
     }
   }
   if (
-    merged.durationMs == null
-    && typeof previous.durationMs === "number"
-    && Number.isFinite(previous.durationMs)
-    && previous.durationMs >= 0
+    merged.durationMs == null &&
+    typeof previous.durationMs === "number" &&
+    Number.isFinite(previous.durationMs) &&
+    previous.durationMs >= 0
   ) {
     merged.durationMs = previous.durationMs;
   }
@@ -1171,7 +1187,7 @@ export function mergeCursorTaskArgs(
   cursorTask: AcpToolSourceState["cursorTask"],
 ): JsonObject | undefined {
   if (!cursorTask) return toolArgs;
-  const merged: JsonObject = { ...(toolArgs ?? {}) };
+  const merged: JsonObject = { ...toolArgs };
   if (cursorTask.description) merged.description = cursorTask.description;
   if (cursorTask.prompt) merged.prompt = cursorTask.prompt;
   if (cursorTask.subagentType) merged.subagent_type = cursorTask.subagentType;
@@ -1209,9 +1225,9 @@ export function isGrokTodoWriteToolName(value: string | undefined): boolean {
 
 export function isAcpTodosToolName(value: string | undefined): boolean {
   const normalized = value?.trim().toLowerCase();
-  return isCursorTodosToolName(value)
-    || isGrokTodoWriteToolName(value)
-    || normalized === "todo_list";
+  return (
+    isCursorTodosToolName(value) || isGrokTodoWriteToolName(value) || normalized === "todo_list"
+  );
 }
 
 function mergeFlagForTodoTool(toolName: string | undefined, merge: unknown): boolean {
@@ -1221,8 +1237,11 @@ function mergeFlagForTodoTool(toolName: string | undefined, merge: unknown): boo
 
 function todoToolNameFromUpdate(update: JsonObject): string | undefined {
   if (typeof update.name === "string" && isAcpTodosToolName(update.name)) return update.name;
-  if (isObject(update.rawInput) && typeof update.rawInput._toolName === "string"
-    && isAcpTodosToolName(update.rawInput._toolName)) {
+  if (
+    isObject(update.rawInput) &&
+    typeof update.rawInput._toolName === "string" &&
+    isAcpTodosToolName(update.rawInput._toolName)
+  ) {
     return update.rawInput._toolName;
   }
   if (isObject(update._meta) && isObject(update._meta["x.ai/tool"])) {
@@ -1328,7 +1347,9 @@ export function mergeCursorTodos(
     .slice(0, MAX_CURSOR_TODOS);
 }
 
-export function restoreCursorTodosFromMessages(messages: readonly BridgeMessage[]): CursorTodoItem[] {
+export function restoreCursorTodosFromMessages(
+  messages: readonly BridgeMessage[],
+): CursorTodoItem[] {
   for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
     const parts = messages[messageIndex]!.parts;
     for (let partIndex = parts.length - 1; partIndex >= 0; partIndex -= 1) {
@@ -1345,9 +1366,13 @@ export function restoreCursorTodosFromMessages(messages: readonly BridgeMessage[
   return [];
 }
 
-export function stampCursorTodos(source: AcpToolSourceState, state: SessionState, merge: boolean): void {
+export function stampCursorTodos(
+  source: AcpToolSourceState,
+  state: SessionState,
+  merge: boolean,
+): void {
   source.toolArgs = {
-    ...(source.toolArgs ?? {}),
+    ...source.toolArgs,
     todos: state.cursorTodos,
     merge,
   };
@@ -1578,28 +1603,31 @@ export function applyCursorTask(state: SessionState, params: JsonObject): void {
   const durationMs = boundedDurationMs(payload.durationMs);
   const namedState = cursorTaskNamedState(payload);
   if (
-    !description
-    && !prompt
-    && !subagentType
-    && !model
-    && !agentId
-    && durationMs === undefined
-    && namedState === undefined
+    !description &&
+    !prompt &&
+    !subagentType &&
+    !model &&
+    !agentId &&
+    durationMs === undefined &&
+    namedState === undefined
   ) {
     return;
   }
 
   const isProgress = namedState === "progress";
-  let agentState: "finished" | "failed" | undefined = isProgress
-    ? undefined
-    : namedState;
+  let agentState: "finished" | "failed" | undefined = isProgress ? undefined : namedState;
 
   let found = findToolPart(state, toolCallId);
   const sourcePeek = found?.part ? acpToolSourceStates.get(found.part) : undefined;
-  const spawnEcho = durationMs !== undefined && isCursorBackgroundSpawnDuration({
-    toolArgs: sourcePeek?.toolArgs ?? found?.part?.toolArgs,
-    rawOutput: sourcePeek?.rawOutput ?? found?.part?.toolOutput,
-  }, durationMs);
+  const spawnEcho =
+    durationMs !== undefined &&
+    isCursorBackgroundSpawnDuration(
+      {
+        toolArgs: sourcePeek?.toolArgs ?? found?.part?.toolArgs,
+        rawOutput: sourcePeek?.rawOutput ?? found?.part?.toolOutput,
+      },
+      durationMs,
+    );
   if (!agentState && !isProgress && durationMs !== undefined && !spawnEcho) {
     agentState = "finished";
   }
@@ -1632,9 +1660,9 @@ export function applyCursorTask(state: SessionState, params: JsonObject): void {
     }
     found = { owner, part };
   } else if (
-    !state.activeSubagentToolIds.has(toolCallId)
-    && found.part.agentState === undefined
-    && (agentState || isProgress)
+    !state.activeSubagentToolIds.has(toolCallId) &&
+    found.part.agentState === undefined &&
+    (agentState || isProgress)
   ) {
     // Only a call that was never a sub-agent launch is rejected here. "Already
     // settled" cannot be the test: Cursor sends this frame *after* the tool
@@ -1650,7 +1678,7 @@ export function applyCursorTask(state: SessionState, params: JsonObject): void {
   const { part } = found;
   const source = ensureAcpToolSource(part);
   source.cursorTask = {
-    ...(source.cursorTask ?? {}),
+    ...source.cursorTask,
     ...(description ? { description } : {}),
     ...(prompt ? { prompt } : {}),
     ...(subagentType ? { subagentType } : {}),
@@ -1662,7 +1690,10 @@ export function applyCursorTask(state: SessionState, params: JsonObject): void {
   };
   if (agentState && source.agentState !== "finished" && source.agentState !== "failed") {
     source.agentState = agentState;
-    if (agentState === "finished" && (source.toolState === "pending" || source.toolState === undefined)) {
+    if (
+      agentState === "finished" &&
+      (source.toolState === "pending" || source.toolState === undefined)
+    ) {
       source.toolState = "success";
     }
   }
@@ -1677,8 +1708,8 @@ export function applyCursorTask(state: SessionState, params: JsonObject): void {
 export function failAllActiveSubagents(state: SessionState): void {
   for (const message of state.messages) {
     for (const part of message.parts) {
-      if (part.type !== "tool-invocation"
-        || !state.activeSubagentToolIds.has(part.toolUseId)) continue;
+      if (part.type !== "tool-invocation" || !state.activeSubagentToolIds.has(part.toolUseId))
+        continue;
       part.agentState = "failed";
       const source = acpToolSourceStates.get(part);
       if (source) source.agentState = "failed";
@@ -1735,15 +1766,16 @@ export function applySubagentSpawned(state: SessionState, update: JsonObject): v
   const candidates = [...state.activeSubagentDescriptors.entries()].filter(
     ([toolUseId]) => !claimedToolIds.has(toolUseId),
   );
-  const matched = candidates.find(([, descriptor]) =>
-    (!description || descriptor.description === description)
-    && (!subagentType || descriptor.subagentType === subagentType)
+  const matched = candidates.find(
+    ([, descriptor]) =>
+      (!description || descriptor.description === description) &&
+      (!subagentType || descriptor.subagentType === subagentType),
   );
   // With metadata present, a mismatch is not permission to claim an unrelated
   // child. Metadata-free events are safe only when exactly one candidate exists.
-  const selected = matched ?? (!description && !subagentType && candidates.length === 1
-    ? candidates[0]
-    : undefined);
+  const selected =
+    matched ??
+    (!description && !subagentType && candidates.length === 1 ? candidates[0] : undefined);
 
   if (selected) state.subagentToolIds.set(subagentId, selected[0]);
 }
@@ -1753,7 +1785,11 @@ export function applySubagentFinished(state: SessionState, update: JsonObject): 
   if (!subagentId) return;
   const toolUseId = state.subagentToolIds.get(subagentId);
   if (!toolUseId) return;
-  finishSubagentTool(state, toolUseId, terminalAgentState(typeof update.status === "string" ? update.status : undefined) ?? "finished");
+  finishSubagentTool(
+    state,
+    toolUseId,
+    terminalAgentState(typeof update.status === "string" ? update.status : undefined) ?? "finished",
+  );
 }
 
 export function finishSubagentTool(
@@ -1781,7 +1817,8 @@ export function lifecycleStatus(lifecycle: JsonObject | undefined): string | und
 
 export function terminalAgentState(status: string | undefined): "finished" | "failed" | undefined {
   if (!status) return undefined;
-  if (/^(failed|killed|cancelled|canceled|error|rejected|aborted|abort)$/i.test(status)) return "failed";
+  if (/^(failed|killed|cancelled|canceled|error|rejected|aborted|abort)$/i.test(status))
+    return "failed";
   if (/^(completed|finished|done|success)$/i.test(status)) return "finished";
   return undefined;
 }
@@ -1799,11 +1836,12 @@ export function terminalAgentState(status: string | undefined): "finished" | "fa
 export function cursorTaskNamedState(
   payload: JsonObject,
 ): "finished" | "failed" | "progress" | undefined {
-  const outcome = typeof payload.outcome === "string"
-    ? payload.outcome
-    : isObject(payload.outcome) && typeof payload.outcome.outcome === "string"
-      ? payload.outcome.outcome
-      : undefined;
+  const outcome =
+    typeof payload.outcome === "string"
+      ? payload.outcome
+      : isObject(payload.outcome) && typeof payload.outcome.outcome === "string"
+        ? payload.outcome.outcome
+        : undefined;
   const status = typeof payload.status === "string" ? payload.status : undefined;
   if (outcome === undefined && status === undefined) return undefined;
   return terminalAgentState(outcome) ?? terminalAgentState(status) ?? "progress";
@@ -1822,8 +1860,11 @@ export function currentAssistantMessage(state: SessionState): BridgeMessage {
   let message = state.messages.at(-1);
   // A hydrating replay is idle by definition, so requiring "running" here would
   // open a fresh, empty assistant message for every tool call in the history.
-  if (!message || message.role !== "assistant"
-    || (state.status !== "running" && state.historyReplay !== "hydrate")) {
+  if (
+    !message ||
+    message.role !== "assistant" ||
+    (state.status !== "running" && state.historyReplay !== "hydrate")
+  ) {
     const modelId = boundedModelId(state.sessionConfig.composer.selectedModelId);
     message = {
       id: randomBytes(12).toString("hex"),

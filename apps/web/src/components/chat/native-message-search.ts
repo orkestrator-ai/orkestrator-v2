@@ -1,12 +1,6 @@
 import { marked, Renderer, type Tokens } from "marked";
-import type {
-  NativeMessage,
-  NativeMessagePart,
-} from "@/lib/chat/native-message-types";
-import {
-  jsonPayloadSearchText,
-  parseJsonPayload,
-} from "@/lib/chat/json-payload";
+import type { NativeMessage, NativeMessagePart } from "@/lib/chat/native-message-types";
+import { jsonPayloadSearchText, parseJsonPayload } from "@/lib/chat/json-payload";
 
 class SearchTextRenderer extends Renderer {
   override space(): string {
@@ -58,10 +52,7 @@ class SearchTextRenderer extends Renderer {
   override table(token: Tokens.Table): string {
     const rows = [token.header, ...token.rows];
     return `${rows
-      .map((row) =>
-        row
-          .map((cell) => this.parser.parseInline(cell.tokens))
-          .join("\t"))
+      .map((row) => row.map((cell) => this.parser.parseInline(cell.tokens)).join("\t"))
       .join("\n")}\n`;
   }
 
@@ -103,9 +94,7 @@ class SearchTextRenderer extends Renderer {
   }
 
   override text(token: Tokens.Text | Tokens.Escape): string {
-    return "tokens" in token && token.tokens
-      ? this.parser.parseInline(token.tokens)
-      : token.text;
+    return "tokens" in token && token.tokens ? this.parser.parseInline(token.tokens) : token.text;
   }
 }
 
@@ -130,9 +119,7 @@ export function markdownToAgentSearchText(markdown: string): string {
 }
 
 function textPartSources(parts: readonly NativeMessagePart[]): string[] {
-  return parts
-    .filter((part) => part.type === "text")
-    .map((part) => part.content);
+  return parts.filter((part) => part.type === "text").map((part) => part.content);
 }
 
 /**
@@ -160,13 +147,11 @@ function textPartSearchText(source: string, foldJsonPayload: boolean): string {
  * independently searchable segment, with message.content as the fallback for
  * system/error/legacy messages without text parts.
  */
-export function getNativeMessageSearchText(
-  message: NativeMessage,
-): string {
+export function getNativeMessageSearchText(message: NativeMessage): string {
   if (
-    message.role === "system"
-    || message.id.startsWith("system-")
-    || message.id.startsWith("error-")
+    message.role === "system" ||
+    message.id.startsWith("system-") ||
+    message.id.startsWith("error-")
   ) {
     return message.content;
   }

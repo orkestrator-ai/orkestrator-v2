@@ -37,8 +37,7 @@ const RETRIABLE_PROVIDER_CODE = String.raw`\[(?:resource_exhausted|unavailable)\
 // but never cross a blank-line paragraph boundary: flattened assistant text is
 // model-controlled, so treating a later paragraph as the error detail would
 // delete a real answer and silently retry the turn.
-const RETRIABLE_PROVIDER_SEPARATOR =
-  String.raw`(?:[^\S\r\n]+(?:\r?\n[^\S\r\n]*)?|\r?\n[^\S\r\n]*)`;
+const RETRIABLE_PROVIDER_SEPARATOR = String.raw`(?:[^\S\r\n]+(?:\r?\n[^\S\r\n]*)?|\r?\n[^\S\r\n]*)`;
 // A real detail starts with a non-whitespace character. Both classifiers use
 // this so whitespace-only tails (`[unavailable]  `) are retriable to neither:
 // the flattened suffix used to use `[^\n]+`, which treated extra spaces as a
@@ -73,8 +72,8 @@ export function flattenedRetriableProviderTail(state: SessionState): {
   const message = state.messages.at(-1);
   const part = message?.parts.at(-1);
   if (message?.role !== "assistant" || part?.type !== "text") return null;
-  return FLATTENED_RETRIABLE_PROVIDER_SUFFIX.test(part.content)
-    && FLATTENED_RETRIABLE_PROVIDER_SUFFIX.test(message.content)
+  return FLATTENED_RETRIABLE_PROVIDER_SUFFIX.test(part.content) &&
+    FLATTENED_RETRIABLE_PROVIDER_SUFFIX.test(message.content)
     ? { message, part }
     : null;
 }
@@ -122,12 +121,14 @@ export function retryStillOwned(
   child: AcpProcess,
   promptSequence: number,
 ): boolean {
-  return !shuttingDown
-    && sessions.get(state.id) === state
-    && state.child === child
-    && state.status === "running"
-    && state.promptSequence === promptSequence
-    && state.retryCancelledPromptSequence !== promptSequence;
+  return (
+    !shuttingDown &&
+    sessions.get(state.id) === state &&
+    state.child === child &&
+    state.status === "running" &&
+    state.promptSequence === promptSequence &&
+    state.retryCancelledPromptSequence !== promptSequence
+  );
 }
 
 export function retryOwnershipLostError(state: SessionState): Error {
@@ -184,7 +185,7 @@ export async function requestPromptWithRetriableProviderRetries(
     // successful and the continuation is explicitly told not to repeat them.
     reconcileStaleToolParts(state);
     retries += 1;
-    await retryDelay(RETRIABLE_PROVIDER_RETRY_BASE_MS * (2 ** (retries - 1)));
+    await retryDelay(RETRIABLE_PROVIDER_RETRY_BASE_MS * 2 ** (retries - 1));
 
     if (!retryStillOwned(state, child, promptSequence)) {
       if (state.retryCancelledPromptSequence === promptSequence) {
@@ -197,12 +198,14 @@ export async function requestPromptWithRetriableProviderRetries(
       // The schema instruction rides every attempt. The continuation replaces
       // the original prompt on the wire, so omitting it would ask a structured
       // turn to finish without restating the contract it must satisfy.
-      prompt: [{
-        type: "text",
-        text: schema
-          ? `${RETRIABLE_PROVIDER_CONTINUATION}\n\n${structuredPromptInstruction(schema)}`
-          : RETRIABLE_PROVIDER_CONTINUATION,
-      }],
+      prompt: [
+        {
+          type: "text",
+          text: schema
+            ? `${RETRIABLE_PROVIDER_CONTINUATION}\n\n${structuredPromptInstruction(schema)}`
+            : RETRIABLE_PROVIDER_CONTINUATION,
+        },
+      ],
     };
   }
 }
@@ -233,8 +236,8 @@ export async function dispatchAcpPrompt(
 
   let continuations = 0;
   while (
-    retryStillOwned(state, child, promptSequence)
-    && continuations < MAX_CURSOR_BACKGROUND_CONTINUATIONS
+    retryStillOwned(state, child, promptSequence) &&
+    continuations < MAX_CURSOR_BACKGROUND_CONTINUATIONS
   ) {
     // Only children Cursor itself named. An inferred binding is good enough to
     // show activity in a card; it is not good enough to hold this turn open.

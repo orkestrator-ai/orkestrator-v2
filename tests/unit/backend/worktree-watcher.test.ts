@@ -20,11 +20,17 @@ interface FakeWatch {
   fail: (error: unknown) => void;
 }
 
-function fakeWatcher(): { start: NonNullable<Parameters<typeof startWorktreeWatcher>[0]["startWatch"]>; handle: FakeWatch } {
+function fakeWatcher(): {
+  start: NonNullable<Parameters<typeof startWorktreeWatcher>[0]["startWatch"]>;
+  handle: FakeWatch;
+} {
   const handle: FakeWatch = { emit: () => {}, closed: false, fail: () => {} };
   const errorHandlers = new Set<(error: unknown) => void>();
 
-  const start = ((_target: string, listener: (eventType: string, filename: string | null) => void) => {
+  const start = ((
+    _target: string,
+    listener: (eventType: string, filename: string | null) => void,
+  ) => {
     handle.emit = listener;
     handle.fail = (error) => {
       for (const onError of errorHandlers) onError(error);
@@ -93,7 +99,9 @@ describe("startWorktreeWatcher", () => {
       worktreePath: "/wt",
       settleMs: 20,
       startWatch: start,
-      onChange: () => { changes += 1; },
+      onChange: () => {
+        changes += 1;
+      },
     });
     cleanups.push(() => watcher.close());
 
@@ -113,7 +121,9 @@ describe("startWorktreeWatcher", () => {
       worktreePath: "/wt",
       settleMs: 20,
       startWatch: start,
-      onChange: () => { changes += 1; },
+      onChange: () => {
+        changes += 1;
+      },
     });
     cleanups.push(() => watcher.close());
 
@@ -132,7 +142,9 @@ describe("startWorktreeWatcher", () => {
       worktreePath: "/wt",
       settleMs: 20,
       startWatch: start,
-      onChange: () => { changes += 1; },
+      onChange: () => {
+        changes += 1;
+      },
     });
     cleanups.push(() => watcher.close());
 
@@ -150,7 +162,9 @@ describe("startWorktreeWatcher", () => {
       worktreePath: "/wt",
       settleMs: 20,
       startWatch: start,
-      onChange: () => { changes += 1; },
+      onChange: () => {
+        changes += 1;
+      },
     });
 
     handle.emit("change", "a.ts");
@@ -175,7 +189,10 @@ describe("startWorktreeWatcher", () => {
   });
 
   test("close remains safe when the platform watcher throws while closing", () => {
-    const start = ((_target: string, _listener: (eventType: string, filename: string | null) => void) => ({
+    const start = ((
+      _target: string,
+      _listener: (eventType: string, filename: string | null) => void,
+    ) => ({
       on() {
         return this;
       },
@@ -199,9 +216,13 @@ describe("startWorktreeWatcher", () => {
     let reported: unknown;
     const watcher = startWorktreeWatcher({
       worktreePath: "/wt",
-      startWatch: () => { throw new Error("ENOSYS: recursive watch unsupported"); },
+      startWatch: () => {
+        throw new Error("ENOSYS: recursive watch unsupported");
+      },
       onChange: () => {},
-      onError: (error) => { reported = error; },
+      onError: (error) => {
+        reported = error;
+      },
     });
     cleanups.push(() => watcher.close());
 
@@ -216,7 +237,9 @@ describe("startWorktreeWatcher", () => {
       worktreePath: "/wt",
       startWatch: start,
       onChange: () => {},
-      onError: (error) => { reported = error; },
+      onError: (error) => {
+        reported = error;
+      },
     });
     cleanups.push(() => watcher.close());
     expect(watcher.watching).toBe(true);
@@ -261,10 +284,7 @@ describe("startWorktreeWatcher", () => {
         `export const value = ${attempt};\n`,
       );
       attempt += 1;
-      await Promise.race([
-        changeObserved,
-        new Promise<void>((resolve) => setTimeout(resolve, 75)),
-      ]);
+      await Promise.race([changeObserved, new Promise<void>((resolve) => setTimeout(resolve, 75))]);
     }
 
     expect(changes).toBeGreaterThan(0);

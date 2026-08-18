@@ -1,27 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import {
-  chmod,
-  mkdtemp,
-  readdir,
-  rm,
-  stat,
-  writeFile,
-  mkdir,
-} from "node:fs/promises";
+import { chmod, mkdtemp, readdir, rm, stat, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import {
-  BRIDGE_SESSION_REGISTRY_VERSION,
-  BridgeSessionStore,
-  hashCwd,
-} from "./persistence.js";
+import { BRIDGE_SESSION_REGISTRY_VERSION, BridgeSessionStore, hashCwd } from "./persistence.js";
 
 const temporaryDirectories: string[] = [];
 
-async function makeStore(
-  options: { now?: () => number; retentionMs?: number } = {},
-) {
+async function makeStore(options: { now?: () => number; retentionMs?: number } = {}) {
   const codexHome = await mkdtemp(join(tmpdir(), "bridge-session-store-"));
   temporaryDirectories.push(codexHome);
   return {
@@ -35,11 +21,7 @@ async function makeStore(
 }
 
 function recordsDirFor(codexHome: string): string {
-  return join(
-    codexHome,
-    "orkestrator-bridge",
-    `bridge-sessions-${hashCwd("/workspace")}`,
-  );
+  return join(codexHome, "orkestrator-bridge", `bridge-sessions-${hashCwd("/workspace")}`);
 }
 
 function recordPathFor(codexHome: string, bridgeSessionId: string): string {
@@ -57,11 +39,7 @@ async function writeRecordFile(
 ): Promise<string> {
   const path = recordPathFor(codexHome, bridgeSessionId);
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(
-    path,
-    typeof contents === "string" ? contents : JSON.stringify(contents),
-    "utf8",
-  );
+  await writeFile(path, typeof contents === "string" ? contents : JSON.stringify(contents), "utf8");
   return path;
 }
 
@@ -75,9 +53,7 @@ function validRecordFields(bridgeSessionId: string, now: number) {
   };
 }
 
-async function captureWarnings<T>(
-  run: () => Promise<T>,
-): Promise<{ result: T; warnings: number }> {
+async function captureWarnings<T>(run: () => Promise<T>): Promise<{ result: T; warnings: number }> {
   const original = console.warn;
   let warnings = 0;
   console.warn = () => {
@@ -92,9 +68,7 @@ async function captureWarnings<T>(
 
 afterEach(async () => {
   await Promise.all(
-    temporaryDirectories
-      .splice(0)
-      .map((path) => rm(path, { recursive: true, force: true })),
+    temporaryDirectories.splice(0).map((path) => rm(path, { recursive: true, force: true })),
   );
 });
 
@@ -110,11 +84,9 @@ describe("BridgeSessionStore", () => {
       }),
     );
 
-    expect((await stat(join(codexHome, "orkestrator-bridge"))).mode & 0o777)
-      .toBe(0o700);
+    expect((await stat(join(codexHome, "orkestrator-bridge"))).mode & 0o777).toBe(0o700);
     expect((await stat(recordsDirFor(codexHome))).mode & 0o777).toBe(0o700);
-    expect((await stat(recordPathFor(codexHome, "private"))).mode & 0o777)
-      .toBe(0o600);
+    expect((await stat(recordPathFor(codexHome, "private"))).mode & 0o777).toBe(0o600);
   });
 
   test("tightens permissions on existing directories and records during load", async () => {
@@ -129,11 +101,8 @@ describe("BridgeSessionStore", () => {
     await chmod(recordsDirFor(codexHome), 0o755);
     await chmod(recordPath, 0o644);
 
-    expect((await store.load()).map((entry) => entry.bridgeSessionId)).toEqual([
-      "existing",
-    ]);
-    expect((await stat(join(codexHome, "orkestrator-bridge"))).mode & 0o777)
-      .toBe(0o700);
+    expect((await store.load()).map((entry) => entry.bridgeSessionId)).toEqual(["existing"]);
+    expect((await stat(join(codexHome, "orkestrator-bridge"))).mode & 0o777).toBe(0o700);
     expect((await stat(recordsDirFor(codexHome))).mode & 0o777).toBe(0o700);
     expect((await stat(recordPath)).mode & 0o777).toBe(0o600);
   });
@@ -184,8 +153,7 @@ describe("BridgeSessionStore", () => {
       ),
     );
 
-    expect((await store.load()).map((record) => record.bridgeSessionId))
-      .toEqual(["valid"]);
+    expect((await store.load()).map((record) => record.bridgeSessionId)).toEqual(["valid"]);
   });
 
   test("serializes concurrent upserts without losing either session", async () => {
@@ -198,13 +166,8 @@ describe("BridgeSessionStore", () => {
         config: { mode: "plan", sandbox: "read-only" },
       });
 
-    await Promise.all([
-      store.upsert(makeRecord("a")),
-      store.upsert(makeRecord("b")),
-    ]);
-    expect(
-      (await store.load()).map((entry) => entry.bridgeSessionId).sort(),
-    ).toEqual(["a", "b"]);
+    await Promise.all([store.upsert(makeRecord("a")), store.upsert(makeRecord("b"))]);
+    expect((await store.load()).map((entry) => entry.bridgeSessionId).sort()).toEqual(["a", "b"]);
   });
 
   test("retains simultaneous records written by separate processes", async () => {
@@ -237,17 +200,11 @@ describe("BridgeSessionStore", () => {
         stderr: "pipe",
       }),
     );
-    await Promise.all(
-      ids.map((id) => waitForFile(join(codexHome, `ready-${id}`))),
-    );
+    await Promise.all(ids.map((id) => waitForFile(join(codexHome, `ready-${id}`))));
 
     await writeFile(releasePath, "release", "utf8");
-    expect(await Promise.all(children.map((child) => child.exited))).toEqual(
-      ids.map(() => 0),
-    );
-    expect(
-      (await store.load()).map((entry) => entry.bridgeSessionId).sort(),
-    ).toEqual(ids.sort());
+    expect(await Promise.all(children.map((child) => child.exited))).toEqual(ids.map(() => 0));
+    expect((await store.load()).map((entry) => entry.bridgeSessionId).sort()).toEqual(ids.sort());
   });
 
   test("migrates the aggregate v2 registry without overwriting a newer record", async () => {
@@ -307,15 +264,10 @@ describe("BridgeSessionStore", () => {
       { encoding: "utf8", mode: 0o644 },
     );
 
-    expect((await store.load()).map((entry) => entry.bridgeSessionId)).toEqual([
-      "legacy-private",
-    ]);
-    expect((await stat(join(codexHome, "orkestrator-bridge"))).mode & 0o777)
-      .toBe(0o700);
+    expect((await store.load()).map((entry) => entry.bridgeSessionId)).toEqual(["legacy-private"]);
+    expect((await stat(join(codexHome, "orkestrator-bridge"))).mode & 0o777).toBe(0o700);
     expect((await stat(recordsDirFor(codexHome))).mode & 0o777).toBe(0o700);
-    expect(
-      (await stat(recordPathFor(codexHome, "legacy-private"))).mode & 0o777,
-    ).toBe(0o600);
+    expect((await stat(recordPathFor(codexHome, "legacy-private"))).mode & 0o777).toBe(0o600);
   });
 
   test("same-id upsert/remove contention cannot revive a legacy record", async () => {
@@ -358,12 +310,8 @@ describe("BridgeSessionStore", () => {
     );
 
     const loaded = await store.load();
-    expect(loaded.every((record) => record.threadId.startsWith("newer-"))).toBe(
-      true,
-    );
-    expect(loaded.some((record) => record.threadId.startsWith("legacy-"))).toBe(
-      false,
-    );
+    expect(loaded.every((record) => record.threadId.startsWith("newer-"))).toBe(true);
+    expect(loaded.some((record) => record.threadId.startsWith("legacy-"))).toBe(false);
   });
 
   test("rejects malformed, expired, foreign-cwd, and old-version records", async () => {
@@ -406,23 +354,13 @@ describe("BridgeSessionStore", () => {
     };
     await writeFile(path, JSON.stringify(registry), "utf8");
 
-    expect((await store.load()).map((entry) => entry.bridgeSessionId)).toEqual([
-      "valid",
-    ]);
+    expect((await store.load()).map((entry) => entry.bridgeSessionId)).toEqual(["valid"]);
 
-    await rm(
-      join(
-        codexHome,
-        "orkestrator-bridge",
-        `bridge-sessions-${hashCwd("/workspace")}`,
-      ),
-      { recursive: true, force: true },
-    );
-    await writeFile(
-      path,
-      JSON.stringify({ ...registry, version: registry.version + 1 }),
-      "utf8",
-    );
+    await rm(join(codexHome, "orkestrator-bridge", `bridge-sessions-${hashCwd("/workspace")}`), {
+      recursive: true,
+      force: true,
+    });
+    await writeFile(path, JSON.stringify({ ...registry, version: registry.version + 1 }), "utf8");
     expect(await store.load()).toEqual([]);
 
     await writeFile(path, "{not json", "utf8");
@@ -463,9 +401,7 @@ describe("BridgeSessionStore", () => {
     });
     await writeRecordFile(codexHome, "primitive", 42);
 
-    expect((await store.load()).map((entry) => entry.bridgeSessionId)).toEqual([
-      "valid",
-    ]);
+    expect((await store.load()).map((entry) => entry.bridgeSessionId)).toEqual(["valid"]);
   });
 
   test("accepts every legal turn config and rejects each malformed field", async () => {
@@ -541,9 +477,11 @@ describe("BridgeSessionStore", () => {
       deletedAt: new Date(now).toISOString(),
     });
 
-    expect(
-      (await store.load()).map((entry) => entry.bridgeSessionId).sort(),
-    ).toEqual(["bad-date", "no-date", "not-flagged"]);
+    expect((await store.load()).map((entry) => entry.bridgeSessionId).sort()).toEqual([
+      "bad-date",
+      "no-date",
+      "not-flagged",
+    ]);
   });
 
   test("re-creating a removed session id round-trips through the tombstone", async () => {
@@ -585,9 +523,7 @@ describe("BridgeSessionStore", () => {
     );
 
     expect(warnings).toBe(1);
-    expect(
-      (await readdir(recordsDir)).filter((name) => name.endsWith(".tmp")),
-    ).toEqual([]);
+    expect((await readdir(recordsDir)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
   });
 
   test("a failing legacy migration warns instead of failing load", async () => {
@@ -731,8 +667,7 @@ describe("BridgeSessionStore", () => {
 async function waitForFile(path: string): Promise<void> {
   const deadline = Date.now() + 5_000;
   while (!(await Bun.file(path).exists())) {
-    if (Date.now() >= deadline)
-      throw new Error(`Timed out waiting for ${path}`);
+    if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${path}`);
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }

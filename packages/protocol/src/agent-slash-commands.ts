@@ -1,7 +1,4 @@
-import type {
-  NativeAgentCapabilities,
-  NativeAgentSlashCommand,
-} from "./native-agent.js";
+import type { NativeAgentCapabilities, NativeAgentSlashCommand } from "./native-agent.js";
 
 /**
  * One parsing rule for every provider.
@@ -118,10 +115,7 @@ export function isProviderSlashCommand(
   const parsed = parseLeadingSlashCommand(text);
   if (!parsed) return false;
   const sessionAction = SESSION_ACTION_SLASH_COMMANDS[parsed.name];
-  if (
-    sessionAction
-    && capabilities?.actions?.[sessionAction.capability] === true
-  ) {
+  if (sessionAction && capabilities?.actions?.[sessionAction.capability] === true) {
     return false;
   }
   return commands.some((command) => command.name.toLowerCase() === parsed.name);

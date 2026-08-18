@@ -3,10 +3,7 @@ import { UpdateCoalescer } from "./coalescer.js";
 
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 5));
 
-async function waitFor(
-  predicate: () => boolean,
-  timeoutMs = 1_000,
-): Promise<void> {
+async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!predicate() && Date.now() < deadline) {
     await tick();
@@ -54,9 +51,7 @@ describe("UpdateCoalescer", () => {
     expect(publishedAt).toHaveLength(1);
     await waitFor(() => publishedAt.length === 2);
 
-    expect(publishedAt[1]! - firstPublishedAt).toBeGreaterThanOrEqual(
-      selectedIntervalMs - 2,
-    );
+    expect(publishedAt[1]! - firstPublishedAt).toBeGreaterThanOrEqual(selectedIntervalMs - 2);
     coalescer.stop();
   });
 

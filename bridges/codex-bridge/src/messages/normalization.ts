@@ -32,8 +32,7 @@ import type { FileChangeDiffContext, NormalizedPart, ToolDiffMetadata } from "./
 
 const execFile = promisify(execFileCallback);
 const COMMAND_OUTPUT_TRUNCATION_NOTICE = "\n… output truncated";
-const INVISIBLE_TEXT_ONLY =
-  /^(?:\p{White_Space}|\uFEFF|\p{Default_Ignorable_Code_Point})*$/u;
+const INVISIBLE_TEXT_ONLY = /^(?:\p{White_Space}|\uFEFF|\p{Default_Ignorable_Code_Point})*$/u;
 
 export function hasVisibleText(value: string): boolean {
   return !INVISIBLE_TEXT_ONLY.test(value);
@@ -70,22 +69,24 @@ function describeMediaUrl(url: string, kind: "image" | "audio"): string {
 }
 
 function stringifyDynamicToolContent(items: unknown[]): string | undefined {
-  const content = items.map((item) => {
-    if (!item || typeof item !== "object" || Array.isArray(item)) {
+  const content = items
+    .map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        return stringifyUnknown(item);
+      }
+      const record = item as Record<string, unknown>;
+      if (record.type === "inputText" && typeof record.text === "string") {
+        return record.text;
+      }
+      if (record.type === "inputImage" && typeof record.imageUrl === "string") {
+        return describeMediaUrl(record.imageUrl, "image");
+      }
+      if (record.type === "inputAudio" && typeof record.audioUrl === "string") {
+        return describeMediaUrl(record.audioUrl, "audio");
+      }
       return stringifyUnknown(item);
-    }
-    const record = item as Record<string, unknown>;
-    if (record.type === "inputText" && typeof record.text === "string") {
-      return record.text;
-    }
-    if (record.type === "inputImage" && typeof record.imageUrl === "string") {
-      return describeMediaUrl(record.imageUrl, "image");
-    }
-    if (record.type === "inputAudio" && typeof record.audioUrl === "string") {
-      return describeMediaUrl(record.audioUrl, "audio");
-    }
-    return stringifyUnknown(item);
-  }).filter((value): value is string => typeof value === "string" && value.length > 0);
+    })
+    .filter((value): value is string => typeof value === "string" && value.length > 0);
 
   return content.length > 0 ? content.join("\n") : undefined;
 }
@@ -149,10 +150,14 @@ async function runGitDiffNoIndexWithIo(
   const afterPath = join(tempDir, "after");
   const normalizeOutput = (output: string) =>
     output
-      .split(`a${beforePath}`).join(`a/${relativePath}`)
-      .split(`b${afterPath}`).join(`b/${relativePath}`)
-      .split(beforePath).join(`a/${relativePath}`)
-      .split(afterPath).join(`b/${relativePath}`);
+      .split(`a${beforePath}`)
+      .join(`a/${relativePath}`)
+      .split(`b${afterPath}`)
+      .join(`b/${relativePath}`)
+      .split(beforePath)
+      .join(`a/${relativePath}`)
+      .split(afterPath)
+      .join(`b/${relativePath}`);
 
   try {
     await io.writeTextFile(beforePath, before ?? "");
@@ -180,9 +185,10 @@ async function runGitDiffNoIndexWithIo(
       if ((error as { code?: unknown }).code !== 1) {
         return undefined;
       }
-      const stdout = typeof (error as { stdout?: unknown }).stdout === "string"
-        ? (error as { stdout: string }).stdout.trimEnd()
-        : "";
+      const stdout =
+        typeof (error as { stdout?: unknown }).stdout === "string"
+          ? (error as { stdout: string }).stdout.trimEnd()
+          : "";
       return stdout.length > 0 ? normalizeOutput(stdout) : undefined;
     }
   } finally {
@@ -253,13 +259,9 @@ export async function getFileChangeDiffMetadata(
     : change.kind === "add"
       ? undefined
       : await readGitHeadTextFile(cwd, relativePath);
-  const after = change.kind === "delete"
-    ? undefined
-    : await readTextFileIfPresent(resolvedPath);
+  const after = change.kind === "delete" ? undefined : await readTextFileIfPresent(resolvedPath);
   const diff = await runGitDiffNoIndex(cwd, relativePath, before, after);
-  const { additions, deletions } = diff
-    ? countDiffLines(diff)
-    : { additions: 0, deletions: 0 };
+  const { additions, deletions } = diff ? countDiffLines(diff) : { additions: 0, deletions: 0 };
 
   // Oversized before/after are dropped here rather than stored and truncated
   // later: they are entire file contents, and this is the bridge's largest
@@ -301,30 +303,30 @@ export async function itemToParts(
     case "agent_message":
       return [{ type: "text", content: item.text }];
     case "reasoning":
-      return hasVisibleText(item.text)
-        ? [{ type: "thinking", content: item.text }]
-        : [];
+      return hasVisibleText(item.text) ? [{ type: "thinking", content: item.text }] : [];
     case "command_execution": {
       const output = capCommandOutput(item.aggregated_output);
       const failed = item.status === "failed";
-      return [{
-        type: "tool-invocation",
-        content: item.command,
-        toolName: "bash",
-        toolArgs: { command: item.command },
-        toolState:
-          item.status === "failed"
-            ? "failure"
-            : item.status === "completed"
-              ? "success"
-              : "pending",
-        toolTitle: item.command,
-        // A failed command used to duplicate the same potentially 256 KiB
-        // string into both fields. The renderer already gives `toolError` its
-        // error treatment, so keep the payload exactly once.
-        toolOutput: failed ? undefined : output || undefined,
-        toolError: failed ? output || "Command failed" : undefined,
-      }];
+      return [
+        {
+          type: "tool-invocation",
+          content: item.command,
+          toolName: "bash",
+          toolArgs: { command: item.command },
+          toolState:
+            item.status === "failed"
+              ? "failure"
+              : item.status === "completed"
+                ? "success"
+                : "pending",
+          toolTitle: item.command,
+          // A failed command used to duplicate the same potentially 256 KiB
+          // string into both fields. The renderer already gives `toolError` its
+          // error treatment, so keep the payload exactly once.
+          toolOutput: failed ? undefined : output || undefined,
+          toolError: failed ? output || "Command failed" : undefined,
+        },
+      ];
     }
     case "file_change":
       return Promise.all(
@@ -344,81 +346,86 @@ export async function itemToParts(
         })),
       );
     case "mcp_tool_call":
-      return [{
-        type: "tool-invocation",
-        content: item.tool,
-        toolName: item.tool,
-        toolArgs: (item.arguments ?? {}) as Record<string, unknown>,
-        toolState:
-          item.status === "failed"
-            ? "failure"
-            : item.status === "completed"
-              ? "success"
-              : "pending",
-        toolTitle: `${item.server}:${item.tool}`,
-        toolOutput: stringifyUnknown(item.result),
-        toolError: item.error?.message,
-      }];
+      return [
+        {
+          type: "tool-invocation",
+          content: item.tool,
+          toolName: item.tool,
+          toolArgs: (item.arguments ?? {}) as Record<string, unknown>,
+          toolState:
+            item.status === "failed"
+              ? "failure"
+              : item.status === "completed"
+                ? "success"
+                : "pending",
+          toolTitle: `${item.server}:${item.tool}`,
+          toolOutput: stringifyUnknown(item.result),
+          toolError: item.error?.message,
+        },
+      ];
     case "dynamic_tool_call": {
-      const output = capCommandOutput(
-        stringifyDynamicToolContent(item.content_items) ?? "",
-      ) || undefined;
+      const output =
+        capCommandOutput(stringifyDynamicToolContent(item.content_items) ?? "") || undefined;
       const toolState =
-        item.status === "failed"
-          ? "failure"
-          : item.status === "completed"
-            ? "success"
-            : "pending";
+        item.status === "failed" ? "failure" : item.status === "completed" ? "success" : "pending";
       if (item.tool.trim().toLowerCase() === "apply_patch") {
         const patchParts = rawApplyPatchParts(item.arguments, cwd, toolState);
         if (patchParts.length > 0) {
           return patchParts.map((part) => ({
             ...part,
             toolOutput: item.status === "failed" ? undefined : output,
-            toolError: item.status === "failed" ? output ?? "Tool failed" : undefined,
+            toolError: item.status === "failed" ? (output ?? "Tool failed") : undefined,
           }));
         }
       }
-      return [{
-        type: "tool-invocation",
-        content: item.tool,
-        toolName: item.tool,
-        toolArgs: normalizeTranscriptToolArgs(item.tool, item.arguments),
-        toolState,
-        // Dynamic tools are namespaced by the protocol, so two same-named tools
-        // are only distinguishable by it. Mirrors the `mcp_tool_call` title.
-        toolTitle: item.namespace ? `${item.namespace}:${item.tool}` : item.tool,
-        toolOutput: item.status === "failed" ? undefined : output,
-        toolError: item.status === "failed" ? output ?? "Tool failed" : undefined,
-      }];
+      return [
+        {
+          type: "tool-invocation",
+          content: item.tool,
+          toolName: item.tool,
+          toolArgs: normalizeTranscriptToolArgs(item.tool, item.arguments),
+          toolState,
+          // Dynamic tools are namespaced by the protocol, so two same-named tools
+          // are only distinguishable by it. Mirrors the `mcp_tool_call` title.
+          toolTitle: item.namespace ? `${item.namespace}:${item.tool}` : item.tool,
+          toolOutput: item.status === "failed" ? undefined : output,
+          toolError: item.status === "failed" ? (output ?? "Tool failed") : undefined,
+        },
+      ];
     }
     case "web_search":
-      return [{
-        type: "tool-invocation",
-        content: item.query,
-        toolName: "web_search",
-        toolArgs: { query: item.query },
-        toolState: "success",
-        toolTitle: item.query,
-      }];
+      return [
+        {
+          type: "tool-invocation",
+          content: item.query,
+          toolName: "web_search",
+          toolArgs: { query: item.query },
+          toolState: "success",
+          toolTitle: item.query,
+        },
+      ];
     case "todo_list":
-      return [{
-        type: "tool-invocation",
-        content: summarizeTodoList(item.items),
-        toolName: "todo_list",
-        toolState: "success",
-        toolTitle: "Todo List",
-        toolArgs: mapTodoArgs(item.items),
-        toolOutput: summarizeTodoList(item.items),
-      }];
+      return [
+        {
+          type: "tool-invocation",
+          content: summarizeTodoList(item.items),
+          toolName: "todo_list",
+          toolState: "success",
+          toolTitle: "Todo List",
+          toolArgs: mapTodoArgs(item.items),
+          toolOutput: summarizeTodoList(item.items),
+        },
+      ];
     case "error":
-      return [{
-        type: "tool-result",
-        content: item.message,
-        toolName: "error",
-        toolState: "failure",
-        toolError: item.message,
-      }];
+      return [
+        {
+          type: "tool-result",
+          content: item.message,
+          toolName: "error",
+          toolState: "failure",
+          toolError: item.message,
+        },
+      ];
     /**
      * app-server only: free-text plan the agent drafts mid-turn.
      *
@@ -427,14 +434,16 @@ export async function itemToParts(
      * grouped.
      */
     case "plan":
-      return [{
-        type: "tool-invocation",
-        content: item.text,
-        toolName: "plan",
-        toolState: "success",
-        toolTitle: "Plan",
-        toolOutput: item.text,
-      }];
+      return [
+        {
+          type: "tool-invocation",
+          content: item.text,
+          toolName: "plan",
+          toolState: "success",
+          toolTitle: "Plan",
+          toolOutput: item.text,
+        },
+      ];
     /**
      * app-server only: sub-agent lifecycle beat. Intentionally renders nothing —
      * the visible sub-agent timeline is assembled from `collab_tool_call` items

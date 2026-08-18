@@ -20,9 +20,8 @@ mock.module("@/lib/native/dialog", () => ({
   open: openDialogMock,
 }));
 
-const { AddProjectDialog } = await import(
-  "../../../apps/web/src/components/projects/AddProjectDialog"
-);
+const { AddProjectDialog } =
+  await import("../../../apps/web/src/components/projects/AddProjectDialog");
 
 afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
@@ -51,7 +50,7 @@ describe("AddProjectDialog", () => {
         onAdd={async () => {}}
         onCreate={async () => {}}
         validateGitUrl={async () => true}
-      />
+      />,
     );
 
     expect(screen.getByRole("dialog").className).toContain("sm:max-w-2xl");
@@ -69,15 +68,17 @@ describe("AddProjectDialog", () => {
         onAdd={async () => {}}
         onCreate={async () => {}}
         validateGitUrl={validateGitUrl}
-      />
+      />,
     );
 
     fireEvent.change(screen.getByLabelText(/Local path/i), {
       target: { value: "/srv/repos/project" },
     });
-    fireEvent.click(screen.getByRole("button", {
-      name: "Select or detect repository directory",
-    }));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Select or detect repository directory",
+      }),
+    );
 
     await waitFor(() => {
       expect(getGitRemoteUrlMock).toHaveBeenCalledWith("/srv/repos/project");
@@ -89,7 +90,7 @@ describe("AddProjectDialog", () => {
       defaultPath: "/srv/repos/project",
     });
     expect((screen.getByLabelText(/Git URL/) as HTMLInputElement).value).toBe(
-      "git@github.com:acme/project.git"
+      "git@github.com:acme/project.git",
     );
     expect(validateGitUrl).toHaveBeenCalledWith("git@github.com:acme/project.git");
   });
@@ -100,18 +101,20 @@ describe("AddProjectDialog", () => {
     getGitRemoteUrlMock.mockResolvedValue("https://github.com/acme/project.git");
 
     renderDialog({ validateGitUrl });
-    fireEvent.click(screen.getByRole("button", {
-      name: "Select or detect repository directory",
-    }));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Select or detect repository directory",
+      }),
+    );
 
     await waitFor(() => {
       expect(getGitRemoteUrlMock).toHaveBeenCalledWith("/Users/alice/project");
     });
     expect((screen.getByLabelText(/Local path/i) as HTMLInputElement).value).toBe(
-      "/Users/alice/project"
+      "/Users/alice/project",
     );
     expect((screen.getByLabelText(/Git URL/) as HTMLInputElement).value).toBe(
-      "https://github.com/acme/project.git"
+      "https://github.com/acme/project.git",
     );
   });
 
@@ -120,9 +123,11 @@ describe("AddProjectDialog", () => {
     fireEvent.change(screen.getByLabelText(/Local path/i), {
       target: { value: "/Users/alice/project" },
     });
-    fireEvent.click(screen.getByRole("button", {
-      name: "Select or detect repository directory",
-    }));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Select or detect repository directory",
+      }),
+    );
 
     await waitFor(() => expect(openDialogMock).toHaveBeenCalledTimes(1));
     expect(getGitRemoteUrlMock).not.toHaveBeenCalled();
@@ -133,9 +138,11 @@ describe("AddProjectDialog", () => {
     window.orkestratorGateway = { enabled: true };
     renderDialog();
 
-    fireEvent.click(screen.getByRole("button", {
-      name: "Select or detect repository directory",
-    }));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Select or detect repository directory",
+      }),
+    );
 
     await waitFor(() => expect(openDialogMock).toHaveBeenCalledTimes(1));
     expect(getGitRemoteUrlMock).not.toHaveBeenCalled();
@@ -150,15 +157,17 @@ describe("AddProjectDialog", () => {
     });
     await waitFor(() => expect(validateGitUrl).toHaveBeenCalledTimes(1));
 
-    fireEvent.click(screen.getByRole("button", {
-      name: "Select or detect repository directory",
-    }));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Select or detect repository directory",
+      }),
+    );
 
     await waitFor(() => {
       expect(getGitRemoteUrlMock).toHaveBeenCalledWith("/Users/alice/no-remote");
     });
     expect((screen.getByLabelText(/Git URL/) as HTMLInputElement).value).toBe(
-      "https://github.com/acme/existing.git"
+      "https://github.com/acme/existing.git",
     );
   });
 
@@ -173,23 +182,31 @@ describe("AddProjectDialog", () => {
     try {
       openDialogMock.mockRejectedValueOnce(new Error("picker failed"));
       renderDialog();
-      fireEvent.click(screen.getByRole("button", {
-        name: "Select or detect repository directory",
-      }));
-      await waitFor(() => expect(consoleErrorMock).toHaveBeenCalledWith(
-        "Failed to open directory picker:",
-        expect.any(Error),
-      ));
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: "Select or detect repository directory",
+        }),
+      );
+      await waitFor(() =>
+        expect(consoleErrorMock).toHaveBeenCalledWith(
+          "Failed to open directory picker:",
+          expect.any(Error),
+        ),
+      );
 
       openDialogMock.mockResolvedValueOnce("/Users/alice/not-git");
       getGitRemoteUrlMock.mockRejectedValueOnce(new Error("not a repository"));
-      fireEvent.click(screen.getByRole("button", {
-        name: "Select or detect repository directory",
-      }));
-      await waitFor(() => expect(consoleDebugMock).toHaveBeenCalledWith(
-        "Could not get git remote URL:",
-        expect.any(Error),
-      ));
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: "Select or detect repository directory",
+        }),
+      );
+      await waitFor(() =>
+        expect(consoleDebugMock).toHaveBeenCalledWith(
+          "Could not get git remote URL:",
+          expect.any(Error),
+        ),
+      );
     } finally {
       console.error = originalConsoleError;
       console.debug = originalConsoleDebug;
@@ -202,9 +219,11 @@ describe("AddProjectDialog", () => {
     getGitRemoteUrlMock.mockResolvedValue("invalid-remote");
     renderDialog({ validateGitUrl });
 
-    fireEvent.click(screen.getByRole("button", {
-      name: "Select or detect repository directory",
-    }));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Select or detect repository directory",
+      }),
+    );
 
     expect(await screen.findByText("Enter a valid Git URL (SSH or HTTPS format)")).toBeTruthy();
     expect((screen.getByLabelText(/Git URL/) as HTMLInputElement).value).toBe("invalid-remote");
@@ -213,10 +232,13 @@ describe("AddProjectDialog", () => {
   test("ignores stale URL validation results", async () => {
     let resolveFirst: ((valid: boolean) => void) | undefined;
     let resolveSecond: ((valid: boolean) => void) | undefined;
-    const validateGitUrl = mock((url: string) => new Promise<boolean>((resolve) => {
-      if (url.includes("first")) resolveFirst = resolve;
-      else resolveSecond = resolve;
-    }));
+    const validateGitUrl = mock(
+      (url: string) =>
+        new Promise<boolean>((resolve) => {
+          if (url.includes("first")) resolveFirst = resolve;
+          else resolveSecond = resolve;
+        }),
+    );
     renderDialog({ validateGitUrl });
     const gitUrlInput = screen.getByLabelText(/Git URL/);
 
@@ -266,10 +288,7 @@ describe("AddProjectDialog", () => {
     expect((submitButton as HTMLButtonElement).disabled).toBe(true);
     fireEvent.submit(submitButton.closest("form")!);
 
-    expect(await screen.findByRole("alert")).toHaveProperty(
-      "textContent",
-      "Git URL is required",
-    );
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent", "Git URL is required");
     expect(onAdd).not.toHaveBeenCalled();
   });
 
@@ -286,10 +305,12 @@ describe("AddProjectDialog", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Add project" }));
 
-    await waitFor(() => expect(onAdd).toHaveBeenCalledWith(
-      "https://github.com/acme/project.git",
-      "/Users/alice/project",
-    ));
+    await waitFor(() =>
+      expect(onAdd).toHaveBeenCalledWith(
+        "https://github.com/acme/project.git",
+        "/Users/alice/project",
+      ),
+    );
     expect(onOpenChange).toHaveBeenCalledWith(false);
     expect((screen.getByLabelText(/Git URL/) as HTMLInputElement).value).toBe("");
     expect((screen.getByLabelText(/Local path/i) as HTMLInputElement).value).toBe("");
@@ -310,7 +331,7 @@ describe("AddProjectDialog", () => {
     expect(await screen.findByText("Failed to add project")).toBeTruthy();
     expect(onOpenChange).not.toHaveBeenCalled();
     expect((screen.getByLabelText(/Git URL/) as HTMLInputElement).value).toBe(
-      "https://github.com/acme/project.git"
+      "https://github.com/acme/project.git",
     );
   });
 
@@ -326,9 +347,7 @@ describe("AddProjectDialog", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Add project" }));
 
-    expect((await screen.findByRole("alert")).textContent).toContain(
-      "repository already exists",
-    );
+    expect((await screen.findByRole("alert")).textContent).toContain("repository already exists");
     expect(onAdd).toHaveBeenCalledWith("https://github.com/acme/project.git", undefined);
   });
 
@@ -370,12 +389,14 @@ describe("AddProjectDialog", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Choose an empty project folder" }));
 
-    await waitFor(() => expect(openDialogMock).toHaveBeenCalledWith({
-      directory: true,
-      multiple: false,
-      title: "Choose an empty project folder",
-      defaultPath: undefined,
-    }));
+    await waitFor(() =>
+      expect(openDialogMock).toHaveBeenCalledWith({
+        directory: true,
+        multiple: false,
+        title: "Choose an empty project folder",
+        defaultPath: undefined,
+      }),
+    );
     expect((screen.getByLabelText(/Project path/i) as HTMLInputElement).value).toBe(
       "/Users/alice/new-project",
     );
@@ -391,12 +412,14 @@ describe("AddProjectDialog", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Choose an empty project folder" }));
 
-    await waitFor(() => expect(openDialogMock).toHaveBeenCalledWith({
-      directory: true,
-      multiple: false,
-      title: "Choose an empty project folder",
-      defaultPath: "/srv/projects/new-project",
-    }));
+    await waitFor(() =>
+      expect(openDialogMock).toHaveBeenCalledWith({
+        directory: true,
+        multiple: false,
+        title: "Choose an empty project folder",
+        defaultPath: "/srv/projects/new-project",
+      }),
+    );
     expect((screen.getByLabelText(/Project path/i) as HTMLInputElement).value).toBe(
       "/srv/projects/new-project",
     );
@@ -432,10 +455,12 @@ describe("AddProjectDialog", () => {
 
       fireEvent.click(screen.getByRole("button", { name: "Choose an empty project folder" }));
 
-      await waitFor(() => expect(consoleErrorMock).toHaveBeenCalledWith(
-        "Failed to open directory picker:",
-        expect.any(Error),
-      ));
+      await waitFor(() =>
+        expect(consoleErrorMock).toHaveBeenCalledWith(
+          "Failed to open directory picker:",
+          expect.any(Error),
+        ),
+      );
       expect((screen.getByLabelText(/Project path/i) as HTMLInputElement).value).toBe(
         "/Users/alice/new-project",
       );
@@ -457,8 +482,9 @@ describe("AddProjectDialog", () => {
 
     await waitFor(() => expect(onCreate).toHaveBeenCalledWith("/Users/alice/new-project"));
     expect(onOpenChange).toHaveBeenCalledWith(false);
-    expect(screen.getByRole("tab", { name: "Existing repository" }).getAttribute("data-state"))
-      .toBe("active");
+    expect(
+      screen.getByRole("tab", { name: "Existing repository" }).getAttribute("data-state"),
+    ).toBe("active");
     expect((screen.getByLabelText(/Git URL/i) as HTMLInputElement).value).toBe("");
   });
 
@@ -535,9 +561,12 @@ describe("AddProjectDialog", () => {
 
   test("ignores duplicate scratch submissions while creation is pending", async () => {
     let resolveCreation!: () => void;
-    const onCreate = mock(() => new Promise<void>((resolve) => {
-      resolveCreation = resolve;
-    }));
+    const onCreate = mock(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveCreation = resolve;
+        }),
+    );
     const onOpenChange = mock(() => undefined);
     renderDialog({ onCreate, onOpenChange });
     selectScratchTab();
@@ -559,9 +588,12 @@ describe("AddProjectDialog", () => {
 
   test("ignores duplicate existing-project submissions while the add is pending", async () => {
     let resolveAdd!: () => void;
-    const onAdd = mock(() => new Promise<void>((resolve) => {
-      resolveAdd = resolve;
-    }));
+    const onAdd = mock(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveAdd = resolve;
+        }),
+    );
     const onOpenChange = mock(() => undefined);
     renderDialog({ onAdd, onOpenChange });
     fireEvent.change(screen.getByLabelText(/Git URL/i), {
@@ -583,9 +615,12 @@ describe("AddProjectDialog", () => {
 
   test("disables the scratch inputs and shows progress while creation is pending", async () => {
     let resolveCreation!: () => void;
-    const onCreate = mock(() => new Promise<void>((resolve) => {
-      resolveCreation = resolve;
-    }));
+    const onCreate = mock(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveCreation = resolve;
+        }),
+    );
     renderDialog({ onCreate });
     selectScratchTab();
     const pathInput = screen.getByLabelText(/Project path/i);
@@ -595,7 +630,9 @@ describe("AddProjectDialog", () => {
     await waitFor(() => expect((pathInput as HTMLInputElement).disabled).toBe(true));
     const browseButton = screen.getByRole("button", { name: "Choose an empty project folder" });
     expect((browseButton as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
 
     await act(async () => resolveCreation());
     await waitFor(() => expect((pathInput as HTMLInputElement).disabled).toBe(false));
@@ -613,7 +650,9 @@ describe("AddProjectDialog", () => {
     const form = screen.getByRole("button", { name: "Create project" }).closest("form");
 
     fireEvent.submit(form!);
-    expect((await screen.findByRole("alert")).textContent).toContain("GitHub authentication failed");
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "GitHub authentication failed",
+    );
 
     // The in-flight guard must clear on failure, or the dialog would be wedged.
     fireEvent.submit(form!);
@@ -622,9 +661,12 @@ describe("AddProjectDialog", () => {
 
   test("invalidates pending URL validation when the dialog closes", async () => {
     let resolveValidation!: (valid: boolean) => void;
-    const validateGitUrl = mock(() => new Promise<boolean>((resolve) => {
-      resolveValidation = resolve;
-    }));
+    const validateGitUrl = mock(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolveValidation = resolve;
+        }),
+    );
     const onOpenChange = mock(() => undefined);
     renderDialog({ validateGitUrl, onOpenChange });
     fireEvent.change(screen.getByLabelText(/Git URL/i), {
@@ -653,6 +695,6 @@ function renderDialog(overrides: Partial<React.ComponentProps<typeof AddProjectD
       onCreate={async () => {}}
       validateGitUrl={async () => true}
       {...overrides}
-    />
+    />,
   );
 }

@@ -9,19 +9,12 @@ import { TerminalContainer } from "@/components/terminal";
 import { KanbanBoard } from "@/components/kanban";
 import { ProjectLauncher } from "@/components/projects";
 import { TerminalProvider } from "@/contexts";
-import {
-  useUIStore,
-  useEnvironmentStore,
-  useConfigStore,
-  useClaudeOptionsStore,
-} from "@/stores";
+import { useUIStore, useEnvironmentStore, useConfigStore, useClaudeOptionsStore } from "@/stores";
 import { useProjectStore } from "@/stores/projectStore";
 import { startPaneLayoutPersistence } from "@/lib/pane-layout-persistence";
 import { startResourceSync } from "@/lib/resource-sync";
 import { startStoreResourceSync } from "@/lib/store-resource-sync";
-import {
-  hydrateLoopedReviewWorkflowsForEnvironment,
-} from "@/lib/looped-review-persistence";
+import { hydrateLoopedReviewWorkflowsForEnvironment } from "@/lib/looped-review-persistence";
 import { hydrateMultiReviewWorkflowsForEnvironment } from "@/lib/multi-review-persistence";
 import {
   hydrateBuildPipelinesForProject,
@@ -31,7 +24,19 @@ import { hydratePromptQueuesForEnvironment } from "@/lib/prompt-queue-persistenc
 import { createPromptQueueSources } from "@/lib/prompt-queue-sources";
 import { Toaster } from "@/components/ui/sonner";
 import { ErrorDetailsDialog } from "@/components/errors";
-import { checkDocker, checkClaudeCli, checkClaudeConfig, checkCodexCli, checkOpencodeCli, checkGithubCli, getAvailableAiCli, getConfig, getEnvironment, getResourceRevisionManifest, syncAllEnvironmentsWithDocker } from "@/lib/backend";
+import {
+  checkDocker,
+  checkClaudeCli,
+  checkClaudeConfig,
+  checkCodexCli,
+  checkOpencodeCli,
+  checkGithubCli,
+  getAvailableAiCli,
+  getConfig,
+  getEnvironment,
+  getResourceRevisionManifest,
+  syncAllEnvironmentsWithDocker,
+} from "@/lib/backend";
 import { usePrMonitorService } from "@/hooks/usePrMonitorService";
 import { useGlobalActivityMonitor } from "@/hooks/useGlobalActivityMonitor";
 import { useUnreadEnvironmentSync } from "@/hooks/useUnreadEnvironmentSync";
@@ -84,8 +89,10 @@ export function isEnvironmentContainerAvailable(
   environment: Pick<Environment, "containerId" | "environmentType" | "setupPhase" | "status">,
 ): boolean {
   if (environment.environmentType === "local" || !environment.containerId) return false;
-  return environment.status === "running"
-    || (environment.status === "error" && environment.setupPhase === "failed");
+  return (
+    environment.status === "running" ||
+    (environment.status === "error" && environment.setupPhase === "failed")
+  );
 }
 
 function App() {
@@ -135,13 +142,9 @@ function App() {
   const promptQueueSources = useMemo(() => createPromptQueueSources(), []);
   useEffect(() => {
     for (const environment of environments) {
-      void hydratePromptQueuesForEnvironment(environment.id, promptQueueSources)
-        .catch((error) => {
-          console.warn(
-            `[App] Failed to restore prompt queues for ${environment.id}:`,
-            error,
-          );
-        });
+      void hydratePromptQueuesForEnvironment(environment.id, promptQueueSources).catch((error) => {
+        console.warn(`[App] Failed to restore prompt queues for ${environment.id}:`, error);
+      });
     }
   }, [environments, promptQueueSources]);
 
@@ -151,16 +154,10 @@ function App() {
   useEffect(() => {
     for (const environment of environments) {
       void hydrateLoopedReviewWorkflowsForEnvironment(environment.id).catch((error) => {
-        console.warn(
-          `[App] Failed to restore looped reviews for ${environment.id}:`,
-          error,
-        );
+        console.warn(`[App] Failed to restore looped reviews for ${environment.id}:`, error);
       });
       void hydrateMultiReviewWorkflowsForEnvironment(environment.id).catch((error) => {
-        console.warn(
-          `[App] Failed to restore multi reviews for ${environment.id}:`,
-          error,
-        );
+        console.warn(`[App] Failed to restore multi reviews for ${environment.id}:`, error);
       });
     }
   }, [environments]);
@@ -180,10 +177,7 @@ function App() {
     if (!pipelineProjectIds) return;
     for (const projectId of pipelineProjectIds.split(",")) {
       void hydrateBuildPipelinesForProject(projectId).catch((error) => {
-        console.warn(
-          `[App] Failed to restore build pipelines for ${projectId}:`,
-          error,
-        );
+        console.warn(`[App] Failed to restore build pipelines for ${projectId}:`, error);
       });
     }
   }, [pipelineProjectIds]);
@@ -197,7 +191,7 @@ function App() {
   const [githubCliWarningDismissed, setGithubCliWarningDismissed] = useState(false);
 
   const selectedEnvironment = selectedEnvironmentId
-    ? environments.find((env) => env.id === selectedEnvironmentId) ?? null
+    ? (environments.find((env) => env.id === selectedEnvironmentId) ?? null)
     : null;
   const refreshDockerAvailability = useCallback(async (source: "startup" | "retry" | "poll") => {
     if (dockerCheckInFlightRef.current) return dockerCheckInFlightRef.current;
@@ -356,7 +350,18 @@ function App() {
         checkGithubCli(),
         getAvailableAiCli(),
       ]);
-      rendererDebugLog("[App] CLI retry check - Claude:", claudeCli, "OpenCode:", opencodeCli, "Codex:", codexCli, "GitHub:", githubCli, "Available AI:", aiCli);
+      rendererDebugLog(
+        "[App] CLI retry check - Claude:",
+        claudeCli,
+        "OpenCode:",
+        opencodeCli,
+        "Codex:",
+        codexCli,
+        "GitHub:",
+        githubCli,
+        "Available AI:",
+        aiCli,
+      );
       setClaudeCliAvailable(claudeCli);
       setClaudeConfigAvailable(claudeConfig);
       setOpencodeCliAvailable(opencodeCli);
@@ -429,7 +434,7 @@ function App() {
           description: event.payload.message,
           duration: 10_000,
         });
-      }
+      },
     );
     return () => {
       unlisten.then((fn) => fn());
@@ -496,13 +501,10 @@ function App() {
   // When Docker is down, let its outage warning lead; host-tool onboarding is
   // shown after the user chooses to continue without containers.
   const hostToolWarningsVisible =
-    dockerAvailable === true
-    || (dockerAvailable === false && dockerWarningDismissed);
+    dockerAvailable === true || (dockerAvailable === false && dockerWarningDismissed);
 
   const isCheckingCliTools =
-    hostToolWarningsVisible &&
-    availableAiCli === null &&
-    claudeCliAvailable === null;
+    hostToolWarningsVisible && availableAiCli === null && claudeCliAvailable === null;
 
   const noAiCliAvailable =
     hostToolWarningsVisible &&
@@ -554,10 +556,7 @@ function App() {
          * would run a prompt whose images are missing.
          */
         const attachmentState = environment?.hasInitialPromptAttachments;
-        if (
-          existingOptions?.initialPromptAttachments === undefined
-          && attachmentState !== false
-        ) {
+        if (existingOptions?.initialPromptAttachments === undefined && attachmentState !== false) {
           try {
             const loadedEnvironment = await getEnvironment(environmentId);
             if (!loadedEnvironment) {
@@ -581,17 +580,18 @@ function App() {
         const storedAttachments = detailedEnvironment?.initialPromptAttachments?.map(
           (attachment) => ({
             ...attachment,
-            previewUrl: attachment.previewUrl
-              ?? `data:image/png;base64,${attachment.base64Data}`,
+            previewUrl: attachment.previewUrl ?? `data:image/png;base64,${attachment.base64Data}`,
           }),
         );
         setClaudeOptions(environmentId, {
           launchAgent: true,
-          agentType: existingOptions?.agentType ?? environment?.defaultAgent ?? config.global.defaultAgent ?? "claude",
+          agentType:
+            existingOptions?.agentType ??
+            environment?.defaultAgent ??
+            config.global.defaultAgent ??
+            "claude",
           initialPrompt: launchPrompt,
-          initialPromptAttachments:
-            existingOptions?.initialPromptAttachments
-            ?? storedAttachments,
+          initialPromptAttachments: existingOptions?.initialPromptAttachments ?? storedAttachments,
         });
       } else if (existingOptions?.initialPrompt?.trim()) {
         clearClaudeOptions(environmentId);
@@ -607,7 +607,14 @@ function App() {
         return false;
       }
     },
-    [clearClaudeOptions, config.global.defaultAgent, dockerAvailable, getEnvironmentById, setClaudeOptions, startEnvironment]
+    [
+      clearClaudeOptions,
+      config.global.defaultAgent,
+      dockerAvailable,
+      getEnvironmentById,
+      setClaudeOptions,
+      startEnvironment,
+    ],
   );
 
   const handleCreateScriptFromOverlay = useCallback(
@@ -626,7 +633,13 @@ function App() {
         clearClaudeOptions(environmentId);
       }
     },
-    [clearClaudeOptions, config.global.defaultAgent, getEnvironmentById, handleStartEnvironmentFromOverlay, setClaudeOptions]
+    [
+      clearClaudeOptions,
+      config.global.defaultAgent,
+      getEnvironmentById,
+      handleStartEnvironmentFromOverlay,
+      setClaudeOptions,
+    ],
   );
 
   return (
@@ -634,10 +647,10 @@ function App() {
       <TerminalProvider>
         <DockerAvailabilityProvider available={dockerAvailable === true}>
           <AppShell>
-          {selectedEnvironment ? (
-            <div className="relative h-full bg-background">
-              <div className="absolute inset-0 z-10 bg-background">
-                {/*
+            {selectedEnvironment ? (
+              <div className="relative h-full bg-background">
+                <div className="absolute inset-0 z-10 bg-background">
+                  {/*
                   `isContainerRunning` is deliberately not gated on Docker
                   availability. A false value means "this container stopped",
                   and TerminalContainer answers it by disposing every terminal
@@ -647,32 +660,31 @@ function App() {
                   handleStartEnvironmentFromOverlay refuses to start a container
                   while Docker is down.
                 */}
-                <TerminalContainer
-                  environmentId={selectedEnvironment.id}
-                  containerId={selectedEnvironment.containerId ?? null}
-                  isContainerRunning={isEnvironmentContainerAvailable(selectedEnvironment)}
-                  isContainerCreating={selectedEnvironment.status === "creating"}
-                  isActive
-                  className="h-full"
-                  onStartContainer={(initialPrompt) => {
-                    void handleStartEnvironmentFromOverlay(selectedEnvironment.id, initialPrompt);
-                  }}
-                  onCreateScript={(initialPrompt) => {
-                    void handleCreateScriptFromOverlay(selectedEnvironment.id, initialPrompt);
-                  }}
-                />
+                  <TerminalContainer
+                    environmentId={selectedEnvironment.id}
+                    containerId={selectedEnvironment.containerId ?? null}
+                    isContainerRunning={isEnvironmentContainerAvailable(selectedEnvironment)}
+                    isContainerCreating={selectedEnvironment.status === "creating"}
+                    isActive
+                    className="h-full"
+                    onStartContainer={(initialPrompt) => {
+                      void handleStartEnvironmentFromOverlay(selectedEnvironment.id, initialPrompt);
+                    }}
+                    onCreateScript={(initialPrompt) => {
+                      void handleCreateScriptFromOverlay(selectedEnvironment.id, initialPrompt);
+                    }}
+                  />
+                </div>
               </div>
-            </div>
-          ) : selectedProjectId ? (
-            <KanbanBoard projectId={selectedProjectId} />
-          ) : (
-            <ProjectLauncher
-              createEnvironment={createEnvironment}
-              updateEnvironment={updateEnvironment}
-              startEnvironment={startEnvironment}
-            />
-          )}
-
+            ) : selectedProjectId ? (
+              <KanbanBoard projectId={selectedProjectId} />
+            ) : (
+              <ProjectLauncher
+                createEnvironment={createEnvironment}
+                updateEnvironment={updateEnvironment}
+                startEnvironment={startEnvironment}
+              />
+            )}
           </AppShell>
         </DockerAvailabilityProvider>
         <Toaster />
@@ -709,8 +721,10 @@ function App() {
             <AlertDialogHeader>
               <AlertDialogTitle>Docker Is Not Running</AlertDialogTitle>
               <AlertDialogDescription>
-                Container functionality is currently disabled. You can continue using local worktree environments while Docker is unavailable.
-                <br /><br />
+                Container functionality is currently disabled. You can continue using local worktree
+                environments while Docker is unavailable.
+                <br />
+                <br />
                 Start Docker, or install Docker Desktop from{" "}
                 <a
                   href="https://docker.com"
@@ -719,7 +733,8 @@ function App() {
                   rel="noopener noreferrer"
                 >
                   docker.com
-                </a>. Orkestrator will check again automatically every 60 seconds.
+                </a>
+                . Orkestrator will check again automatically every 60 seconds.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
@@ -750,17 +765,28 @@ function App() {
             <AlertDialogHeader>
               <AlertDialogTitle>AI CLI Required</AlertDialogTitle>
               <AlertDialogDescription>
-                No compatible AI CLI is installed on your system. Orkestrator AI requires Claude Code, Codex, or OpenCode to create and manage AI-powered development environments.
-                <br /><br />
+                No compatible AI CLI is installed on your system. Orkestrator AI requires Claude
+                Code, Codex, or OpenCode to create and manage AI-powered development environments.
+                <br />
+                <br />
                 <strong>Option 1: Install Claude Code (recommended)</strong>
-                <pre className="my-2 rounded bg-muted p-2 text-sm font-mono">curl -fsSL https://claude.ai/install.sh | bash</pre>
-                Then run <code className="rounded bg-muted px-1 font-mono">claude</code> to complete the setup.
-                <br /><br />
+                <pre className="my-2 rounded bg-muted p-2 text-sm font-mono">
+                  curl -fsSL https://claude.ai/install.sh | bash
+                </pre>
+                Then run <code className="rounded bg-muted px-1 font-mono">claude</code> to complete
+                the setup.
+                <br />
+                <br />
                 <strong>Option 2: Install Codex</strong>
-                <pre className="my-2 rounded bg-muted p-2 text-sm font-mono">npm install -g @openai/codex</pre>
-                <br /><br />
+                <pre className="my-2 rounded bg-muted p-2 text-sm font-mono">
+                  npm install -g @openai/codex
+                </pre>
+                <br />
+                <br />
                 <strong>Option 3: Install OpenCode</strong>
-                <pre className="my-2 rounded bg-muted p-2 text-sm font-mono">curl -fsSL https://opencode.ai/install | bash</pre>
+                <pre className="my-2 rounded bg-muted p-2 text-sm font-mono">
+                  curl -fsSL https://opencode.ai/install | bash
+                </pre>
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
@@ -778,9 +804,7 @@ function App() {
                   "Retry"
                 )}
               </Button>
-              <Button onClick={handleCloseApp}>
-                Close Application
-              </Button>
+              <Button onClick={handleCloseApp}>Close Application</Button>
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
@@ -792,7 +816,8 @@ function App() {
               <AlertDialogTitle>Claude Code Login Required</AlertDialogTitle>
               <AlertDialogDescription>
                 Claude Code is installed but you haven't logged in yet. Please log in to continue.
-                <br /><br />
+                <br />
+                <br />
                 Run the following command in your terminal:
                 <pre className="my-2 rounded bg-muted p-2 text-sm font-mono">claude</pre>
                 This will open a browser window to authenticate with your Anthropic account.
@@ -813,9 +838,7 @@ function App() {
                   "Retry"
                 )}
               </Button>
-              <Button onClick={handleCloseApp}>
-                Close Application
-              </Button>
+              <Button onClick={handleCloseApp}>Close Application</Button>
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
@@ -826,17 +849,26 @@ function App() {
             <AlertDialogHeader>
               <AlertDialogTitle>GitHub CLI Not Found</AlertDialogTitle>
               <AlertDialogDescription>
-                The GitHub CLI (gh) is not installed on your system. While not required, it enables features like PR detection and GitHub integration.
-                <br /><br />
+                The GitHub CLI (gh) is not installed on your system. While not required, it enables
+                features like PR detection and GitHub integration.
+                <br />
+                <br />
                 <strong>Install GitHub CLI:</strong>
-                <br /><br />
+                <br />
+                <br />
                 <strong>macOS (Homebrew):</strong>
                 <pre className="my-2 rounded bg-muted p-2 text-sm font-mono">brew install gh</pre>
                 <strong>Linux:</strong>
-                <pre className="my-2 rounded bg-muted p-2 text-sm font-mono">sudo apt install gh  # Debian/Ubuntu{"\n"}sudo dnf install gh  # Fedora</pre>
+                <pre className="my-2 rounded bg-muted p-2 text-sm font-mono">
+                  sudo apt install gh # Debian/Ubuntu{"\n"}sudo dnf install gh # Fedora
+                </pre>
                 <strong>Windows:</strong>
-                <pre className="my-2 rounded bg-muted p-2 text-sm font-mono">winget install GitHub.cli</pre>
-                After installation, run <code className="rounded bg-muted px-1 font-mono">gh auth login</code> to authenticate.
+                <pre className="my-2 rounded bg-muted p-2 text-sm font-mono">
+                  winget install GitHub.cli
+                </pre>
+                After installation, run{" "}
+                <code className="rounded bg-muted px-1 font-mono">gh auth login</code> to
+                authenticate.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>

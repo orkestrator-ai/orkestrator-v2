@@ -175,9 +175,7 @@ describe("claudeTmuxStore", () => {
       useClaudeTmuxStore.getState().setEffortLevel("tab-1", "low");
       useClaudeTmuxStore.getState().setEffortLevel("tab-1", "high");
 
-      expect(useClaudeTmuxStore.getState().effortLevels.get("tab-1")).toBe(
-        "high",
-      );
+      expect(useClaudeTmuxStore.getState().effortLevels.get("tab-1")).toBe("high");
     });
   });
 
@@ -274,10 +272,7 @@ describe("claudeTmuxStore", () => {
         plans: [],
         permissions: [],
         elicitations: [],
-        infoEvents: [
-          { ...dismissed, message: "authoritative re-delivery" },
-          infoEvent("visible"),
-        ],
+        infoEvents: [{ ...dismissed, message: "authoritative re-delivery" }, infoEvent("visible")],
       });
 
       const tab = useClaudeTmuxStore.getState().getTab("tab-1");
@@ -291,9 +286,9 @@ describe("claudeTmuxStore", () => {
         store.dismissInfoEvent("tab-1", `event-${index}`);
       }
 
-      expect(
-        useClaudeTmuxStore.getState().getTab("tab-1").dismissedInfoEventIds,
-      ).toEqual(Array.from({ length: 20 }, (_, index) => `event-${index + 5}`));
+      expect(useClaudeTmuxStore.getState().getTab("tab-1").dismissedInfoEventIds).toEqual(
+        Array.from({ length: 20 }, (_, index) => `event-${index + 5}`),
+      );
     });
   });
 });

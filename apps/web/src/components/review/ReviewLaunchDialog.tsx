@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Bot, BrainCircuit, Layers3 } from "lucide-react";
-import type { AgentModel, AgentModelRef, AgentReasoningOption } from "@orkestrator/protocol/native-agent";
+import type {
+  AgentModel,
+  AgentModelRef,
+  AgentReasoningOption,
+} from "@orkestrator/protocol/native-agent";
 import { firstEnabledAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { Button } from "@/components/ui/button";
 import {
@@ -92,7 +96,9 @@ function Step({
             {number}
           </span>
         </div>
-        {!last && <div className="my-1 h-full min-h-5 w-px bg-gradient-to-b from-cyan-400/35 to-zinc-700/20" />}
+        {!last && (
+          <div className="my-1 h-full min-h-5 w-px bg-gradient-to-b from-cyan-400/35 to-zinc-700/20" />
+        )}
       </div>
       <div className={cn("min-w-0", !last && "pb-4")}>{children}</div>
     </div>
@@ -122,15 +128,19 @@ export function ReviewLaunchDialog({
   busy = false,
   onConfirm,
 }: ReviewLaunchDialogProps) {
-  const { favorites, enabledPlatforms, toggleFavorite, reorderFavorites } = useAgentModelFavorites();
+  const { favorites, enabledPlatforms, toggleFavorite, reorderFavorites } =
+    useAgentModelFavorites();
   // Configuration guarantees at least one enabled platform, but retain a safe
   // fallback for older or malformed persisted state. `firstEnabledAgentPlatform`
   // already answers "the preferred one, or the first enabled one, or Claude", so
   // the empty case resolves to the same single platform the picker is given.
   const defaultEnabledTabType = firstEnabledAgentPlatform(enabledPlatforms, defaultTabType);
-  const reviewPlatforms: ReviewAgent[] = enabledPlatforms.length > 0
-    ? enabledPlatforms
-    : [defaultEnabledTabType];
+  // The single-platform branch builds a new array every render, so both memos
+  // below recomputed unconditionally without this.
+  const reviewPlatforms = useMemo<ReviewAgent[]>(
+    () => (enabledPlatforms.length > 0 ? enabledPlatforms : [defaultEnabledTabType]),
+    [enabledPlatforms, defaultEnabledTabType],
+  );
   const initialModel = firstModelFor(
     getReviewAgent(defaultEnabledTabType),
     catalog,
@@ -146,9 +156,7 @@ export function ReviewLaunchDialog({
       preferredReasoningEfforts,
     ),
   );
-  const [passAllowance, setPassAllowance] = useState(
-    String(LOOPED_REVIEW_DEFAULT_ALLOWANCE),
-  );
+  const [passAllowance, setPassAllowance] = useState(String(LOOPED_REVIEW_DEFAULT_ALLOWANCE));
   const wasOpenRef = useRef(false);
 
   useEffect(() => {
@@ -162,20 +170,16 @@ export function ReviewLaunchDialog({
     );
     setTabType(defaultEnabledTabType);
     setModel(nextModel);
-    setReasoningEffort(defaultEffortFor(
-      getReviewAgent(defaultEnabledTabType),
-      nextModel,
-      catalog,
-      preferredReasoningEfforts,
-    ));
+    setReasoningEffort(
+      defaultEffortFor(
+        getReviewAgent(defaultEnabledTabType),
+        nextModel,
+        catalog,
+        preferredReasoningEfforts,
+      ),
+    );
     setPassAllowance(String(LOOPED_REVIEW_DEFAULT_ALLOWANCE));
-  }, [
-    catalog,
-    defaultEnabledTabType,
-    open,
-    preferredModels,
-    preferredReasoningEfforts,
-  ]);
+  }, [catalog, defaultEnabledTabType, open, preferredModels, preferredReasoningEfforts]);
 
   const agent = getReviewAgent(tabType);
   const models = modelsForAgent(catalog, agent);
@@ -183,8 +187,7 @@ export function ReviewLaunchDialog({
   const reasoningEfforts = selectedModel?.reasoningEfforts ?? [];
   const effortAvailable = reasoningEfforts.length > 0;
   const effectiveEffort =
-    effortAvailable
-    && (reasoningEffort === "default" || reasoningEfforts.includes(reasoningEffort))
+    effortAvailable && (reasoningEffort === "default" || reasoningEfforts.includes(reasoningEffort))
       ? reasoningEffort
       : "default";
 
@@ -194,14 +197,16 @@ export function ReviewLaunchDialog({
   // has to travel there or the caption the old model list showed disappears
   // behind a platform name repeated on every row.
   const pickerModels = useMemo<AgentModel[]>(
-    () => reviewPlatforms.flatMap((platform) =>
-      modelsForAgent(catalog, platform).map((option) => ({
-        platform,
-        id: option.id,
-        label: option.name,
-        ...(option.description ? { providerLabel: option.description } : {}),
-        description: option.description,
-      }))),
+    () =>
+      reviewPlatforms.flatMap((platform) =>
+        modelsForAgent(catalog, platform).map((option) => ({
+          platform,
+          id: option.id,
+          label: option.name,
+          ...(option.description ? { providerLabel: option.description } : {}),
+          description: option.description,
+        })),
+      ),
     [catalog, reviewPlatforms],
   );
   // Favorites are global, so one earned while a platform was enabled outlives
@@ -212,14 +217,17 @@ export function ReviewLaunchDialog({
     () => favorites.filter((favorite) => reviewPlatforms.includes(favorite.platform)),
     [favorites, reviewPlatforms],
   );
-  const reorderReviewFavorites = useCallback((reorderedVisibleFavorites: AgentModelRef[]) => {
-    const merged = mergeReorderedFavoriteModels(
-      favorites,
-      pickerFavorites,
-      reorderedVisibleFavorites,
-    );
-    if (merged) reorderFavorites(merged);
-  }, [favorites, pickerFavorites, reorderFavorites]);
+  const reorderReviewFavorites = useCallback(
+    (reorderedVisibleFavorites: AgentModelRef[]) => {
+      const merged = mergeReorderedFavoriteModels(
+        favorites,
+        pickerFavorites,
+        reorderedVisibleFavorites,
+      );
+      if (merged) reorderFavorites(merged);
+    },
+    [favorites, pickerFavorites, reorderFavorites],
+  );
   const reasoningOptions: AgentReasoningOption[] = effortAvailable
     ? [
         { id: "default", label: "Default" },
@@ -229,35 +237,23 @@ export function ReviewLaunchDialog({
 
   const summary = useMemo(() => {
     const label = REVIEW_TAB_OPTIONS.find((option) => option.value === tabType)?.label;
-    const effort = effectiveEffort === "default"
-      ? "default effort"
-      : `${effectiveEffort} effort`;
+    const effort = effectiveEffort === "default" ? "default effort" : `${effectiveEffort} effort`;
     return [
       label,
       selectedModel?.name ?? model,
       effort,
       kind === "looped" ? `${passAllowance} initial passes` : "one pass",
-    ].filter(Boolean).join(" · ");
-  }, [
-    effectiveEffort,
-    kind,
-    model,
-    passAllowance,
-    selectedModel?.name,
-    tabType,
-  ]);
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  }, [effectiveEffort, kind, model, passAllowance, selectedModel?.name, tabType]);
 
   const handleAgentChange = (nextAgent: ReviewAgent) => {
     if (nextAgent === agent) return;
     const nextModel = firstModelFor(nextAgent, catalog, preferredModels);
     setTabType(nativeTabType(nextAgent));
     setModel(nextModel);
-    setReasoningEffort(defaultEffortFor(
-      nextAgent,
-      nextModel,
-      catalog,
-      preferredReasoningEfforts,
-    ));
+    setReasoningEffort(defaultEffortFor(nextAgent, nextModel, catalog, preferredReasoningEfforts));
   };
 
   /**
@@ -271,21 +267,16 @@ export function ReviewLaunchDialog({
     const nextAgent = nextModel.platform as ReviewAgent;
     setTabType(nativeTabType(nextAgent));
     setModel(nextModel.id);
-    setReasoningEffort(defaultEffortFor(
-      nextAgent,
-      nextModel.id,
-      catalog,
-      preferredReasoningEfforts,
-    ));
+    setReasoningEffort(
+      defaultEffortFor(nextAgent, nextModel.id, catalog, preferredReasoningEfforts),
+    );
   };
 
   const handleModelChange = (nextModel: string) => {
     handleModelSelect({ platform: agent, id: nextModel, label: nextModel });
   };
 
-  const title = kind === "looped"
-    ? "Configure looped code review"
-    : "Configure code review";
+  const title = kind === "looped" ? "Configure looped code review" : "Configure code review";
 
   return (
     <Dialog
@@ -298,9 +289,11 @@ export function ReviewLaunchDialog({
         <DialogHeader className="shrink-0 border-b border-zinc-800 bg-gradient-to-br from-cyan-500/[0.08] via-transparent to-transparent px-5 pb-4 pt-5 sm:px-6">
           <DialogTitle className="flex items-center gap-2 text-base">
             <span className="grid size-8 shrink-0 place-items-center rounded-full border border-cyan-400/25 bg-cyan-500/10 text-cyan-300">
-              {kind === "looped"
-                ? <Layers3 className="size-4" />
-                : <BrainCircuit className="size-4" />}
+              {kind === "looped" ? (
+                <Layers3 className="size-4" />
+              ) : (
+                <BrainCircuit className="size-4" />
+              )}
             </span>
             {title}
           </DialogTitle>
@@ -320,11 +313,8 @@ export function ReviewLaunchDialog({
             onConfirm({
               tabType,
               model: selectedModel?.id ?? model,
-              reasoningEffort:
-                effectiveEffort === "default" ? undefined : effectiveEffort,
-              ...(kind === "looped"
-                ? { passAllowance: Number(passAllowance) }
-                : {}),
+              reasoningEffort: effectiveEffort === "default" ? undefined : effectiveEffort,
+              ...(kind === "looped" ? { passAllowance: Number(passAllowance) } : {}),
             });
           }}
         >
@@ -343,68 +333,74 @@ export function ReviewLaunchDialog({
               aria-label="Review configuration"
               className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 sm:px-6"
             >
-              <Step
-                number={1}
-                icon={<Bot className="size-4" />}
-                last={kind !== "looped"}
-              >
-              {/* The visible label has to read the same as the trigger's
+              <Step number={1} icon={<Bot className="size-4" />} last={kind !== "looped"}>
+                {/* The visible label has to read the same as the trigger's
                   `ariaLabel`, or speech input cannot address the control by
                   the name a sighted user can see. */}
-              <Label htmlFor="review-model" className="mb-2 block text-xs font-medium uppercase tracking-[0.14em] text-zinc-400">
-                Agent, model and reasoning
-              </Label>
-              <AgentModelPicker
-                id="review-model"
-                ariaLabel="Agent, model and reasoning"
-                models={pickerModels}
-                enabledPlatforms={reviewPlatforms}
-                selectedPlatform={agent}
-                favorites={pickerFavorites}
-                onToggleFavorite={toggleFavorite}
-                onReorderFavorites={reorderReviewFavorites}
-                onPlatformChange={handleAgentChange}
-                selectedModelId={selectedModel?.id ?? model}
-                selectedModelLabel={selectedModel?.name ?? "Choose a model"}
-                onModelChange={handleModelChange}
-                onModelSelect={handleModelSelect}
-                reasoningOptions={reasoningOptions}
-                selectedReasoningId={effectiveEffort}
-                selectedReasoningLabel={
-                  reasoningOptions.find((option) => option.id === effectiveEffort)?.label
-                }
-                onReasoningChange={setReasoningEffort}
-                title="Choose the review agent, model and reasoning"
-                className="min-h-11 w-full max-w-none border border-zinc-700/80 bg-zinc-900 py-2.5 text-sm text-foreground md:max-w-none md:flex-1"
-              />
-              {!effortAvailable && (
-                <p className="mt-1.5 text-xs text-zinc-500">
-                  This model uses its default reasoning setting.
-                </p>
-              )}
+                <Label
+                  htmlFor="review-model"
+                  className="mb-2 block text-xs font-medium uppercase tracking-[0.14em] text-zinc-400"
+                >
+                  Agent, model and reasoning
+                </Label>
+                <AgentModelPicker
+                  id="review-model"
+                  ariaLabel="Agent, model and reasoning"
+                  models={pickerModels}
+                  enabledPlatforms={reviewPlatforms}
+                  selectedPlatform={agent}
+                  favorites={pickerFavorites}
+                  onToggleFavorite={toggleFavorite}
+                  onReorderFavorites={reorderReviewFavorites}
+                  onPlatformChange={handleAgentChange}
+                  selectedModelId={selectedModel?.id ?? model}
+                  selectedModelLabel={selectedModel?.name ?? "Choose a model"}
+                  onModelChange={handleModelChange}
+                  onModelSelect={handleModelSelect}
+                  reasoningOptions={reasoningOptions}
+                  selectedReasoningId={effectiveEffort}
+                  selectedReasoningLabel={
+                    reasoningOptions.find((option) => option.id === effectiveEffort)?.label
+                  }
+                  onReasoningChange={setReasoningEffort}
+                  title="Choose the review agent, model and reasoning"
+                  className="min-h-11 w-full max-w-none border border-zinc-700/80 bg-zinc-900 py-2.5 text-sm text-foreground md:max-w-none md:flex-1"
+                />
+                {!effortAvailable && (
+                  <p className="mt-1.5 text-xs text-zinc-500">
+                    This model uses its default reasoning setting.
+                  </p>
+                )}
               </Step>
 
               {kind === "looped" && (
                 <Step number={2} icon={<Layers3 className="size-4" />} last>
-                <Label htmlFor="review-pass-allowance" className="mb-2 block text-xs font-medium uppercase tracking-[0.14em] text-zinc-400">
-                  Initial review-pass allowance
-                </Label>
-                <Select value={passAllowance} onValueChange={setPassAllowance}>
-                  <SelectTrigger id="review-pass-allowance" className="h-11 w-full border-zinc-700/80 bg-zinc-900">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {Array.from({ length: 10 }, (_, index) => index + 1).map((value) => (
-                      <SelectItem key={value} value={String(value)}>
-                        {value} {value === 1 ? "pass" : "passes"}
-                        {value === LOOPED_REVIEW_DEFAULT_ALLOWANCE ? " (default)" : ""}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="mt-1.5 text-xs leading-relaxed text-zinc-500">
-                  A round stops early when reconciliation changes nothing. After fixes, the next allowance is halved and rounded up.
-                </p>
+                  <Label
+                    htmlFor="review-pass-allowance"
+                    className="mb-2 block text-xs font-medium uppercase tracking-[0.14em] text-zinc-400"
+                  >
+                    Initial review-pass allowance
+                  </Label>
+                  <Select value={passAllowance} onValueChange={setPassAllowance}>
+                    <SelectTrigger
+                      id="review-pass-allowance"
+                      className="h-11 w-full border-zinc-700/80 bg-zinc-900"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {Array.from({ length: 10 }, (_, index) => index + 1).map((value) => (
+                        <SelectItem key={value} value={String(value)}>
+                          {value} {value === 1 ? "pass" : "passes"}
+                          {value === LOOPED_REVIEW_DEFAULT_ALLOWANCE ? " (default)" : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="mt-1.5 text-xs leading-relaxed text-zinc-500">
+                    A round stops early when reconciliation changes nothing. After fixes, the next
+                    allowance is halved and rounded up.
+                  </p>
                 </Step>
               )}
 
@@ -424,8 +420,12 @@ export function ReviewLaunchDialog({
               </Button>
               <Button type="submit" disabled={busy}>
                 {busy
-                  ? kind === "looped" ? "Starting looped review…" : "Starting review…"
-                  : kind === "looped" ? "Start looped review" : "Start review"}
+                  ? kind === "looped"
+                    ? "Starting looped review…"
+                    : "Starting review…"
+                  : kind === "looped"
+                    ? "Start looped review"
+                    : "Start review"}
               </Button>
             </DialogFooter>
           </fieldset>

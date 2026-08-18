@@ -18,11 +18,7 @@ import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { NativeAgentToolDetails } from "@orkestrator/protocol/native-agent";
 import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
 
-function ExternalLink({
-  href,
-  children,
-  ...props
-}: AnchorHTMLAttributes<HTMLAnchorElement>) {
+function ExternalLink({ href, children, ...props }: AnchorHTMLAttributes<HTMLAnchorElement>) {
   const handleClick = useCallback(
     (e: React.MouseEvent<HTMLAnchorElement>) => {
       e.preventDefault();
@@ -97,10 +93,13 @@ export const ToolDetailLoaderContext = createContext<
 >(undefined);
 const TOOL_DETAIL_BROWSER_CACHE_MAX_ENTRIES = 256;
 const TOOL_DETAIL_BROWSER_CACHE_MAX_BYTES = 32 * 1024 * 1024;
-const toolDetailBrowserCache = new Map<string, {
-  details: NativeAgentToolDetails;
-  bytes: number;
-}>();
+const toolDetailBrowserCache = new Map<
+  string,
+  {
+    details: NativeAgentToolDetails;
+    bytes: number;
+  }
+>();
 let toolDetailBrowserCacheBytes = 0;
 
 export function cachedToolDetails(detailRef: string): NativeAgentToolDetails | undefined {
@@ -119,8 +118,8 @@ export function cacheToolDetails(details: NativeAgentToolDetails): void {
   toolDetailBrowserCache.set(details.detailRef, { details, bytes });
   toolDetailBrowserCacheBytes += bytes;
   while (
-    toolDetailBrowserCache.size > TOOL_DETAIL_BROWSER_CACHE_MAX_ENTRIES
-    || toolDetailBrowserCacheBytes > TOOL_DETAIL_BROWSER_CACHE_MAX_BYTES
+    toolDetailBrowserCache.size > TOOL_DETAIL_BROWSER_CACHE_MAX_ENTRIES ||
+    toolDetailBrowserCacheBytes > TOOL_DETAIL_BROWSER_CACHE_MAX_BYTES
   ) {
     const oldest = toolDetailBrowserCache.keys().next().value;
     if (!oldest) break;
@@ -147,8 +146,8 @@ export function useDeferredToolResult(
 ): { toolOutput?: string; toolError?: string } {
   const loadToolDetails = useContext(ToolDetailLoaderContext);
   const detailRef = source.detailRef;
-  const [details, setDetails] = useState<NativeAgentToolDetails | undefined>(
-    () => (detailRef ? cachedToolDetails(detailRef) : undefined),
+  const [details, setDetails] = useState<NativeAgentToolDetails | undefined>(() =>
+    detailRef ? cachedToolDetails(detailRef) : undefined,
   );
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -168,11 +167,11 @@ export function useDeferredToolResult(
       })
       .catch((error) => {
         if (cancelled) return;
-        setLoadError(
-          error instanceof Error ? error.message : "Tool details are unavailable",
-        );
+        setLoadError(error instanceof Error ? error.message : "Tool details are unavailable");
       });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [detailRef, details, loadError, loadToolDetails, open]);
 
   // An inline result is already the whole answer; only a deferred one needs
@@ -188,10 +187,7 @@ export function useDeferredToolResult(
   return {};
 }
 
-export function getAgentExpansionKey(
-  part: NativeAgentActivityPart,
-  partKey: string,
-): string {
+export function getAgentExpansionKey(part: NativeAgentActivityPart, partKey: string): string {
   if (part.type === "task-group") {
     const durableId = part.task.toolUseId?.trim() || part.task.subagentId?.trim();
     return durableId ? `task:id:${durableId}` : `task:part:${partKey}`;
@@ -208,9 +204,7 @@ export function useAgentExpansion(part: NativeAgentActivityPart, partKey: string
   // streams or while the reader scrolls. Persist the user's explicit toggle in
   // the same bounded store used by thinking/JSON disclosures so those routine
   // remounts cannot silently collapse the agent again.
-  return useMessagePartExpansion(
-    `native-agent:${expansionScope}:${expansionKey}`,
-  );
+  return useMessagePartExpansion(`native-agent:${expansionScope}:${expansionKey}`);
 }
 
 export function getToolExpansionKey(
@@ -220,7 +214,6 @@ export function getToolExpansionKey(
   const durableId = part.toolUseId?.trim() || part.sourcePartId?.trim();
   return durableId ? `id:${durableId}` : `part:${partKey}`;
 }
-
 
 export interface NativeMessagePartRendererProps {
   part: NativeMessagePart;
@@ -234,12 +227,11 @@ export interface NativeMessagePartRendererProps {
   embedded?: boolean;
 }
 
-export type NativeMessagePartRenderer = (
-  props: NativeMessagePartRendererProps,
-) => ReactNode;
+export type NativeMessagePartRenderer = (props: NativeMessagePartRendererProps) => ReactNode;
 
-export const NativeMessagePartRendererContext =
-  createContext<NativeMessagePartRenderer | undefined>(undefined);
+export const NativeMessagePartRendererContext = createContext<
+  NativeMessagePartRenderer | undefined
+>(undefined);
 
 export function NativeMessagePartRenderer(props: NativeMessagePartRendererProps) {
   const renderPart = useContext(NativeMessagePartRendererContext);

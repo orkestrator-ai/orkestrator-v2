@@ -1,4 +1,21 @@
-import { fs, os, isIP, path, spawnPty, APP_SLUG, DOCKER_LABEL_APP, DOCKER_LABEL_APP_VALUE, DOCKER_LABEL_OWNER, ORKESTRATOR_PROJECT_CONFIG, dockerOwnerNamespace, sanitizeBranchName, sanitizeEnvironmentName, pathExists, runCommand, shutdownClaudeStatePolling } from "./commands-dependencies.js";
+import {
+  fs,
+  os,
+  isIP,
+  path,
+  spawnPty,
+  APP_SLUG,
+  DOCKER_LABEL_APP,
+  DOCKER_LABEL_APP_VALUE,
+  DOCKER_LABEL_OWNER,
+  ORKESTRATOR_PROJECT_CONFIG,
+  dockerOwnerNamespace,
+  sanitizeBranchName,
+  sanitizeEnvironmentName,
+  pathExists,
+  runCommand,
+  shutdownClaudeStatePolling,
+} from "./commands-dependencies.js";
 import { addLocalWorkspaceArtifactsToGitExclude } from "./commands-files.js";
 import { setupTerminalSessionId, isSetupTerminalSessionId } from "./commands-terminal.js";
 import {
@@ -13,19 +30,80 @@ import {
   parseDockerStatus,
   setDockerContainerStateCache,
 } from "./commands-container-exec.js";
+import { copyConfiguredProjectFilesToDirectory } from "./commands-project-files.js";
+import type {
+  Environment,
+  EnvironmentStatus,
+  PtyProcess,
+  StorageService,
+  AgentToolConnection,
+} from "./commands-dependencies.js";
 import {
-  copyConfiguredProjectFilesToDirectory,
-} from "./commands-project-files.js";
-import type { Environment, EnvironmentStatus, PtyProcess, StorageService, AgentToolConnection } from "./commands-dependencies.js";
-import { terminalProcesses, CONTAINER_WORKSPACE_SETUP_COMMAND, SETUP_DONE_OSC_SEQUENCE, SETUP_FAILED_OSC_SEQUENCE, SETUP_DONE_PRINTF_CMD, SETUP_FAILED_PRINTF_CMD, environmentSetupSessions, environmentSetupTasks, environmentSetupStartTasks, environmentStartTasks, environmentLifecycleOperations, environmentBaselineTasks, diffStatsService, invalidatePendingDiffStatsSync, syncDiffStatsTracking } from "./commands-runtime-state.js";
-import { prMonitorService, invalidatePendingPrMonitorSync, syncPrMonitorTracking } from "./commands-pr-monitor.js";
-import { quoteShell, validateGitRefName, envWithManagedBinaries, configureSameNamedOriginPush } from "./commands-agent-support.js";
-import { createLocalGhRunner, createContainerGhRunner, deletePullRequestHeadBranchViaGitHubApi, findEnvironmentByContainerId } from "./commands-review.js";
-import { toClientEnvironment, terminalOutputBufferLength, deleteRetainedTerminalOutputBuffer, emitTerminalOutput, resetTerminalOutputBuffer, logSetupTerminal, terminalEnv, resolveLocalShellPath, cleanupTerminalSession, assertEnvironmentNotDeleting, assertEnvironmentDeletionNotRequested } from "./commands-terminal.js";
-import { readLocalHeadCommit, ensureCreatedFromCommitBeforeSetup, enqueueLocalServerEnvironmentOperation, stopLocalServersForEnvironmentUnlocked } from "./commands-local-server-lifecycle.js";
-import { resolveRemoteWorktreeStartPoint, enableGitScanCaches, resolveContainerGitHubToken, syncContainerGitHubCredential, syncContainerClaudeCredentialBestEffort, ensureContainerProjectFilesAccess } from "./commands-files.js";
+  terminalProcesses,
+  CONTAINER_WORKSPACE_SETUP_COMMAND,
+  SETUP_DONE_OSC_SEQUENCE,
+  SETUP_FAILED_OSC_SEQUENCE,
+  SETUP_DONE_PRINTF_CMD,
+  SETUP_FAILED_PRINTF_CMD,
+  environmentSetupSessions,
+  environmentSetupTasks,
+  environmentSetupStartTasks,
+  environmentStartTasks,
+  environmentLifecycleOperations,
+  environmentBaselineTasks,
+  diffStatsService,
+  invalidatePendingDiffStatsSync,
+  syncDiffStatsTracking,
+} from "./commands-runtime-state.js";
+import {
+  prMonitorService,
+  invalidatePendingPrMonitorSync,
+  syncPrMonitorTracking,
+} from "./commands-pr-monitor.js";
+import {
+  quoteShell,
+  validateGitRefName,
+  envWithManagedBinaries,
+  configureSameNamedOriginPush,
+} from "./commands-agent-support.js";
+import {
+  createLocalGhRunner,
+  createContainerGhRunner,
+  deletePullRequestHeadBranchViaGitHubApi,
+  findEnvironmentByContainerId,
+} from "./commands-review.js";
+import {
+  toClientEnvironment,
+  terminalOutputBufferLength,
+  deleteRetainedTerminalOutputBuffer,
+  emitTerminalOutput,
+  resetTerminalOutputBuffer,
+  logSetupTerminal,
+  terminalEnv,
+  resolveLocalShellPath,
+  cleanupTerminalSession,
+  assertEnvironmentNotDeleting,
+  assertEnvironmentDeletionNotRequested,
+} from "./commands-terminal.js";
+import {
+  readLocalHeadCommit,
+  ensureCreatedFromCommitBeforeSetup,
+  enqueueLocalServerEnvironmentOperation,
+  stopLocalServersForEnvironmentUnlocked,
+} from "./commands-local-server-lifecycle.js";
+import {
+  resolveRemoteWorktreeStartPoint,
+  enableGitScanCaches,
+  resolveContainerGitHubToken,
+  syncContainerGitHubCredential,
+  syncContainerClaudeCredentialBestEffort,
+  ensureContainerProjectFilesAccess,
+} from "./commands-files.js";
 import { createDockerContainer } from "./commands-containers.js";
-import { environmentLifecycleErrorMessage, logEnvironmentLifecycleFailure } from "./commands-error-text.js";
+import {
+  environmentLifecycleErrorMessage,
+  logEnvironmentLifecycleFailure,
+} from "./commands-error-text.js";
 import type { EnvironmentSetupStartResult } from "./commands-runtime-state.js";
 import type { CommandContext, BackendEmit } from "./commands-context.js";
 
@@ -142,7 +220,9 @@ export async function assertDockerContainerOwned(
     throw error;
   }
   if (identity.owner !== owner) {
-    throw new Error("Refusing Docker operation on a container not owned by this development profile");
+    throw new Error(
+      "Refusing Docker operation on a container not owned by this development profile",
+    );
   }
 }
 
@@ -156,18 +236,25 @@ export async function listOrkestratorContainerStates(
 ): Promise<Map<string, EnvironmentStatus> | null> {
   try {
     const ownerFilter = context?.strictDockerOwner
-      ? ["--filter", `label=${DOCKER_LABEL_OWNER}=${dockerOwnerNamespace(context.storage.getDataDir())}`]
+      ? [
+          "--filter",
+          `label=${DOCKER_LABEL_OWNER}=${dockerOwnerNamespace(context.storage.getDataDir())}`,
+        ]
       : [];
-    const { stdout } = await runCommand("docker", [
-      "ps",
-      "-a",
-      "--no-trunc",
-      "--filter",
-      `label=${DOCKER_LABEL_APP}=${DOCKER_LABEL_APP_VALUE}`,
-      ...ownerFilter,
-      "--format",
-      "{{.ID}}\t{{.State}}",
-    ], { timeoutMs: 10_000 });
+    const { stdout } = await runCommand(
+      "docker",
+      [
+        "ps",
+        "-a",
+        "--no-trunc",
+        "--filter",
+        `label=${DOCKER_LABEL_APP}=${DOCKER_LABEL_APP_VALUE}`,
+        ...ownerFilter,
+        "--format",
+        "{{.ID}}\t{{.State}}",
+      ],
+      { timeoutMs: 10_000 },
+    );
     const states = new Map<string, EnvironmentStatus>();
     for (const line of stdout.split("\n")) {
       const [id, state] = line.split("\t");
@@ -188,9 +275,9 @@ export function getOrkestratorContainerStates(
     ? dockerOwnerNamespace(context.storage.getDataDir())
     : "legacy";
   if (
-    dockerContainerStateCache
-    && dockerContainerStateCache.ownershipKey === ownershipKey
-    && now - dockerContainerStateCache.fetchedAt < DOCKER_CONTAINER_STATE_CACHE_MS
+    dockerContainerStateCache &&
+    dockerContainerStateCache.ownershipKey === ownershipKey &&
+    now - dockerContainerStateCache.fetchedAt < DOCKER_CONTAINER_STATE_CACHE_MS
   ) {
     return dockerContainerStateCache.states;
   }
@@ -219,9 +306,9 @@ export async function syncStoredEnvironmentStatus(
   // durable failure remains stable across renderer rehydration and backend
   // restart until the user actually retries or stops the environment.
   if (
-    environmentStartTasks.has(environment.id)
-    || environment.status === "error"
-    || Boolean(environment.lifecycleError?.trim())
+    environmentStartTasks.has(environment.id) ||
+    environment.status === "error" ||
+    Boolean(environment.lifecycleError?.trim())
   ) {
     return environment;
   }
@@ -258,10 +345,13 @@ export async function syncStoredEnvironmentStatus(
       if (isMissingDockerObjectError(error)) {
         return storage.updateEnvironment(environment.id, { status: "stopped", containerId: null });
       }
-      console.warn("[environment-status] Preserving container state after strict ownership probe failed", {
-        environmentId: environment.id,
-        message: error instanceof Error ? error.message : String(error),
-      });
+      console.warn(
+        "[environment-status] Preserving container state after strict ownership probe failed",
+        {
+          environmentId: environment.id,
+          message: error instanceof Error ? error.message : String(error),
+        },
+      );
       return environment;
     }
   }
@@ -290,11 +380,15 @@ export function getWorktreeBaseDir(context?: Pick<CommandContext, "worktreeDir">
 
 export async function readSetupLocalCommands(worktreePath: string): Promise<string[]> {
   const configPath = path.join(worktreePath, ORKESTRATOR_PROJECT_CONFIG);
-  if (!await pathExists(configPath)) return [];
+  if (!(await pathExists(configPath))) return [];
 
   const parsed = JSON.parse(await fs.readFile(configPath, "utf8")) as { setupLocal?: unknown };
-  if (typeof parsed.setupLocal === "string") return parsed.setupLocal.trim() ? [parsed.setupLocal] : [];
-  if (Array.isArray(parsed.setupLocal)) return parsed.setupLocal.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+  if (typeof parsed.setupLocal === "string")
+    return parsed.setupLocal.trim() ? [parsed.setupLocal] : [];
+  if (Array.isArray(parsed.setupLocal))
+    return parsed.setupLocal.filter(
+      (item): item is string => typeof item === "string" && item.trim().length > 0,
+    );
   return [];
 }
 
@@ -338,9 +432,10 @@ export function buildSetupTerminalCommand(commands: string[], finalShellCommand:
 }
 
 export function formatSetupTerminalIntro(environment: Environment, commands: string[]): string {
-  const target = environment.environmentType === "local"
-    ? environment.worktreePath ?? environment.id
-    : environment.containerId ?? environment.id;
+  const target =
+    environment.environmentType === "local"
+      ? (environment.worktreePath ?? environment.id)
+      : (environment.containerId ?? environment.id);
   const lines = [
     "\r\n",
     "[orkestrator] Starting environment setup",
@@ -354,9 +449,10 @@ export function formatSetupTerminalIntro(environment: Environment, commands: str
 }
 
 export function formatSetupPreparationIntro(environment: Environment): string {
-  const target = environment.environmentType === "local"
-    ? environment.worktreePath ?? environment.id
-    : environment.containerId ?? environment.id;
+  const target =
+    environment.environmentType === "local"
+      ? (environment.worktreePath ?? environment.id)
+      : (environment.containerId ?? environment.id);
   return [
     "\r\n",
     "[orkestrator] Preparing workspace",
@@ -380,7 +476,10 @@ export function toTerminalText(output: string): string {
  * watches a blank panel until it finishes, because the setup terminal used to be
  * created only afterwards.
  */
-export function beginSetupPreparationSession(environment: Environment, context: CommandContext): string {
+export function beginSetupPreparationSession(
+  environment: Environment,
+  context: CommandContext,
+): string {
   const sessionId = setupTerminalSessionId(environment.id);
   resetTerminalOutputBuffer(sessionId);
   environmentSetupSessions.set(environment.id, {
@@ -427,7 +526,8 @@ export function createSetupCompletionTracker(): {
   // completion marker can arrive split across two `onData` chunks. Keep a small
   // rolling tail of the previous chunk (one byte short of the longest marker)
   // and prepend it before matching so a split marker is still detected.
-  const markerTailLength = Math.max(SETUP_DONE_OSC_SEQUENCE.length, SETUP_FAILED_OSC_SEQUENCE.length) - 1;
+  const markerTailLength =
+    Math.max(SETUP_DONE_OSC_SEQUENCE.length, SETUP_FAILED_OSC_SEQUENCE.length) - 1;
   let pending = "";
 
   return {
@@ -481,8 +581,9 @@ export async function spawnSetupTerminal(
   });
 
   if (environment.environmentType === "local") {
-    if (!environment.worktreePath) throw new Error(`Local environment worktree is not available: ${environment.id}`);
-    if (!await pathExists(environment.worktreePath)) {
+    if (!environment.worktreePath)
+      throw new Error(`Local environment worktree is not available: ${environment.id}`);
+    if (!(await pathExists(environment.worktreePath))) {
       throw new Error(`Local environment worktree does not exist: ${environment.worktreePath}`);
     }
     const shellPath = resolveLocalShellPath();
@@ -507,8 +608,9 @@ export async function spawnSetupTerminal(
       { onData: tracker.onData, onExit: tracker.onExit },
     );
   } else {
-    if (!environment.containerId) throw new Error(`Environment has no container: ${environment.id}`);
-    if (!await isContainerRunning(environment.containerId)) {
+    if (!environment.containerId)
+      throw new Error(`Environment has no container: ${environment.id}`);
+    if (!(await isContainerRunning(environment.containerId))) {
       throw new Error(`Container is not running: ${environment.containerId}`);
     }
     const setupCommand = buildSetupTerminalCommand(commands, "zsh -l");
@@ -543,7 +645,9 @@ export async function completeEnvironmentSetup(
   context: CommandContext,
 ): Promise<Environment> {
   if (!environment.createdFromCommit) {
-    throw new Error(`Environment creation commit was not captured before setup completed: ${environment.id}`);
+    throw new Error(
+      `Environment creation commit was not captured before setup completed: ${environment.id}`,
+    );
   }
   let updated = await context.storage.updateEnvironment(environment.id, {
     setupScriptsComplete: true,
@@ -557,7 +661,7 @@ export async function completeEnvironmentSetup(
       // succeeded and must not be rolled back because an agent bridge was
       // temporarily unavailable.
     });
-    updated = await context.storage.getEnvironment(updated.id) ?? updated;
+    updated = (await context.storage.getEnvironment(updated.id)) ?? updated;
   }
   const session = environmentSetupSessions.get(environment.id);
   logSetupTerminal("setup completed", {
@@ -590,7 +694,11 @@ export function clearPendingAgentLaunchUpdates(): Partial<Environment> {
   };
 }
 
-export async function failEnvironmentSetup(environmentId: string, error: unknown, context: CommandContext): Promise<void> {
+export async function failEnvironmentSetup(
+  environmentId: string,
+  error: unknown,
+  context: CommandContext,
+): Promise<void> {
   const message = error instanceof Error ? error.message : String(error);
   const lifecycleError = environmentLifecycleErrorMessage(error);
   const session = environmentSetupSessions.get(environmentId);
@@ -616,21 +724,15 @@ export async function failEnvironmentSetup(environmentId: string, error: unknown
   // the original prompt whenever the environment is next started.
   let updated: Environment | undefined;
   try {
-    updated = await context.storage.updateEnvironment(
-      environmentId,
-      {
-        status: "error",
-        setupPhase: "failed",
-        setupCompletedAt: new Date().toISOString(),
-        lifecycleError,
-        ...clearPendingAgentLaunchUpdates(),
-      },
-    );
+    updated = await context.storage.updateEnvironment(environmentId, {
+      status: "error",
+      setupPhase: "failed",
+      setupCompletedAt: new Date().toISOString(),
+      lifecycleError,
+      ...clearPendingAgentLaunchUpdates(),
+    });
   } catch (clearError) {
-    console.warn(
-      `[setup] Failed to clear pending agent launch for ${environmentId}:`,
-      clearError,
-    );
+    console.warn(`[setup] Failed to clear pending agent launch for ${environmentId}:`, clearError);
   }
   context.emit("environment-setup-complete", {
     environment_id: environmentId,
@@ -675,11 +777,11 @@ export async function startEnvironmentSetupOnce(
   environment: Environment,
   context: CommandContext,
 ): Promise<EnvironmentSetupStartResult> {
-  const current = await context.storage.getEnvironment(environment.id) ?? environment;
+  const current = (await context.storage.getEnvironment(environment.id)) ?? environment;
   if (
-    current.setupScriptsComplete
-    || current.setupPhase === "ready"
-    || current.setupOverride === true
+    current.setupScriptsComplete ||
+    current.setupPhase === "ready" ||
+    current.setupOverride === true
   ) {
     logSetupTerminal("setup already complete", {
       environmentId: current.id,
@@ -809,12 +911,11 @@ export function startEnvironmentSetup(
   const existing = environmentSetupStartTasks.get(environment.id);
   if (existing) return existing;
 
-  const task = startEnvironmentSetupOnce(environment, context)
-    .finally(() => {
-      if (environmentSetupStartTasks.get(environment.id) === task) {
-        environmentSetupStartTasks.delete(environment.id);
-      }
-    });
+  const task = startEnvironmentSetupOnce(environment, context).finally(() => {
+    if (environmentSetupStartTasks.get(environment.id) === task) {
+      environmentSetupStartTasks.delete(environment.id);
+    }
+  });
   environmentSetupStartTasks.set(environment.id, task);
   return task;
 }
@@ -843,7 +944,7 @@ export async function startEnvironmentOnce(
       lifecycleError: null,
     });
     if (environment.environmentType === "local") {
-      if (environment.worktreePath && await pathExists(environment.worktreePath)) {
+      if (environment.worktreePath && (await pathExists(environment.worktreePath))) {
         const running = await storage.updateEnvironment(environment.id, {
           status: "running",
           lifecycleError: null,
@@ -855,7 +956,8 @@ export async function startEnvironmentOnce(
         return result;
       }
       const project = await storage.getProject(environment.projectId);
-      if (!project?.localPath) throw new Error("Project has no local path - cannot create a local worktree");
+      if (!project?.localPath)
+        throw new Error("Project has no local path - cannot create a local worktree");
       const repoConfig = await storage.getRepositoryConfig(project.id);
       const worktree = await createLocalWorktree(
         project.localPath,
@@ -903,7 +1005,9 @@ export async function startEnvironmentOnce(
     if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("claude")) {
       await syncContainerClaudeCredentialBestEffort(containerId, config.global);
     }
-    const hostEntryPort = environment.entryPort ? await getHostPort(containerId, environment.entryPort) : null;
+    const hostEntryPort = environment.entryPort
+      ? await getHostPort(containerId, environment.entryPort)
+      : null;
     const updated = await storage.updateEnvironment(environment.id, {
       status: "running",
       entryPort: environment.entryPort ?? null,
@@ -918,11 +1022,9 @@ export async function startEnvironmentOnce(
   } catch (error) {
     logEnvironmentLifecycleFailure("start", environment.id, error);
     if (unpersistedContainerId) {
-      await runCommand(
-        "docker",
-        ["rm", "-f", unpersistedContainerId],
-        { timeoutMs: 60_000 },
-      ).catch(() => undefined);
+      await runCommand("docker", ["rm", "-f", unpersistedContainerId], { timeoutMs: 60_000 }).catch(
+        () => undefined,
+      );
     }
     if (unpersistedWorktree) {
       // `git worktree add -b` created a branch too. Leaving it behind makes the
@@ -934,14 +1036,16 @@ export async function startEnvironmentOnce(
         unpersistedWorktree.branch,
       ).catch(() => undefined);
     }
-    await storage.updateEnvironment(environment.id, {
-      status: "error",
-      lifecycleError: environmentLifecycleErrorMessage(error),
-      // A start that never reached "running" cannot honour a post-setup agent
-      // launch, and the durable intent would otherwise fire on some later
-      // successful transition the user never connected to this attempt.
-      ...clearPendingAgentLaunchUpdates(),
-    }).catch(() => undefined);
+    await storage
+      .updateEnvironment(environment.id, {
+        status: "error",
+        lifecycleError: environmentLifecycleErrorMessage(error),
+        // A start that never reached "running" cannot honour a post-setup agent
+        // launch, and the durable intent would otherwise fire on some later
+        // successful transition the user never connected to this attempt.
+        ...clearPendingAgentLaunchUpdates(),
+      })
+      .catch(() => undefined);
     throw error;
   }
 }
@@ -963,16 +1067,13 @@ export async function admitEnvironmentStartTask(
   const existing = environmentStartTasks.get(environmentId);
   if (existing) return { task: existing };
 
-  const task = enqueueEnvironmentLifecycleOperation(
-    environmentId,
-    context,
-    () => startEnvironmentOnce(environmentId, context, schedulePendingRename),
-  )
-    .finally(() => {
-      if (environmentStartTasks.get(environmentId) === task) {
-        environmentStartTasks.delete(environmentId);
-      }
-    });
+  const task = enqueueEnvironmentLifecycleOperation(environmentId, context, () =>
+    startEnvironmentOnce(environmentId, context, schedulePendingRename),
+  ).finally(() => {
+    if (environmentStartTasks.get(environmentId) === task) {
+      environmentStartTasks.delete(environmentId);
+    }
+  });
   environmentStartTasks.set(environmentId, task);
   return { task };
 }
@@ -989,10 +1090,11 @@ export function enqueueEnvironmentLifecycleOperation<T>(
   operation: () => Promise<T>,
 ): Promise<T> {
   const previous = environmentLifecycleOperations.get(environmentId) ?? Promise.resolve();
-  const result = context.environmentLifecycleTasks.admit(
-    () => previous.then(operation, operation),
+  const result = context.environmentLifecycleTasks.admit(() => previous.then(operation, operation));
+  const tail = result.then(
+    () => undefined,
+    () => undefined,
   );
-  const tail = result.then(() => undefined, () => undefined);
   environmentLifecycleOperations.set(environmentId, tail);
   void tail.finally(() => {
     if (environmentLifecycleOperations.get(environmentId) === tail) {
@@ -1069,10 +1171,8 @@ export function stopEnvironmentTask(
   invalidateDiscovery: (environmentId: string) => void,
 ): Promise<void> {
   invalidateEnvironmentStartDedupe(environmentId);
-  return enqueueEnvironmentLifecycleOperation(
-    environmentId,
-    context,
-    () => stopEnvironmentOnce(environmentId, context, invalidateDiscovery),
+  return enqueueEnvironmentLifecycleOperation(environmentId, context, () =>
+    stopEnvironmentOnce(environmentId, context, invalidateDiscovery),
   );
 }
 
@@ -1091,13 +1191,11 @@ export async function recreateEnvironmentOnce(
   // unrepairable. Drop the reference and build a fresh container anyway; the
   // remains are swept by `cleanup_orphaned_containers`. Logged rather than
   // swallowed so the daemon-level cause is still recoverable.
-  await runCommand(
-    "docker",
-    ["rm", "-f", environment.containerId],
-    { timeoutMs: 60_000 },
-  ).catch((error: unknown) => {
-    logEnvironmentLifecycleFailure("recreate (container removal)", environment.id, error);
-  });
+  await runCommand("docker", ["rm", "-f", environment.containerId], { timeoutMs: 60_000 }).catch(
+    (error: unknown) => {
+      logEnvironmentLifecycleFailure("recreate (container removal)", environment.id, error);
+    },
+  );
   await context.storage.updateEnvironment(environment.id, {
     containerId: null,
     status: "stopped",
@@ -1113,19 +1211,15 @@ export function recreateEnvironmentTask(
   invalidateDiscovery: (environmentId: string) => void,
 ): Promise<EnvironmentSetupStartResult | undefined> {
   invalidateEnvironmentStartDedupe(environmentId);
-  return enqueueEnvironmentLifecycleOperation(
-    environmentId,
-    context,
-    () => recreateEnvironmentOnce(
-      environmentId,
-      context,
-      schedulePendingRename,
-      invalidateDiscovery,
-    ),
+  return enqueueEnvironmentLifecycleOperation(environmentId, context, () =>
+    recreateEnvironmentOnce(environmentId, context, schedulePendingRename, invalidateDiscovery),
   );
 }
 
-export async function runEnvironmentSetupNow(environmentId: string, context: CommandContext): Promise<Environment> {
+export async function runEnvironmentSetupNow(
+  environmentId: string,
+  context: CommandContext,
+): Promise<Environment> {
   const environment = await context.storage.getEnvironment(environmentId);
   if (!environment) throw new Error(`Environment not found: ${environmentId}`);
   if (environment.setupScriptsComplete) return environment;
@@ -1152,12 +1246,15 @@ export async function createLocalWorktree(
   const baseDir = worktreeBaseDir ?? getWorktreeBaseDir();
   await fs.mkdir(baseDir, { recursive: true });
   const baseSlug = sanitizeBranchName(branch);
-  const startPoint = await resolveRemoteWorktreeStartPoint(projectPath, baseBranch?.trim() || "main");
+  const startPoint = await resolveRemoteWorktreeStartPoint(
+    projectPath,
+    baseBranch?.trim() || "main",
+  );
   let finalBranch = baseSlug;
   let worktreePath = path.join(baseDir, `${sanitizeEnvironmentName(projectName)}-${finalBranch}`);
 
   let suffix = 1;
-  while (await pathExists(worktreePath) || await gitBranchExists(projectPath, finalBranch)) {
+  while ((await pathExists(worktreePath)) || (await gitBranchExists(projectPath, finalBranch))) {
     finalBranch = `${baseSlug}-${suffix}`;
     worktreePath = path.join(baseDir, `${sanitizeEnvironmentName(projectName)}-${finalBranch}`);
     suffix += 1;
@@ -1166,7 +1263,17 @@ export async function createLocalWorktree(
   // A branch created directly from origin/<base> otherwise inherits that base as
   // its upstream (usually origin/main), which is what makes a plain `git push`
   // target the base branch instead of publishing the environment branch.
-  const args = ["-C", projectPath, "worktree", "add", "--no-track", "-b", finalBranch, worktreePath, startPoint];
+  const args = [
+    "-C",
+    projectPath,
+    "worktree",
+    "add",
+    "--no-track",
+    "-b",
+    finalBranch,
+    worktreePath,
+    startPoint,
+  ];
   await runCommand("git", args, { timeoutMs: 120_000 });
 
   try {
@@ -1180,7 +1287,7 @@ export async function createLocalWorktree(
     for (const envFile of [".env", ".env.local"]) {
       const source = path.join(projectPath, envFile);
       const destination = path.join(worktreePath, envFile);
-      if (await pathExists(source) && !await pathExists(destination)) {
+      if ((await pathExists(source)) && !(await pathExists(destination))) {
         await fs.copyFile(source, destination);
       }
     }
@@ -1198,8 +1305,14 @@ export async function gitBranchExists(projectPath: string, branch: string): Prom
   const refName = validateGitRefName(branch, "environment branch");
   const refs = [`refs/heads/${refName}`, `refs/remotes/origin/${refName}`];
   for (const ref of refs) {
-    const exists = await runCommand("git", ["-C", projectPath, "show-ref", "--verify", "--quiet", ref], { timeoutMs: 10_000 })
-      .then(() => true, () => false);
+    const exists = await runCommand(
+      "git",
+      ["-C", projectPath, "show-ref", "--verify", "--quiet", ref],
+      { timeoutMs: 10_000 },
+    ).then(
+      () => true,
+      () => false,
+    );
     if (exists) return true;
   }
 
@@ -1212,7 +1325,9 @@ export async function gitBranchExists(projectPath: string, branch: string): Prom
 }
 
 export async function removeLocalWorktree(worktreePath: string): Promise<void> {
-  await runCommand("git", ["-C", worktreePath, "worktree", "remove", "--force", worktreePath], { timeoutMs: 120_000 }).catch(async () => {
+  await runCommand("git", ["-C", worktreePath, "worktree", "remove", "--force", worktreePath], {
+    timeoutMs: 120_000,
+  }).catch(async () => {
     await fs.rm(worktreePath, { recursive: true, force: true });
   });
 }
@@ -1222,23 +1337,39 @@ export async function deleteMergedEnvironmentRemoteBranch(environment: Environme
 
   if (environment.environmentType === "local") {
     if (!environment.worktreePath) return;
-    await deletePullRequestHeadBranchViaGitHubApi(environment.prUrl, createLocalGhRunner(environment.worktreePath));
+    await deletePullRequestHeadBranchViaGitHubApi(
+      environment.prUrl,
+      createLocalGhRunner(environment.worktreePath),
+    );
     return;
   }
 
   if (environment.containerId && environment.status === "running") {
-    await deletePullRequestHeadBranchViaGitHubApi(environment.prUrl, createContainerGhRunner(environment.containerId));
+    await deletePullRequestHeadBranchViaGitHubApi(
+      environment.prUrl,
+      createContainerGhRunner(environment.containerId),
+    );
   }
 }
 
-export async function cleanupFailedLocalWorktree(projectPath: string, worktreePath: string, branch: string): Promise<void> {
-  await runCommand("git", ["-C", projectPath, "worktree", "remove", "--force", worktreePath], { timeoutMs: 120_000 }).catch(async () => {
+export async function cleanupFailedLocalWorktree(
+  projectPath: string,
+  worktreePath: string,
+  branch: string,
+): Promise<void> {
+  await runCommand("git", ["-C", projectPath, "worktree", "remove", "--force", worktreePath], {
+    timeoutMs: 120_000,
+  }).catch(async () => {
     await fs.rm(worktreePath, { recursive: true, force: true }).catch(() => undefined);
-    await runCommand("git", ["-C", projectPath, "worktree", "prune"], { timeoutMs: 30_000 }).catch(() => undefined);
+    await runCommand("git", ["-C", projectPath, "worktree", "prune"], { timeoutMs: 30_000 }).catch(
+      () => undefined,
+    );
   });
 
   const refName = validateGitRefName(branch, "environment branch");
-  await runCommand("git", ["-C", projectPath, "branch", "-D", refName], { timeoutMs: 30_000 }).catch(() => undefined);
+  await runCommand("git", ["-C", projectPath, "branch", "-D", refName], {
+    timeoutMs: 30_000,
+  }).catch(() => undefined);
 }
 
 export function parseIpTokens(output: string): string[] {
@@ -1253,9 +1384,7 @@ export function parseIpTokens(output: string): string[] {
  * tools URL. Linux Engine needs a host-gateway alias, while Docker Desktop must
  * use its built-in DNS rather than an explicit Linux bridge-gateway override.
  */
-export async function ensureContainerAgentToolsHost(
-  containerId: string,
-): Promise<void> {
+export async function ensureContainerAgentToolsHost(containerId: string): Promise<void> {
   let existing = await dockerExec(
     containerId,
     `getent hosts ${CONTAINER_AGENT_TOOLS_HOST} 2>/dev/null || true`,
@@ -1288,15 +1417,7 @@ export async function ensureContainerAgentToolsHost(
       `;
       await runCommand(
         "docker",
-        [
-          "exec",
-          "--user",
-          "root",
-          containerId,
-          "bash",
-          "-lc",
-          repairHosts,
-        ],
+        ["exec", "--user", "root", containerId, "bash", "-lc", repairHosts],
         { timeoutMs: 10_000 },
       );
       existing = await dockerExec(
@@ -1325,9 +1446,7 @@ export async function ensureContainerAgentToolsHost(
   );
   const gateway = parseIpTokens(stdout)[0];
   if (!gateway) {
-    throw new Error(
-      `Could not determine the Docker host gateway for container ${containerId}`,
-    );
+    throw new Error(`Could not determine the Docker host gateway for container ${containerId}`);
   }
   if (parseIpTokens(existing).includes(gateway)) return;
 
@@ -1368,9 +1487,5 @@ export async function resolveContainerAgentToolConnection(
   );
   if (!environment) return undefined;
   await ensureContainerAgentToolsHost(containerId);
-  return context.agentTools.connection(
-    environment.id,
-    environment.projectId,
-    "container",
-  );
+  return context.agentTools.connection(environment.id, environment.projectId, "container");
 }

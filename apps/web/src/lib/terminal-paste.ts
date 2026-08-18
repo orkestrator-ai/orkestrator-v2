@@ -54,7 +54,7 @@ export async function handleTerminalPaste({
       },
       (error) => {
         console.error(`[${componentName}] Clipboard paste error:`, error);
-      }
+      },
     );
   } else if (worktreePath) {
     // Local environment - supports both image and text paste via worktree
@@ -70,7 +70,7 @@ export async function handleTerminalPaste({
       },
       (error) => {
         console.error(`[${componentName}] Clipboard paste error:`, error);
-      }
+      },
     );
   } else {
     // No target available - text-only paste using Electron clipboard API

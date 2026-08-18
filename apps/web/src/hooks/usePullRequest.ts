@@ -38,9 +38,7 @@ interface UsePullRequestReturn {
   disarmRefreshAfterAgentCompletion: (armedAt: string) => Promise<void>;
 }
 
-export function usePullRequest({
-  environmentId,
-}: UsePullRequestOptions): UsePullRequestReturn {
+export function usePullRequest({ environmentId }: UsePullRequestOptions): UsePullRequestReturn {
   const [error, setError] = useState<string | null>(null);
 
   const { getEnvironmentById, setEnvironmentPR } = useEnvironmentStore();
@@ -53,7 +51,7 @@ export function usePullRequest({
 
   // Detection status mirrored from the backend monitor
   const monitorState = usePrMonitorStore((state) =>
-    environmentId ? state.states.get(environmentId) ?? null : null
+    environmentId ? (state.states.get(environmentId) ?? null) : null,
   );
   const isDetecting = monitorState?.checkInProgress ?? false;
 
@@ -105,7 +103,10 @@ export function usePullRequest({
   const setModeCreatePending = useCallback(() => {
     if (environmentId) {
       void backend.prMonitorWatch(environmentId, "create-pending").catch((err) => {
-        console.warn(`[usePullRequest] Failed to request create-pending mode for ${environmentId}:`, err);
+        console.warn(
+          `[usePullRequest] Failed to request create-pending mode for ${environmentId}:`,
+          err,
+        );
       });
     }
   }, [environmentId]);
@@ -114,7 +115,10 @@ export function usePullRequest({
   const setModeMergePending = useCallback(() => {
     if (environmentId) {
       void backend.prMonitorWatch(environmentId, "merge-pending").catch((err) => {
-        console.warn(`[usePullRequest] Failed to request merge-pending mode for ${environmentId}:`, err);
+        console.warn(
+          `[usePullRequest] Failed to request merge-pending mode for ${environmentId}:`,
+          err,
+        );
       });
     }
   }, [environmentId]);
@@ -124,10 +128,13 @@ export function usePullRequest({
     return backend.armPrRefreshAfterAgentCompletion(environmentId);
   }, [environmentId]);
 
-  const disarmRefreshAfterAgentCompletion = useCallback(async (armedAt: string) => {
-    if (!environmentId) return;
-    await backend.disarmPrRefreshAfterAgentCompletion(environmentId, armedAt);
-  }, [environmentId]);
+  const disarmRefreshAfterAgentCompletion = useCallback(
+    async (armedAt: string) => {
+      if (!environmentId) return;
+      await backend.disarmPrRefreshAfterAgentCompletion(environmentId, armedAt);
+    },
+    [environmentId],
+  );
 
   return {
     prUrl,

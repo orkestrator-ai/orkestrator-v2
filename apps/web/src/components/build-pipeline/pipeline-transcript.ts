@@ -19,7 +19,10 @@ import {
   type TaskListSnapshot,
   type TaskSnapshotItem,
 } from "@orkestrator/protocol/task-list";
-import { normalizeClaudeMessagesForDisplay, normalizeNativeMessages } from "@/lib/chat/native-message-adapters";
+import {
+  normalizeClaudeMessagesForDisplay,
+  normalizeNativeMessages,
+} from "@/lib/chat/native-message-adapters";
 import { normalizeOpenCodeMessage } from "@/lib/opencode-client";
 import type { ClaudeMessage, ClaudeMessagePart } from "@/lib/claude-client";
 import type {
@@ -36,7 +39,7 @@ import type {
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
+    ? (value as Record<string, unknown>)
     : null;
 }
 
@@ -49,21 +52,15 @@ function asNumber(value: unknown): number | undefined {
 }
 
 function asToolState(value: unknown): NativeToolState | undefined {
-  return value === "success" || value === "failure" || value === "pending"
-    ? value
-    : undefined;
+  return value === "success" || value === "failure" || value === "pending" ? value : undefined;
 }
 
 function asAgentState(value: unknown): NativeAgentState | undefined {
-  return value === "active" || value === "finished" || value === "failed"
-    ? value
-    : undefined;
+  return value === "active" || value === "finished" || value === "failed" ? value : undefined;
 }
 
 function asRole(value: unknown): NativeMessage["role"] | undefined {
-  return value === "user" || value === "assistant" || value === "system"
-    ? value
-    : undefined;
+  return value === "user" || value === "assistant" || value === "system" ? value : undefined;
 }
 
 const BACKGROUND_TASK_STATUSES = new Set<NativeBackgroundTaskStatus>([
@@ -75,12 +72,10 @@ const BACKGROUND_TASK_STATUSES = new Set<NativeBackgroundTaskStatus>([
   "paused",
 ]);
 
-function asBackgroundTaskStatus(
-  value: unknown,
-): NativeBackgroundTaskStatus | undefined {
-  return typeof value === "string"
-    && BACKGROUND_TASK_STATUSES.has(value as NativeBackgroundTaskStatus)
-    ? value as NativeBackgroundTaskStatus
+function asBackgroundTaskStatus(value: unknown): NativeBackgroundTaskStatus | undefined {
+  return typeof value === "string" &&
+    BACKGROUND_TASK_STATUSES.has(value as NativeBackgroundTaskStatus)
+    ? (value as NativeBackgroundTaskStatus)
     : undefined;
 }
 
@@ -161,9 +156,7 @@ function asToolDiff(value: unknown): NativeToolDiffMetadata | undefined {
     deletions: asNumber(raw.deletions),
   };
   // An object every field of which was dropped is not a diff at all.
-  return Object.values(diff).some((field) => field !== undefined)
-    ? diff
-    : undefined;
+  return Object.values(diff).some((field) => field !== undefined) ? diff : undefined;
 }
 
 const PART_TYPES = new Set([
@@ -178,17 +171,13 @@ const PART_TYPES = new Set([
   "task-group",
 ]);
 
-function isAgentActivityPart(
-  part: NativeMessagePart,
-): part is NativeAgentActivityPart {
+function isAgentActivityPart(part: NativeMessagePart): part is NativeAgentActivityPart {
   return part.type === "subagent" || part.type === "task-group";
 }
 
 function toNativeParts(value: unknown): NativeMessagePart[] {
   if (!Array.isArray(value)) return [];
-  return value
-    .map(toNativePart)
-    .filter((part): part is NativeMessagePart => part !== null);
+  return value.map(toNativePart).filter((part): part is NativeMessagePart => part !== null);
 }
 
 /**
@@ -221,9 +210,7 @@ function toNativePart(value: unknown): NativeMessagePart | null {
     toolUseCount: asNumber(raw.toolUseCount),
     tokenCount: asNumber(raw.tokenCount),
     tokenCountText: asString(raw.tokenCountText),
-    ...(raw.agentUsageDisplay === "token-only"
-      ? { agentUsageDisplay: "token-only" as const }
-      : {}),
+    ...(raw.agentUsageDisplay === "token-only" ? { agentUsageDisplay: "token-only" as const } : {}),
     toolUseId: asString(raw.toolUseId),
     parentTaskUseId: asString(raw.parentTaskUseId),
     isMcpTool: raw.isMcpTool === true ? true : undefined,
@@ -275,13 +262,7 @@ function toNativePart(value: unknown): NativeMessagePart | null {
 }
 
 /** The part types `normalizeClaudePart` understands; it drops the rest. */
-const CLAUDE_PART_TYPES = new Set([
-  "text",
-  "thinking",
-  "file",
-  "tool-invocation",
-  "tool-result",
-]);
+const CLAUDE_PART_TYPES = new Set(["text", "thinking", "file", "tool-invocation", "tool-result"]);
 
 /**
  * Validate provider parts and put back the two names Claude spells differently.
@@ -295,14 +276,17 @@ function toClaudeParts(value: unknown): ClaudeMessagePart[] {
   if (!Array.isArray(value)) return [];
   return toNativeParts(value)
     .filter((part) => CLAUDE_PART_TYPES.has(part.type))
-    .map(({ createdAt, sourcePartId, content, ...rest }) => ({
-      ...rest,
-      // The Claude adapter falls back to the tool name for a part that carries
-      // no content of its own; the validator's `""` would suppress that.
-      ...(content ? { content } : {}),
-      ...(createdAt ? { createdAt } : {}),
-      ...(sourcePartId ? { sourcePartId } : {}),
-    }) as unknown as ClaudeMessagePart);
+    .map(
+      ({ createdAt, sourcePartId, content, ...rest }) =>
+        ({
+          ...rest,
+          // The Claude adapter falls back to the tool name for a part that carries
+          // no content of its own; the validator's `""` would suppress that.
+          ...(content ? { content } : {}),
+          ...(createdAt ? { createdAt } : {}),
+          ...(sourcePartId ? { sourcePartId } : {}),
+        }) as unknown as ClaudeMessagePart,
+    );
 }
 
 /** `new Date(value).toISOString()` throws beyond the ECMA-262 time clip. */
@@ -322,9 +306,7 @@ function isRenderableEpoch(value: unknown): boolean {
  * through to `toISOString` would throw `RangeError` from inside a render.
  */
 function isRenderableEpochNumber(value: unknown): value is number {
-  return typeof value === "number"
-    && Number.isFinite(value)
-    && Math.abs(value) <= MAX_EPOCH_MS;
+  return typeof value === "number" && Number.isFinite(value) && Math.abs(value) <= MAX_EPOCH_MS;
 }
 
 /**
@@ -341,9 +323,7 @@ const MAX_INTERACTION_QUESTIONS = 4;
 const MAX_INTERACTION_OPTIONS = 8;
 
 function clip(value: string, maximum: number): string {
-  return value.length <= maximum
-    ? value
-    : `${value.slice(0, Math.max(0, maximum - 1))}…`;
+  return value.length <= maximum ? value : `${value.slice(0, Math.max(0, maximum - 1))}…`;
 }
 
 /** The entry with `info.time.created` removed, so the normalizer skips it. */
@@ -410,9 +390,7 @@ function messageId(raw: Record<string, unknown>, index: number): string {
  * flat message shape. Detected per entry rather than from the pipeline's agent
  * type so a snapshot whose agent was recorded differently still renders.
  */
-function openCodeInfo(
-  raw: Record<string, unknown>,
-): Record<string, unknown> | null {
+function openCodeInfo(raw: Record<string, unknown>): Record<string, unknown> | null {
   return asRecord(raw.info);
 }
 
@@ -435,16 +413,17 @@ function isInitialPipelineHandoff(raw: Record<string, unknown>): boolean {
   if (role !== "user") return false;
 
   const carriesHandoff = (value: unknown): boolean =>
-    typeof value === "string"
-    && value.trimStart().startsWith(PIPELINE_HANDOFF_OPEN)
-    && value.includes(PIPELINE_HANDOFF_CLOSE);
+    typeof value === "string" &&
+    value.trimStart().startsWith(PIPELINE_HANDOFF_OPEN) &&
+    value.includes(PIPELINE_HANDOFF_CLOSE);
 
   if (carriesHandoff(raw.content)) return true;
   if (!Array.isArray(raw.parts)) return false;
   return raw.parts.some((part) => {
     const candidate = asRecord(part);
-    return candidate !== null
-      && (carriesHandoff(candidate.content) || carriesHandoff(candidate.text));
+    return (
+      candidate !== null && (carriesHandoff(candidate.content) || carriesHandoff(candidate.text))
+    );
   });
 }
 
@@ -468,18 +447,14 @@ export function toPipelineTranscript(
     if (info) {
       const message = toOpenCodeMessage(raw, info, index, fallbackCreatedAt);
       if (message) {
-        transcript.push(
-          ...normalizeNativeMessages([message]).filter(hasRenderableContent),
-        );
+        transcript.push(...normalizeNativeMessages([message]).filter(hasRenderableContent));
       }
       return;
     }
 
     const role = asRole(raw.role) ?? "assistant";
     const content = asString(raw.content) ?? "";
-    const createdAt = asString(raw.createdAt)
-      ?? asString(raw.timestamp)
-      ?? fallbackCreatedAt;
+    const createdAt = asString(raw.createdAt) ?? asString(raw.timestamp) ?? fallbackCreatedAt;
     const modelId = asString(raw.modelId);
 
     if (agentType === "claude") {
@@ -494,8 +469,7 @@ export function toPipelineTranscript(
         ...(modelId ? { modelId } : {}),
       };
       transcript.push(
-        ...normalizeClaudeMessagesForDisplay([claudeMessage])
-          .filter(hasRenderableContent),
+        ...normalizeClaudeMessagesForDisplay([claudeMessage]).filter(hasRenderableContent),
       );
       return;
     }
@@ -509,9 +483,7 @@ export function toPipelineTranscript(
       ...(modelId ? { modelId } : {}),
       ...(asString(raw.turnId) ? { turnId: asString(raw.turnId) } : {}),
     };
-    transcript.push(
-      ...normalizeNativeMessages([message]).filter(hasRenderableContent),
-    );
+    transcript.push(...normalizeNativeMessages([message]).filter(hasRenderableContent));
   });
 
   if (interactions.length === 0) return transcript;
@@ -520,25 +492,31 @@ export function toPipelineTranscript(
     const questionText = interaction.questions
       .slice(0, MAX_INTERACTION_QUESTIONS)
       .map((question) => {
-        const options = question.options.length > 0
-          ? `\nOffered options: ${question.options
-            .slice(0, MAX_INTERACTION_OPTIONS)
-            .map((option) => clip(option, MAX_INTERACTION_OPTION_LENGTH))
-            .join(", ")}`
-          : "";
+        const options =
+          question.options.length > 0
+            ? `\nOffered options: ${question.options
+                .slice(0, MAX_INTERACTION_OPTIONS)
+                .map((option) => clip(option, MAX_INTERACTION_OPTION_LENGTH))
+                .join(", ")}`
+            : "";
         return `${clip(question.prompt, MAX_INTERACTION_LINE_LENGTH)}${options}`;
-      }).join("\n\n");
+      })
+      .join("\n\n");
     const details = [
       interaction.body ? clip(interaction.body, MAX_INTERACTION_BODY_LENGTH) : "",
       questionText,
-    ].filter(Boolean).join("\n\n");
+    ]
+      .filter(Boolean)
+      .join("\n\n");
     const content = [
       `Auto-declined unattended ${interaction.provider} ${interaction.kind} during ${interaction.phase}`,
       `Outcome: ${interaction.outcome}`,
       clip(interaction.title, MAX_INTERACTION_LINE_LENGTH),
       details,
       "No answer was fabricated. The agent was instructed to make and state the safest likely assumption, then continue.",
-    ].filter(Boolean).join("\n\n");
+    ]
+      .filter(Boolean)
+      .join("\n\n");
     return {
       id: `pipeline-interaction:${interaction.id}`,
       role: "system",
@@ -575,8 +553,9 @@ function mergeByCreatedAt(
 ): NativeMessage[] {
   let carried = Number.NEGATIVE_INFINITY;
   const keyed = providerMessages.map((message) => {
-    const raw = (message as { createdAt?: unknown }).createdAt
-      ?? (message as { timestamp?: unknown }).timestamp;
+    const raw =
+      (message as { createdAt?: unknown }).createdAt ??
+      (message as { timestamp?: unknown }).timestamp;
     const parsed = typeof raw === "string" ? Date.parse(raw) : Number.NaN;
     if (Number.isFinite(parsed)) carried = parsed;
     return { message, key: carried };
@@ -588,7 +567,5 @@ function mergeByCreatedAt(
       key: Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY,
     });
   }
-  return keyed
-    .sort((left, right) => left.key - right.key)
-    .map((entry) => entry.message);
+  return keyed.sort((left, right) => left.key - right.key).map((entry) => entry.message);
 }

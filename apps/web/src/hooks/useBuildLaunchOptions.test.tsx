@@ -99,11 +99,10 @@ describe("useBuildLaunchOptions", () => {
       projectId === "project-1"
         ? {
             projectId: "project-1",
-            models: [
-              { id: "provider/model-a", name: "OpenCode A", provider: "Provider A" },
-            ],
+            models: [{ id: "provider/model-a", name: "OpenCode A", provider: "Provider A" }],
           }
-        : null);
+        : null,
+    );
     const { result } = renderHook(() => useBuildLaunchOptions("project-1", true));
     await flushPromises();
 
@@ -118,9 +117,7 @@ describe("useBuildLaunchOptions", () => {
         ...baseConfig,
         global: {
           ...baseConfig.global,
-          favoriteModels: [
-            { platform: "opencode", modelId: "opencode-go/deepseek-v4-flash" },
-          ],
+          favoriteModels: [{ platform: "opencode", modelId: "opencode-go/deepseek-v4-flash" }],
         },
       },
     });
@@ -142,9 +139,7 @@ describe("useBuildLaunchOptions", () => {
         ...baseConfig,
         global: {
           ...baseConfig.global,
-          favoriteModels: [
-            { platform: "opencode", modelId: "openrouter/kimi-k2.5" },
-          ],
+          favoriteModels: [{ platform: "opencode", modelId: "openrouter/kimi-k2.5" }],
           openCodeModelProviders: ["opencode", "opencode-go"],
         },
       },
@@ -161,15 +156,16 @@ describe("useBuildLaunchOptions", () => {
 
     expect(result.current.catalog.cursor?.map((model) => model.id)).toEqual(["default"]);
     act(() => {
-      useAgentModelCatalogStore.getState().setAcpModels([{
-        platform: "cursor",
-        id: "composer-2.5",
-        label: "Composer 2.5",
-      }]);
+      useAgentModelCatalogStore.getState().setAcpModels([
+        {
+          platform: "cursor",
+          id: "composer-2.5",
+          label: "Composer 2.5",
+        },
+      ]);
     });
 
-    expect(result.current.catalog.cursor?.map((model) => model.id))
-      .toEqual(["composer-2.5"]);
+    expect(result.current.catalog.cursor?.map((model) => model.id)).toEqual(["composer-2.5"]);
   });
 
   test("ignores a cached catalog snapshot that belongs to another project", async () => {
@@ -186,10 +182,12 @@ describe("useBuildLaunchOptions", () => {
 
   test("discards a stale catalog result after the project changes", async () => {
     let resolveFirst: ((value: unknown) => void) | undefined;
-    getCachedOpenCodeModelCatalogMock.mockImplementation(() =>
-      new Promise((resolve) => {
-        resolveFirst = resolve;
-      }));
+    getCachedOpenCodeModelCatalogMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveFirst = resolve;
+        }),
+    );
     getOpencodeModelPreferencesMock.mockImplementation(async () => ({
       favorite: ["provider/model-b"],
       recent: [],

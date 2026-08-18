@@ -33,9 +33,9 @@ function authoritativeSnapshot(
   entry: PersistedLoopedReviewWorkflow<LoopedReviewWorkflow>,
 ): LoopedReviewWorkflow | null {
   if (
-    !isLoopedReviewWorkflow(entry.snapshot)
-    || entry.snapshot.id !== entry.id
-    || entry.snapshot.environmentId !== entry.environmentId
+    !isLoopedReviewWorkflow(entry.snapshot) ||
+    entry.snapshot.id !== entry.id ||
+    entry.snapshot.environmentId !== entry.environmentId
   ) {
     return null;
   }

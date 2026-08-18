@@ -8,9 +8,7 @@ describe("configuration type contract", () => {
   });
 
   test("exposes durable merge cleanup state to rehydrating clients", () => {
-    expectTypeOf<Environment["cleanupAfterMergeRequestedAt"]>()
-      .toEqualTypeOf<string | undefined>();
-    expectTypeOf<Environment["cleanupAfterMergeError"]>()
-      .toEqualTypeOf<string | undefined>();
+    expectTypeOf<Environment["cleanupAfterMergeRequestedAt"]>().toEqualTypeOf<string | undefined>();
+    expectTypeOf<Environment["cleanupAfterMergeError"]>().toEqualTypeOf<string | undefined>();
   });
 });

@@ -64,18 +64,18 @@ export function httpProvider(
       requests.push({ url, init });
       return handler(url, init);
     }) as typeof fetch,
-    stageImages: options.stageImages === false
-      ? undefined
-      : async (images) => {
-          staged.push([...images]);
-          return images.map((image) => ({
-            type: "image" as const,
-            path: `/workspace/.orkestrator/initial-prompt/${image.filename}`,
-            filename: image.filename,
-            dataUrl:
-              `data:${mimeTypeForFilename(image.filename)};base64,${image.data}`,
-          }));
-        },
+    stageImages:
+      options.stageImages === false
+        ? undefined
+        : async (images) => {
+            staged.push([...images]);
+            return images.map((image) => ({
+              type: "image" as const,
+              path: `/workspace/.orkestrator/initial-prompt/${image.filename}`,
+              filename: image.filename,
+              dataUrl: `data:${mimeTypeForFilename(image.filename)};base64,${image.data}`,
+            }));
+          },
   });
   return { provider, requests, staged };
 }
@@ -105,9 +105,8 @@ export function deferred(): { promise: Promise<void>; resolve(): void } {
 }
 
 export function expectedOpenCodeMessageId(requestId: string): string {
-  const encoded = Array.from(
-    { length: requestId.length },
-    (_, index) => requestId.charCodeAt(index).toString(16).padStart(4, "0"),
+  const encoded = Array.from({ length: requestId.length }, (_, index) =>
+    requestId.charCodeAt(index).toString(16).padStart(4, "0"),
   ).join("");
   return `msg_00000000000000000000000000_ork_${encoded}`;
 }
@@ -157,10 +156,12 @@ export function freeTextResolution(
       version: AGENT_INTERACTION_CONTRACT_VERSION,
       interactionId: request.id,
       sessionId: request.sessionId,
-      answers: [{
-        questionId: request.presentation.questions[0]!.id,
-        freeText: value,
-      }],
+      answers: [
+        {
+          questionId: request.presentation.questions[0]!.id,
+          freeText: value,
+        },
+      ],
     },
   };
 }
@@ -250,10 +251,7 @@ export type OpenCodeFake = {
     permissions: Record<string, unknown> | null,
     questions: Record<string, unknown> | null,
   ): void;
-  setPendingReadErrors(
-    permissions: unknown | null,
-    questions: unknown | null,
-  ): void;
+  setPendingReadErrors(permissions: unknown | null, questions: unknown | null): void;
   setPermissionReplyResponse(response: Record<string, unknown>): void;
   setQuestionRejectResponse(response: Record<string, unknown>): void;
   setQuestionReplyResponse(response: Record<string, unknown>): void;
@@ -272,10 +270,7 @@ export type OpenCodeFake = {
   setSessionListError(error: unknown): void;
   setSessionListResponse(response: Record<string, unknown>): void;
   setSessionGetError(error: unknown): void;
-  setSessionGetResponse(
-    sessionId: string,
-    response: Record<string, unknown>,
-  ): void;
+  setSessionGetResponse(sessionId: string, response: Record<string, unknown>): void;
 };
 
 export function openCodeFake(): OpenCodeFake {
@@ -312,7 +307,7 @@ export function openCodeFake(): OpenCodeFake {
   let questionReplyFailure: { error: unknown; applied: boolean } | null = null;
   let messagesResponse: Record<string, unknown> = { data: [] };
   let messagesHandler:
-    ((parameters?: Record<string, unknown>) => Promise<Record<string, unknown>>)
+    | ((parameters?: Record<string, unknown>) => Promise<Record<string, unknown>>)
     | null = null;
   let abortResponse: Record<string, unknown> = { data: true };
   let createResponse: Record<string, unknown> = { data: { id: "owned-session" } };
@@ -336,10 +331,7 @@ export function openCodeFake(): OpenCodeFake {
 
   const client = {
     event: {
-      async subscribe(
-        _parameters: unknown,
-        options: { signal: AbortSignal },
-      ) {
+      async subscribe(_parameters: unknown, options: { signal: AbortSignal }) {
         subscribeCallCount += 1;
         const failure = subscribeFailures.shift();
         if (failure === "throw") throw new Error("subscribe failed");
@@ -360,9 +352,7 @@ export function openCodeFake(): OpenCodeFake {
       async reply(parameters: Record<string, unknown>) {
         permissionReplies.push(parameters);
         if (!permissionReplyResponse.error) {
-          pendingPermissions = pendingPermissions.filter(
-            ({ id }) => id !== parameters.requestID,
-          );
+          pendingPermissions = pendingPermissions.filter(({ id }) => id !== parameters.requestID);
         }
         return permissionReplyResponse;
       },
@@ -378,9 +368,7 @@ export function openCodeFake(): OpenCodeFake {
       async reject(parameters: Record<string, unknown>) {
         questionRejections.push(parameters);
         if (!questionRejectResponse.error) {
-          pendingQuestions = pendingQuestions.filter(
-            ({ id }) => id !== parameters.requestID,
-          );
+          pendingQuestions = pendingQuestions.filter(({ id }) => id !== parameters.requestID);
         }
         return questionRejectResponse;
       },
@@ -389,16 +377,12 @@ export function openCodeFake(): OpenCodeFake {
         await questionReplyGate;
         if (questionReplyFailure) {
           if (questionReplyFailure.applied) {
-            pendingQuestions = pendingQuestions.filter(
-              ({ id }) => id !== parameters.requestID,
-            );
+            pendingQuestions = pendingQuestions.filter(({ id }) => id !== parameters.requestID);
           }
           throw questionReplyFailure.error;
         }
         if (!questionReplyResponse.error) {
-          pendingQuestions = pendingQuestions.filter(
-            ({ id }) => id !== parameters.requestID,
-          );
+          pendingQuestions = pendingQuestions.filter(({ id }) => id !== parameters.requestID);
         }
         return questionReplyResponse;
       },
@@ -414,36 +398,29 @@ export function openCodeFake(): OpenCodeFake {
         if (promptError) throw promptError;
         return promptResponse;
       },
-      async status(
-        parameters?: Record<string, unknown>,
-        options?: { signal?: AbortSignal },
-      ) {
+      async status(parameters?: Record<string, unknown>, options?: { signal?: AbortSignal }) {
         statusCalls.push(parameters);
         statusOptions.push(options);
         if (statusError) throw statusError;
         return statusResponse;
       },
-      async list(
-        parameters?: Record<string, unknown>,
-        options?: { signal?: AbortSignal },
-      ) {
+      async list(parameters?: Record<string, unknown>, options?: { signal?: AbortSignal }) {
         sessionListCalls.push(parameters);
         sessionListOptions.push(options);
         if (sessionListError) throw sessionListError;
         return sessionListResponse;
       },
-      async get(
-        parameters: Record<string, unknown>,
-        options?: { signal?: AbortSignal },
-      ) {
+      async get(parameters: Record<string, unknown>, options?: { signal?: AbortSignal }) {
         sessionGetCalls.push(parameters);
         sessionGetOptions.push(options);
         if (sessionGetError) throw sessionGetError;
         const sessionId = String(parameters.sessionID ?? "");
-        return sessionGetResponses.get(sessionId)
-          ?? (sessionId === "owned-session"
+        return (
+          sessionGetResponses.get(sessionId) ??
+          (sessionId === "owned-session"
             ? { data: { id: sessionId, directory: "/workspace" } }
-            : { error: { name: "NotFound" }, response: { status: 404 } });
+            : { error: { name: "NotFound" }, response: { status: 404 } })
+        );
       },
       async messages(parameters?: Record<string, unknown>) {
         messageCalls.push(parameters);

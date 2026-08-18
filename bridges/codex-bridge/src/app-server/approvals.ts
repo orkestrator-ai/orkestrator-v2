@@ -173,7 +173,8 @@ export function describeApproval(options: {
   const kind: ApprovalKind =
     options.method === "item/permissions/requestApproval"
       ? "permissions"
-      : options.method === "item/fileChange/requestApproval" || options.method === "applyPatchApproval"
+      : options.method === "item/fileChange/requestApproval" ||
+          options.method === "applyPatchApproval"
         ? "file-change"
         : "command";
 
@@ -200,15 +201,13 @@ export function describeApproval(options: {
     ? str(params.networkApprovalContext.host)
     : undefined;
 
-  const command =
-    commandText(params.command) ?? commandActionsText(params.commandActions);
+  const command = commandText(params.command) ?? commandActionsText(params.commandActions);
   const actionable =
     kind === "command"
       ? command !== undefined
       : kind === "file-change"
         ? Boolean(changes?.length)
-        : permissions !== undefined
-          && (permissions.network || permissions.fileSystem);
+        : permissions !== undefined && (permissions.network || permissions.fileSystem);
 
   return {
     approvalId: options.approvalId,
@@ -307,7 +306,6 @@ export function buildApprovalResponse(
       };
     }
   }
-
 }
 
 /** Human-readable line for the transcript when an approval was not granted. */

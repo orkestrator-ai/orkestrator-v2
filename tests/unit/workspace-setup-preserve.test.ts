@@ -33,7 +33,11 @@ function runGit(dir: string, args: string[]): void {
   expect(result.status).toBe(0);
 }
 
-function runGitExcludeHarness(workspace: string): { code: number | null; stdout: string; stderr: string } {
+function runGitExcludeHarness(workspace: string): {
+  code: number | null;
+  stdout: string;
+  stderr: string;
+} {
   const harness = `
 set -e
 GREEN=""; NC=""
@@ -61,7 +65,11 @@ validate_prepared_workspace "$2"
   }).status;
 }
 
-function runPrepareOnlyCheckpoint(workspace: string): { code: number | null; stdout: string; stderr: string } {
+function runPrepareOnlyCheckpoint(workspace: string): {
+  code: number | null;
+  stdout: string;
+  stderr: string;
+} {
   const harness = `
 set -e
 GREEN=""; RED=""; NC=""
@@ -76,15 +84,17 @@ emit_prepare_only_checkpoint "$2"
   return { code: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
 }
 
-function runGitScanCacheHarness(options: {
-  insideWorktree: boolean;
-  configFails?: boolean;
-}): { code: number | null; calls: string[] } {
+function runGitScanCacheHarness(options: { insideWorktree: boolean; configFails?: boolean }): {
+  code: number | null;
+  calls: string[];
+} {
   const harnessRoot = mkdtempSync(join(tmpdir(), "ork-git-cache-"));
   const fakeBin = join(harnessRoot, "bin");
   const gitLog = join(harnessRoot, "git.log");
   mkdirSync(fakeBin);
-  writeFileSync(join(fakeBin, "git"), `#!/bin/sh
+  writeFileSync(
+    join(fakeBin, "git"),
+    `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GIT_LOG"
 case "$*" in
   *"rev-parse --is-inside-work-tree"*)
@@ -97,7 +107,8 @@ case "$*" in
     exit 64
     ;;
 esac
-`);
+`,
+  );
   chmodSync(join(fakeBin, "git"), 0o755);
 
   const harness = `
@@ -136,9 +147,7 @@ describe("workspace setup prepare-only contract", () => {
     const marker = commandTesting.CONTAINER_WORKSPACE_SETUP_CAPABILITY_MARKER;
 
     expect(setup.split("\n")).toContain(marker);
-    expect(
-      spawnSync("grep", ["-qxF", marker, setupScript], { encoding: "utf8" }).status,
-    ).toBe(0);
+    expect(spawnSync("grep", ["-qxF", marker, setupScript], { encoding: "utf8" }).status).toBe(0);
   });
 
   test("rejects an unrecognised argument before touching the workspace", () => {
@@ -192,18 +201,14 @@ describe("workspace setup Git scan caches", () => {
     const result = runGitScanCacheHarness({ insideWorktree: false });
 
     expect(result.code).toBe(0);
-    expect(result.calls).toEqual([
-      "-C /workspace under test rev-parse --is-inside-work-tree",
-    ]);
+    expect(result.calls).toEqual(["-C /workspace under test rev-parse --is-inside-work-tree"]);
   });
 
   test("keeps setup best-effort when enabling the cache fails", () => {
     const result = runGitScanCacheHarness({ insideWorktree: true, configFails: true });
 
     expect(result.code).toBe(0);
-    expect(result.calls.at(-1)).toBe(
-      "-C /workspace under test config core.untrackedCache true",
-    );
+    expect(result.calls.at(-1)).toBe("-C /workspace under test config core.untrackedCache true");
   });
 });
 
@@ -241,7 +246,9 @@ describe("workspace setup attachment preservation (structure)", () => {
     expect(setup).toContain('for pattern in ".orkestrator" ".claude/settings.local.json"; do');
     expect(setup).toContain('grep -qxF "$pattern" "$exclude_file"');
     expect(setup).toContain('append_git_exclude_pattern "$exclude_file" "$pattern"');
-    expect(setup.match(/add_workspace_artifacts_to_git_exclude/g)?.length).toBeGreaterThanOrEqual(3);
+    expect(setup.match(/add_workspace_artifacts_to_git_exclude/g)?.length).toBeGreaterThanOrEqual(
+      3,
+    );
   });
 
   test("prepare-only stops after checkout restoration and before untrusted setup", () => {
@@ -277,7 +284,10 @@ describe("workspace setup attachment preservation (structure)", () => {
   });
 });
 
-function runHarness(scenario: string, workspace: string): { code: number | null; stdout: string; stderr: string } {
+function runHarness(
+  scenario: string,
+  workspace: string,
+): { code: number | null; stdout: string; stderr: string } {
   // Source just the helper function definitions and the global var, then dispatch a scenario.
   // Functions live between the `ORKESTRATOR_WORKSPACE_STATE_BACKUP=""` line and the
   // `convert_ssh_to_https()` definition.
@@ -395,7 +405,9 @@ describe("workspace setup preserve/restore (functional)", () => {
     expect(readFileSync(join(workspace, ".orkestrator", "attachments", "image.png"), "utf8")).toBe(
       "binary-content",
     );
-    expect(readFileSync(join(workspace, ".orkestrator", "metadata.json"), "utf8")).toBe(`{"key":"value"}`);
+    expect(readFileSync(join(workspace, ".orkestrator", "metadata.json"), "utf8")).toBe(
+      `{"key":"value"}`,
+    );
     expect(existsSync(join(workspace, "stale-file.txt"))).toBe(false);
   });
 
@@ -415,7 +427,9 @@ describe("workspace setup preserve/restore (functional)", () => {
     const result = runHarness("fallback_path", workspace);
 
     expect(result.code).toBe(0);
-    expect(readFileSync(join(workspace, ".orkestrator", "attachment.txt"), "utf8")).toBe("preserved");
+    expect(readFileSync(join(workspace, ".orkestrator", "attachment.txt"), "utf8")).toBe(
+      "preserved",
+    );
     expect(readFileSync(join(workspace, "repo-file.txt"), "utf8").trim()).toBe("cloned-content");
   });
 
@@ -456,9 +470,9 @@ describe("workspace setup preserve/restore (functional)", () => {
     expect(result.code).toBe(1);
     const backupPath = extractBackupPath(result.stdout);
     expect(existsSync(backupPath)).toBe(false);
-    expect(readFileSync(join(workspace, ".orkestrator", "initial-prompt", "image.png"), "utf8")).toBe(
-      "preserved",
-    );
+    expect(
+      readFileSync(join(workspace, ".orkestrator", "initial-prompt", "image.png"), "utf8"),
+    ).toBe("preserved");
   });
 
   test("restore replaces a cloned .orkestrator symlink instead of writing through it", () => {
@@ -469,7 +483,9 @@ describe("workspace setup preserve/restore (functional)", () => {
 
     expect(result.code).toBe(0);
     expect(lstatSync(join(workspace, ".orkestrator")).isSymbolicLink()).toBe(false);
-    expect(readFileSync(join(workspace, ".orkestrator", "attachment.txt"), "utf8")).toBe("preserved");
+    expect(readFileSync(join(workspace, ".orkestrator", "attachment.txt"), "utf8")).toBe(
+      "preserved",
+    );
     expect(existsSync(join(workspace, "symlink-target", "attachment.txt"))).toBe(false);
   });
 
@@ -481,7 +497,9 @@ describe("workspace setup preserve/restore (functional)", () => {
 
     expect(result.code).toBe(0);
     expect(lstatSync(join(workspace, ".orkestrator")).isDirectory()).toBe(true);
-    expect(readFileSync(join(workspace, ".orkestrator", "attachment.txt"), "utf8")).toBe("preserved");
+    expect(readFileSync(join(workspace, ".orkestrator", "attachment.txt"), "utf8")).toBe(
+      "preserved",
+    );
   });
 
   test("preserve skips a symlinked .orkestrator root", () => {
@@ -554,9 +572,13 @@ describe("workspace setup preserve/restore (functional)", () => {
     runGit(repo, ["commit", "-m", "base"]);
     runGit(repo, ["worktree", "add", "-b", "linked-branch", linkedWorktree]);
 
-    const excludePathResult = spawnSync("git", ["-C", linkedWorktree, "rev-parse", "--git-path", "info/exclude"], {
-      encoding: "utf8",
-    });
+    const excludePathResult = spawnSync(
+      "git",
+      ["-C", linkedWorktree, "rev-parse", "--git-path", "info/exclude"],
+      {
+        encoding: "utf8",
+      },
+    );
     expect(excludePathResult.status).toBe(0);
     expect(lstatSync(join(linkedWorktree, ".git")).isFile()).toBe(true);
 
@@ -566,7 +588,9 @@ describe("workspace setup preserve/restore (functional)", () => {
     expect(first.code).toBe(0);
     expect(second.code).toBe(0);
     const excludePath = excludePathResult.stdout.trim();
-    const excludeFile = isAbsolute(excludePath) ? excludePath : resolve(linkedWorktree, excludePath);
+    const excludeFile = isAbsolute(excludePath)
+      ? excludePath
+      : resolve(linkedWorktree, excludePath);
     const exclude = readFileSync(excludeFile, "utf8");
     expect(exclude).toContain(".orkestrator\n");
     expect(exclude).toContain(".claude/settings.local.json\n");

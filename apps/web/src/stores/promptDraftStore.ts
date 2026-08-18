@@ -80,11 +80,7 @@ export const usePromptDraftStore = create<PromptDraftState>((set) => ({
  * Key builders shared by the cards and by the stores that clear drafts on
  * resolution. Namespaced so ids from different agents can never collide.
  */
-function scopedDraftKey(
-  provider: string,
-  sessionId: string,
-  requestId: string,
-): string {
+function scopedDraftKey(provider: string, sessionId: string, requestId: string): string {
   return `${provider}:${encodeURIComponent(sessionId)}:${encodeURIComponent(requestId)}`;
 }
 
@@ -132,9 +128,9 @@ export function usePromptDraftField<T>(
   // navigation index.
   const identityRef = useRef<FieldIdentity | null>(null);
   if (
-    identityRef.current === null
-    || identityRef.current.draftKey !== draftKey
-    || identityRef.current.field !== field
+    identityRef.current === null ||
+    identityRef.current.draftKey !== draftKey ||
+    identityRef.current.field !== field
   ) {
     identityRef.current = { draftKey, field, value: initial() };
   }
@@ -153,25 +149,20 @@ export function usePromptDraftField<T>(
     (action) => {
       if (draftKey === undefined) {
         setLocalField((previousField) => {
-          const previous = previousField.draftKey === draftKey
-            && previousField.field === field
-            ? previousField.value
-            : identityRef.current!.value;
-          const value = typeof action === "function"
-            ? (action as (prev: T) => T)(previous)
-            : action;
+          const previous =
+            previousField.draftKey === draftKey && previousField.field === field
+              ? previousField.value
+              : identityRef.current!.value;
+          const value =
+            typeof action === "function" ? (action as (prev: T) => T)(previous) : action;
           return { draftKey, field, value };
         });
         return;
       }
       const store = usePromptDraftStore.getState();
       const current = store.drafts.get(draftKey)?.[field];
-      const previous =
-        current === undefined ? identityRef.current!.value : (current as T);
-      const next =
-        typeof action === "function"
-          ? (action as (prev: T) => T)(previous)
-          : action;
+      const previous = current === undefined ? identityRef.current!.value : (current as T);
+      const next = typeof action === "function" ? (action as (prev: T) => T)(previous) : action;
       store.setDraftValue(draftKey, field, next);
     },
     [draftKey, field],

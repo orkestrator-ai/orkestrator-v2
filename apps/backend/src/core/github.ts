@@ -78,7 +78,14 @@ type GitHubRepositoryIdentity = {
 
 type GitHubApiErrorOptions = {
   status?: number;
-  code?: "authentication" | "permission" | "not-found" | "rate-limit" | "validation" | "network" | "github";
+  code?:
+    | "authentication"
+    | "permission"
+    | "not-found"
+    | "rate-limit"
+    | "validation"
+    | "network"
+    | "github";
 };
 
 export class GitHubApiError extends Error {
@@ -139,7 +146,12 @@ function validateRepositoryParts(owner: string, name: string): GitHubRepositoryR
   const normalizedOwner = owner.trim();
   const normalizedName = normalizeRepositoryName(name.trim());
   const validPart = /^[A-Za-z0-9_.-]+$/;
-  if (!normalizedOwner || !normalizedName || !validPart.test(normalizedOwner) || !validPart.test(normalizedName)) {
+  if (
+    !normalizedOwner ||
+    !normalizedName ||
+    !validPart.test(normalizedOwner) ||
+    !validPart.test(normalizedName)
+  ) {
     throw new GitHubApiError(
       "Could not resolve the GitHub repository. Use an HTTPS or SSH GitHub repository URL.",
       { code: "validation" },
@@ -177,13 +189,12 @@ export function resolveGitHubRepository(gitUrl: string): GitHubRepositoryRef {
   }
 
   if (
-    parsed.hostname.toLowerCase() !== "github.com"
-    || (parsed.protocol !== "https:" && parsed.protocol !== "ssh:")
+    parsed.hostname.toLowerCase() !== "github.com" ||
+    (parsed.protocol !== "https:" && parsed.protocol !== "ssh:")
   ) {
-    throw new GitHubApiError(
-      "This project repository must use a github.com HTTPS or SSH URL.",
-      { code: "validation" },
-    );
+    throw new GitHubApiError("This project repository must use a github.com HTTPS or SSH URL.", {
+      code: "validation",
+    });
   }
 
   const parts = parsed.pathname.split("/").filter(Boolean);
@@ -233,9 +244,10 @@ function rateLimitMessage(response: Response): string {
 function responseError(response: Response, payload: unknown, operation: string): GitHubApiError {
   const status = response.status;
   const apiMessage = safePayloadMessage(payload)?.toLowerCase() ?? "";
-  const rateLimited = response.headers.get("x-ratelimit-remaining") === "0"
-    || response.headers.has("retry-after")
-    || apiMessage.includes("rate limit");
+  const rateLimited =
+    response.headers.get("x-ratelimit-remaining") === "0" ||
+    response.headers.has("retry-after") ||
+    apiMessage.includes("rate limit");
 
   if ((status === 403 || status === 429) && rateLimited) {
     return new GitHubApiError(rateLimitMessage(response), { status, code: "rate-limit" });
@@ -270,10 +282,10 @@ function responseError(response: Response, payload: unknown, operation: string):
       { status, code: "validation" },
     );
   }
-  return new GitHubApiError(
-    `GitHub could not ${operation} (HTTP ${status}). Try again.`,
-    { status, code: "github" },
-  );
+  return new GitHubApiError(`GitHub could not ${operation} (HTTP ${status}). Try again.`, {
+    status,
+    code: "github",
+  });
 }
 
 function requestUrl(pathOrUrl: string): string {
@@ -303,9 +315,7 @@ async function githubRequest<T>(
 
   let response: Response;
   const timeoutSignal = AbortSignal.timeout(GITHUB_REQUEST_TIMEOUT_MS);
-  const signal = init.signal
-    ? AbortSignal.any([init.signal, timeoutSignal])
-    : timeoutSignal;
+  const signal = init.signal ? AbortSignal.any([init.signal, timeoutSignal]) : timeoutSignal;
   try {
     response = await fetchImpl(requestUrl(pathOrUrl), {
       ...init,
@@ -371,12 +381,16 @@ async function githubPaginatedArray(
   while (next) {
     const url = requestUrl(next);
     if (visited.has(url)) {
-      throw new GitHubApiError(`GitHub ${operation} pagination repeated a page. Refresh and try again.`);
+      throw new GitHubApiError(
+        `GitHub ${operation} pagination repeated a page. Refresh and try again.`,
+      );
     }
     visited.add(url);
     const { data, response } = await githubRequest<unknown>(token, url, operation, {}, fetchImpl);
     if (!Array.isArray(data)) {
-      throw new GitHubApiError(`GitHub returned an invalid list while trying to ${operation}. Try again.`);
+      throw new GitHubApiError(
+        `GitHub returned an invalid list while trying to ${operation}. Try again.`,
+      );
     }
     values.push(...data);
     next = nextLink(response.headers.get("link"));
@@ -426,7 +440,9 @@ function issueFromApi(value: unknown): GitHubIssue | null {
   if (!id || !issueNumber || !title || !htmlUrl || !createdAt || !updatedAt) return null;
 
   const labelValues = Array.isArray(value.labels) ? value.labels : [];
-  const labels = labelValues.map(labelFromApi).filter((label): label is GitHubLabel => label !== null);
+  const labels = labelValues
+    .map(labelFromApi)
+    .filter((label): label is GitHubLabel => label !== null);
   const assigneeValues = Array.isArray(value.assignees) ? value.assignees : [];
   return {
     id,
@@ -470,8 +486,10 @@ function viewerCanEditComment(
   viewer: GitHubViewer,
   viewerCanManageIssueComments: boolean,
 ): boolean {
-  return viewerCanManageIssueComments
-    || comment.author?.login.toLowerCase() === viewer.login.toLowerCase();
+  return (
+    viewerCanManageIssueComments ||
+    comment.author?.login.toLowerCase() === viewer.login.toLowerCase()
+  );
 }
 
 async function loadRepositoryIdentity(
@@ -485,19 +503,26 @@ async function loadRepositoryIdentity(
     githubRequest<unknown>(token, base, "load the project repository", {}, fetchImpl),
   ]);
   const viewer = userFromApi(viewerResult.data);
-  if (!viewer) throw new GitHubApiError("GitHub returned an invalid authenticated user. Update the token and try again.");
+  if (!viewer)
+    throw new GitHubApiError(
+      "GitHub returned an invalid authenticated user. Update the token and try again.",
+    );
   if (!isRecord(repositoryResult.data)) {
     throw new GitHubApiError("GitHub returned invalid repository information. Try again.");
   }
   const fullName = stringValue(repositoryResult.data.full_name, `${ref.owner}/${ref.name}`);
-  const htmlUrl = stringValue(repositoryResult.data.html_url, `https://github.com/${ref.owner}/${ref.name}`);
-  const permissions = isRecord(repositoryResult.data.permissions) ? repositoryResult.data.permissions : {};
+  const htmlUrl = stringValue(
+    repositoryResult.data.html_url,
+    `https://github.com/${ref.owner}/${ref.name}`,
+  );
+  const permissions = isRecord(repositoryResult.data.permissions)
+    ? repositoryResult.data.permissions
+    : {};
   return {
     viewer,
     repository: { ...ref, fullName, htmlUrl },
-    viewerCanManageIssueComments: permissions.admin === true
-      || permissions.maintain === true
-      || permissions.push === true,
+    viewerCanManageIssueComments:
+      permissions.admin === true || permissions.maintain === true || permissions.push === true,
   };
 }
 
@@ -507,7 +532,12 @@ async function ensureWorkflowLabelsUnlocked(
   fetchImpl: GitHubFetch,
 ): Promise<void> {
   const base = repositoryPath(ref);
-  const labelValues = await githubPaginatedArray(token, `${base}/labels`, "load repository labels", fetchImpl);
+  const labelValues = await githubPaginatedArray(
+    token,
+    `${base}/labels`,
+    "load repository labels",
+    fetchImpl,
+  );
   const existing = new Set(
     labelValues
       .map(labelFromApi)
@@ -515,9 +545,21 @@ async function ensureWorkflowLabelsUnlocked(
       .map((label) => label.name.toLowerCase()),
   );
   const definitions: Array<{ name: string; color: string; description: string }> = [
-    { name: GITHUB_STATUS_LABELS.todo, color: "D4C5F9", description: "Ready to start in Orkestrator" },
-    { name: GITHUB_STATUS_LABELS.inprogress, color: "FBCA04", description: "In progress in Orkestrator" },
-    { name: GITHUB_STATUS_LABELS.review, color: "0E8A16", description: "Ready for review in Orkestrator" },
+    {
+      name: GITHUB_STATUS_LABELS.todo,
+      color: "D4C5F9",
+      description: "Ready to start in Orkestrator",
+    },
+    {
+      name: GITHUB_STATUS_LABELS.inprogress,
+      color: "FBCA04",
+      description: "In progress in Orkestrator",
+    },
+    {
+      name: GITHUB_STATUS_LABELS.review,
+      color: "0E8A16",
+      description: "Ready for review in Orkestrator",
+    },
   ];
 
   for (const label of definitions) {
@@ -620,7 +662,9 @@ export async function listGitHubIssueComments(
     `load comments for issue #${issueNumber}`,
     fetchImpl,
   );
-  return values.map((value) => commentFromApi(value)).filter((comment): comment is GitHubIssueComment => comment !== null);
+  return values
+    .map((value) => commentFromApi(value))
+    .filter((comment): comment is GitHubIssueComment => comment !== null);
 }
 
 export async function getGitHubIssue(
@@ -638,7 +682,11 @@ export async function getGitHubIssue(
     ...issue,
     comments: comments.map((comment) => ({
       ...comment,
-      canEdit: viewerCanEditComment(comment, identity.viewer, identity.viewerCanManageIssueComments),
+      canEdit: viewerCanEditComment(
+        comment,
+        identity.viewer,
+        identity.viewerCanManageIssueComments,
+      ),
     })),
   };
 }
@@ -664,7 +712,10 @@ export async function updateGitHubIssue(
     fetchImpl,
   );
   const issue = issueFromApi(data);
-  if (!issue) throw new GitHubApiError(`GitHub returned an invalid update for issue #${issueNumber}. Refresh and try again.`);
+  if (!issue)
+    throw new GitHubApiError(
+      `GitHub returned an invalid update for issue #${issueNumber}. Refresh and try again.`,
+    );
   return issue;
 }
 
@@ -737,7 +788,10 @@ export async function closeGitHubIssue(
     fetchImpl,
   );
   const issue = issueFromApi(data);
-  if (!issue) throw new GitHubApiError(`GitHub returned an invalid result while closing issue #${issueNumber}. Refresh and try again.`);
+  if (!issue)
+    throw new GitHubApiError(
+      `GitHub returned an invalid result while closing issue #${issueNumber}. Refresh and try again.`,
+    );
   return issue;
 }
 
@@ -758,11 +812,18 @@ export async function postGitHubIssueComment(
     fetchImpl,
   );
   const comment = commentFromApi(data, true);
-  if (!comment) throw new GitHubApiError(`GitHub returned an invalid comment for issue #${issueNumber}. Refresh and try again.`);
+  if (!comment)
+    throw new GitHubApiError(
+      `GitHub returned an invalid comment for issue #${issueNumber}. Refresh and try again.`,
+    );
   return comment;
 }
 
-function commentBelongsToIssue(value: unknown, ref: GitHubRepositoryRef, issueNumber: number): boolean {
+function commentBelongsToIssue(
+  value: unknown,
+  ref: GitHubRepositoryRef,
+  issueNumber: number,
+): boolean {
   if (!isRecord(value)) return false;
   const issueUrl = optionalString(value.issue_url);
   if (!issueUrl) return false;
@@ -770,14 +831,14 @@ function commentBelongsToIssue(value: unknown, ref: GitHubRepositoryRef, issueNu
     const url = new URL(issueUrl);
     const parts = url.pathname.split("/");
     if (
-      url.origin !== GITHUB_API_BASE
-      || url.username
-      || url.password
-      || url.search
-      || url.hash
-      || parts.length !== 6
-      || parts[1] !== "repos"
-      || parts[4] !== "issues"
+      url.origin !== GITHUB_API_BASE ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash ||
+      parts.length !== 6 ||
+      parts[1] !== "repos" ||
+      parts[4] !== "issues"
     ) {
       return false;
     }
@@ -785,11 +846,13 @@ function commentBelongsToIssue(value: unknown, ref: GitHubRepositoryRef, issueNu
     const name = decodeURIComponent(parts[3] ?? "");
     const issueNumberPart = parts[5] ?? "";
     const targetIssueNumber = Number(issueNumberPart);
-    return owner.toLowerCase() === ref.owner.toLowerCase()
-      && name.toLowerCase() === ref.name.toLowerCase()
-      && /^[1-9]\d*$/.test(issueNumberPart)
-      && Number.isSafeInteger(targetIssueNumber)
-      && targetIssueNumber === issueNumber;
+    return (
+      owner.toLowerCase() === ref.owner.toLowerCase() &&
+      name.toLowerCase() === ref.name.toLowerCase() &&
+      /^[1-9]\d*$/.test(issueNumberPart) &&
+      Number.isSafeInteger(targetIssueNumber) &&
+      targetIssueNumber === issueNumber
+    );
   } catch {
     return false;
   }
@@ -825,7 +888,10 @@ export async function updateGitHubIssueComment(
     );
   }
   const current = commentFromApi(currentResult.data);
-  if (!current) throw new GitHubApiError(`GitHub returned an invalid comment ${commentId}. Refresh and try again.`);
+  if (!current)
+    throw new GitHubApiError(
+      `GitHub returned an invalid comment ${commentId}. Refresh and try again.`,
+    );
   if (!viewerCanEditComment(current, identity.viewer, identity.viewerCanManageIssueComments)) {
     throw new GitHubApiError(
       "The authenticated GitHub user does not have permission to edit this comment.",
@@ -841,6 +907,9 @@ export async function updateGitHubIssueComment(
     fetchImpl,
   );
   const comment = commentFromApi(data, true);
-  if (!comment) throw new GitHubApiError(`GitHub returned an invalid comment update for ${commentId}. Refresh and try again.`);
+  if (!comment)
+    throw new GitHubApiError(
+      `GitHub returned an invalid comment update for ${commentId}. Refresh and try again.`,
+    );
   return comment;
 }

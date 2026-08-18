@@ -37,8 +37,9 @@ describe("DropdownMenu primitives", () => {
       </DropdownMenu>,
     );
 
-    expect(document.querySelector('[data-slot="dropdown-menu-content"]')?.className)
-      .toContain("z-50");
+    expect(document.querySelector('[data-slot="dropdown-menu-content"]')?.className).toContain(
+      "z-50",
+    );
   });
 
   test("inherits a raised overlay portal layer from an ancestor", () => {
@@ -71,7 +72,8 @@ describe("DropdownMenu primitives", () => {
     );
 
     fireEvent.pointerDown(screen.getByRole("button", { name: "Models" }));
-    const menu = screen.getByRole("menuitem", { name: "Haiku" })
+    const menu = screen
+      .getByRole("menuitem", { name: "Haiku" })
       .closest('[data-slot="dropdown-menu-content"]');
     expect(menu?.className).toContain("custom-menu");
     expect(menu?.className).toContain("z-[70]");

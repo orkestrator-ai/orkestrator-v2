@@ -8,18 +8,12 @@ import type {
 import type { AcpTurnUsage } from "./usage.js";
 import type { AcpNormalizedSessionConfig } from "./session-config.js";
 
-
 export type Provider = "cursor" | "grok";
 export type JsonObject = Record<string, unknown>;
 export type SessionStatus = "idle" | "running" | "error";
 
 /** Display status of a Cursor ACP todo. Matches `cursor/update_todos`. */
-export const CURSOR_TODO_STATUSES = [
-  "pending",
-  "in_progress",
-  "completed",
-  "cancelled",
-] as const;
+export const CURSOR_TODO_STATUSES = ["pending", "in_progress", "completed", "cancelled"] as const;
 export type CursorTodoStatus = (typeof CURSOR_TODO_STATUSES)[number];
 
 export interface CursorTodoItem {
@@ -330,11 +324,13 @@ export const provider = parseProvider(process.env.ACP_PROVIDER);
 export const port = parsePort(process.env.PORT);
 export const hostname = process.env.HOSTNAME?.trim() || "127.0.0.1";
 export const workingDirectory = resolve(process.env.CWD?.trim() || process.cwd());
-export const authToken = process.env.ACP_BRIDGE_TOKEN?.trim() || randomBytes(32).toString("base64url");
+export const authToken =
+  process.env.ACP_BRIDGE_TOKEN?.trim() || randomBytes(32).toString("base64url");
 // `cursor` is the desktop editor's shell command on user machines. Cursor's
 // ACP-capable CLI is `cursor-agent`; never let a missing configuration launch
 // the GUI as an accidental fallback.
-export const executable = process.env.ACP_AGENT_PATH?.trim() || (provider === "cursor" ? "cursor-agent" : "grok");
+export const executable =
+  process.env.ACP_AGENT_PATH?.trim() || (provider === "cursor" ? "cursor-agent" : "grok");
 export const approveProjectMcps = process.env.ACP_APPROVE_PROJECT_MCPS === "1";
 export const stateDirectory = process.env.ACP_STATE_DIR?.trim();
 export const stateFile = stateDirectory ? resolve(stateDirectory, "state.json") : null;
@@ -399,9 +395,9 @@ export const MAX_HISTORY_MESSAGE_IDS = 1_024;
  */
 export const MAX_TRANSCRIPT_BYTES = parseBoundedInteger(
   process.env.ACP_MAX_TRANSCRIPT_BYTES,
-  (16 * 1024 * 1024) - (128 * 1024),
+  16 * 1024 * 1024 - 128 * 1024,
   1024 * 1024,
-  (16 * 1024 * 1024) - (128 * 1024),
+  16 * 1024 * 1024 - 128 * 1024,
 );
 export const MAX_MESSAGE_TEXT_BYTES = 2 * 1024 * 1024;
 export const MAX_PARTS_PER_MESSAGE = 512;
@@ -543,12 +539,15 @@ export const ACP_TOKEN_HEADER = "x-orkestrator-acp-token";
 export class AcpProcess {
   readonly child: ChildProcessWithoutNullStreams;
   #nextId = 1;
-  #pending = new Map<number, {
-    resolve(value: unknown): void;
-    reject(error: Error): void;
-    timer: ReturnType<typeof setTimeout>;
-    cleanupAbort?: () => void;
-  }>();
+  #pending = new Map<
+    number,
+    {
+      resolve(value: unknown): void;
+      reject(error: Error): void;
+      timer: ReturnType<typeof setTimeout>;
+      cleanupAbort?: () => void;
+    }
+  >();
   #closed = false;
   #stdoutBuffer = Buffer.alloc(0);
   onUpdate: (params: JsonObject) => void = () => undefined;
@@ -581,20 +580,21 @@ export class AcpProcess {
     // a stray ambient value — fails closed. Only the container launcher opts
     // in; `startLocalServerUnlocked` pins it to "0" after inheriting the
     // parent environment for exactly that reason.
-    const args = provider === "cursor"
-      ? [
-          "--force",
-          ...(approveProjectMcps ? ["--approve-mcps"] : []),
-          ...(spawnOptions.model ? ["--model", spawnOptions.model] : []),
-          "acp",
-        ]
-      : [
-          "--always-approve",
-          "agent",
-          ...(spawnOptions.model ? ["--model", spawnOptions.model] : []),
-          ...(spawnOptions.effort ? ["--reasoning-effort", spawnOptions.effort] : []),
-          "stdio",
-        ];
+    const args =
+      provider === "cursor"
+        ? [
+            "--force",
+            ...(approveProjectMcps ? ["--approve-mcps"] : []),
+            ...(spawnOptions.model ? ["--model", spawnOptions.model] : []),
+            "acp",
+          ]
+        : [
+            "--always-approve",
+            "agent",
+            ...(spawnOptions.model ? ["--model", spawnOptions.model] : []),
+            ...(spawnOptions.effort ? ["--reasoning-effort", spawnOptions.effort] : []),
+            "stdio",
+          ];
     this.child = spawn(executable, args, {
       cwd: workingDirectory,
       env: process.env,
@@ -616,21 +616,30 @@ export class AcpProcess {
     }
     this.child.once("error", (error) => this.#close(error));
     this.child.once("exit", (code, signal) => {
-      this.#close(new Error(`${provider} ACP process exited (code ${code ?? "null"}, signal ${signal ?? "null"})`));
+      this.#close(
+        new Error(
+          `${provider} ACP process exited (code ${code ?? "null"}, signal ${signal ?? "null"})`,
+        ),
+      );
     });
   }
 
   async initialize(signal?: AbortSignal): Promise<JsonObject> {
-    const result = await this.request("initialize", {
-      protocolVersion: 1,
-      clientCapabilities: {
-        fs: { readTextFile: false, writeTextFile: false },
-        terminal: false,
-        session: { configOptions: { boolean: {} } },
-        _meta: { parameterizedModelPicker: true },
+    const result = await this.request(
+      "initialize",
+      {
+        protocolVersion: 1,
+        clientCapabilities: {
+          fs: { readTextFile: false, writeTextFile: false },
+          terminal: false,
+          session: { configOptions: { boolean: {} } },
+          _meta: { parameterizedModelPicker: true },
+        },
+        clientInfo: { name: "orkestrator", title: "Orkestrator", version: "1.0.0" },
       },
-      clientInfo: { name: "orkestrator", title: "Orkestrator", version: "1.0.0" },
-    }, RPC_TIMEOUT_MS, signal);
+      RPC_TIMEOUT_MS,
+      signal,
+    );
     const initialized = isObject(result) ? result : {};
     rememberAgentRuntime(initialized);
     return initialized;
@@ -686,13 +695,19 @@ export class AcpProcess {
 
   async close(): Promise<void> {
     if (this.child.exitCode !== null || this.child.signalCode !== null) return;
-    const exited = new Promise<void>((resolvePromise) => this.child.once("exit", () => resolvePromise()));
+    const exited = new Promise<void>((resolvePromise) =>
+      this.child.once("exit", () => resolvePromise()),
+    );
     this.child.kill("SIGTERM");
     const forced = setTimeout(() => {
-      if (this.child.exitCode === null && this.child.signalCode === null) this.child.kill("SIGKILL");
+      if (this.child.exitCode === null && this.child.signalCode === null)
+        this.child.kill("SIGKILL");
     }, 2_000);
     forced.unref();
-    await Promise.race([exited, new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 3_000))]);
+    await Promise.race([
+      exited,
+      new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 3_000)),
+    ]);
     clearTimeout(forced);
   }
 
@@ -749,7 +764,9 @@ export class AcpProcess {
       pending.cleanupAbort?.();
       if (message.error && typeof message.error === "object") {
         const error = message.error as JsonObject;
-        pending.reject(new Error(typeof error.message === "string" ? error.message : "ACP request failed"));
+        pending.reject(
+          new Error(typeof error.message === "string" ? error.message : "ACP request failed"),
+        );
       } else {
         pending.resolve(message.result);
       }
@@ -863,10 +880,8 @@ export function supportsSessionCapability(initialized: JsonObject, capability: s
   const sessionCapabilities = isObject(agentCapabilities?.sessionCapabilities)
     ? agentCapabilities.sessionCapabilities
     : undefined;
-  return sessionCapabilities?.[capability] === true
-    || isObject(sessionCapabilities?.[capability]);
+  return sessionCapabilities?.[capability] === true || isObject(sessionCapabilities?.[capability]);
 }
-
 
 export function isObject(value: unknown): value is JsonObject {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -879,7 +894,8 @@ export function parseProvider(value: string | undefined): Provider {
 
 export function parsePort(value: string | undefined): number {
   const parsed = Number(value || "4099");
-  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65_535) throw new Error("PORT is invalid");
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65_535)
+    throw new Error("PORT is invalid");
   return parsed;
 }
 
@@ -897,13 +913,14 @@ export function parseBoundedInteger(
 ): number {
   if (value === undefined) return fallback;
   const parsed = Number(value);
-  return Number.isSafeInteger(parsed) && parsed >= minimum && parsed <= maximum
-    ? parsed
-    : fallback;
+  return Number.isSafeInteger(parsed) && parsed >= minimum && parsed <= maximum ? parsed : fallback;
 }
 
 export class HttpError extends Error {
-  constructor(readonly status: number, message: string) {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
     super(message);
   }
 }
@@ -926,10 +943,18 @@ export function isCursorAcknowledgedExtensionMethod(method: string): boolean {
 }
 
 export function isVendorModelUpdate(method: string, params: JsonObject): boolean {
-  if (method === "x.ai/models/update" || method === "_x.ai/models/update" || method === "cursor/models/update") {
+  if (
+    method === "x.ai/models/update" ||
+    method === "_x.ai/models/update" ||
+    method === "cursor/models/update"
+  ) {
     return true;
   }
-  if (method !== "x.ai/session/update" && method !== "_x.ai/session/update" && method !== "cursor/session/update") {
+  if (
+    method !== "x.ai/session/update" &&
+    method !== "_x.ai/session/update" &&
+    method !== "cursor/session/update"
+  ) {
     return false;
   }
   const update = isObject(params.update) ? params.update : params;
@@ -944,11 +969,12 @@ export function rememberCatalog(composer: NativeAgentComposerState): void {
 function rememberAgentRuntime(initialized: JsonObject): void {
   const meta = isObject(initialized._meta) ? initialized._meta : {};
   const agentInfo = isObject(initialized.agentInfo) ? initialized.agentInfo : {};
-  const version = typeof agentInfo.version === "string"
-    ? agentInfo.version
-    : typeof meta.agentVersion === "string"
-      ? meta.agentVersion
-      : undefined;
+  const version =
+    typeof agentInfo.version === "string"
+      ? agentInfo.version
+      : typeof meta.agentVersion === "string"
+        ? meta.agentVersion
+        : undefined;
   if (version) agentRuntime.version = version.slice(0, 64);
 }
 

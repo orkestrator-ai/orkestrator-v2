@@ -103,19 +103,17 @@ describe("CreateEnvironmentFlowDialog", () => {
   beforeEach(() => {
     updateEnvironmentAgentSettingsMock.mockClear();
     rememberEnvironmentAgentSelectionMock.mockClear();
-    rememberEnvironmentAgentSelectionMock.mockImplementation(
-      async (projectId, selection) => {
-        const config = structuredClone(useConfigStore.getState().config);
-        config.repositories[projectId] = {
-          ...(config.repositories[projectId] ?? {
-            defaultBranch: "main",
-            prBaseBranch: "main",
-          }),
-          lastEnvironmentAgentSelection: selection,
-        };
-        return config;
-      },
-    );
+    rememberEnvironmentAgentSelectionMock.mockImplementation(async (projectId, selection) => {
+      const config = structuredClone(useConfigStore.getState().config);
+      config.repositories[projectId] = {
+        ...(config.repositories[projectId] ?? {
+          defaultBranch: "main",
+          prBaseBranch: "main",
+        }),
+        lastEnvironmentAgentSelection: selection,
+      };
+      return config;
+    });
     getContainerGitHubCredentialStatusMock.mockClear();
     getContainerGitHubCredentialStatusMock.mockResolvedValue({
       source: "host-cli",
@@ -129,27 +127,31 @@ describe("CreateEnvironmentFlowDialog", () => {
       error: null,
     });
     useProjectStore.setState({
-      projects: [{
-        id: "project-1",
-        name: "Project One",
-        gitUrl: "https://example.test/project-one.git",
-        localPath: "/work/project-one",
-        addedAt: "2026-08-11T00:00:00.000Z",
-        order: 0,
-      }],
+      projects: [
+        {
+          id: "project-1",
+          name: "Project One",
+          gitUrl: "https://example.test/project-one.git",
+          localPath: "/work/project-one",
+          addedAt: "2026-08-11T00:00:00.000Z",
+          order: 0,
+        },
+      ],
     });
   });
 
   test("does not submit a forced local fallback for a remote-only project", async () => {
     useProjectStore.setState({
-      projects: [{
-        id: "project-1",
-        name: "Remote Only",
-        gitUrl: "https://example.test/remote-only.git",
-        localPath: null,
-        addedAt: "2026-08-11T00:00:00.000Z",
-        order: 0,
-      }],
+      projects: [
+        {
+          id: "project-1",
+          name: "Remote Only",
+          gitUrl: "https://example.test/remote-only.git",
+          localPath: null,
+          addedAt: "2026-08-11T00:00:00.000Z",
+          order: 0,
+        },
+      ],
     });
     const createEnvironment = mock(async () => ({ id: "env-impossible-local" }) as Environment);
 
@@ -166,10 +168,12 @@ describe("CreateEnvironmentFlowDialog", () => {
       </DockerAvailabilityProvider>,
     );
 
-    expect((screen.getByRole("button", { name: /Containerized/ }) as HTMLButtonElement).disabled)
-      .toBe(true);
-    expect((screen.getByRole("button", { name: /Local/ }) as HTMLButtonElement).disabled)
-      .toBe(true);
+    expect(
+      (screen.getByRole("button", { name: /Containerized/ }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect((screen.getByRole("button", { name: /Local/ }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
     const submit = screen.getByRole("button", { name: "Create Environment" });
     expect((submit as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(submit);
@@ -252,18 +256,15 @@ describe("CreateEnvironmentFlowDialog", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
+    expect(await screen.findByText("GitHub credentials could not be verified")).toBeTruthy();
     expect(
-      await screen.findByText("GitHub credentials could not be verified"),
+      screen.getByText(/could not confirm that GitHub credentials are available/i),
     ).toBeTruthy();
-    expect(screen.getByText(/could not confirm that GitHub credentials are available/i))
-      .toBeTruthy();
     expect(createEnvironment).not.toHaveBeenCalled();
   });
 
   test("cancels a delayed credential preflight when the dialog closes", async () => {
-    let resolveStatus:
-      | ((status: GitHubCredentialStatus) => void)
-      | undefined;
+    let resolveStatus: ((status: GitHubCredentialStatus) => void) | undefined;
     getContainerGitHubCredentialStatusMock.mockImplementationOnce(
       () =>
         new Promise<GitHubCredentialStatus>((resolve) => {
@@ -281,9 +282,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     const view = render(<CreateEnvironmentFlowDialog open {...props} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
-    await waitFor(() =>
-      expect(getContainerGitHubCredentialStatusMock).toHaveBeenCalledTimes(1),
-    );
+    await waitFor(() => expect(getContainerGitHubCredentialStatusMock).toHaveBeenCalledTimes(1));
 
     view.rerender(<CreateEnvironmentFlowDialog open={false} {...props} />);
     await act(async () => {
@@ -296,9 +295,7 @@ describe("CreateEnvironmentFlowDialog", () => {
   });
 
   test("ignores a delayed credential result after switching projects", async () => {
-    let resolveStatus:
-      | ((status: GitHubCredentialStatus) => void)
-      | undefined;
+    let resolveStatus: ((status: GitHubCredentialStatus) => void) | undefined;
     getContainerGitHubCredentialStatusMock.mockImplementationOnce(
       () =>
         new Promise<GitHubCredentialStatus>((resolve) => {
@@ -313,18 +310,12 @@ describe("CreateEnvironmentFlowDialog", () => {
       updateEnvironment: () => {},
       startEnvironment: async () => {},
     };
-    const view = render(
-      <CreateEnvironmentFlowDialog projectId="project-1" {...sharedProps} />,
-    );
+    const view = render(<CreateEnvironmentFlowDialog projectId="project-1" {...sharedProps} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
-    await waitFor(() =>
-      expect(getContainerGitHubCredentialStatusMock).toHaveBeenCalledTimes(1),
-    );
+    await waitFor(() => expect(getContainerGitHubCredentialStatusMock).toHaveBeenCalledTimes(1));
 
-    view.rerender(
-      <CreateEnvironmentFlowDialog projectId="project-2" {...sharedProps} />,
-    );
+    view.rerender(<CreateEnvironmentFlowDialog projectId="project-2" {...sharedProps} />);
     await act(async () => {
       resolveStatus?.({ source: "host-cli", available: false });
       await Promise.resolve();
@@ -346,9 +337,7 @@ describe("CreateEnvironmentFlowDialog", () => {
   });
 
   test("settles a delayed credential preflight when unmounted", async () => {
-    let resolveStatus:
-      | ((status: GitHubCredentialStatus) => void)
-      | undefined;
+    let resolveStatus: ((status: GitHubCredentialStatus) => void) | undefined;
     getContainerGitHubCredentialStatusMock.mockImplementationOnce(
       () =>
         new Promise<GitHubCredentialStatus>((resolve) => {
@@ -368,9 +357,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
-    await waitFor(() =>
-      expect(getContainerGitHubCredentialStatusMock).toHaveBeenCalledTimes(1),
-    );
+    await waitFor(() => expect(getContainerGitHubCredentialStatusMock).toHaveBeenCalledTimes(1));
     view.unmount();
 
     await act(async () => {
@@ -381,9 +368,7 @@ describe("CreateEnvironmentFlowDialog", () => {
   });
 
   test("cancels a delayed container credential preflight when Docker stops", async () => {
-    let resolveStatus:
-      | ((status: GitHubCredentialStatus) => void)
-      | undefined;
+    let resolveStatus: ((status: GitHubCredentialStatus) => void) | undefined;
     getContainerGitHubCredentialStatusMock.mockImplementationOnce(
       () =>
         new Promise<GitHubCredentialStatus>((resolve) => {
@@ -406,9 +391,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
-    await waitFor(() =>
-      expect(getContainerGitHubCredentialStatusMock).toHaveBeenCalledTimes(1),
-    );
+    await waitFor(() => expect(getContainerGitHubCredentialStatusMock).toHaveBeenCalledTimes(1));
 
     view.rerender(
       <DockerAvailabilityProvider available={false}>
@@ -531,19 +514,19 @@ describe("CreateEnvironmentFlowDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
     await waitFor(() => {
-      expect(startEnvironment).toHaveBeenCalledWith(
-        "env-background",
-        "",
-        { background: true, silent: true },
-      );
+      expect(startEnvironment).toHaveBeenCalledWith("env-background", "", {
+        background: true,
+        silent: true,
+      });
     });
   });
 
   test("closes without awaiting background provisioning", async () => {
     const startEnvironment = mock(
-      () => new Promise<void>(() => {
-        // Backend admission intentionally never settles in this test.
-      }),
+      () =>
+        new Promise<void>(() => {
+          // Backend admission intentionally never settles in this test.
+        }),
     );
     const onOpenChange = mock(() => {});
     render(
@@ -560,11 +543,10 @@ describe("CreateEnvironmentFlowDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
     await waitFor(() => {
-      expect(startEnvironment).toHaveBeenCalledWith(
-        "env-pending-start",
-        "",
-        { background: true, silent: true },
-      );
+      expect(startEnvironment).toHaveBeenCalledWith("env-pending-start", "", {
+        background: true,
+        silent: true,
+      });
       expect(onOpenChange).toHaveBeenCalledWith(false);
     });
   });
@@ -595,10 +577,7 @@ describe("CreateEnvironmentFlowDialog", () => {
 
       await waitFor(() => {
         expect(onOpenChange).toHaveBeenCalledWith(false);
-        expect(consoleError).toHaveBeenCalledWith(
-          "Failed to auto-start environment:",
-          startError,
-        );
+        expect(consoleError).toHaveBeenCalledWith("Failed to auto-start environment:", startError);
       });
     } finally {
       console.error = originalConsoleError;
@@ -635,9 +614,7 @@ describe("CreateEnvironmentFlowDialog", () => {
 
     fireEvent.pointerDown(picker, { button: 0, ctrlKey: false });
     fireEvent.click(await screen.findByRole("button", { name: "codex models" }));
-    fireEvent.click(
-      await screen.findByRole("menuitemradio", { name: /GPT-5\.4-Mini/ }),
-    );
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: /GPT-5\.4-Mini/ }));
     fireEvent.pointerDown(picker, { button: 0, ctrlKey: false });
     fireEvent.click(await screen.findByRole("menuitemradio", { name: "High" }));
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
@@ -647,21 +624,17 @@ describe("CreateEnvironmentFlowDialog", () => {
     expect(call[6]).toBe(true);
     expect(call[7]).toBe("gpt-5.4-mini");
     expect(call[8]).toBe("high");
-    expect(rememberEnvironmentAgentSelectionMock).toHaveBeenCalledWith(
-      "project-1",
-      {
-        platform: "codex",
-        mode: "native",
-        model: "gpt-5.4-mini",
-        reasoningEffort: "high",
-      },
-    );
+    expect(rememberEnvironmentAgentSelectionMock).toHaveBeenCalledWith("project-1", {
+      platform: "codex",
+      mode: "native",
+      model: "gpt-5.4-mini",
+      reasoningEffort: "high",
+    });
     // The write is deliberately not awaited by the create flow, so the store
     // catches up on its own tick.
     await waitFor(() => {
       expect(
-        useConfigStore.getState().config.repositories["project-1"]
-          ?.lastEnvironmentAgentSelection,
+        useConfigStore.getState().config.repositories["project-1"]?.lastEnvironmentAgentSelection,
       ).toEqual({
         platform: "codex",
         mode: "native",
@@ -669,13 +642,13 @@ describe("CreateEnvironmentFlowDialog", () => {
         reasoningEffort: "high",
       });
     });
-    expect(
-      useClaudeOptionsStore.getState().getOptions("env-selected-options"),
-    ).toEqual(expect.objectContaining({
-      agentType: "codex",
-      model: "gpt-5.4-mini",
-      reasoningEffort: "high",
-    }));
+    expect(useClaudeOptionsStore.getState().getOptions("env-selected-options")).toEqual(
+      expect.objectContaining({
+        agentType: "codex",
+        model: "gpt-5.4-mini",
+        reasoningEffort: "high",
+      }),
+    );
   });
 
   test("continues creation without publishing local preference state when remembering fails", async () => {
@@ -700,11 +673,10 @@ describe("CreateEnvironmentFlowDialog", () => {
       fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
       await waitFor(() => {
-        expect(startEnvironment).toHaveBeenCalledWith(
-          "env-preference-failed",
-          "",
-          { background: true, silent: true },
-        );
+        expect(startEnvironment).toHaveBeenCalledWith("env-preference-failed", "", {
+          background: true,
+          silent: true,
+        });
         expect(onOpenChange).toHaveBeenCalledWith(false);
       });
       await waitFor(() => {
@@ -714,8 +686,7 @@ describe("CreateEnvironmentFlowDialog", () => {
         );
       });
       expect(
-        useConfigStore.getState().config.repositories["project-1"]
-          ?.lastEnvironmentAgentSelection,
+        useConfigStore.getState().config.repositories["project-1"]?.lastEnvironmentAgentSelection,
       ).toBeUndefined();
     } finally {
       console.warn = originalConsoleWarn;
@@ -726,9 +697,7 @@ describe("CreateEnvironmentFlowDialog", () => {
   // config write that never settles must not strand the user in the modal with a
   // created-but-unstarted environment.
   test("closes and starts the environment even when the preference write never settles", async () => {
-    rememberEnvironmentAgentSelectionMock.mockImplementationOnce(
-      () => new Promise(() => {}),
-    );
+    rememberEnvironmentAgentSelectionMock.mockImplementationOnce(() => new Promise(() => {}));
     const onOpenChange = mock(() => {});
     const startEnvironment = mock(async () => {});
 
@@ -746,19 +715,17 @@ describe("CreateEnvironmentFlowDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
     await waitFor(() => {
-      expect(startEnvironment).toHaveBeenCalledWith(
-        "env-preference-hung",
-        "",
-        { background: true, silent: true },
-      );
+      expect(startEnvironment).toHaveBeenCalledWith("env-preference-hung", "", {
+        background: true,
+        silent: true,
+      });
       expect(onOpenChange).toHaveBeenCalledWith(false);
     });
     expect(rememberEnvironmentAgentSelectionMock).toHaveBeenCalled();
     // The create button must not be left spinning behind the pending write.
     await waitFor(() => {
       expect(
-        screen.getByRole("button", { name: "Create Environment" })
-          .hasAttribute("disabled"),
+        screen.getByRole("button", { name: "Create Environment" }).hasAttribute("disabled"),
       ).toBe(false);
     });
   });
@@ -768,7 +735,9 @@ describe("CreateEnvironmentFlowDialog", () => {
       const [open, setOpen] = useState(true);
       return (
         <>
-          <button type="button" onClick={() => setOpen(true)}>Reopen creator</button>
+          <button type="button" onClick={() => setOpen(true)}>
+            Reopen creator
+          </button>
           <CreateEnvironmentFlowDialog
             open={open}
             onOpenChange={setOpen}
@@ -803,10 +772,12 @@ describe("CreateEnvironmentFlowDialog", () => {
     expect(picker.textContent).toContain("GPT-5.4-Mini");
     expect(picker.textContent).toContain("High");
     fireEvent.pointerDown(picker, { button: 0, ctrlKey: false });
-    expect(screen.getByRole("button", { name: "Favorite models" }).getAttribute("aria-pressed"))
-      .toBe("false");
-    expect(screen.getByRole("button", { name: "codex models" }).getAttribute("aria-pressed"))
-      .toBe("true");
+    expect(
+      screen.getByRole("button", { name: "Favorite models" }).getAttribute("aria-pressed"),
+    ).toBe("false");
+    expect(screen.getByRole("button", { name: "codex models" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
   });
 
   test("does not let a late catalog refresh replace a user-touched agent selection", async () => {
@@ -828,18 +799,21 @@ describe("CreateEnvironmentFlowDialog", () => {
 
     act(() => {
       useClaudeStore.setState({
-        models: [{
-          id: "late-claude",
-          name: "Late Claude",
-          supportsEffort: false,
-        }],
+        models: [
+          {
+            id: "late-claude",
+            name: "Late Claude",
+            supportsEffort: false,
+          },
+        ],
       });
     });
 
     fireEvent.pointerDown(picker, { button: 0, ctrlKey: false });
     fireEvent.click(screen.getByRole("button", { name: "codex models" }));
-    expect(screen.getByRole("button", { name: "codex models" }).getAttribute("aria-pressed"))
-      .toBe("true");
+    expect(screen.getByRole("button", { name: "codex models" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
     expect(screen.queryByRole("menuitemradio", { name: /Late Claude/ }) === null).toBe(true);
   });
 
@@ -899,27 +873,33 @@ describe("CreateEnvironmentFlowDialog", () => {
   });
 
   test("forwards non-empty launch attachments only while launch is enabled", () => {
-    const attachments = [{
-      id: "image-1",
-      name: "diagram.png",
-      previewUrl: "data:image/png;base64,cHJldmlldw==",
-      base64Data: "cGl4ZWxz",
-    }];
+    const attachments = [
+      {
+        id: "image-1",
+        name: "diagram.png",
+        previewUrl: "data:image/png;base64,cHJldmlldw==",
+        base64Data: "cGl4ZWxz",
+      },
+    ];
 
-    expect(resolveEnvironmentAgentLaunchSettings({
-      ...baseOptions,
-      initialPromptAttachments: attachments,
-    })).toEqual({
+    expect(
+      resolveEnvironmentAgentLaunchSettings({
+        ...baseOptions,
+        initialPromptAttachments: attachments,
+      }),
+    ).toEqual({
       pendingAgentLaunch: true,
       initialAgentModel: "default",
       initialReasoningEffort: undefined,
       initialPromptAttachments: attachments,
     });
-    expect(resolveEnvironmentAgentLaunchSettings({
-      ...baseOptions,
-      launchAgent: false,
-      initialPromptAttachments: attachments,
-    })).toEqual({
+    expect(
+      resolveEnvironmentAgentLaunchSettings({
+        ...baseOptions,
+        launchAgent: false,
+        initialPromptAttachments: attachments,
+      }),
+    ).toEqual({
       pendingAgentLaunch: false,
       initialAgentModel: undefined,
       initialReasoningEffort: undefined,
@@ -976,14 +956,16 @@ describe("CreateEnvironmentFlowDialog", () => {
 
   test("uses the stored project name unless an explicit name is provided", () => {
     useProjectStore.setState({
-      projects: [{
-        id: "project-1",
-        name: "Stored Project",
-        gitUrl: "https://example.invalid/stored.git",
-        localPath: null,
-        addedAt: "2026-01-01T00:00:00.000Z",
-        order: 0,
-      }],
+      projects: [
+        {
+          id: "project-1",
+          name: "Stored Project",
+          gitUrl: "https://example.invalid/stored.git",
+          localPath: null,
+          addedAt: "2026-01-01T00:00:00.000Z",
+          order: 0,
+        },
+      ],
     });
     const operations = {
       createEnvironment: mock(async () => ({ id: "unused" }) as Environment),
@@ -1042,10 +1024,12 @@ describe("CreateEnvironmentFlowDialog", () => {
   });
 
   test("maps optional create fields and derives naming intent only for unnamed environments", () => {
-    expect(resolveEnvironmentCreateRequest({
-      ...baseOptions,
-      initialPrompt: "  repair stale sessions  ",
-    })).toEqual({
+    expect(
+      resolveEnvironmentCreateRequest({
+        ...baseOptions,
+        initialPrompt: "  repair stale sessions  ",
+      }),
+    ).toEqual({
       name: undefined,
       networkAccessMode: "restricted",
       initialPrompt: "  repair stale sessions  ",
@@ -1054,16 +1038,20 @@ describe("CreateEnvironmentFlowDialog", () => {
       namingPrompt: "repair stale sessions",
     });
 
-    expect(resolveEnvironmentCreateRequest({
-      ...baseOptions,
-      environmentName: "Manual Name",
-      initialPrompt: "Do not use this for naming",
-      portMappings: [{ containerPort: 8080, hostPort: 48080, protocol: "tcp" }],
-    })).toEqual(expect.objectContaining({
-      name: "Manual Name",
-      namingPrompt: undefined,
-      portMappings: [{ containerPort: 8080, hostPort: 48080, protocol: "tcp" }],
-    }));
+    expect(
+      resolveEnvironmentCreateRequest({
+        ...baseOptions,
+        environmentName: "Manual Name",
+        initialPrompt: "Do not use this for naming",
+        portMappings: [{ containerPort: 8080, hostPort: 48080, protocol: "tcp" }],
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        name: "Manual Name",
+        namingPrompt: undefined,
+        portMappings: [{ containerPort: 8080, hostPort: 48080, protocol: "tcp" }],
+      }),
+    );
   });
 
   test("maps each agent mode to its backend slot", () => {
@@ -1073,21 +1061,25 @@ describe("CreateEnvironmentFlowDialog", () => {
       opencodeMode: null,
       codexMode: null,
     });
-    expect(resolveEnvironmentAgentSettings({
-      ...baseOptions,
-      agentType: "opencode",
-      opencodeMode: "native",
-    })).toEqual({
+    expect(
+      resolveEnvironmentAgentSettings({
+        ...baseOptions,
+        agentType: "opencode",
+        opencodeMode: "native",
+      }),
+    ).toEqual({
       defaultAgent: "opencode",
       claudeMode: null,
       opencodeMode: "native",
       codexMode: null,
     });
-    expect(resolveEnvironmentAgentSettings({
-      ...baseOptions,
-      agentType: "codex",
-      codexMode: "terminal",
-    })).toEqual({
+    expect(
+      resolveEnvironmentAgentSettings({
+        ...baseOptions,
+        agentType: "codex",
+        codexMode: "terminal",
+      }),
+    ).toEqual({
       defaultAgent: "codex",
       claudeMode: null,
       opencodeMode: null,

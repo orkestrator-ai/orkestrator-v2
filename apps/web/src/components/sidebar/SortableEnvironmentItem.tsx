@@ -30,14 +30,9 @@ export function SortableEnvironmentItem({
   isMultiSelectMode = false,
   isChecked = false,
 }: SortableEnvironmentItemProps) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: environment.id });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: environment.id,
+  });
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -45,13 +40,7 @@ export function SortableEnvironmentItem({
   };
 
   return (
-    <div
-      ref={setNodeRef}
-      style={style}
-      className={cn(
-        isDragging && "opacity-50 z-50"
-      )}
-    >
+    <div ref={setNodeRef} style={style} className={cn(isDragging && "opacity-50 z-50")}>
       <div
         className={cn(
           "group/sortable mx-1 flex items-center rounded-lg transition-colors",
@@ -66,7 +55,7 @@ export function SortableEnvironmentItem({
           {...listeners}
           className={cn(
             "flex h-6 w-4 shrink-0 cursor-grab items-center justify-center text-muted-foreground opacity-0 transition-opacity hover:text-foreground active:cursor-grabbing",
-            "group-hover/sortable:opacity-100"
+            "group-hover/sortable:opacity-100",
           )}
         >
           <GripVertical className="h-3 w-3" />

@@ -6,9 +6,10 @@ import path from "path";
 // @ts-expect-error process is a nodejs global
 const host = process.env.VITE_DEV_HOST;
 const configuredPort = Number.parseInt(process.env.VITE_DEV_PORT ?? "1420", 10);
-const port = Number.isInteger(configuredPort) && configuredPort > 0 && configuredPort <= 65535
-  ? configuredPort
-  : 1420;
+const port =
+  Number.isInteger(configuredPort) && configuredPort > 0 && configuredPort <= 65535
+    ? configuredPort
+    : 1420;
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({

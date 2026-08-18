@@ -110,26 +110,23 @@ export abstract class NativeAgentServiceBase {
    * may now record its intent while one is running, so the background cache
    * pruner must not dispose the provider until the send has settled.
    */
-  protected readonly providerDispatchCounts = new Map<
-    NativeAgentRuntimeProvider,
-    number
-  >();
+  protected readonly providerDispatchCounts = new Map<NativeAgentRuntimeProvider, number>();
   /**
    * Identity of the live bridge generation behind each production provider.
    * Ports and bearer credentials both change when a bridge is replaced.
    */
   protected readonly providerConnections = new Map<string, string>();
   /** Bounded, reconstructible view cache; providers remain authoritative. */
-  protected readonly projectionCache = new Map<
-    string,
-    NativeAgentProjectionCacheEntry
-  >();
+  protected readonly projectionCache = new Map<string, NativeAgentProjectionCacheEntry>();
   /** Heavy, reconstructible fields omitted from ordinary renderer snapshots. */
-  protected readonly toolDetailCache = new Map<string, {
-    sessionKey: string;
-    details: NativeAgentToolDetails;
-    bytes: number;
-  }>();
+  protected readonly toolDetailCache = new Map<
+    string,
+    {
+      sessionKey: string;
+      details: NativeAgentToolDetails;
+      bytes: number;
+    }
+  >();
   /** Entries temporarily protected while an authoritative refresh recreates them. */
   protected readonly pinnedToolDetailRefs = new Set<string>();
   protected toolDetailCacheBytes = 0;
@@ -142,10 +139,13 @@ export abstract class NativeAgentServiceBase {
     { commands: NativeAgentSlashCommand[]; expiresAt: number }
   >();
   /** Coalesced stale-while-revalidate tasks for projection-only metadata. */
-  protected readonly modelCatalogRefreshes = new Map<string, {
-    operation: Promise<AgentModel[]>;
-    validity: { current: boolean };
-  }>();
+  protected readonly modelCatalogRefreshes = new Map<
+    string,
+    {
+      operation: Promise<AgentModel[]>;
+      validity: { current: boolean };
+    }
+  >();
   protected readonly slashCommandRefreshes = new Map<
     string,
     {
@@ -170,10 +170,7 @@ export abstract class NativeAgentServiceBase {
   /** In-flight incomplete-turn recoveries, coalesced per durable session. */
   protected readonly openCodeRecoveryTasks = new Map<string, Promise<void>>();
   /** Idle transcript candidates retained across transient recovery failures. */
-  protected readonly openCodeRecoveryCandidates = new Map<
-    string,
-    OpenCodeRecoveryCandidate
-  >();
+  protected readonly openCodeRecoveryCandidates = new Map<string, OpenCodeRecoveryCandidate>();
 
   protected abstract trackScan(task: Promise<void>): Promise<void>;
   protected abstract reconcilePendingLaunches(): Promise<void>;
@@ -237,19 +234,13 @@ export abstract class NativeAgentServiceBase {
     agent: BuildPipelineAgent,
     message: unknown,
   ): ProviderExecutionMode;
-  protected abstract queueString(
-    message: unknown,
-    field: string,
-  ): string | undefined;
+  protected abstract queueString(message: unknown, field: string): string | undefined;
   protected abstract queueReasoningEffort(message: unknown): string | undefined;
   protected abstract queueFastMode(
     agent: BuildPipelineAgent,
     message: unknown,
   ): boolean | undefined;
-  protected abstract queueBoolean(
-    message: unknown,
-    field: string,
-  ): boolean | undefined;
+  protected abstract queueBoolean(message: unknown, field: string): boolean | undefined;
   /** Short-lived manual-send claims prevent stale automatic continuations. */
   protected readonly openCodeManualPromptClaims = new Map<
     string,
@@ -317,8 +308,7 @@ export abstract class NativeAgentServiceBase {
     protected readonly invoke: CommandInvoker,
     protected readonly options: NativeAgentServiceOptions = {},
   ) {
-    this.interactionMonitorAdoptionEnabled =
-      options.interactionMonitorAdoptionEnabled !== false;
+    this.interactionMonitorAdoptionEnabled = options.interactionMonitorAdoptionEnabled !== false;
   }
 
   protected now(): number {
@@ -352,9 +342,12 @@ export abstract class NativeAgentServiceBase {
     if (this.options.interactionMonitorMode === "observe-only") {
       await this.reconcileAgentInteractions().catch(() => undefined);
       if (this.stopped) return;
-      this.interactionTimer = setInterval(() => {
-        void this.reconcileAgentInteractions().catch(() => undefined);
-      }, Math.max(100, this.options.interactionMonitorIntervalMs ?? 2_000));
+      this.interactionTimer = setInterval(
+        () => {
+          void this.reconcileAgentInteractions().catch(() => undefined);
+        },
+        Math.max(100, this.options.interactionMonitorIntervalMs ?? 2_000),
+      );
       this.interactionTimer.unref?.();
     }
   }
@@ -369,9 +362,10 @@ export abstract class NativeAgentServiceBase {
    */
   protected async repairPersistedStartupTabs(): Promise<void> {
     const sessions = (await this.storage.listNativeAgentSessions())
-      .filter((session) =>
-        session.origin === "interactive-native"
-        && session.logicalSessionKey === `env-${session.environmentId}:startup-agent`
+      .filter(
+        (session) =>
+          session.origin === "interactive-native" &&
+          session.logicalSessionKey === `env-${session.environmentId}:startup-agent`,
       )
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
     const repairedEnvironments = new Set<string>();
@@ -379,25 +373,25 @@ export abstract class NativeAgentServiceBase {
       if (this.stopped) return;
       if (repairedEnvironments.has(session.environmentId)) continue;
       repairedEnvironments.add(session.environmentId);
-      await this.storage.ensureStartupNativeAgentTab({
-        environmentId: session.environmentId,
-        agent: session.agent,
-        providerSessionId: session.providerSessionId,
-        existingOnly: true,
-        upgradeOnly: true,
-      }).catch(() => undefined);
+      await this.storage
+        .ensureStartupNativeAgentTab({
+          environmentId: session.environmentId,
+          agent: session.agent,
+          providerSessionId: session.providerSessionId,
+          existingOnly: true,
+          upgradeOnly: true,
+        })
+        .catch(() => undefined);
     }
   }
 
-  async ensureSession(
-    input: EnsureNativeAgentSessionInput,
-  ): Promise<PersistedNativeAgentSession> {
+  async ensureSession(input: EnsureNativeAgentSessionInput): Promise<PersistedNativeAgentSession> {
     this.assertAcceptingWork();
     if (
-      !nonBlank(input.environmentId)
-      || !nonBlank(input.logicalSessionKey)
-      || !BUILD_PIPELINE_AGENTS.includes(input.agent)
-      || !isValidInteractionMetadata(input)
+      !nonBlank(input.environmentId) ||
+      !nonBlank(input.logicalSessionKey) ||
+      !BUILD_PIPELINE_AGENTS.includes(input.agent) ||
+      !isValidInteractionMetadata(input)
     ) {
       throw new Error("Invalid native agent session request");
     }
@@ -425,19 +419,13 @@ export abstract class NativeAgentServiceBase {
        * failed every later ensure/dispatch on the *previous* turn's failure, so
        * the tab could never send the message that would have cleared it.
        */
-      const { status } = await readProviderStatus(
-        provider,
-        existing.providerSessionId,
-      );
+      const { status } = await readProviderStatus(provider, existing.providerSessionId);
       await this.assertEnvironmentLive(input.environmentId);
       if (status !== "missing") {
         void this.reconcileAgentInteractions().catch(() => undefined);
         return existing;
       }
-      await this.storage.invalidateNativeAgentSession(
-        key,
-        existing.providerSessionId,
-      );
+      await this.storage.invalidateNativeAgentSession(key, existing.providerSessionId);
     }
     /*
      * Create the provider session under the native-agent lock alone.
@@ -470,20 +458,15 @@ export abstract class NativeAgentServiceBase {
     return session;
   }
 
-  async adoptSession(
-    input: AdoptNativeAgentSessionInput,
-  ): Promise<PersistedNativeAgentSession> {
+  async adoptSession(input: AdoptNativeAgentSessionInput): Promise<PersistedNativeAgentSession> {
     this.assertAcceptingWork();
     if (
-      !nonBlank(input.environmentId)
-      || !nonBlank(input.logicalSessionKey)
-      || !nonBlank(input.providerSessionId)
-      || !BUILD_PIPELINE_AGENTS.includes(input.agent)
-      || !isValidInteractionMetadata(input)
-      || (
-        input.expectedProviderSessionId !== undefined
-        && !nonBlank(input.expectedProviderSessionId)
-      )
+      !nonBlank(input.environmentId) ||
+      !nonBlank(input.logicalSessionKey) ||
+      !nonBlank(input.providerSessionId) ||
+      !BUILD_PIPELINE_AGENTS.includes(input.agent) ||
+      !isValidInteractionMetadata(input) ||
+      (input.expectedProviderSessionId !== undefined && !nonBlank(input.expectedProviderSessionId))
     ) {
       throw new Error("Invalid native agent session adoption request");
     }
@@ -496,8 +479,9 @@ export abstract class NativeAgentServiceBase {
     const provider = await this.provider(input);
     provider.registerSession?.(input.providerSessionId, {
       origin: input.origin ?? "interactive-native",
-      interactionPolicy: input.interactionPolicy
-        ?? ((input.origin === "build-pipeline" || input.origin === "looped-review")
+      interactionPolicy:
+        input.interactionPolicy ??
+        (input.origin === "build-pipeline" || input.origin === "looped-review"
           ? UNATTENDED_AGENT_INTERACTION_POLICY
           : INTERACTIVE_AGENT_INTERACTION_POLICY),
       phase: input.phase,
@@ -566,14 +550,10 @@ export abstract class NativeAgentServiceBase {
     return this.refreshProjection(input, true);
   }
 
-  async listProjectionModels(
-    input: NativeAgentProjectionInput,
-  ): Promise<AgentModel[]> {
+  async listProjectionModels(input: NativeAgentProjectionInput): Promise<AgentModel[]> {
     this.assertProjectionInput(input);
     const provider = await this.provider(input);
-    return provider.modelCatalog
-      ? (await provider.modelCatalog()).slice(0, 512)
-      : [];
+    return provider.modelCatalog ? (await provider.modelCatalog()).slice(0, 512) : [];
   }
 
   /**
@@ -584,24 +564,16 @@ export abstract class NativeAgentServiceBase {
    * the wider source catalogue so a provider added later is available to launch
    * dialogs before an environment starts another bridge.
    */
-  async listModelCatalogForCache(
-    input: NativeAgentProjectionInput,
-  ): Promise<AgentModel[]> {
+  async listModelCatalogForCache(input: NativeAgentProjectionInput): Promise<AgentModel[]> {
     this.assertProjectionInput(input);
     const provider = await this.provider(input);
     if (provider.rawModelCatalog) {
       return (await provider.rawModelCatalog()).slice(0, 512);
     }
-    return provider.modelCatalog
-      ? (await provider.modelCatalog()).slice(0, 512)
-      : [];
+    return provider.modelCatalog ? (await provider.modelCatalog()).slice(0, 512) : [];
   }
 
-  async dispatchIntent(
-    input: DispatchNativeAgentPromptInput,
-  ): Promise<NativeAgentDispatchOutcome> {
+  async dispatchIntent(input: DispatchNativeAgentPromptInput): Promise<NativeAgentDispatchOutcome> {
     return this.dispatchIntentInternal(input, false);
   }
-
-
 }

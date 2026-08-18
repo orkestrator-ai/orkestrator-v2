@@ -1,10 +1,4 @@
-import {
-  closeInput,
-  grokConfig,
-  provider,
-  write,
-  type JsonObject,
-} from "./fake-agent-context.js";
+import { closeInput, grokConfig, provider, write, type JsonObject } from "./fake-agent-context.js";
 
 export function handlePromptSetup(message: JsonObject): boolean {
   if (message.method === "session/prompt" && typeof message.params === "object") {
@@ -14,10 +8,11 @@ export function handlePromptSetup(message: JsonObject): boolean {
     // Emitted on prompt rather than on session/new: the bridge only binds its
     // vendor handler once session/new has returned, so a catalogue update
     // racing that return would be dropped by the bridge, not by the transport.
-    if (provider === "grok" && (
-      process.env.FAKE_ACP_EMIT_MODEL_UPDATE === "1"
-      || process.env.FAKE_ACP_VENDOR_MODEL_REQUEST_FILE
-    )) {
+    if (
+      provider === "grok" &&
+      (process.env.FAKE_ACP_EMIT_MODEL_UPDATE === "1" ||
+        process.env.FAKE_ACP_VENDOR_MODEL_REQUEST_FILE)
+    ) {
       grokConfig.models.availableModels.push({
         modelId: "grok-next",
         name: "Grok Next",
@@ -39,7 +34,11 @@ export function handlePromptSetup(message: JsonObject): boolean {
     // bridge's next write then fails with EPIPE against a child it still
     // believes is running — the exact race an unhandled stream error would
     // turn into an uncaught exception.
-    if (typeof text === "string" && text.startsWith("CLOSESTDIN") && typeof message.id === "number") {
+    if (
+      typeof text === "string" &&
+      text.startsWith("CLOSESTDIN") &&
+      typeof message.id === "number"
+    ) {
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
       setInterval(() => {}, 1_000);
       closeInput();
@@ -49,4 +48,3 @@ export function handlePromptSetup(message: JsonObject): boolean {
 
   return false;
 }
-

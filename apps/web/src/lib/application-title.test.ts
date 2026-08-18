@@ -11,9 +11,7 @@ describe("getApplicationTitle", () => {
   });
 
   test("includes the active environment in the mobile title", () => {
-    expect(getApplicationTitle("pgstack1", true, "feature-auth")).toBe(
-      "pgstack1 - feature-auth",
-    );
+    expect(getApplicationTitle("pgstack1", true, "feature-auth")).toBe("pgstack1 - feature-auth");
   });
 
   test("does not include the active environment in the desktop title", () => {

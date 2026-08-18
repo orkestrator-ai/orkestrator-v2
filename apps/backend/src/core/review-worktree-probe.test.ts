@@ -1,8 +1,5 @@
 import { expect, test } from "bun:test";
-import {
-  probeReviewWorktree,
-  probeReviewWorktreeOnce,
-} from "./review-worktree-probe.js";
+import { probeReviewWorktree, probeReviewWorktreeOnce } from "./review-worktree-probe.js";
 
 const HEAD = "1111111111111111111111111111111111111111";
 const FINGERPRINT = "a".repeat(64);
@@ -32,11 +29,13 @@ test("reports a clean worktree and its head", async () => {
 });
 
 test("reports the uncommitted paths verbatim", async () => {
-  const { invoke } = invoker([{
-    head: HEAD,
-    paths: ["src/a.ts", "docs/b.md"],
-    fingerprint: FINGERPRINT,
-  }]);
+  const { invoke } = invoker([
+    {
+      head: HEAD,
+      paths: ["src/a.ts", "docs/b.md"],
+      fingerprint: FINGERPRINT,
+    },
+  ]);
   await expect(probeReviewWorktreeOnce(invoke, "env-1")).resolves.toEqual({
     status: "dirty",
     head: HEAD,
@@ -182,10 +181,7 @@ test("names a timeout", async () => {
 // Re-running a worktree that exceeds the probe's byte caps just spends the same
 // time again for the same answer.
 test("does not retry a failure a retry cannot clear", async () => {
-  for (const message of [
-    "review-worktree-probe:too-large",
-    "review-worktree-probe:git-missing",
-  ]) {
+  for (const message of ["review-worktree-probe:too-large", "review-worktree-probe:git-missing"]) {
     const { invoke, commands } = invoker([new Error(message)]);
     await expect(probeReviewWorktree(invoke, "env-1", 3)).resolves.toMatchObject({
       status: "unknown",

@@ -129,11 +129,7 @@ class RecordingProvider implements BuildPipelineProvider {
     return id;
   }
 
-  async send(
-    sessionId: string,
-    prompt: string,
-    options: ProviderSendOptions,
-  ): Promise<void> {
+  async send(sessionId: string, prompt: string, options: ProviderSendOptions): Promise<void> {
     const error = this.sendErrors.shift();
     if (error) throw error;
     this.sentModes.push(options.mode);
@@ -154,10 +150,7 @@ class RecordingProvider implements BuildPipelineProvider {
     return [{ id: `${sessionId}-assistant`, role: "assistant", parts: [] }];
   }
 
-  async structured<T>(
-    sessionId: string,
-    requestId: string,
-  ): Promise<StructuredOutputResult<T>> {
+  async structured<T>(sessionId: string, requestId: string): Promise<StructuredOutputResult<T>> {
     const phase = this.phases.get(sessionId);
     return {
       ok: true,
@@ -238,10 +231,7 @@ async function withService(
     providers.set(agent, provider);
     return provider;
   };
-  const invoke = async <T>(
-    command: string,
-    _args: Record<string, unknown> = {},
-  ): Promise<T> => {
+  const invoke = async <T>(command: string, _args: Record<string, unknown> = {}): Promise<T> => {
     if (command === "start_environment" || command === "run_environment_setup") {
       return (await storage.getEnvironment("env-1")) as T;
     }
@@ -282,21 +272,21 @@ async function withService(
 }
 
 /** The service's own provider cache, keyed by `${environmentId}:${agent}`. */
-function providerCache(
-  service: BuildPipelineService,
-): Map<string, BuildPipelineProvider> {
-  return (service as unknown as {
-    providers: Map<string, BuildPipelineProvider>;
-  }).providers;
+function providerCache(service: BuildPipelineService): Map<string, BuildPipelineProvider> {
+  return (
+    service as unknown as {
+      providers: Map<string, BuildPipelineProvider>;
+    }
+  ).providers;
 }
 
 /** The harness each pipeline last resolved a provider for. */
-function lastProviderAgents(
-  service: BuildPipelineService,
-): Map<string, BuildPipelineAgent> {
-  return (service as unknown as {
-    lastProviderAgent: Map<string, BuildPipelineAgent>;
-  }).lastProviderAgent;
+function lastProviderAgents(service: BuildPipelineService): Map<string, BuildPipelineAgent> {
+  return (
+    service as unknown as {
+      lastProviderAgent: Map<string, BuildPipelineAgent>;
+    }
+  ).lastProviderAgent;
 }
 
 /** Writes the global and repository defaults a step may fall back to. */
@@ -317,10 +307,7 @@ async function writeDefaults(
   await storage.saveConfig(config);
 }
 
-async function snapshot(
-  storage: StorageService,
-  id: string,
-): Promise<BuildPipeline> {
+async function snapshot(storage: StorageService, id: string): Promise<BuildPipeline> {
   const stored = await storage.getBuildPipeline(id);
   if (!stored) throw new Error("Pipeline disappeared");
   return stored.snapshot as BuildPipeline;
@@ -365,9 +352,7 @@ async function withBridgeService(
     bridges: Map<BuildPipelineAgent, { port: number; authToken?: string }>;
   }) => Promise<void>,
 ): Promise<void> {
-  const dataDir = await fs.mkdtemp(
-    path.join(tmpdir(), "orkestrator-pipeline-steps-bridge-"),
-  );
+  const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-pipeline-steps-bridge-"));
   const storage = new StorageService(dataDir);
   await storage.init();
   await storage.addEnvironment({
@@ -390,22 +375,14 @@ async function withBridgeService(
   const requests: BridgeRequest[] = [];
   const originalFetch = globalThis.fetch;
   let sessionCounter = 0;
-  globalThis.fetch = (async (
-    input: string | URL | Request,
-    init: RequestInit = {},
-  ) => {
+  globalThis.fetch = (async (input: string | URL | Request, init: RequestInit = {}) => {
     const url = input instanceof Request ? input.url : String(input);
-    const method = input instanceof Request ? input.method : init.method ?? "GET";
-    const rawBody = input instanceof Request
-      ? await input.clone().text()
-      : init.body
-        ? String(init.body)
-        : "";
+    const method = input instanceof Request ? input.method : (init.method ?? "GET");
+    const rawBody =
+      input instanceof Request ? await input.clone().text() : init.body ? String(init.body) : "";
     requests.push({
       url,
-      body: rawBody
-        ? JSON.parse(rawBody) as Record<string, unknown>
-        : undefined,
+      body: rawBody ? (JSON.parse(rawBody) as Record<string, unknown>) : undefined,
     });
     const pathname = new URL(url).pathname;
     if (pathname === "/permission" || pathname === "/question") {
@@ -425,17 +402,20 @@ async function withBridgeService(
     }
     if (pathname === "/event") {
       const signal = input instanceof Request ? input.signal : init.signal;
-      return new Response(new ReadableStream({
-        start(controller) {
-          if (signal?.aborted) {
-            controller.close();
-            return;
-          }
-          signal?.addEventListener("abort", () => controller.close(), {
-            once: true,
-          });
-        },
-      }), { headers: { "Content-Type": "text/event-stream" } });
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            if (signal?.aborted) {
+              controller.close();
+              return;
+            }
+            signal?.addEventListener("abort", () => controller.close(), {
+              once: true,
+            });
+          },
+        }),
+        { headers: { "Content-Type": "text/event-stream" } },
+      );
     }
     if (url.endsWith("/session/create")) {
       return Response.json({ sessionId: `bridge-session-${++sessionCounter}` });
@@ -452,10 +432,7 @@ async function withBridgeService(
     }
     return Response.json({ status: "idle" });
   }) as unknown as typeof fetch;
-  const bridges = new Map<
-    BuildPipelineAgent,
-    { port: number; authToken?: string }
-  >([
+  const bridges = new Map<BuildPipelineAgent, { port: number; authToken?: string }>([
     ["claude", { port: 3210, authToken: "claude-token" }],
     ["codex", { port: 3211, authToken: "codex-token" }],
   ]);
@@ -463,9 +440,9 @@ async function withBridgeService(
   const invoke = async <T>(command: string): Promise<T> => {
     invocations.push(command);
     if (
-      command === "start_environment"
-      || command === "run_environment_setup"
-      || command === "update_environment_agent_settings"
+      command === "start_environment" ||
+      command === "run_environment_setup" ||
+      command === "update_environment_agent_settings"
     ) {
       return (await storage.getEnvironment("env-1")) as T;
     }
@@ -536,26 +513,24 @@ describe("per-step build configuration", () => {
         { agent: "opencode", phase: "verify", model: "opencode/c", effort: undefined },
         { agent: "codex", phase: "pr", model: "codex-pr", effort: undefined },
       ]);
-      expect(sent.map((prompt) => [prompt.agent, prompt.model, prompt.effort]))
-        .toEqual([
-          ["claude", "claude-a", "high"],
-          ["codex", "codex-b", "low"],
-          ["opencode", "opencode/c", undefined],
-          ["codex", "codex-pr", undefined],
-        ]);
+      expect(sent.map((prompt) => [prompt.agent, prompt.model, prompt.effort])).toEqual([
+        ["claude", "claude-a", "high"],
+        ["codex", "codex-b", "low"],
+        ["opencode", "opencode/c", undefined],
+        ["codex", "codex-pr", undefined],
+      ]);
       expect(providerRequests).toContain("claude");
       expect(providerRequests).toContain("codex");
       expect(providerRequests).toContain("opencode");
 
       // Recorded per session so status, transcript and abort calls reach the
       // harness that actually owns each one.
-      expect(pipeline.sessions.map((session) => [session.phase, session.agent]))
-        .toEqual([
-          ["build", "claude"],
-          ["review", "codex"],
-          ["verify", "opencode"],
-          ["pr", "codex"],
-        ]);
+      expect(pipeline.sessions.map((session) => [session.phase, session.agent])).toEqual([
+        ["build", "claude"],
+        ["review", "codex"],
+        ["verify", "opencode"],
+        ["pr", "codex"],
+      ]);
     });
   });
 
@@ -591,7 +566,7 @@ describe("per-step build configuration", () => {
       // Not just undefined on the returned object: an empty map must never be
       // persisted, or `steps` in the snapshot would read as a configuration.
       expect(empty.steps).toBeUndefined();
-      expect("steps" in await snapshot(storage, empty.id)).toBe(false);
+      expect("steps" in (await snapshot(storage, empty.id))).toBe(false);
 
       const blank = await service.start({
         ...startInput(),
@@ -617,33 +592,27 @@ describe("per-step build configuration", () => {
     await withService(async ({ service, storage, sent, providerFor }) => {
       // Claude and OpenCode bind the model per prompt, so a redispatch that
       // dropped it would quietly rerun the turn on the connection default.
-      providerFor("codex").sendErrors = [
-        new AmbiguousPromptDispatchError("response lost"),
-      ];
+      providerFor("codex").sendErrors = [new AmbiguousPromptDispatchError("response lost")];
       const started = await service.start({
         ...startInput(),
         taskId: "task-redispatch",
       });
-      const reviewing = await advanceToStage(
-        service,
-        storage,
-        started.id,
-        "review",
-      );
+      const reviewing = await advanceToStage(service, storage, started.id, "review");
       const review = reviewing.sessions.at(-1)!;
       expect(sent).toHaveLength(1);
 
       await service.advanceNow(started.id);
 
       expect(sent).toHaveLength(2);
-      expect(sent.at(-1)).toEqual(expect.objectContaining({
-        agent: "codex",
-        sessionId: review.sdkSessionId,
-        model: "codex-b",
-        effort: "low",
-      }));
-      expect((await snapshot(storage, started.id)).pendingPromptAttempt)
-        .toBeUndefined();
+      expect(sent.at(-1)).toEqual(
+        expect.objectContaining({
+          agent: "codex",
+          sessionId: review.sdkSessionId,
+          model: "codex-b",
+          effort: "low",
+        }),
+      );
+      expect((await snapshot(storage, started.id)).pendingPromptAttempt).toBeUndefined();
     });
   });
 
@@ -785,12 +754,7 @@ describe("per-step provider lifecycle", () => {
         taskId: "task-pause-owner",
         steps: { build: { agent: "claude" }, review: { agent: "codex" } },
       });
-      const reviewingForPause = await advanceToStage(
-        service,
-        storage,
-        pauseTarget.id,
-        "review",
-      );
+      const reviewingForPause = await advanceToStage(service, storage, pauseTarget.id, "review");
       const pausedSession = reviewingForPause.sessions.at(-1)!;
 
       await service.pause(pauseTarget.id);
@@ -803,21 +767,13 @@ describe("per-step provider lifecycle", () => {
         taskId: "task-cancel-owner",
         steps: { build: { agent: "claude" }, review: { agent: "codex" } },
       });
-      const reviewingForCancel = await advanceToStage(
-        service,
-        storage,
-        cancelTarget.id,
-        "review",
-      );
+      const reviewingForCancel = await advanceToStage(service, storage, cancelTarget.id, "review");
       const cancelledSession = reviewingForCancel.sessions.at(-1)!;
       expect(lastProviderAgents(service).get(cancelTarget.id)).toBe("codex");
 
       await service.cancel(cancelTarget.id);
 
-      expect(codex.aborted).toEqual([
-        pausedSession.sdkSessionId,
-        cancelledSession.sdkSessionId,
-      ]);
+      expect(codex.aborted).toEqual([pausedSession.sdkSessionId, cancelledSession.sdkSessionId]);
       expect(claude.aborted).toEqual([]);
       expect(lastProviderAgents(service).has(cancelTarget.id)).toBe(false);
     });
@@ -890,9 +846,7 @@ describe("per-step provider lifecycle", () => {
         },
       });
       await advanceToStage(service, storage, started.id, "build");
-      codex.createSessionError = new ProviderUnavailableError(
-        "codex bridge is unavailable",
-      );
+      codex.createSessionError = new ProviderUnavailableError("codex bridge is unavailable");
 
       // The review harness fails while the stored snapshot still describes the
       // build stage: the failing provider cannot be derived from the session.
@@ -901,8 +855,10 @@ describe("per-step provider lifecycle", () => {
       const reconnecting = await snapshot(storage, started.id);
       // The guarantee only has teeth while the snapshot still points at the
       // healthy harness: the review session is not recorded until it opens.
-      expect(reconnecting.sessions.at(reconnecting.currentSessionIndex))
-        .toMatchObject({ phase: "build", agent: "claude" });
+      expect(reconnecting.sessions.at(reconnecting.currentSessionIndex)).toMatchObject({
+        phase: "build",
+        agent: "claude",
+      });
       expect(reconnecting.error).toContain("Reconnecting to codex");
       expect(reconnecting.error).not.toContain("claude");
       expect(codex.disposed).toBe(1);
@@ -915,29 +871,30 @@ describe("per-step provider lifecycle", () => {
   });
 
   test("names the failing harness when it stays unreachable past the deadline", async () => {
-    await withService(async ({ service, storage, providerFor }) => {
-      const codex = providerFor("codex");
-      const started = await service.start({
-        ...startInput(),
-        taskId: "task-reconnect-deadline",
-        steps: {
-          build: { agent: "claude" },
-          review: { agent: "codex" },
-        },
-      });
-      await advanceToStage(service, storage, started.id, "build");
-      codex.createSessionError = new ProviderUnavailableError(
-        "codex bridge is unavailable",
-      );
+    await withService(
+      async ({ service, storage, providerFor }) => {
+        const codex = providerFor("codex");
+        const started = await service.start({
+          ...startInput(),
+          taskId: "task-reconnect-deadline",
+          steps: {
+            build: { agent: "claude" },
+            review: { agent: "codex" },
+          },
+        });
+        await advanceToStage(service, storage, started.id, "build");
+        codex.createSessionError = new ProviderUnavailableError("codex bridge is unavailable");
 
-      await service.advanceNow(started.id);
-      await service.advanceNow(started.id);
+        await service.advanceNow(started.id);
+        await service.advanceNow(started.id);
 
-      const failed = await snapshot(storage, started.id);
-      expect(failed.phase).toBe("failed");
-      expect(failed.error).toContain("codex stayed unreachable");
-      expect(failed.error).not.toContain("claude");
-    }, { reconnectDeadlineMs: 0 });
+        const failed = await snapshot(storage, started.id);
+        expect(failed.phase).toBe("failed");
+        expect(failed.error).toContain("codex stayed unreachable");
+        expect(failed.error).not.toContain("claude");
+      },
+      { reconnectDeadlineMs: 0 },
+    );
   });
 
   test("never registers a session with a harness that does not own it", async () => {
@@ -965,50 +922,43 @@ describe("per-step provider lifecycle", () => {
   });
 
   test("routes a session recorded before per-step harnesses to the pipeline agent", async () => {
-    await withService(async ({
-      service,
-      storage,
-      created,
-      sent,
-      providerRequests,
-      providerFor,
-    }) => {
-      const codex = providerFor("codex");
-      const started = await service.start({
-        ...startInput(),
-        taskId: "task-legacy-session",
-        agentType: "codex",
-        steps: undefined,
-      });
-      const building = await advanceToStage(service, storage, started.id, "build");
+    await withService(
+      async ({ service, storage, created, sent, providerRequests, providerFor }) => {
+        const codex = providerFor("codex");
+        const started = await service.start({
+          ...startInput(),
+          taskId: "task-legacy-session",
+          agentType: "codex",
+          steps: undefined,
+        });
+        const building = await advanceToStage(service, storage, started.id, "build");
 
-      // A snapshot written before sessions recorded their own harness.
-      const record = (await storage.getBuildPipeline(started.id))!;
-      const legacy = record.snapshot as BuildPipeline;
-      delete legacy.sessions[0]!.agent;
-      await storage.saveBuildPipeline(
-        legacy.id,
-        legacy.projectId,
-        legacy.environmentId,
-        record.version,
-        legacy,
-        record.revision,
-      );
-      const legacySessionId = building.sessions[0]!.sdkSessionId;
-      const registeredBefore = codex.registered.length;
+        // A snapshot written before sessions recorded their own harness.
+        const record = (await storage.getBuildPipeline(started.id))!;
+        const legacy = record.snapshot as BuildPipeline;
+        delete legacy.sessions[0]!.agent;
+        await storage.saveBuildPipeline(
+          legacy.id,
+          legacy.projectId,
+          legacy.environmentId,
+          record.version,
+          legacy,
+          record.revision,
+        );
+        const legacySessionId = building.sessions[0]!.sdkSessionId;
+        const registeredBefore = codex.registered.length;
 
-      await service.advanceNow(started.id);
+        await service.advanceNow(started.id);
 
-      // Re-registered by the ownership filter, which only claims it because the
-      // agentless session resolves to the pipeline agent.
-      expect(codex.registered.slice(registeredBefore))
-        .toContain(legacySessionId);
-      expect(new Set(providerRequests)).toEqual(new Set(["codex"]));
-      expect(created.every((session) => session.agent === "codex")).toBe(true);
-      expect(sent.every((prompt) => prompt.agent === "codex")).toBe(true);
-      expect((await snapshot(storage, started.id)).sessions.at(-1)?.phase)
-        .toBe("review");
-    });
+        // Re-registered by the ownership filter, which only claims it because the
+        // agentless session resolves to the pipeline agent.
+        expect(codex.registered.slice(registeredBefore)).toContain(legacySessionId);
+        expect(new Set(providerRequests)).toEqual(new Set(["codex"]));
+        expect(created.every((session) => session.agent === "codex")).toBe(true);
+        expect(sent.every((prompt) => prompt.agent === "codex")).toBe(true);
+        expect((await snapshot(storage, started.id)).sessions.at(-1)?.phase).toBe("review");
+      },
+    );
   });
 });
 
@@ -1033,9 +983,7 @@ describe("per-step bridge connections", () => {
       await service.advanceNow(started.id);
 
       const prompt = requests.find((request) => request.url.endsWith("/prompt"));
-      expect(prompt?.url).toBe(
-        "http://127.0.0.1:3210/session/bridge-session-1/prompt",
-      );
+      expect(prompt?.url).toBe("http://127.0.0.1:3210/session/bridge-session-1/prompt");
       // Claude takes the model per prompt, so the connection default is what a
       // step that pinned nothing runs on.
       expect(prompt?.body?.model).toBe("global-claude");
@@ -1046,13 +994,7 @@ describe("per-step bridge connections", () => {
   });
 
   test("passes the global OpenCode model through the production provider", async () => {
-    await withBridgeService(async ({
-      service,
-      storage,
-      requests,
-      invocations,
-      bridges,
-    }) => {
+    await withBridgeService(async ({ service, storage, requests, invocations, bridges }) => {
       bridges.set("opencode", { port: 3212, authToken: "opencode-token" });
       await writeDefaults(storage, {
         global: {
@@ -1078,12 +1020,13 @@ describe("per-step bridge connections", () => {
 
       expect(invocations).toContain("start_local_opencode_server_cmd");
       const history = requests.find((request) =>
-        new URL(request.url).pathname.endsWith("/message")
+        new URL(request.url).pathname.endsWith("/message"),
       );
-      expect(new URL(history!.url).searchParams.get("limit"))
-        .toBe(String(OPEN_CODE_MESSAGE_HISTORY_LIMIT));
+      expect(new URL(history!.url).searchParams.get("limit")).toBe(
+        String(OPEN_CODE_MESSAGE_HISTORY_LIMIT),
+      );
       const prompt = requests.find((request) =>
-        new URL(request.url).pathname.endsWith("/prompt_async")
+        new URL(request.url).pathname.endsWith("/prompt_async"),
       );
       expect(prompt?.body?.model).toEqual({
         providerID: "anthropic",
@@ -1094,13 +1037,7 @@ describe("per-step bridge connections", () => {
   });
 
   test("fails on the review harness's bridge while the build harness stays healthy", async () => {
-    await withBridgeService(async ({
-      service,
-      storage,
-      requests,
-      invocations,
-      bridges,
-    }) => {
+    await withBridgeService(async ({ service, storage, requests, invocations, bridges }) => {
       bridges.set("codex", { port: 3211 });
       const started = await service.start({
         ...startInput(),
@@ -1177,12 +1114,7 @@ describe("per-step stage coverage", () => {
       };
 
       const started = await service.start(startInput());
-      const pipeline = await advanceToStage(
-        service,
-        storage,
-        started.id,
-        "resolve-conflicts",
-      );
+      const pipeline = await advanceToStage(service, storage, started.id, "resolve-conflicts");
 
       expect(created).toContainEqual({
         agent: "claude",
@@ -1190,9 +1122,7 @@ describe("per-step stage coverage", () => {
         model: "claude-conflicts",
         effort: undefined,
       });
-      const conflicts = pipeline.sessions.find(
-        (session) => session.phase === "resolve-conflicts",
-      );
+      const conflicts = pipeline.sessions.find((session) => session.phase === "resolve-conflicts");
       expect(conflicts?.agent).toBe("claude");
 
       controls.detection = {
@@ -1288,111 +1218,116 @@ describe("per-step stage coverage", () => {
 
 describe("per-step reconnect accounting", () => {
   test("lets the deadline elapse when a healthy harness owns the current session", async () => {
-    await withService(async ({ service, storage, providerFor }) => {
-      // The regression this pins: a stage transition resolves the *next* step's
-      // provider before it records that step's session, so the failure belongs
-      // to a harness no session names. Clearing the attempt on the previous
-      // stage's still-healthy harness restarted `startedAt` every pass, and the
-      // deadline could then never elapse — the pipeline retried a dead bridge
-      // forever instead of failing.
-      const codex = providerFor("codex");
-      const started = await service.start({
-        ...startInput(),
-        taskId: "task-reconnect-accrues",
-        steps: { build: { agent: "claude" }, review: { agent: "codex" } },
-      });
-      await advanceToStage(service, storage, started.id, "build");
-      codex.createSessionError = new ProviderUnavailableError(
-        "codex bridge is unavailable",
-      );
+    await withService(
+      async ({ service, storage, providerFor }) => {
+        // The regression this pins: a stage transition resolves the *next* step's
+        // provider before it records that step's session, so the failure belongs
+        // to a harness no session names. Clearing the attempt on the previous
+        // stage's still-healthy harness restarted `startedAt` every pass, and the
+        // deadline could then never elapse — the pipeline retried a dead bridge
+        // forever instead of failing.
+        const codex = providerFor("codex");
+        const started = await service.start({
+          ...startInput(),
+          taskId: "task-reconnect-accrues",
+          steps: { build: { agent: "claude" }, review: { agent: "codex" } },
+        });
+        await advanceToStage(service, storage, started.id, "build");
+        codex.createSessionError = new ProviderUnavailableError("codex bridge is unavailable");
 
-      await service.advanceNow(started.id);
-      const first = (await snapshot(storage, started.id)).reconnectAttempt;
-      expect(first).toMatchObject({ agent: "codex" });
-      // The build session is on the healthy harness, so it must not be offered
-      // as the failure's session id.
-      expect(first?.sessionId).toBeUndefined();
-
-      for (let pass = 0; pass < 4; pass += 1) {
         await service.advanceNow(started.id);
-        const current = await snapshot(storage, started.id);
-        if (current.phase === "failed") break;
-        expect(current.reconnectAttempt?.startedAt).toBe(first!.startedAt);
-        expect(current.reconnectAttempt?.id).toBe(first!.id);
-      }
-    }, { reconnectDeadlineMs: 60_000 });
+        const first = (await snapshot(storage, started.id)).reconnectAttempt;
+        expect(first).toMatchObject({ agent: "codex" });
+        // The build session is on the healthy harness, so it must not be offered
+        // as the failure's session id.
+        expect(first?.sessionId).toBeUndefined();
+
+        for (let pass = 0; pass < 4; pass += 1) {
+          await service.advanceNow(started.id);
+          const current = await snapshot(storage, started.id);
+          if (current.phase === "failed") break;
+          expect(current.reconnectAttempt?.startedAt).toBe(first!.startedAt);
+          expect(current.reconnectAttempt?.id).toBe(first!.id);
+        }
+      },
+      { reconnectDeadlineMs: 60_000 },
+    );
   });
 
   test("gives a different harness's outage its own deadline", async () => {
-    await withService(async ({ service, storage, providerFor }) => {
-      const codex = providerFor("codex");
-      const started = await service.start({
-        ...startInput(),
-        taskId: "task-reconnect-switches",
-        steps: { build: { agent: "claude" }, review: { agent: "codex" } },
-      });
-      await advanceToStage(service, storage, started.id, "build");
-      codex.createSessionError = new ProviderUnavailableError("codex is down");
-      await service.advanceNow(started.id);
-      const onCodex = (await snapshot(storage, started.id)).reconnectAttempt!;
-      expect(onCodex.agent).toBe("codex");
+    await withService(
+      async ({ service, storage, providerFor }) => {
+        const codex = providerFor("codex");
+        const started = await service.start({
+          ...startInput(),
+          taskId: "task-reconnect-switches",
+          steps: { build: { agent: "claude" }, review: { agent: "codex" } },
+        });
+        await advanceToStage(service, storage, started.id, "build");
+        codex.createSessionError = new ProviderUnavailableError("codex is down");
+        await service.advanceNow(started.id);
+        const onCodex = (await snapshot(storage, started.id)).reconnectAttempt!;
+        expect(onCodex.agent).toBe("codex");
 
-      // Rewrite the standing attempt so it belongs to another harness and has
-      // already run past the deadline. A continuation would inherit that
-      // elapsed time and fail the pipeline on this very pass; a new outage on a
-      // harness that has only just stopped answering must start its own clock.
-      const pipeline = await snapshot(storage, started.id);
-      pipeline.reconnectAttempt = {
-        ...pipeline.reconnectAttempt!,
-        agent: "opencode",
-        startedAt: new Date(0).toISOString(),
-      };
-      const record = await storage.getBuildPipeline(started.id);
-      await storage.saveBuildPipeline(
-        pipeline.id,
-        pipeline.projectId,
-        pipeline.environmentId,
-        2,
-        pipeline,
-        record!.revision,
-      );
+        // Rewrite the standing attempt so it belongs to another harness and has
+        // already run past the deadline. A continuation would inherit that
+        // elapsed time and fail the pipeline on this very pass; a new outage on a
+        // harness that has only just stopped answering must start its own clock.
+        const pipeline = await snapshot(storage, started.id);
+        pipeline.reconnectAttempt = {
+          ...pipeline.reconnectAttempt!,
+          agent: "opencode",
+          startedAt: new Date(0).toISOString(),
+        };
+        const record = await storage.getBuildPipeline(started.id);
+        await storage.saveBuildPipeline(
+          pipeline.id,
+          pipeline.projectId,
+          pipeline.environmentId,
+          2,
+          pipeline,
+          record!.revision,
+        );
 
-      await service.advanceNow(started.id);
+        await service.advanceNow(started.id);
 
-      const after = await snapshot(storage, started.id);
-      expect(after.phase).not.toBe("failed");
-      expect(after.reconnectAttempt?.agent).toBe("codex");
-      expect(after.reconnectAttempt?.startedAt).not.toBe(new Date(0).toISOString());
-      expect(after.reconnectAttempt?.id).not.toBe(onCodex.id);
-    }, { reconnectDeadlineMs: 60_000 });
+        const after = await snapshot(storage, started.id);
+        expect(after.phase).not.toBe("failed");
+        expect(after.reconnectAttempt?.agent).toBe("codex");
+        expect(after.reconnectAttempt?.startedAt).not.toBe(new Date(0).toISOString());
+        expect(after.reconnectAttempt?.id).not.toBe(onCodex.id);
+      },
+      { reconnectDeadlineMs: 60_000 },
+    );
   });
 
   test("clears the attempt once the harness that failed answers again", async () => {
-    await withService(async ({ service, storage, providerFor }) => {
-      const codex = providerFor("codex");
-      const started = await service.start({
-        ...startInput(),
-        taskId: "task-reconnect-recovers",
-        steps: { build: { agent: "claude" }, review: { agent: "codex" } },
-      });
-      await advanceToStage(service, storage, started.id, "build");
-      codex.createSessionError = new ProviderUnavailableError("codex is down");
-      await service.advanceNow(started.id);
-      expect((await snapshot(storage, started.id)).reconnectAttempt?.agent)
-        .toBe("codex");
+    await withService(
+      async ({ service, storage, providerFor }) => {
+        const codex = providerFor("codex");
+        const started = await service.start({
+          ...startInput(),
+          taskId: "task-reconnect-recovers",
+          steps: { build: { agent: "claude" }, review: { agent: "codex" } },
+        });
+        await advanceToStage(service, storage, started.id, "build");
+        codex.createSessionError = new ProviderUnavailableError("codex is down");
+        await service.advanceNow(started.id);
+        expect((await snapshot(storage, started.id)).reconnectAttempt?.agent).toBe("codex");
 
-      codex.createSessionError = null;
-      // Opens the review stage on the recovered harness, then lets the next
-      // pass observe it: the outage is over, so nothing should still say so.
-      await service.advanceNow(started.id);
-      await service.advanceNow(started.id);
+        codex.createSessionError = null;
+        // Opens the review stage on the recovered harness, then lets the next
+        // pass observe it: the outage is over, so nothing should still say so.
+        await service.advanceNow(started.id);
+        await service.advanceNow(started.id);
 
-      const recovered = await snapshot(storage, started.id);
-      expect(recovered.reconnectAttempt).toBeUndefined();
-      expect(recovered.error).toBeUndefined();
-      expect(recovered.sessions.map((session) => session.phase))
-        .toContain("review");
-    }, { reconnectDeadlineMs: 60_000 });
+        const recovered = await snapshot(storage, started.id);
+        expect(recovered.reconnectAttempt).toBeUndefined();
+        expect(recovered.error).toBeUndefined();
+        expect(recovered.sessions.map((session) => session.phase)).toContain("review");
+      },
+      { reconnectDeadlineMs: 60_000 },
+    );
   });
 
   test("clears its recorded harness once the pipeline reaches a terminal phase", async () => {
@@ -1445,8 +1380,9 @@ describe("per-step model placeholders", () => {
         agentType: "claude",
         steps: { build: { agent: "claude", model: "default" } },
       });
-      expect((await snapshot(storage, started.id)).steps)
-        .toEqual({ build: { agent: "claude", model: "default" } });
+      expect((await snapshot(storage, started.id)).steps).toEqual({
+        build: { agent: "claude", model: "default" },
+      });
 
       await advanceToStage(service, storage, started.id, "build");
 
@@ -1473,8 +1409,7 @@ describe("per-step model placeholders", () => {
         agentType: "codex",
         steps: { build: { agent: "codex", model: "default" } },
       });
-      expect((await snapshot(storage, started.id)).steps)
-        .toEqual({ build: { agent: "codex" } });
+      expect((await snapshot(storage, started.id)).steps).toEqual({ build: { agent: "codex" } });
 
       await advanceToStage(service, storage, started.id, "build");
 
@@ -1565,8 +1500,12 @@ describe("per-step execution modes", () => {
       });
       await advanceToStage(service, storage, started.id, "pr");
 
-      expect(claude.createdModes.map(([, mode]) => mode))
-        .toEqual(["build", "build", "build", "build"]);
+      expect(claude.createdModes.map(([, mode]) => mode)).toEqual([
+        "build",
+        "build",
+        "build",
+        "build",
+      ]);
       expect(claude.sentModes).toEqual(["build", "build", "build", "build"]);
     });
   });
@@ -1584,19 +1523,21 @@ describe("per-step execution modes", () => {
         value: (codex.phases.get(sessionId) === "review"
           ? {
               ...cleanReview,
-              issues: [{
-                severity: "P1" as const,
-                confidence: 90,
-                category: "correctness" as const,
-                title: "Off-by-one",
-                file: "src/app.ts",
-                line: 2,
-                symbol: "run",
-                description: "Loops once too many.",
-                evidence: "for (i <= n)",
-                suggestion: "Use <.",
-                verification: "Run the suite.",
-              }],
+              issues: [
+                {
+                  severity: "P1" as const,
+                  confidence: 90,
+                  category: "correctness" as const,
+                  title: "Off-by-one",
+                  file: "src/app.ts",
+                  line: 2,
+                  symbol: "run",
+                  description: "Loops once too many.",
+                  evidence: "for (i <= n)",
+                  suggestion: "Use <.",
+                  verification: "Run the suite.",
+                },
+              ],
             }
           : { complete: true, rationale: "All criteria pass." }) as T,
       });
@@ -1624,11 +1565,13 @@ describe("per-step execution modes", () => {
         model: "provider/address-model",
         effort: "high",
       });
-      expect(sent).toContainEqual(expect.objectContaining({
-        agent: "opencode",
-        model: "provider/address-model",
-        effort: "high",
-      }));
+      expect(sent).toContainEqual(
+        expect.objectContaining({
+          agent: "opencode",
+          model: "provider/address-model",
+          effort: "high",
+        }),
+      );
       const addressDispatch = sent.find((entry) => entry.agent === "opencode");
       expect(addressDispatch?.prompt).toContain("orkestrator-handoff-transcript-json");
       expect(addressDispatch?.prompt).toContain("Off-by-one");

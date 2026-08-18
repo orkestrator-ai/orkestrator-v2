@@ -1,8 +1,24 @@
 import { GatewayBase } from "./gateway-base.js";
 import { formatGatewayCursor } from "./gateway-event-replay.js";
-import type { GatewayEventReplay, GatewayCursorParseResult, GatewayReplayFrame } from "./gateway-event-replay.js";
-import { DROPPABLE_EVENT_PREFIX, SSE_CLIENT_SOFT_BUFFER_BYTES, SSE_CLIENT_HARD_BUFFER_BYTES, GATEWAY_CONNECTED_EVENT, GATEWAY_RECONCILE_REQUIRED_EVENT, GATEWAY_CURSOR_EVENT, eventMatchesSubscription } from "./gateway-internals.js";
-import type { EventClientWriter, GatewayEventClient, GatewayReconcileReason } from "./gateway-internals.js";
+import type {
+  GatewayEventReplay,
+  GatewayCursorParseResult,
+  GatewayReplayFrame,
+} from "./gateway-event-replay.js";
+import {
+  DROPPABLE_EVENT_PREFIX,
+  SSE_CLIENT_SOFT_BUFFER_BYTES,
+  SSE_CLIENT_HARD_BUFFER_BYTES,
+  GATEWAY_CONNECTED_EVENT,
+  GATEWAY_RECONCILE_REQUIRED_EVENT,
+  GATEWAY_CURSOR_EVENT,
+  eventMatchesSubscription,
+} from "./gateway-internals.js";
+import type {
+  EventClientWriter,
+  GatewayEventClient,
+  GatewayReconcileReason,
+} from "./gateway-internals.js";
 
 export abstract class GatewayEvents extends GatewayBase {
   emit(event: string, payload: unknown): void {
@@ -16,12 +32,14 @@ export abstract class GatewayEvents extends GatewayBase {
     let message = replayFrame?.message ?? null;
     let messageBytes = replayFrame?.encodedBytes ?? 0;
     for (const [client, state] of this.clients) {
-      if (!eventMatchesSubscription(
-        event,
-        state.prefixes,
-        state.includedPrefixes,
-        state.excludedPrefixes,
-      )) {
+      if (
+        !eventMatchesSubscription(
+          event,
+          state.prefixes,
+          state.includedPrefixes,
+          state.excludedPrefixes,
+        )
+      ) {
         // The revision still happened globally. Remember it so the keepalive can
         // advance this client's cursor; otherwise its next reconnect asks for a
         // window the ring has long since evicted and reconciles for nothing.
@@ -42,8 +60,8 @@ export abstract class GatewayEvents extends GatewayBase {
         const projectedFrames = state.handshake.events.length + 1;
         const projectedBytes = state.handshake.bytes + messageBytes;
         if (
-          projectedFrames > this.replayHandshakeFrameCapacity
-          || projectedBytes > this.replayHandshakeMaxBytes
+          projectedFrames > this.replayHandshakeFrameCapacity ||
+          projectedBytes > this.replayHandshakeMaxBytes
         ) {
           this.dropBufferedClient(client, event, projectedBytes);
           continue;
@@ -85,19 +103,23 @@ export abstract class GatewayEvents extends GatewayBase {
   protected flushOmittedCursor(client: EventClientWriter, state: GatewayEventClient): void {
     const omitted = state.omittedRevision;
     if (
-      omitted === null
-      || omitted === undefined
-      || !state.tracksReplayCursor
-      || state.handshake
-      || omitted <= (state.sentRevision ?? 0)
-    ) return;
+      omitted === null ||
+      omitted === undefined ||
+      !state.tracksReplayCursor ||
+      state.handshake ||
+      omitted <= (state.sentRevision ?? 0)
+    )
+      return;
     state.omittedRevision = null;
-    if (!this.writeControlFrame(
-      client,
-      GATEWAY_CURSOR_EVENT,
-      formatGatewayCursor(this.eventReplay.generation, omitted),
-      null,
-    )) return;
+    if (
+      !this.writeControlFrame(
+        client,
+        GATEWAY_CURSOR_EVENT,
+        formatGatewayCursor(this.eventReplay.generation, omitted),
+        null,
+      )
+    )
+      return;
     state.sentRevision = omitted;
   }
 
@@ -115,17 +137,11 @@ export abstract class GatewayEvents extends GatewayBase {
       return false;
     }
 
-    if (
-      droppable
-      && client.writableLength + messageBytes > SSE_CLIENT_SOFT_BUFFER_BYTES
-    ) {
+    if (droppable && client.writableLength + messageBytes > SSE_CLIENT_SOFT_BUFFER_BYTES) {
       this.markTerminalFrameDropped(client, state, event, message, payload);
       return true;
     }
-    if (
-      state.desyncedSessions.size > 0
-      && !this.flushDesyncNotices(client, state)
-    ) {
+    if (state.desyncedSessions.size > 0 && !this.flushDesyncNotices(client, state)) {
       return false;
     }
 
@@ -169,12 +185,14 @@ export abstract class GatewayEvents extends GatewayBase {
     state: GatewayEventClient,
     frame: GatewayReplayFrame,
   ): boolean {
-    if (eventMatchesSubscription(
-      frame.event,
-      state.prefixes,
-      state.includedPrefixes,
-      state.excludedPrefixes,
-    )) {
+    if (
+      eventMatchesSubscription(
+        frame.event,
+        state.prefixes,
+        state.includedPrefixes,
+        state.excludedPrefixes,
+      )
+    ) {
       return this.writeEventToClient(
         client,
         state,
@@ -217,15 +235,12 @@ export abstract class GatewayEvents extends GatewayBase {
     cursor: GatewayCursorParseResult,
   ): void {
     const latestAtSubscribe = this.eventReplay.latestRevision;
-    let replay:
-      | ReturnType<GatewayEventReplay["since"]>
-      | null = null;
+    let replay: ReturnType<GatewayEventReplay["since"]> | null = null;
     // An invalid cursor is not safe to echo as an SSE id, and advancing to the
     // latest revision here could make a disconnect before reconcile-required
     // permanently skip the snapshot recovery signal.
-    let connectedCursor: string | null = cursor.kind === "invalid"
-      ? null
-      : this.eventReplay.latestCursor;
+    let connectedCursor: string | null =
+      cursor.kind === "invalid" ? null : this.eventReplay.latestCursor;
     let replayStatus: "fresh" | "caught-up" | "replayed" | "reconcile" = "fresh";
     let reconcileReason: GatewayReconcileReason | null = null;
     let requestedRevision: number | null = null;
@@ -264,30 +279,31 @@ export abstract class GatewayEvents extends GatewayBase {
 
     const replayedFrames = replay?.complete ? replay.frames.length : 0;
     this.metrics.recordReplayHandshake(replayStatus, reconcileReason, replayedFrames);
-    if (!this.writeControlFrame(client, GATEWAY_CONNECTED_EVENT, connectedCursor, {
-      generation: this.eventReplay.generation,
-      revision: latestAtSubscribe,
-      status: replayStatus,
-      replayed: replayedFrames,
-    })) return;
+    if (
+      !this.writeControlFrame(client, GATEWAY_CONNECTED_EVENT, connectedCursor, {
+        generation: this.eventReplay.generation,
+        revision: latestAtSubscribe,
+        status: replayStatus,
+        replayed: replayedFrames,
+      })
+    )
+      return;
     if (!this.clients.has(client)) return;
 
     let highestSent = cursor.kind === "valid" ? cursor.revision : latestAtSubscribe;
     if (reconcileReason) {
       const currentCursor = this.eventReplay.latestCursor;
-      if (!this.writeControlFrame(
-        client,
-        GATEWAY_RECONCILE_REQUIRED_EVENT,
-        currentCursor,
-        {
+      if (
+        !this.writeControlFrame(client, GATEWAY_RECONCILE_REQUIRED_EVENT, currentCursor, {
           reason: reconcileReason,
           requestedCursor: cursor.kind === "absent" ? null : cursor.raw,
           requestedRevision,
           oldestAvailableRevision: this.eventReplay.oldestRevision,
           latestRevision: this.eventReplay.latestRevision,
           generation: this.eventReplay.generation,
-        },
-      )) return;
+        })
+      )
+        return;
       if (!this.clients.has(client)) return;
       highestSent = this.eventReplay.latestRevision;
     } else if (replay) {
@@ -306,15 +322,18 @@ export abstract class GatewayEvents extends GatewayBase {
       const buffered = state.handshake.events[index]!;
       index += 1;
       if (buffered.revision !== null && buffered.revision <= highestSent) continue;
-      if (!this.writeEventToClient(
-        client,
-        state,
-        buffered.event,
-        buffered.payload,
-        buffered.message,
-        buffered.messageBytes,
-        buffered.droppable,
-      )) return;
+      if (
+        !this.writeEventToClient(
+          client,
+          state,
+          buffered.event,
+          buffered.payload,
+          buffered.message,
+          buffered.messageBytes,
+          buffered.droppable,
+        )
+      )
+        return;
       if (buffered.revision !== null) highestSent = buffered.revision;
     }
     state.handshake = null;
@@ -337,10 +356,7 @@ export abstract class GatewayEvents extends GatewayBase {
     this.metrics.recordDroppedEventFrame(event);
     this.metrics.recordSoftDesync();
     if (!streamAlreadyStalled) this.metrics.recordStreamStalled();
-    if (
-      !sessionId.startsWith("tmux:")
-      || !state.includedPrefixes?.includes(event)
-    ) return;
+    if (!sessionId.startsWith("tmux:") || !state.includedPrefixes?.includes(event)) return;
     let frames = this.droppedTmuxFrames.get(client);
     if (!frames) {
       frames = new Map();
@@ -350,11 +366,7 @@ export abstract class GatewayEvents extends GatewayBase {
     // retain at most the newest full-pane frame for each subscribed tmux
     // session. Broader/legacy streams receive the ordinary desync notice
     // instead of accumulating panes for terminals they are not displaying.
-    if (
-      payload
-      && typeof payload === "object"
-      && (payload as { full?: unknown }).full === true
-    ) {
+    if (payload && typeof payload === "object" && (payload as { full?: unknown }).full === true) {
       frames.set(sessionId, message);
     } else {
       // A line patch cannot recover earlier dropped patches. Force the client
@@ -363,7 +375,11 @@ export abstract class GatewayEvents extends GatewayBase {
     }
   }
 
-  protected dropBufferedClient(client: EventClientWriter, event: string, projectedBytes: number): void {
+  protected dropBufferedClient(
+    client: EventClientWriter,
+    event: string,
+    projectedBytes: number,
+  ): void {
     this.logger.warn(
       `[RemoteGateway] Dropping an event-stream client buffering ${projectedBytes} bytes; it will reconnect and refetch`,
     );
@@ -382,15 +398,12 @@ export abstract class GatewayEvents extends GatewayBase {
    * rides the session's own event rather than a second event name so consumers
    * need no extra subscription and existing filters keep working.
    */
-  protected flushDesyncNotices(
-    client: EventClientWriter,
-    state: GatewayEventClient,
-  ): boolean {
-    for (const sessionId of [...state.desyncedSessions]) {
+  protected flushDesyncNotices(client: EventClientWriter, state: GatewayEventClient): boolean {
+    for (const sessionId of Array.from(state.desyncedSessions)) {
       const event = `${DROPPABLE_EVENT_PREFIX}${sessionId}`;
       const retainedTmuxFrame = this.droppedTmuxFrames.get(client)?.get(sessionId);
-      const recoveryFrame = retainedTmuxFrame
-        ?? `data: ${JSON.stringify({ event, payload: { desynced: true } })}\n\n`;
+      const recoveryFrame =
+        retainedTmuxFrame ?? `data: ${JSON.stringify({ event, payload: { desynced: true } })}\n\n`;
       const projectedBytes = client.writableLength + Buffer.byteLength(recoveryFrame);
       if (projectedBytes > SSE_CLIENT_HARD_BUFFER_BYTES) {
         this.dropBufferedClient(client, event, projectedBytes);
@@ -411,5 +424,4 @@ export abstract class GatewayEvents extends GatewayBase {
     }
     return true;
   }
-
 }

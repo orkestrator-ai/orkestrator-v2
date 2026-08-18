@@ -1,8 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-  ERROR_MESSAGE_PREFIX,
-  SYSTEM_MESSAGE_PREFIX,
-} from "@/lib/opencode-client";
+import { ERROR_MESSAGE_PREFIX, SYSTEM_MESSAGE_PREFIX } from "@/lib/opencode-client";
 import {
   carryOverMessagesAddedDuringFetch,
   createOptimisticNativeMessage,
@@ -37,11 +34,7 @@ function createServerMessage(
   };
 }
 
-function createClientOnlyMessage(
-  id: string,
-  content: string,
-  createdAt: string,
-): NativeMessage {
+function createClientOnlyMessage(id: string, content: string, createdAt: string): NativeMessage {
   return {
     id,
     role: "assistant",
@@ -89,11 +82,13 @@ describe("client-only optimistic messages", () => {
       },
     ]);
 
-    expect(message.parts).toEqual([{
-      type: "file",
-      content: "error.png",
-      fileUrl: "file:///workspace/screenshots/error.png",
-    }]);
+    expect(message.parts).toEqual([
+      {
+        type: "file",
+        content: "error.png",
+        fileUrl: "file:///workspace/screenshots/error.png",
+      },
+    ]);
   });
 
   test("omits the file url for an attachment whose path is not absolute", () => {
@@ -209,10 +204,7 @@ describe("client-only optimistic messages", () => {
 
     const merged = mergeNativeMessagesPreservingClientOnly([first, second], incoming);
 
-    expect(merged.map((message) => message.id)).toEqual([
-      "server-half-1",
-      "optimistic-half-2",
-    ]);
+    expect(merged.map((message) => message.id)).toEqual(["server-half-1", "optimistic-half-2"]);
   });
 
   test("preserves an optimistic message when the matching incoming echo was already present as a server message", () => {
@@ -233,10 +225,7 @@ describe("client-only optimistic messages", () => {
       [alreadyEchoed],
     );
 
-    expect(merged.map((message) => message.id)).toEqual([
-      "server-existing",
-      "optimistic-unechoed",
-    ]);
+    expect(merged.map((message) => message.id)).toEqual(["server-existing", "optimistic-unechoed"]);
   });
 
   test("preserves an optimistic message when the server echoes the same text with a different attachment", () => {
@@ -288,11 +277,13 @@ describe("client-only optimistic messages", () => {
     const optimistic = createOptimisticNativeMessage(
       "optimistic-attachment",
       "Please inspect the screenshot",
-      [{
-        path: "/workspace/a.png",
-        name: "a.png",
-        previewUrl: "data:image/png;base64,abc123",
-      }],
+      [
+        {
+          path: "/workspace/a.png",
+          name: "a.png",
+          previewUrl: "data:image/png;base64,abc123",
+        },
+      ],
       "2026-04-15T10:00:01.000Z",
     );
     const incoming: NativeMessage[] = [
@@ -414,11 +405,7 @@ describe("client-only optimistic messages", () => {
       parts: [{ type: "text", content: "Naming environment..." }],
       createdAt: "2026-04-15T10:00:01.000Z",
     };
-    const laterServerMessage = createServerMessage(
-      "server-4",
-      "Done",
-      "2026-04-15T10:00:02.000Z",
-    );
+    const laterServerMessage = createServerMessage("server-4", "Done", "2026-04-15T10:00:02.000Z");
 
     const merged = mergeNativeMessagesPreservingClientOnly(
       [serverMessage, systemMessage],
@@ -512,10 +499,7 @@ describe("client-only optimistic messages", () => {
       createdAt: "2026-04-15T10:00:02.000Z",
     };
 
-    const afterFirstEcho = mergeNativeMessagesPreservingClientOnly(
-      [first, second],
-      [echo],
-    );
+    const afterFirstEcho = mergeNativeMessagesPreservingClientOnly([first, second], [echo]);
 
     // The surviving bubble keeps its own (earlier) send time, so it sorts
     // ahead of the echo it is still waiting for.
@@ -681,10 +665,7 @@ describe("client-only optimistic messages", () => {
 
     const merged = mergeNativeMessagesPreservingClientOnly([optimistic], incoming);
 
-    expect(merged.map((message) => message.id)).toEqual([
-      "optimistic-unnamed",
-      "server-unnamed",
-    ]);
+    expect(merged.map((message) => message.id)).toEqual(["optimistic-unnamed", "server-unnamed"]);
   });
 
   test("never retires an optimistic user prompt against an assistant message repeating its text", () => {
@@ -725,9 +706,7 @@ describe("client-only optimistic messages", () => {
       parts: [{ type: "text", content: "Failed to send prompt" }],
       createdAt: "",
     };
-    const incoming = [
-      createServerMessage("server-5", "Hello", "2026-04-15T10:00:00.000Z"),
-    ];
+    const incoming = [createServerMessage("server-5", "Hello", "2026-04-15T10:00:00.000Z")];
 
     const merged = mergeNativeMessagesPreservingClientOnly([errorMessage], incoming);
 
@@ -743,9 +722,7 @@ describe("client-only optimistic messages", () => {
       "Failed to send prompt",
       "2026-04-15T10:00:00.000Z",
     );
-    const incoming = [
-      createServerMessage("server-6", "Hello", "2026-04-15T10:00:00.000Z"),
-    ];
+    const incoming = [createServerMessage("server-6", "Hello", "2026-04-15T10:00:00.000Z")];
 
     const merged = mergeNativeMessagesPreservingClientOnly([clientOnly], incoming);
 
@@ -757,9 +734,7 @@ describe("client-only optimistic messages", () => {
 
   test("returns the incoming array by reference when there is nothing client-only to preserve", () => {
     // The store's identity-preserving no-op write depends on this shape.
-    const incoming = [
-      createServerMessage("server-7", "Hello", "2026-04-15T10:00:00.000Z"),
-    ];
+    const incoming = [createServerMessage("server-7", "Hello", "2026-04-15T10:00:00.000Z")];
 
     expect(mergeNativeMessagesPreservingClientOnly([], incoming)).toBe(incoming);
 
@@ -771,9 +746,7 @@ describe("client-only optimistic messages", () => {
     );
     // Every client-only message is retired, so the incoming array survives
     // untouched rather than being rebuilt.
-    expect(
-      mergeNativeMessagesPreservingClientOnly([optimistic], incoming),
-    ).toBe(incoming);
+    expect(mergeNativeMessagesPreservingClientOnly([optimistic], incoming)).toBe(incoming);
   });
 
   describe("carryOverMessagesAddedDuringFetch", () => {
@@ -796,18 +769,11 @@ describe("client-only optimistic messages", () => {
         new Set(["server-prior"]),
       );
 
-      expect(carried.map((message) => message.id)).toEqual([
-        "server-prior",
-        "server-live",
-      ]);
+      expect(carried.map((message) => message.id)).toEqual(["server-prior", "server-live"]);
     });
 
     test("drops a message the server removed rather than resurrecting it", () => {
-      const removed = createServerMessage(
-        "server-removed",
-        "Gone",
-        "2026-04-15T10:00:01.000Z",
-      );
+      const removed = createServerMessage("server-removed", "Gone", "2026-04-15T10:00:01.000Z");
 
       const carried = carryOverMessagesAddedDuringFetch(
         [snapshotMessage],
@@ -841,11 +807,7 @@ describe("client-only optimistic messages", () => {
       const snapshot = [snapshotMessage];
 
       expect(
-        carryOverMessagesAddedDuringFetch(
-          snapshot,
-          [snapshotMessage],
-          new Set(["server-prior"]),
-        ),
+        carryOverMessagesAddedDuringFetch(snapshot, [snapshotMessage], new Set(["server-prior"])),
       ).toBe(snapshot);
     });
 
@@ -862,10 +824,7 @@ describe("client-only optimistic messages", () => {
         new Set(["server-prior"]),
       );
 
-      expect(carried.map((message) => message.id)).toEqual([
-        "server-prior",
-        "server-live",
-      ]);
+      expect(carried.map((message) => message.id)).toEqual(["server-prior", "server-live"]);
     });
   });
 

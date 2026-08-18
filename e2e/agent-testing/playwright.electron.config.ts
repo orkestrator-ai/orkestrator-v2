@@ -10,10 +10,7 @@ export default defineConfig({
   testMatch: "electron-main.spec.ts",
   workers: 1,
   timeout: 120_000,
-  reporter: [
-    ["line"],
-    ["json", { outputFile: path.join(outputRoot, "results.json") }],
-  ],
+  reporter: [["line"], ["json", { outputFile: path.join(outputRoot, "results.json") }]],
   outputDir: path.join(outputRoot, "artifacts"),
   use: { trace: "retain-on-failure", screenshot: "only-on-failure" },
 });

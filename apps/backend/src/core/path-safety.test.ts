@@ -55,10 +55,12 @@ describe("assertBase64PayloadWithinLimit", () => {
     // the editor sends an empty payload when the user clears a buffer.
     expect(assertBase64PayloadWithinLimit("")).toBe("");
     expect(assertBase64PayloadWithinLimit("   \n ")).toBe("");
-    expect(() => assertBase64PayloadWithinLimit("", { rejectEmpty: true }))
-      .toThrow("must not be empty");
-    expect(() => assertBase64PayloadWithinLimit("   \n ", { rejectEmpty: true }))
-      .toThrow("must not be empty");
+    expect(() => assertBase64PayloadWithinLimit("", { rejectEmpty: true })).toThrow(
+      "must not be empty",
+    );
+    expect(() => assertBase64PayloadWithinLimit("   \n ", { rejectEmpty: true })).toThrow(
+      "must not be empty",
+    );
     expect(() => assertBase64PayloadWithinLimit("QUJ")).toThrow("not valid base64");
     expect(() => assertBase64PayloadWithinLimit("QQ=Q")).toThrow("not valid base64");
     expect(() => assertBase64PayloadWithinLimit("**")).toThrow("not valid base64");
@@ -67,14 +69,15 @@ describe("assertBase64PayloadWithinLimit", () => {
   test("reports an oversized payload as oversized, not as malformed base64", () => {
     // The oversize check runs first on purpose: this payload is also not a
     // multiple of four, and "not valid base64" would be a misleading answer.
-    expect(() => assertBase64PayloadWithinLimit("a".repeat(MAX_BASE64_PAYLOAD_BYTES + 1)))
-      .toThrow("File payload exceeds");
-    expect(() => assertBase64PayloadWithinLimit(
-      Buffer.alloc(MAX_WRITE_FILE_BYTES + 1).toString("base64"),
-    )).toThrow("File payload exceeds");
-    expect(() => assertBase64PayloadWithinLimit(
-      Buffer.alloc(MAX_WRITE_FILE_BYTES).toString("base64"),
-    )).not.toThrow();
+    expect(() => assertBase64PayloadWithinLimit("a".repeat(MAX_BASE64_PAYLOAD_BYTES + 1))).toThrow(
+      "File payload exceeds",
+    );
+    expect(() =>
+      assertBase64PayloadWithinLimit(Buffer.alloc(MAX_WRITE_FILE_BYTES + 1).toString("base64")),
+    ).toThrow("File payload exceeds");
+    expect(() =>
+      assertBase64PayloadWithinLimit(Buffer.alloc(MAX_WRITE_FILE_BYTES).toString("base64")),
+    ).not.toThrow();
   });
 
   test("computes the decoded size without decoding", () => {
@@ -94,13 +97,16 @@ describe("writeConfinedFile", () => {
       Buffer.from("A").toString("base64"),
     );
 
-    expect(written).toBe(path.join(
-      await fs.realpath(root),
-      ".orkestrator/initial-prompt/batch/image.png",
-    ));
+    expect(written).toBe(
+      path.join(await fs.realpath(root), ".orkestrator/initial-prompt/batch/image.png"),
+    );
     await expect(fs.readFile(written, "utf8")).resolves.toBe("A");
     expect((await fs.stat(written)).mode & 0o777).toBe(0o600);
-    for (const directory of [".orkestrator", ".orkestrator/initial-prompt", ".orkestrator/initial-prompt/batch"]) {
+    for (const directory of [
+      ".orkestrator",
+      ".orkestrator/initial-prompt",
+      ".orkestrator/initial-prompt/batch",
+    ]) {
       expect((await fs.stat(path.join(root, directory))).mode & 0o777).toBe(0o700);
     }
   });
@@ -115,11 +121,9 @@ describe("writeConfinedFile", () => {
     const root = await createWorktree();
     const written = await writeConfinedFile(root, "notes/data.bin", Buffer.from([0, 1, 255]));
     await expect(fs.readFile(written)).resolves.toEqual(Buffer.from([0, 1, 255]));
-    await expect(writeConfinedFile(
-      root,
-      "notes/huge.bin",
-      Buffer.alloc(MAX_WRITE_FILE_BYTES + 1),
-    )).rejects.toThrow("File payload exceeds");
+    await expect(
+      writeConfinedFile(root, "notes/huge.bin", Buffer.alloc(MAX_WRITE_FILE_BYTES + 1)),
+    ).rejects.toThrow("File payload exceeds");
   });
 
   test("refuses to adopt an existing file unless the caller asked to overwrite", async () => {
@@ -127,8 +131,7 @@ describe("writeConfinedFile", () => {
     await fs.mkdir(path.join(root, "notes"), { recursive: true });
     await fs.writeFile(path.join(root, "notes/data.bin"), "planted");
 
-    await expect(writeConfinedFile(root, "notes/data.bin", "QQ=="))
-      .rejects.toThrow(/EEXIST/);
+    await expect(writeConfinedFile(root, "notes/data.bin", "QQ==")).rejects.toThrow(/EEXIST/);
     await expect(fs.readFile(path.join(root, "notes/data.bin"), "utf8")).resolves.toBe("planted");
 
     // The overwrite-intended path truncates rather than failing, and must not
@@ -141,14 +144,16 @@ describe("writeConfinedFile", () => {
     const root = await createWorktree();
     const external = await createWorktree();
     await fs.symlink(external, path.join(root, ".orkestrator"));
-    await expect(writeConfinedFile(root, ".orkestrator/image.png", "QQ=="))
-      .rejects.toThrow("symlink or non-directory ancestor");
+    await expect(writeConfinedFile(root, ".orkestrator/image.png", "QQ==")).rejects.toThrow(
+      "symlink or non-directory ancestor",
+    );
     expect(await fs.readdir(external)).toEqual([]);
 
     const fileRoot = await createWorktree();
     await fs.writeFile(path.join(fileRoot, ".orkestrator"), "not a directory");
-    await expect(writeConfinedFile(fileRoot, ".orkestrator/image.png", "QQ=="))
-      .rejects.toThrow("symlink or non-directory ancestor");
+    await expect(writeConfinedFile(fileRoot, ".orkestrator/image.png", "QQ==")).rejects.toThrow(
+      "symlink or non-directory ancestor",
+    );
   });
 
   test("does not truncate an external file when an overwrite parent is replaced", async () => {
@@ -167,7 +172,7 @@ describe("writeConfinedFile", () => {
       target: string,
       ...rest: unknown[]
     ) => {
-      const stats = await realLstat(target as never, ...rest as never[]);
+      const stats = await realLstat(target as never, ...(rest as never[]));
       if (target === canonicalRoot && !swapped) {
         swapped = true;
         await fs.rename(root, displacedRoot);
@@ -176,29 +181,34 @@ describe("writeConfinedFile", () => {
       return stats;
     }) as typeof fs.lstat);
     try {
-      await expect(writeConfinedFile(root, "notes/data.bin", "bmV3", {
-        exclusive: false,
-      })).rejects.toThrow();
+      await expect(
+        writeConfinedFile(root, "notes/data.bin", "bmV3", {
+          exclusive: false,
+        }),
+      ).rejects.toThrow();
     } finally {
       lstatSpy.mockRestore();
     }
-    await expect(fs.readFile(path.join(external, "notes/data.bin"), "utf8"))
-      .resolves.toBe("outside-sentinel");
-    await expect(fs.readFile(path.join(displacedRoot, "notes/data.bin"), "utf8"))
-      .resolves.toBe("inside-original");
+    await expect(fs.readFile(path.join(external, "notes/data.bin"), "utf8")).resolves.toBe(
+      "outside-sentinel",
+    );
+    await expect(fs.readFile(path.join(displacedRoot, "notes/data.bin"), "utf8")).resolves.toBe(
+      "inside-original",
+    );
     await fs.rm(root, { force: true });
     await fs.rm(displacedRoot, { recursive: true, force: true });
   });
 
   test("reports a missing worktree instead of creating one", async () => {
     const root = await createWorktree();
-    await expect(writeConfinedFile(path.join(root, "gone"), "a/b.png", "QQ=="))
-      .rejects.toThrow(/ENOENT/);
+    await expect(writeConfinedFile(path.join(root, "gone"), "a/b.png", "QQ==")).rejects.toThrow(
+      /ENOENT/,
+    );
   });
 
   test("accepts a pre-existing directory whose on-disk casing differs", async () => {
     const root = await createWorktree();
-    if (!await foldsCase(root)) return;
+    if (!(await foldsCase(root))) return;
     // mkdir returns EEXIST, lstat reports a plain directory, and realpath
     // answers with the on-disk `.Orkestrator`. Comparing that string to the
     // requested `.orkestrator` would reject a directory that is not a symlink.
@@ -211,10 +221,12 @@ describe("writeConfinedFile", () => {
 
   test("validates the path before touching the filesystem", async () => {
     const root = await createWorktree();
-    await expect(writeConfinedFile(root, "../escape.png", "QQ=="))
-      .rejects.toThrow("parent directory traversal");
-    await expect(writeConfinedFile(root, "notes/truncated.png", "QUJ"))
-      .rejects.toThrow("not valid base64");
+    await expect(writeConfinedFile(root, "../escape.png", "QQ==")).rejects.toThrow(
+      "parent directory traversal",
+    );
+    await expect(writeConfinedFile(root, "notes/truncated.png", "QUJ")).rejects.toThrow(
+      "not valid base64",
+    );
     expect(await fs.readdir(root)).toEqual([]);
   });
 
@@ -235,13 +247,17 @@ describe("writeConfinedFile", () => {
       const root = await createWorktree();
       const canonicalRoot = await fs.realpath(root);
       const realpath = fs.realpath.bind(fs);
-      const spy = spyOn(fs, "realpath").mockImplementation((async (target: string, ...rest: unknown[]) => {
+      const spy = spyOn(fs, "realpath").mockImplementation((async (
+        target: string,
+        ...rest: unknown[]
+      ) => {
         if (target === path.join(canonicalRoot, ".orkestrator")) return "/elsewhere";
-        return realpath(target as never, ...rest as never[]);
+        return realpath(target as never, ...(rest as never[]));
       }) as typeof fs.realpath);
       try {
-        await expect(writeConfinedFile(root, ".orkestrator/image.png", "QQ=="))
-          .rejects.toThrow("path leaves the local worktree");
+        await expect(writeConfinedFile(root, ".orkestrator/image.png", "QQ==")).rejects.toThrow(
+          "path leaves the local worktree",
+        );
       } finally {
         spy.mockRestore();
       }
@@ -253,13 +269,14 @@ describe("writeConfinedFile", () => {
       await fs.writeFile(external, "outside-sentinel");
       await fs.mkdir(path.join(root, "notes"));
       await fs.symlink(external, path.join(root, "notes/image.png"));
-      await expect(writeConfinedFile(root, "notes/image.png", "QQ==", {
-        exclusive: false,
-      })).resolves.toBe(path.join(await fs.realpath(root), "notes/image.png"));
+      await expect(
+        writeConfinedFile(root, "notes/image.png", "QQ==", {
+          exclusive: false,
+        }),
+      ).resolves.toBe(path.join(await fs.realpath(root), "notes/image.png"));
       await expect(fs.readFile(external, "utf8")).resolves.toBe("outside-sentinel");
       await expect(fs.readFile(path.join(root, "notes/image.png"), "utf8")).resolves.toBe("A");
     });
-
   });
 });
 
@@ -275,8 +292,11 @@ describe("removeConfinedDirectory", () => {
     const canonicalRoot = await fs.realpath(root);
     const realLstat = fs.lstat.bind(fs);
     let swapped = false;
-    const spy = spyOn(fs, "lstat").mockImplementation((async (target: string, ...rest: unknown[]) => {
-      const stats = await realLstat(target as never, ...rest as never[]);
+    const spy = spyOn(fs, "lstat").mockImplementation((async (
+      target: string,
+      ...rest: unknown[]
+    ) => {
+      const stats = await realLstat(target as never, ...(rest as never[]));
       if (target === canonicalRoot && !swapped) {
         swapped = true;
         await fs.rename(root, displaced);
@@ -289,10 +309,12 @@ describe("removeConfinedDirectory", () => {
     } finally {
       spy.mockRestore();
     }
-    await expect(fs.readFile(path.join(external, "batches/mine/sentinel"), "utf8"))
-      .resolves.toBe("outside");
-    await expect(fs.readFile(path.join(displaced, "batches/mine/inside"), "utf8"))
-      .resolves.toBe("inside");
+    await expect(fs.readFile(path.join(external, "batches/mine/sentinel"), "utf8")).resolves.toBe(
+      "outside",
+    );
+    await expect(fs.readFile(path.join(displaced, "batches/mine/inside"), "utf8")).resolves.toBe(
+      "inside",
+    );
     await fs.rm(root, { force: true });
     await fs.rm(displaced, { recursive: true, force: true });
   });

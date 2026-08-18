@@ -1,7 +1,4 @@
-import {
-  ERROR_MESSAGE_PREFIX,
-  SYSTEM_MESSAGE_PREFIX,
-} from "@/lib/opencode-client";
+import { ERROR_MESSAGE_PREFIX, SYSTEM_MESSAGE_PREFIX } from "@/lib/opencode-client";
 import type { NativeMessage, NativeMessagePart } from "./native-message-types";
 
 export const OPTIMISTIC_MESSAGE_PREFIX = "optimistic-";
@@ -40,9 +37,7 @@ function toOptimisticFileUrl(path: string, previewUrl?: string): string | undefi
    * as a fragment or query and the image resolves to the wrong (or no) file.
    * Every other character `encodeURI` escapes stays escaped.
    */
-  const encodedPath = encodeURI(path)
-    .replace(/#/g, "%23")
-    .replace(/\?/g, "%3F");
+  const encodedPath = encodeURI(path).replace(/#/g, "%23").replace(/\?/g, "%3F");
   return `file://${encodedPath}`;
 }
 
@@ -117,10 +112,7 @@ function getMessageFingerprint(message: Pick<NativeMessage, "role" | "content" |
     role: message.role,
     content: normalizeMessageContent(message.content),
     parts: message.parts
-      .filter(
-        (part) =>
-          part.type !== "text" || normalizeMessageContent(part.content).length > 0,
-      )
+      .filter((part) => part.type !== "text" || normalizeMessageContent(part.content).length > 0)
       .map(getPartFingerprint)
       .sort(),
   });
@@ -185,11 +177,13 @@ export function createOptimisticNativeMessage(
   // ignores empty text parts precisely because OpenCode does send one — but an
   // empty text bubble is still not something to render.
   if (text.length > 0) parts.push({ type: "text", content: text });
-  parts.push(...attachments.map((attachment) => ({
-    type: "file" as const,
-    content: attachment.name || attachment.path,
-    fileUrl: toOptimisticFileUrl(attachment.path, attachment.previewUrl),
-  })));
+  parts.push(
+    ...attachments.map((attachment) => ({
+      type: "file" as const,
+      content: attachment.name || attachment.path,
+      fileUrl: toOptimisticFileUrl(attachment.path, attachment.previewUrl),
+    })),
+  );
 
   return {
     id: messageId,
@@ -202,9 +196,9 @@ export function createOptimisticNativeMessage(
 
 export function isClientOnlyNativeMessage(message: Pick<NativeMessage, "id">): boolean {
   return (
-    message.id.startsWith(ERROR_MESSAGE_PREFIX)
-    || message.id.startsWith(SYSTEM_MESSAGE_PREFIX)
-    || isOptimisticNativeMessage(message)
+    message.id.startsWith(ERROR_MESSAGE_PREFIX) ||
+    message.id.startsWith(SYSTEM_MESSAGE_PREFIX) ||
+    isOptimisticNativeMessage(message)
   );
 }
 
@@ -240,9 +234,9 @@ export function carryOverMessagesAddedDuringFetch<T extends Pick<NativeMessage, 
   const snapshotIds = new Set(snapshot.map((message) => message.id));
   const missed = currentMessages.filter(
     (message) =>
-      !isClientOnlyNativeMessage(message)
-      && !snapshotIds.has(message.id)
-      && !idsBeforeFetch.has(message.id),
+      !isClientOnlyNativeMessage(message) &&
+      !snapshotIds.has(message.id) &&
+      !idsBeforeFetch.has(message.id),
   );
 
   return missed.length === 0 ? snapshot : [...snapshot, ...missed];
@@ -282,9 +276,7 @@ export function mergeNativeMessagesPreservingClientOnly(
       ),
     );
     const couldMatchOptimistic = (message: NativeMessage): boolean =>
-      optimisticContentKeys.has(
-        `${message.role}\0${normalizeMessageContent(message.content)}`,
-      );
+      optimisticContentKeys.has(`${message.role}\0${normalizeMessageContent(message.content)}`);
 
     const existingServerFingerprintCounts = countFingerprints(
       existingServerMessages.filter(couldMatchOptimistic),

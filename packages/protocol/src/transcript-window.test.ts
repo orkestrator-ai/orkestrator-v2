@@ -26,19 +26,16 @@ describe("boundTranscriptResponse", () => {
   });
 
   test("drops whole messages from the front and keeps the newest", () => {
-    const messages = Array.from(
-      { length: 20 },
-      (_, index) => message(`m-${index}`, [textPart(64 * 1024)]),
+    const messages = Array.from({ length: 20 }, (_, index) =>
+      message(`m-${index}`, [textPart(64 * 1024)]),
     );
     const bounded = boundTranscriptResponse(messages, 512 * 1024);
 
-    expect(Buffer.byteLength(JSON.stringify(bounded)))
-      .toBeLessThanOrEqual(512 * 1024);
+    expect(Buffer.byteLength(JSON.stringify(bounded))).toBeLessThanOrEqual(512 * 1024);
     expect(bounded.messages.at(-1)?.id).toBe("m-19");
     expect(bounded.messages[0]?.id).not.toBe("m-0");
     expect(bounded.messageWindow.truncated).toBe(true);
-    expect(bounded.messageWindow.omittedMessages)
-      .toBe(messages.length - bounded.messages.length);
+    expect(bounded.messageWindow.omittedMessages).toBe(messages.length - bounded.messages.length);
     expect(bounded.messageWindow.omittedParts).toBeUndefined();
     expect(bounded.overflowed).toBe(false);
   });
@@ -50,13 +47,13 @@ describe("boundTranscriptResponse", () => {
     const bounded = boundTranscriptResponse([message("only", parts)], 256 * 1024);
 
     expect(bounded.messages).toHaveLength(1);
-    expect(Buffer.byteLength(JSON.stringify(bounded)))
-      .toBeLessThanOrEqual(256 * 1024);
+    expect(Buffer.byteLength(JSON.stringify(bounded))).toBeLessThanOrEqual(256 * 1024);
     expect(bounded.messageWindow.truncated).toBe(true);
     expect(bounded.messageWindow.omittedParts).toBeGreaterThan(0);
     expect(bounded.messageWindow.omittedMessages).toBeUndefined();
-    expect(bounded.messages[0]!.parts.length)
-      .toBe(parts.length - bounded.messageWindow.omittedParts!);
+    expect(bounded.messages[0]!.parts.length).toBe(
+      parts.length - bounded.messageWindow.omittedParts!,
+    );
     // Trimming is oldest-first, so the newest part always survives.
     expect(bounded.messages[0]!.parts.at(-1)).toEqual(parts.at(-1)!);
     expect(bounded.overflowed).toBe(false);
@@ -127,8 +124,7 @@ describe("boundTranscriptResponse", () => {
     const elapsedMs = performance.now() - started;
 
     expect(bounded.messageWindow.omittedParts).toBeGreaterThan(10_000);
-    expect(Buffer.byteLength(JSON.stringify(bounded)))
-      .toBeLessThanOrEqual(2 * 1024 * 1024);
+    expect(Buffer.byteLength(JSON.stringify(bounded))).toBeLessThanOrEqual(2 * 1024 * 1024);
     // Linear costs a few passes; quadratic costs thousands and blows past this
     // by orders of magnitude on any machine.
     expect(elapsedMs).toBeLessThan(5_000);

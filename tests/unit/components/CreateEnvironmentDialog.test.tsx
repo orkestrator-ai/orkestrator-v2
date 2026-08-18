@@ -13,7 +13,8 @@ import {
 } from "../../mocks/sonner";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 
-const { CreateEnvironmentDialog, getEncodedImageSizeError, resolveAgentDefaults } = await import("../../../apps/web/src/components/environments/CreateEnvironmentDialog");
+const { CreateEnvironmentDialog, getEncodedImageSizeError, resolveAgentDefaults } =
+  await import("../../../apps/web/src/components/environments/CreateEnvironmentDialog");
 const defaultConfig = structuredClone(useConfigStore.getState().config);
 const defaultClaudeModels = useClaudeStore.getState().models;
 const defaultCodexModels = useCodexStore.getState().models;
@@ -61,7 +62,8 @@ function openAgentModelPicker() {
   if (picker.getAttribute("aria-expanded") !== "true") {
     fireEvent.pointerDown(picker, { button: 0, ctrlKey: false });
   }
-  const platform = picker.querySelector("[data-native-model-platform]")
+  const platform = picker
+    .querySelector("[data-native-model-platform]")
     ?.getAttribute("data-native-model-platform");
   if (platform) {
     const catalog = screen.queryByRole("button", { name: `${platform} models` });
@@ -74,18 +76,15 @@ function openAgentModelPicker() {
 
 async function selectAgentPlatform(label: "Claude" | "Codex" | "Cursor" | "Grok" | "OpenCode") {
   openAgentModelPicker();
-  fireEvent.click(
-    await screen.findByRole("button", { name: `${label.toLowerCase()} models` }),
-  );
+  fireEvent.click(await screen.findByRole("button", { name: `${label.toLowerCase()} models` }));
   fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
-  await waitFor(() =>
-    expect(getAgentModelPicker().getAttribute("aria-expanded")).toBe("false"),
-  );
+  await waitFor(() => expect(getAgentModelPicker().getAttribute("aria-expanded")).toBe("false"));
 }
 
 async function selectAgentModel(name: string | RegExp) {
   const picker = openAgentModelPicker();
-  const platform = picker.querySelector("[data-native-model-platform]")
+  const platform = picker
+    .querySelector("[data-native-model-platform]")
     ?.getAttribute("data-native-model-platform");
   if (platform) {
     fireEvent.click(screen.getByRole("button", { name: `${platform} models` }));
@@ -140,7 +139,12 @@ describe("resolveAgentDefaults", () => {
 
   test("uses app-level defaults when no repo config provided", () => {
     const result = resolveAgentDefaults(
-      { defaultAgent: "claude", claudeMode: "native", opencodeMode: "terminal", codexMode: "native" },
+      {
+        defaultAgent: "claude",
+        claudeMode: "native",
+        opencodeMode: "terminal",
+        codexMode: "native",
+      },
       undefined,
     );
     expect(result.defaultAgent).toBe("claude");
@@ -153,11 +157,7 @@ describe("resolveAgentDefaults", () => {
     const onCreate = mock(async () => {});
     render(
       <DockerAvailabilityProvider available={false}>
-        <CreateEnvironmentDialog
-          open
-          onOpenChange={() => {}}
-          onCreate={onCreate}
-        />
+        <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />
       </DockerAvailabilityProvider>,
     );
 
@@ -172,30 +172,22 @@ describe("resolveAgentDefaults", () => {
 
   test("falls back to a local worktree when Docker stops while the dialog is open", async () => {
     const onCreate = mock(async () => {});
-    const dialog = (
-      <CreateEnvironmentDialog
-        open
-        onOpenChange={() => {}}
-        onCreate={onCreate}
-      />
-    );
+    const dialog = <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />;
     const view = render(
-      <DockerAvailabilityProvider available>
-        {dialog}
-      </DockerAvailabilityProvider>,
+      <DockerAvailabilityProvider available>{dialog}</DockerAvailabilityProvider>,
     );
 
-    expect((screen.getByRole("button", { name: /Containerized/ }) as HTMLButtonElement).disabled)
-      .toBe(false);
+    expect(
+      (screen.getByRole("button", { name: /Containerized/ }) as HTMLButtonElement).disabled,
+    ).toBe(false);
     view.rerender(
-      <DockerAvailabilityProvider available={false}>
-        {dialog}
-      </DockerAvailabilityProvider>,
+      <DockerAvailabilityProvider available={false}>{dialog}</DockerAvailabilityProvider>,
     );
 
     await waitFor(() => {
-      expect((screen.getByRole("button", { name: /Containerized/ }) as HTMLButtonElement).disabled)
-        .toBe(true);
+      expect(
+        (screen.getByRole("button", { name: /Containerized/ }) as HTMLButtonElement).disabled,
+      ).toBe(true);
     });
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
     await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
@@ -215,10 +207,12 @@ describe("resolveAgentDefaults", () => {
       </DockerAvailabilityProvider>,
     );
 
-    expect((screen.getByRole("button", { name: /Containerized/ }) as HTMLButtonElement).disabled)
-      .toBe(true);
-    expect((screen.getByRole("button", { name: /Local/ }) as HTMLButtonElement).disabled)
-      .toBe(true);
+    expect(
+      (screen.getByRole("button", { name: /Containerized/ }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect((screen.getByRole("button", { name: /Local/ }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
     const submit = screen.getByRole("button", { name: "Create Environment" });
     expect((submit as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(submit);
@@ -227,8 +221,16 @@ describe("resolveAgentDefaults", () => {
 
   test("uses app-level defaults when repo config has no overrides", () => {
     const result = resolveAgentDefaults(
-      { defaultAgent: "opencode", claudeMode: "terminal", opencodeMode: "native", codexMode: "terminal" },
-      { defaultBranch: "main", prBaseBranch: "main" } as { defaultAgent?: string; agentStyle?: string },
+      {
+        defaultAgent: "opencode",
+        claudeMode: "terminal",
+        opencodeMode: "native",
+        codexMode: "terminal",
+      },
+      { defaultBranch: "main", prBaseBranch: "main" } as {
+        defaultAgent?: string;
+        agentStyle?: string;
+      },
     );
     expect(result.defaultAgent).toBe("opencode");
     expect(result.claudeMode).toBe("terminal");
@@ -246,7 +248,12 @@ describe("resolveAgentDefaults", () => {
 
   test("project-level agentStyle overrides both claudeMode and opencodeMode", () => {
     const result = resolveAgentDefaults(
-      { defaultAgent: "claude", claudeMode: "terminal", opencodeMode: "terminal", codexMode: "native" },
+      {
+        defaultAgent: "claude",
+        claudeMode: "terminal",
+        opencodeMode: "terminal",
+        codexMode: "native",
+      },
       { agentStyle: "native" },
     );
     expect(result.claudeMode).toBe("native");
@@ -256,7 +263,12 @@ describe("resolveAgentDefaults", () => {
 
   test("project-level overrides take precedence over app-level for all fields", () => {
     const result = resolveAgentDefaults(
-      { defaultAgent: "claude", claudeMode: "terminal", opencodeMode: "terminal", codexMode: "native" },
+      {
+        defaultAgent: "claude",
+        claudeMode: "terminal",
+        opencodeMode: "terminal",
+        codexMode: "native",
+      },
       { defaultAgent: "codex", agentStyle: "native" },
     );
     expect(result.defaultAgent).toBe("codex");
@@ -274,10 +286,7 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("project agentStyle does not affect defaultAgent resolution", () => {
-    const result = resolveAgentDefaults(
-      { defaultAgent: "claude" },
-      { agentStyle: "native" },
-    );
+    const result = resolveAgentDefaults({ defaultAgent: "claude" }, { agentStyle: "native" });
     // defaultAgent should still come from app-level
     expect(result.defaultAgent).toBe("claude");
     expect(result.claudeMode).toBe("native");
@@ -286,7 +295,12 @@ describe("resolveAgentDefaults", () => {
 
   test("project defaultAgent does not affect mode resolution", () => {
     const result = resolveAgentDefaults(
-      { defaultAgent: "claude", claudeMode: "native", opencodeMode: "native", codexMode: "terminal" },
+      {
+        defaultAgent: "claude",
+        claudeMode: "native",
+        opencodeMode: "native",
+        codexMode: "terminal",
+      },
       { defaultAgent: "opencode" },
     );
     // Modes should still come from app-level since no agentStyle override
@@ -315,8 +329,9 @@ describe("resolveAgentDefaults", () => {
     expect(screen.queryByRole("combobox", { name: "Reasoning effort" }) === null).toBe(true);
     expect(getAgentModelPicker()).toBeTruthy();
     expect(
-      (screen.getByRole("checkbox", { name: "Use TUI" }) as HTMLButtonElement)
-        .getAttribute("data-state"),
+      (screen.getByRole("checkbox", { name: "Use TUI" }) as HTMLButtonElement).getAttribute(
+        "data-state",
+      ),
     ).toBe("unchecked");
   });
 
@@ -326,7 +341,7 @@ describe("resolveAgentDefaults", () => {
         open={true}
         onOpenChange={() => {}}
         onCreate={mock(async () => {})}
-      />
+      />,
     );
 
     const tabs = screen.getAllByRole("tab");
@@ -341,7 +356,12 @@ describe("resolveAgentDefaults", () => {
     const promptTab = screen.getByRole("tab", { name: "Prompt" });
     const setupTab = screen.getByRole("tab", { name: "Setup" });
     expect(promptTab.getAttribute("aria-selected")).toBe("true");
-    expect(screen.getByLabelText(/Initial Prompt/i).closest('[role="tabpanel"]')?.getAttribute("data-state")).toBe("active");
+    expect(
+      screen
+        .getByLabelText(/Initial Prompt/i)
+        .closest('[role="tabpanel"]')
+        ?.getAttribute("data-state"),
+    ).toBe("active");
 
     fireEvent.mouseDown(setupTab, { button: 0, ctrlKey: false });
     expect(setupTab.getAttribute("aria-selected")).toBe("true");
@@ -355,8 +375,12 @@ describe("resolveAgentDefaults", () => {
     });
     fireEvent.mouseDown(setupTab, { button: 0, ctrlKey: false });
 
-    expect((screen.getByLabelText(/Environment Name/i) as HTMLInputElement).value).toBe("mobile-tabs");
-    expect((screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement).value).toBe("Keep this task");
+    expect((screen.getByLabelText(/Environment Name/i) as HTMLInputElement).value).toBe(
+      "mobile-tabs",
+    );
+    expect((screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement).value).toBe(
+      "Keep this task",
+    );
   });
 
   test("sets every mobile panel's animation direction from section order", () => {
@@ -365,7 +389,7 @@ describe("resolveAgentDefaults", () => {
         open={true}
         onOpenChange={() => {}}
         onCreate={mock(async () => {})}
-      />
+      />,
     );
 
     const panels = {
@@ -373,7 +397,9 @@ describe("resolveAgentDefaults", () => {
       Setup: screen.getByLabelText(/Environment Name/i).closest('[role="tabpanel"]'),
       Agent: screen.getByRole("switch", { name: "Launch Agent" }).closest('[role="tabpanel"]'),
       Access: screen.getByRole("button", { name: "Restricted" }).closest('[role="tabpanel"]'),
-      Ports: screen.getByRole("button", { name: /Port Configuration/ }).closest('[role="tabpanel"]'),
+      Ports: screen
+        .getByRole("button", { name: /Port Configuration/ })
+        .closest('[role="tabpanel"]'),
     };
 
     for (const panel of Object.values(panels)) {
@@ -408,7 +434,7 @@ describe("resolveAgentDefaults", () => {
         open={true}
         onOpenChange={() => {}}
         onCreate={mock(async () => {})}
-      />
+      />,
     );
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Setup" }), { button: 0, ctrlKey: false });
@@ -431,7 +457,7 @@ describe("resolveAgentDefaults", () => {
           open={true}
           onOpenChange={() => {}}
           onCreate={mock(async () => {})}
-        />
+        />,
       );
 
       fireEvent.mouseDown(screen.getByRole("tab", { name: tabName }), {
@@ -443,7 +469,9 @@ describe("resolveAgentDefaults", () => {
       fireEvent.click(screen.getByRole("button", { name: /Local/ }));
 
       await waitFor(() => {
-        expect(screen.getByRole("tab", { name: "Setup" }).getAttribute("aria-selected")).toBe("true");
+        expect(screen.getByRole("tab", { name: "Setup" }).getAttribute("aria-selected")).toBe(
+          "true",
+        );
       });
       expect(
         screen
@@ -461,7 +489,7 @@ describe("resolveAgentDefaults", () => {
         open={true}
         onOpenChange={() => {}}
         onCreate={mock(async () => {})}
-      />
+      />,
     );
 
     expect(screen.getByRole("tab", { name: "Prompt" }).getAttribute("aria-selected")).toBe("true");
@@ -502,21 +530,21 @@ describe("resolveAgentDefaults", () => {
     rerender(<CreateEnvironmentDialog open={true} {...props} />);
 
     await waitFor(() => {
-      expect(screen.getByRole("tab", { name: "Prompt" }).getAttribute("aria-selected")).toBe("true");
+      expect(screen.getByRole("tab", { name: "Prompt" }).getAttribute("aria-selected")).toBe(
+        "true",
+      );
     });
-    expect(screen
+    expect(
+      screen
         .getByLabelText(/Initial Prompt/i)
         .closest('[role="tabpanel"]')
-        ?.getAttribute("data-mobile-transition") === null).toBe(true);
+        ?.getAttribute("data-mobile-transition") === null,
+    ).toBe(true);
   });
 
   test("clears the delayed prompt autofocus when the dialog unmounts", async () => {
     const { unmount } = render(
-      <CreateEnvironmentDialog
-        open
-        onOpenChange={() => {}}
-        onCreate={mock(async () => {})}
-      />,
+      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
     );
     const prompt = screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement;
     const focus = mock(() => {});
@@ -556,10 +584,14 @@ describe("resolveAgentDefaults", () => {
     unmount();
     render(<CreateEnvironmentDialog open={true} {...props} />);
     await waitFor(() => {
-      expect((screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement).value).toBe("Keep this draft");
+      expect((screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement).value).toBe(
+        "Keep this draft",
+      );
     });
     expect((screen.getByLabelText(/Environment Name/i) as HTMLInputElement).value).toBe("");
-    expect(screen.getByRole("switch", { name: "Launch Agent" }).getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByRole("switch", { name: "Launch Agent" }).getAttribute("aria-checked")).toBe(
+      "true",
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
     await waitFor(() => {
@@ -590,7 +622,9 @@ describe("resolveAgentDefaults", () => {
 
     const secondRender = render(<CreateEnvironmentDialog open={true} {...props} />);
     await waitFor(() => {
-      expect((screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement).value).toBe("Remove this draft");
+      expect((screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement).value).toBe(
+        "Remove this draft",
+      );
     });
     fireEvent.change(screen.getByLabelText(/Initial Prompt/i), {
       target: { value: "   " },
@@ -618,7 +652,9 @@ describe("resolveAgentDefaults", () => {
 
     const secondRender = render(<CreateEnvironmentDialog open={true} {...props} />);
     await waitFor(() => {
-      expect((screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement).value).toBe("Saved until creation");
+      expect((screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement).value).toBe(
+        "Saved until creation",
+      );
     });
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
     await waitFor(() => expect(props.onCreate).toHaveBeenCalled());
@@ -630,13 +666,7 @@ describe("resolveAgentDefaults", () => {
 
   test("submits the selected restricted network mode", async () => {
     const onCreate = mock(async () => {});
-    render(
-      <CreateEnvironmentDialog
-        open={true}
-        onOpenChange={() => {}}
-        onCreate={onCreate}
-      />
-    );
+    render(<CreateEnvironmentDialog open={true} onOpenChange={() => {}} onCreate={onCreate} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Restricted" }));
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
@@ -650,13 +680,7 @@ describe("resolveAgentDefaults", () => {
 
   test("submits on plain Enter but not modified Enter in the prompt", async () => {
     const onCreate = mock(async () => {});
-    render(
-      <CreateEnvironmentDialog
-        open={true}
-        onOpenChange={() => {}}
-        onCreate={onCreate}
-      />
-    );
+    render(<CreateEnvironmentDialog open={true} onOpenChange={() => {}} onCreate={onCreate} />);
     const prompt = screen.getByLabelText(/Initial Prompt/i);
 
     for (const modifier of ["shiftKey", "metaKey", "ctrlKey", "altKey"] as const) {
@@ -676,13 +700,21 @@ describe("resolveAgentDefaults", () => {
         onOpenChange={() => {}}
         onCreate={onCreate}
         isLoading={true}
-      />
+      />,
     );
 
-    expect((screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole("button", { name: "Create Environment" }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole("button", { name: /Containerized/ }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole("switch", { name: "Launch Agent" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    expect(
+      (screen.getByRole("button", { name: "Create Environment" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(
+      (screen.getByRole("button", { name: /Containerized/ }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(
+      (screen.getByRole("switch", { name: "Launch Agent" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
     expect((screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement).disabled).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
@@ -719,13 +751,7 @@ describe("resolveAgentDefaults", () => {
 
     const onCreate = mock(async () => {});
 
-    render(
-      <CreateEnvironmentDialog
-        open={true}
-        onOpenChange={() => {}}
-        onCreate={onCreate}
-      />
-    );
+    render(<CreateEnvironmentDialog open={true} onOpenChange={() => {}} onCreate={onCreate} />);
 
     await selectAgentPlatform("Codex");
     fireEvent.click(screen.getByRole("checkbox", { name: "Use TUI" }));
@@ -740,20 +766,14 @@ describe("resolveAgentDefaults", () => {
           agentType: "codex",
           codexMode: "terminal",
           initialPrompt: "Review the migration plan",
-        })
+        }),
       );
     });
   });
 
   test("submits the selected model and reasoning effort", async () => {
     const onCreate = mock(async () => {});
-    render(
-      <CreateEnvironmentDialog
-        open
-        onOpenChange={() => {}}
-        onCreate={onCreate}
-      />,
-    );
+    render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
 
     await selectAgentPlatform("Codex");
     await selectAgentModel(/GPT-5\.4-Mini/);
@@ -774,8 +794,18 @@ describe("resolveAgentDefaults", () => {
   test("starts a new project's environment on the configured New projects default", async () => {
     useCodexStore.setState({
       models: [
-        { id: "codex-a", name: "Codex A", description: "First", reasoningEfforts: ["medium", "high"] },
-        { id: "codex-b", name: "Codex B", description: "Second", reasoningEfforts: ["medium", "high"] },
+        {
+          id: "codex-a",
+          name: "Codex A",
+          description: "First",
+          reasoningEfforts: ["medium", "high"],
+        },
+        {
+          id: "codex-b",
+          name: "Codex B",
+          description: "Second",
+          reasoningEfforts: ["medium", "high"],
+        },
       ],
     });
     const config = structuredClone(defaultConfig);
@@ -791,25 +821,37 @@ describe("resolveAgentDefaults", () => {
     useConfigStore.setState({ config });
     const onCreate = mock(async () => {});
 
-    render(
-      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />,
-    );
+    render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
 
     await waitFor(() => expect(getAgentModelPicker().textContent).toContain("Codex B"));
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
-    await waitFor(() => expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({
-      agentType: "codex",
-      model: "codex-b",
-      reasoningEffort: "high",
-    })));
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentType: "codex",
+          model: "codex-b",
+          reasoningEffort: "high",
+        }),
+      ),
+    );
   });
 
   test("keeps a project's remembered selection ahead of the New projects default", async () => {
     useCodexStore.setState({
       models: [
-        { id: "codex-a", name: "Codex A", description: "First", reasoningEfforts: ["medium", "high"] },
-        { id: "codex-b", name: "Codex B", description: "Second", reasoningEfforts: ["medium", "high"] },
+        {
+          id: "codex-a",
+          name: "Codex A",
+          description: "First",
+          reasoningEfforts: ["medium", "high"],
+        },
+        {
+          id: "codex-b",
+          name: "Codex B",
+          description: "Second",
+          reasoningEfforts: ["medium", "high"],
+        },
       ],
     });
     const config = structuredClone(defaultConfig);
@@ -843,11 +885,15 @@ describe("resolveAgentDefaults", () => {
     await waitFor(() => expect(getAgentModelPicker().textContent).toContain("Codex A"));
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
-    await waitFor(() => expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({
-      agentType: "codex",
-      model: "codex-a",
-      reasoningEffort: "medium",
-    })));
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentType: "codex",
+          model: "codex-a",
+          reasoningEffort: "medium",
+        }),
+      ),
+    );
   });
 
   test("ignores a New projects default whose platform is no longer enabled", async () => {
@@ -861,18 +907,20 @@ describe("resolveAgentDefaults", () => {
     useConfigStore.setState({ config });
     const onCreate = mock(async () => {});
 
-    render(
-      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />,
-    );
+    render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
     // The default is dropped whole rather than contributing its model, so the
     // dialog opens on the app default agent and that agent's configured model.
-    await waitFor(() => expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({
-      agentType: "claude",
-      model: "sonnet",
-    })));
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentType: "claude",
+          model: "sonnet",
+        }),
+      ),
+    );
   });
 
   test("offers the durable Cursor catalogue when creating a new environment", async () => {
@@ -900,31 +948,23 @@ describe("resolveAgentDefaults", () => {
     ]);
     const onCreate = mock(async () => {});
 
-    render(
-      <CreateEnvironmentDialog
-        open
-        onOpenChange={() => {}}
-        onCreate={onCreate}
-      />,
-    );
+    render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
 
-    await waitFor(() =>
-      expect(getAgentModelPicker().textContent).toContain("Cursor Grok 4.6")
-    );
+    await waitFor(() => expect(getAgentModelPicker().textContent).toContain("Cursor Grok 4.6"));
     openAgentModelPicker();
-    expect(screen.getByRole("menuitemradio", { name: /Cursor Grok 4\.6/ }))
-      .toBeTruthy();
-    expect(screen.getByRole("menuitemradio", { name: /Composer 2\.5/ }))
-      .toBeTruthy();
+    expect(screen.getByRole("menuitemradio", { name: /Cursor Grok 4\.6/ })).toBeTruthy();
+    expect(screen.getByRole("menuitemradio", { name: /Composer 2\.5/ })).toBeTruthy();
     fireEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
     await waitFor(() => {
-      expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({
-        agentType: "cursor",
-        model: "grok-4.6",
-        reasoningEffort: "high",
-      }));
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentType: "cursor",
+          model: "grok-4.6",
+          reasoningEffort: "high",
+        }),
+      );
     });
   });
 
@@ -958,21 +998,13 @@ describe("resolveAgentDefaults", () => {
     useConfigStore.setState({ config });
     const onCreate = mock(async () => {});
 
-    render(
-      <CreateEnvironmentDialog
-        open
-        onOpenChange={() => {}}
-        onCreate={onCreate}
-      />,
-    );
+    render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
 
     expect(getAgentModelPicker().textContent).toContain("Codex A");
     expect(getAgentModelPicker().textContent).toContain("Medium");
 
     await selectReasoning("High");
-    await waitFor(() =>
-      expect(getAgentModelPicker().textContent).toContain("High")
-    );
+    await waitFor(() => expect(getAgentModelPicker().textContent).toContain("High"));
 
     await selectAgentModel(/Codex B/);
 
@@ -1019,18 +1051,10 @@ describe("resolveAgentDefaults", () => {
     useConfigStore.setState({ config });
     const onCreate = mock(async () => {});
 
-    render(
-      <CreateEnvironmentDialog
-        open
-        onOpenChange={() => {}}
-        onCreate={onCreate}
-      />,
-    );
+    render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
 
     await selectAgentModel(/Codex B/);
-    await waitFor(() =>
-      expect(getAgentModelPicker().textContent).toContain("Codex B")
-    );
+    await waitFor(() => expect(getAgentModelPicker().textContent).toContain("Codex B"));
 
     await selectAgentPlatform("Codex");
 
@@ -1057,13 +1081,7 @@ describe("resolveAgentDefaults", () => {
     config.global.opencodeModel = undefined;
     useConfigStore.setState({ config });
     const onCreate = mock(async () => {});
-    render(
-      <CreateEnvironmentDialog
-        open
-        onOpenChange={() => {}}
-        onCreate={onCreate}
-      />,
-    );
+    render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
 
     await selectAgentPlatform("OpenCode");
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
@@ -1080,13 +1098,7 @@ describe("resolveAgentDefaults", () => {
     // an id of "default", so it must keep flowing through untouched.
     useClaudeStore.setState({ models: [] });
     const onCreate = mock(async () => {});
-    render(
-      <CreateEnvironmentDialog
-        open
-        onOpenChange={() => {}}
-        onCreate={onCreate}
-      />,
-    );
+    render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
 
     await selectAgentPlatform("Claude");
     await selectAgentModel(/Default \(recommended\)/);
@@ -1101,13 +1113,7 @@ describe("resolveAgentDefaults", () => {
 
   test("submits an unset reasoning effort as undefined", async () => {
     const onCreate = mock(async () => {});
-    render(
-      <CreateEnvironmentDialog
-        open
-        onOpenChange={() => {}}
-        onCreate={onCreate}
-      />,
-    );
+    render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
 
     await selectAgentPlatform("Codex");
     await selectReasoning("Default");
@@ -1123,11 +1129,7 @@ describe("resolveAgentDefaults", () => {
   test("omits reasoning choices when the selected model supports none", async () => {
     useOpenCodeStore.setState({ models: new Map() });
     render(
-      <CreateEnvironmentDialog
-        open
-        onOpenChange={() => {}}
-        onCreate={mock(async () => {})}
-      />,
+      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
     );
 
     await selectAgentPlatform("OpenCode");
@@ -1136,9 +1138,7 @@ describe("resolveAgentDefaults", () => {
     expect(screen.queryByRole("group", { name: "Reasoning" }) === null).toBe(true);
     expect(screen.getByPlaceholderText("Search models...")).toBeTruthy();
     fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
-    await waitFor(() =>
-      expect(getAgentModelPicker().getAttribute("aria-expanded")).toBe("false"),
-    );
+    await waitFor(() => expect(getAgentModelPicker().getAttribute("aria-expanded")).toBe("false"));
   });
 
   test("honors project mode defaults in the checkbox and submission", async () => {
@@ -1162,25 +1162,27 @@ describe("resolveAgentDefaults", () => {
       />,
     );
 
-    expect(
-      screen.getByRole("checkbox", { name: "Use TUI" }).getAttribute("data-state"),
-    ).toBe("unchecked");
+    expect(screen.getByRole("checkbox", { name: "Use TUI" }).getAttribute("data-state")).toBe(
+      "unchecked",
+    );
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
     await waitFor(() =>
       expect(onCreate).toHaveBeenCalledWith(
         expect.objectContaining({ agentType: "claude", claudeMode: "native" }),
-      )
+      ),
     );
   });
 
   test("falls back to the global Codex effort when the project has no override", async () => {
     useCodexStore.setState({
-      models: [{
-        id: "codex-preferred",
-        name: "Codex Preferred",
-        description: "Preferred",
-        reasoningEfforts: ["medium", "high"],
-      }],
+      models: [
+        {
+          id: "codex-preferred",
+          name: "Codex Preferred",
+          description: "Preferred",
+          reasoningEfforts: ["medium", "high"],
+        },
+      ],
     });
     const config = structuredClone(defaultConfig);
     config.global.defaultAgent = "codex";
@@ -1204,9 +1206,7 @@ describe("resolveAgentDefaults", () => {
       />,
     );
 
-    expect(
-      getAgentModelPicker().textContent,
-    ).toContain("High");
+    expect(getAgentModelPicker().textContent).toContain("High");
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
     await waitFor(() =>
       expect(onCreate).toHaveBeenCalledWith(
@@ -1215,18 +1215,20 @@ describe("resolveAgentDefaults", () => {
           model: "codex-preferred",
           reasoningEffort: "high",
         }),
-      )
+      ),
     );
   });
 
   test("prefers a project effort and drops an unsupported configured effort", async () => {
     useCodexStore.setState({
-      models: [{
-        id: "codex-medium-only",
-        name: "Codex Medium",
-        description: "Medium only",
-        reasoningEfforts: ["medium"],
-      }],
+      models: [
+        {
+          id: "codex-medium-only",
+          name: "Codex Medium",
+          description: "Medium only",
+          reasoningEfforts: ["medium"],
+        },
+      ],
     });
     const config = structuredClone(defaultConfig);
     config.global.defaultAgent = "codex";
@@ -1250,9 +1252,7 @@ describe("resolveAgentDefaults", () => {
         projectId="project-codex"
       />,
     );
-    expect(
-      getAgentModelPicker().textContent,
-    ).toContain("Medium");
+    expect(getAgentModelPicker().textContent).toContain("Medium");
 
     unmount();
     config.repositories["project-codex"]!.defaultEffort = "high";
@@ -1265,9 +1265,7 @@ describe("resolveAgentDefaults", () => {
         projectId="project-codex"
       />,
     );
-    expect(
-      getAgentModelPicker().textContent,
-    ).toContain("Default");
+    expect(getAgentModelPicker().textContent).toContain("Default");
   });
 
   test("offers live OpenCode models and a configured project variant", async () => {
@@ -1308,22 +1306,14 @@ describe("resolveAgentDefaults", () => {
     );
 
     expect(getAgentModelPicker().textContent).toContain("Model B");
-    expect(
-      getAgentModelPicker().textContent,
-    ).toContain("Deep");
+    expect(getAgentModelPicker().textContent).toContain("Deep");
     fireEvent.pointerDown(getAgentModelPicker(), {
       button: 0,
       ctrlKey: false,
     });
-    fireEvent.click(
-      await screen.findByRole("button", { name: "opencode models" }),
-    );
-    expect(
-      await screen.findByRole("menuitemradio", { name: /Model A/ }),
-    ).toBeTruthy();
-    fireEvent.click(
-      await screen.findByRole("menuitemradio", { name: /Model B/ }),
-    );
+    fireEvent.click(await screen.findByRole("button", { name: "opencode models" }));
+    expect(await screen.findByRole("menuitemradio", { name: /Model A/ })).toBeTruthy();
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: /Model B/ }));
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
     await waitFor(() =>
       expect(onCreate).toHaveBeenCalledWith(
@@ -1332,7 +1322,7 @@ describe("resolveAgentDefaults", () => {
           model: "provider/model-b",
           reasoningEffort: "deep",
         }),
-      )
+      ),
     );
   });
 
@@ -1390,26 +1380,18 @@ describe("resolveAgentDefaults", () => {
     );
 
     await waitFor(() => {
-      expect(getAgentModelPicker().textContent)
-        .toContain("Durable Model A");
-      expect(getAgentModelPicker().textContent)
-        .toContain("Fast");
+      expect(getAgentModelPicker().textContent).toContain("Durable Model A");
+      expect(getAgentModelPicker().textContent).toContain("Fast");
     });
 
     fireEvent.pointerDown(getAgentModelPicker(), {
       button: 0,
       ctrlKey: false,
     });
-    fireEvent.click(
-      await screen.findByRole("button", { name: "opencode models" }),
-    );
-    fireEvent.click(
-      await screen.findByRole("menuitemradio", { name: /Durable Model B/ }),
-    );
-    expect(getAgentModelPicker().textContent)
-      .toContain("Durable Model B");
-    expect(getAgentModelPicker().textContent)
-      .toContain("Default");
+    fireEvent.click(await screen.findByRole("button", { name: "opencode models" }));
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: /Durable Model B/ }));
+    expect(getAgentModelPicker().textContent).toContain("Durable Model B");
+    expect(getAgentModelPicker().textContent).toContain("Default");
 
     await selectReasoning("Deep");
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
@@ -1460,10 +1442,7 @@ describe("resolveAgentDefaults", () => {
       />,
     );
     await selectAgentPlatform("OpenCode");
-    await waitFor(() =>
-      expect(getAgentModelPicker().textContent)
-        .toContain("Model A")
-    );
+    await waitFor(() => expect(getAgentModelPicker().textContent).toContain("Model A"));
     fireEvent.pointerDown(getAgentModelPicker(), {
       button: 0,
       ctrlKey: false,
@@ -1479,21 +1458,28 @@ describe("resolveAgentDefaults", () => {
   test("preserves the target agent effort when selecting a cross-platform favorite", async () => {
     useOpenCodeStore.setState({
       models: new Map([
-        ["existing-env", [{
-          id: "provider/source",
-          name: "OpenCode Source",
-          provider: "Provider",
-          variants: ["deep"],
-        }]],
+        [
+          "existing-env",
+          [
+            {
+              id: "provider/source",
+              name: "OpenCode Source",
+              provider: "Provider",
+              variants: ["deep"],
+            },
+          ],
+        ],
       ]),
     });
     useCodexStore.setState({
-      models: [{
-        id: "codex-favorite",
-        name: "Codex Favorite",
-        description: "Favorite",
-        reasoningEfforts: ["high"],
-      }],
+      models: [
+        {
+          id: "codex-favorite",
+          name: "Codex Favorite",
+          description: "Favorite",
+          reasoningEfforts: ["high"],
+        },
+      ],
     });
     const config = structuredClone(defaultConfig);
     config.global.defaultAgent = "opencode";
@@ -1524,9 +1510,7 @@ describe("resolveAgentDefaults", () => {
     expect(getAgentModelPicker().textContent).toContain("Deep");
     openAgentModelPicker();
     fireEvent.click(screen.getByRole("button", { name: "Favorite models" }));
-    fireEvent.click(
-      await screen.findByRole("menuitemradio", { name: /Codex Favorite/ }),
-    );
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: /Codex Favorite/ }));
 
     await waitFor(() => {
       expect(getAgentModelPicker().textContent).toContain("Codex Favorite");
@@ -1548,12 +1532,17 @@ describe("resolveAgentDefaults", () => {
   test("prefers a live OpenCode catalog over the durable project cache", async () => {
     useOpenCodeStore.setState({
       models: new Map([
-        ["live-environment", [{
-          id: "live/model",
-          name: "Live Model",
-          provider: "Live Provider",
-          variants: ["live"],
-        }]],
+        [
+          "live-environment",
+          [
+            {
+              id: "live/model",
+              name: "Live Model",
+              provider: "Live Provider",
+              variants: ["live"],
+            },
+          ],
+        ],
       ]),
     });
     const config = structuredClone(defaultConfig);
@@ -1566,11 +1555,13 @@ describe("resolveAgentDefaults", () => {
           projectId: "live-project",
           catalogVersion: "stale",
           updatedAt: "2026-07-27T12:00:00.000Z",
-          models: [{
-            id: "cached/model",
-            name: "Cached Model",
-            provider: "Cached Provider",
-          }],
+          models: [
+            {
+              id: "cached/model",
+              name: "Cached Model",
+              provider: "Cached Provider",
+            },
+          ],
         });
       }
       if (command === "get_opencode_model_preferences") {
@@ -1588,13 +1579,9 @@ describe("resolveAgentDefaults", () => {
       />,
     );
     await selectAgentPlatform("OpenCode");
-    await waitFor(() =>
-      expect(getAgentModelPicker().textContent)
-        .toContain("Live Model")
-    );
+    await waitFor(() => expect(getAgentModelPicker().textContent).toContain("Live Model"));
     openAgentModelPicker();
-    expect(await screen.findByRole("menuitemradio", { name: /Live Model/ }))
-      .toBeTruthy();
+    expect(await screen.findByRole("menuitemradio", { name: /Live Model/ })).toBeTruthy();
     expect(screen.queryByRole("menuitemradio", { name: /Cached Model/ }) === null).toBe(true);
   });
 
@@ -1605,11 +1592,7 @@ describe("resolveAgentDefaults", () => {
     useConfigStore.setState({ config });
 
     render(
-      <CreateEnvironmentDialog
-        open
-        onOpenChange={() => {}}
-        onCreate={mock(async () => {})}
-      />,
+      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
     );
     await selectAgentPlatform("OpenCode");
     expect(invokeMock).not.toHaveBeenCalledWith("get_opencode_model_preferences");
@@ -1625,42 +1608,37 @@ describe("resolveAgentDefaults", () => {
     config.global.opencodeModel = undefined;
     useConfigStore.setState({ config });
     const projectA = deferred<Record<string, unknown>>();
-    invokeMock.mockImplementation(
-      (command: string, args?: Record<string, unknown>) => {
-        if (command === "get_opencode_model_catalog_cache") {
-          if (args?.projectId === "project-a") return projectA.promise;
-          return Promise.resolve({
-            schemaVersion: 2,
-            projectId: "project-b",
-            catalogVersion: "b",
-            updatedAt: "2026-07-27T12:00:00.000Z",
-            models: [{
+    invokeMock.mockImplementation((command: string, args?: Record<string, unknown>) => {
+      if (command === "get_opencode_model_catalog_cache") {
+        if (args?.projectId === "project-a") return projectA.promise;
+        return Promise.resolve({
+          schemaVersion: 2,
+          projectId: "project-b",
+          catalogVersion: "b",
+          updatedAt: "2026-07-27T12:00:00.000Z",
+          models: [
+            {
               id: "provider/model-b",
               name: "Project B Model",
               provider: "Provider",
-            }],
-          });
-        }
-        if (command === "get_opencode_model_preferences") {
-          return Promise.resolve({ recent: [], favorite: [], variant: {} });
-        }
-        return Promise.resolve(undefined);
-      },
-    );
+            },
+          ],
+        });
+      }
+      if (command === "get_opencode_model_preferences") {
+        return Promise.resolve({ recent: [], favorite: [], variant: {} });
+      }
+      return Promise.resolve(undefined);
+    });
     const props = {
       open: true,
       onOpenChange: () => {},
       onCreate: mock(async () => {}),
     };
-    const { rerender } = render(
-      <CreateEnvironmentDialog {...props} projectId="project-a" />,
-    );
+    const { rerender } = render(<CreateEnvironmentDialog {...props} projectId="project-a" />);
     await selectAgentPlatform("OpenCode");
     rerender(<CreateEnvironmentDialog {...props} projectId="project-b" />);
-    await waitFor(() =>
-      expect(getAgentModelPicker().textContent)
-        .toContain("Project B Model")
-    );
+    await waitFor(() => expect(getAgentModelPicker().textContent).toContain("Project B Model"));
 
     await act(async () => {
       projectA.resolve({
@@ -1668,16 +1646,17 @@ describe("resolveAgentDefaults", () => {
         projectId: "project-a",
         catalogVersion: "a",
         updatedAt: "2026-07-27T12:00:00.000Z",
-        models: [{
-          id: "provider/model-a",
-          name: "Project A Model",
-          provider: "Provider",
-        }],
+        models: [
+          {
+            id: "provider/model-a",
+            name: "Project A Model",
+            provider: "Provider",
+          },
+        ],
       });
       await projectA.promise;
     });
-    expect(getAgentModelPicker().textContent)
-      .toContain("Project B Model");
+    expect(getAgentModelPicker().textContent).toContain("Project B Model");
   });
 
   test("clears a previous durable catalog when a repeated open returns empty", async () => {
@@ -1696,11 +1675,13 @@ describe("resolveAgentDefaults", () => {
                 projectId: "repeat-project",
                 catalogVersion: "first",
                 updatedAt: "2026-07-27T12:00:00.000Z",
-                models: [{
-                  id: "provider/old-model",
-                  name: "Old Cached Model",
-                  provider: "Provider",
-                }],
+                models: [
+                  {
+                    id: "provider/old-model",
+                    name: "Old Cached Model",
+                    provider: "Provider",
+                  },
+                ],
               }
             : null,
         );
@@ -1715,20 +1696,14 @@ describe("resolveAgentDefaults", () => {
       onCreate: mock(async () => {}),
       projectId: "repeat-project",
     };
-    const { rerender } = render(
-      <CreateEnvironmentDialog open {...props} />,
-    );
+    const { rerender } = render(<CreateEnvironmentDialog open {...props} />);
     await selectAgentPlatform("OpenCode");
-    await waitFor(() =>
-      expect(getAgentModelPicker().textContent)
-        .toContain("Old Cached Model")
-    );
+    await waitFor(() => expect(getAgentModelPicker().textContent).toContain("Old Cached Model"));
 
     rerender(<CreateEnvironmentDialog open={false} {...props} />);
     rerender(<CreateEnvironmentDialog open {...props} />);
     await waitFor(() =>
-      expect(getAgentModelPicker().textContent)
-        .not.toContain("Old Cached Model")
+      expect(getAgentModelPicker().textContent).not.toContain("Old Cached Model"),
     );
   });
 
@@ -1739,15 +1714,18 @@ describe("resolveAgentDefaults", () => {
     },
     {
       name: "invalid",
-      cacheResult: () => Promise.resolve({
-        schemaVersion: 2,
-        projectId: "another-project",
-        models: [{
-          id: "provider/wrong-project",
-          name: "Wrong Project Model",
-          provider: "Provider",
-        }],
-      }),
+      cacheResult: () =>
+        Promise.resolve({
+          schemaVersion: 2,
+          projectId: "another-project",
+          models: [
+            {
+              id: "provider/wrong-project",
+              name: "Wrong Project Model",
+              provider: "Provider",
+            },
+          ],
+        }),
     },
   ])("keeps durable state empty for a $name cache payload", async ({ cacheResult }) => {
     useOpenCodeStore.setState({ models: new Map() });
@@ -1772,13 +1750,11 @@ describe("resolveAgentDefaults", () => {
     );
     await selectAgentPlatform("OpenCode");
     await waitFor(() =>
-      expect(getAgentModelPicker().textContent)
-        .not.toContain("Wrong Project Model")
+      expect(getAgentModelPicker().textContent).not.toContain("Wrong Project Model"),
     );
-    expect(invokeMock).toHaveBeenCalledWith(
-      "get_opencode_model_catalog_cache",
-      { projectId: "current-project" },
-    );
+    expect(invokeMock).toHaveBeenCalledWith("get_opencode_model_catalog_cache", {
+      projectId: "current-project",
+    });
   });
 
   test("augments the durable catalog with a missing configured OpenCode model and effort", async () => {
@@ -1801,12 +1777,14 @@ describe("resolveAgentDefaults", () => {
           projectId: "configured-project",
           catalogVersion: "catalog-v1",
           updatedAt: "2026-07-27T12:00:00.000Z",
-          models: [{
-            id: "provider/cached-model",
-            name: "Cached Model",
-            provider: "Provider",
-            variants: ["normal"],
-          }],
+          models: [
+            {
+              id: "provider/cached-model",
+              name: "Cached Model",
+              provider: "Provider",
+              variants: ["normal"],
+            },
+          ],
         });
       }
       if (command === "get_opencode_model_preferences") {
@@ -1825,21 +1803,16 @@ describe("resolveAgentDefaults", () => {
       />,
     );
     await waitFor(() => {
-      expect(getAgentModelPicker().textContent)
-        .toContain("missing-model");
-      expect(getAgentModelPicker().textContent)
-        .not.toContain("configured/missing-model");
-      expect(getAgentModelPicker().textContent)
-        .toContain("Turbo");
+      expect(getAgentModelPicker().textContent).toContain("missing-model");
+      expect(getAgentModelPicker().textContent).not.toContain("configured/missing-model");
+      expect(getAgentModelPicker().textContent).toContain("Turbo");
     });
     openAgentModelPicker();
     const configuredOption = await screen.findByRole("menuitemradio", {
       name: /missing-model/,
     });
     expect(configuredOption).toBeTruthy();
-    expect(
-      screen.getByRole("menuitemradio", { name: /Cached Model/ }),
-    ).toBeTruthy();
+    expect(screen.getByRole("menuitemradio", { name: /Cached Model/ })).toBeTruthy();
     fireEvent.click(configuredOption);
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
@@ -1849,7 +1822,7 @@ describe("resolveAgentDefaults", () => {
           model: "configured/missing-model",
           reasoningEffort: "turbo",
         }),
-      )
+      ),
     );
   });
 
@@ -1873,12 +1846,14 @@ describe("resolveAgentDefaults", () => {
           projectId: "configured-effort-project",
           catalogVersion: "catalog-v1",
           updatedAt: "2026-07-27T12:00:00.000Z",
-          models: [{
-            id: "provider/configured-model",
-            name: "Configured Model",
-            provider: "Provider",
-            variants: ["normal"],
-          }],
+          models: [
+            {
+              id: "provider/configured-model",
+              name: "Configured Model",
+              provider: "Provider",
+              variants: ["normal"],
+            },
+          ],
         });
       }
       if (command === "get_opencode_model_preferences") {
@@ -1897,10 +1872,8 @@ describe("resolveAgentDefaults", () => {
     );
 
     await waitFor(() => {
-      expect(getAgentModelPicker().textContent)
-        .toContain("Configured Model");
-      expect(getAgentModelPicker().textContent)
-        .toContain("Turbo");
+      expect(getAgentModelPicker().textContent).toContain("Configured Model");
+      expect(getAgentModelPicker().textContent).toContain("Turbo");
     });
   });
 
@@ -1917,11 +1890,13 @@ describe("resolveAgentDefaults", () => {
           projectId: "prefs-project",
           catalogVersion: "catalog-v1",
           updatedAt: "2026-07-27T12:00:00.000Z",
-          models: [{
-            id: "provider/model-a",
-            name: "Durable Model A",
-            provider: "Provider",
-          }],
+          models: [
+            {
+              id: "provider/model-a",
+              name: "Durable Model A",
+              provider: "Provider",
+            },
+          ],
         });
       }
       if (command === "get_opencode_model_preferences") {
@@ -1939,15 +1914,10 @@ describe("resolveAgentDefaults", () => {
       />,
     );
 
-    await waitFor(() =>
-      expect(getAgentModelPicker().textContent)
-        .toContain("Durable Model A")
-    );
+    await waitFor(() => expect(getAgentModelPicker().textContent).toContain("Durable Model A"));
     openAgentModelPicker();
     // The catalogue still renders; there is simply no Favorites section.
-    expect(
-      await screen.findByRole("menuitemradio", { name: /Durable Model A/ }),
-    ).toBeTruthy();
+    expect(await screen.findByRole("menuitemradio", { name: /Durable Model A/ })).toBeTruthy();
     expect(screen.queryByText("Favorites") === null).toBe(true);
   });
 
@@ -1968,11 +1938,13 @@ describe("resolveAgentDefaults", () => {
           projectId: "prefs-project",
           catalogVersion: "catalog-v1",
           updatedAt: "2026-07-27T12:00:00.000Z",
-          models: [{
-            id: "provider/model-a",
-            name: "Durable Model A",
-            provider: "Provider",
-          }],
+          models: [
+            {
+              id: "provider/model-a",
+              name: "Durable Model A",
+              provider: "Provider",
+            },
+          ],
         });
       }
       if (command === "get_opencode_model_preferences") {
@@ -1990,14 +1962,9 @@ describe("resolveAgentDefaults", () => {
       />,
     );
 
-    await waitFor(() =>
-      expect(getAgentModelPicker().textContent)
-        .toContain("Durable Model A")
-    );
+    await waitFor(() => expect(getAgentModelPicker().textContent).toContain("Durable Model A"));
     openAgentModelPicker();
-    expect(
-      await screen.findByRole("menuitemradio", { name: /Durable Model A/ }),
-    ).toBeTruthy();
+    expect(await screen.findByRole("menuitemradio", { name: /Durable Model A/ })).toBeTruthy();
     expect(screen.queryByText("Favorites") === null).toBe(true);
   });
 
@@ -2032,10 +1999,8 @@ describe("resolveAgentDefaults", () => {
     );
 
     await waitFor(() => {
-      expect(getAgentModelPicker().textContent)
-        .toContain("configured");
-      expect(getAgentModelPicker().textContent)
-        .not.toContain("provider/configured");
+      expect(getAgentModelPicker().textContent).toContain("configured");
+      expect(getAgentModelPicker().textContent).not.toContain("provider/configured");
     });
 
     await act(async () => {
@@ -2054,15 +2019,12 @@ describe("resolveAgentDefaults", () => {
 
     // Still valid in the arriving catalogue, so the choice survives — now
     // rendered with the catalogue's friendly name rather than the raw id.
-    await waitFor(() =>
-      expect(getAgentModelPicker().textContent)
-        .toContain("Configured")
-    );
+    await waitFor(() => expect(getAgentModelPicker().textContent).toContain("Configured"));
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
     await waitFor(() =>
       expect(onCreate).toHaveBeenCalledWith(
         expect.objectContaining({ model: "provider/configured" }),
-      )
+      ),
     );
   });
 
@@ -2090,33 +2052,27 @@ describe("resolveAgentDefaults", () => {
     useConfigStore.setState({ config });
 
     render(
-      <CreateEnvironmentDialog
-        open
-        onOpenChange={() => {}}
-        onCreate={mock(async () => {})}
-      />,
+      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
     );
 
     await selectAgentModel(/Codex Low/);
-    expect(
-      getAgentModelPicker().textContent,
-    ).toContain("Default");
+    expect(getAgentModelPicker().textContent).toContain("Default");
 
     await act(async () => {
       useCodexStore.setState({
-        models: [{
-          id: "codex-refreshed",
-          name: "Codex Refreshed",
-          description: "Refreshed",
-          reasoningEfforts: ["medium"],
-        }],
+        models: [
+          {
+            id: "codex-refreshed",
+            name: "Codex Refreshed",
+            description: "Refreshed",
+            reasoningEfforts: ["medium"],
+          },
+        ],
       });
     });
     await waitFor(() => {
-      expect(getAgentModelPicker().textContent)
-        .toContain("Codex Refreshed");
-      expect(getAgentModelPicker().textContent)
-        .toContain("Default");
+      expect(getAgentModelPicker().textContent).toContain("Codex Refreshed");
+      expect(getAgentModelPicker().textContent).toContain("Default");
     });
   });
 
@@ -2160,13 +2116,7 @@ describe("resolveAgentDefaults", () => {
     "submits $agentLabel $selectedMode mode from the dialog",
     async ({ agentLabel, agentType, selectedMode, expectedField, expectedMode }) => {
       const onCreate = mock(async () => {});
-      render(
-        <CreateEnvironmentDialog
-          open={true}
-          onOpenChange={() => {}}
-          onCreate={onCreate}
-        />,
-      );
+      render(<CreateEnvironmentDialog open={true} onOpenChange={() => {}} onCreate={onCreate} />);
 
       await selectAgentPlatform(agentLabel);
       const useTui = screen.getByRole("checkbox", { name: "Use TUI" });
@@ -2189,13 +2139,7 @@ describe("resolveAgentDefaults", () => {
 
   test("submits a trimmed environment name without launching an agent", async () => {
     const onCreate = mock(async () => {});
-    render(
-      <CreateEnvironmentDialog
-        open={true}
-        onOpenChange={() => {}}
-        onCreate={onCreate}
-      />,
-    );
+    render(<CreateEnvironmentDialog open={true} onOpenChange={() => {}} onCreate={onCreate} />);
 
     fireEvent.change(screen.getByLabelText(/Environment Name/i), {
       target: { value: "  local-review  " },
@@ -2257,7 +2201,7 @@ describe("resolveAgentDefaults", () => {
         onOpenChange={() => {}}
         onCreate={onCreate}
         projectId="project-1"
-      />
+      />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
@@ -2266,7 +2210,7 @@ describe("resolveAgentDefaults", () => {
       expect(onCreate).toHaveBeenCalledWith(
         expect.objectContaining({
           environmentType: "local",
-        })
+        }),
       );
     });
   });
@@ -2312,27 +2256,12 @@ describe("resolveAgentDefaults", () => {
       projectId: "project-1",
     };
 
-    const { rerender } = render(
-      <CreateEnvironmentDialog
-        open={true}
-        {...props}
-      />
-    );
+    const { rerender } = render(<CreateEnvironmentDialog open={true} {...props} />);
 
     fireEvent.click(screen.getByRole("button", { name: /Containerized/ }));
 
-    rerender(
-      <CreateEnvironmentDialog
-        open={false}
-        {...props}
-      />
-    );
-    rerender(
-      <CreateEnvironmentDialog
-        open={true}
-        {...props}
-      />
-    );
+    rerender(<CreateEnvironmentDialog open={false} {...props} />);
+    rerender(<CreateEnvironmentDialog open={true} {...props} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
@@ -2340,7 +2269,7 @@ describe("resolveAgentDefaults", () => {
       expect(onCreate).toHaveBeenCalledWith(
         expect.objectContaining({
           environmentType: "local",
-        })
+        }),
       );
     });
   });
@@ -2353,13 +2282,7 @@ describe("resolveAgentDefaults", () => {
 
     const onCreate = mock(async () => {});
 
-    render(
-      <CreateEnvironmentDialog
-        open={true}
-        onOpenChange={() => {}}
-        onCreate={onCreate}
-      />
-    );
+    render(<CreateEnvironmentDialog open={true} onOpenChange={() => {}} onCreate={onCreate} />);
 
     const prompt = screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement;
     prompt.focus();
@@ -2383,13 +2306,15 @@ describe("resolveAgentDefaults", () => {
           initialPrompt: "Use this screenshot",
           initialPromptAttachments: [
             expect.objectContaining({
-              id: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/),
+              id: expect.stringMatching(
+                /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+              ),
               base64Data: "QUJD",
               previewUrl: "data:image/png;base64,QUJD",
               name: expect.stringMatching(/^initial-prompt-.*\.png$/),
             }),
           ],
-        })
+        }),
       );
     });
   });
@@ -2448,9 +2373,7 @@ describe("resolveAgentDefaults", () => {
     );
     screen.getByLabelText(/Initial Prompt/i).focus();
 
-    document.dispatchEvent(
-      new Event("paste", { bubbles: true, cancelable: true }),
-    );
+    document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
 
     await waitFor(() => {
       expect(screen.getByAltText(/initial-prompt-/)).toBeTruthy();
@@ -2479,17 +2402,11 @@ describe("resolveAgentDefaults", () => {
       drawImage,
     })) as unknown as typeof HTMLCanvasElement.prototype.getContext;
     HTMLCanvasElement.prototype.toDataURL = function () {
-      return this.width === width
-        ? oversizedDataUrl
-        : "data:image/png;base64,QUJD";
+      return this.width === width ? oversizedDataUrl : "data:image/png;base64,QUJD";
     };
 
     render(
-      <CreateEnvironmentDialog
-        open
-        onOpenChange={() => {}}
-        onCreate={mock(async () => {})}
-      />,
+      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
     );
     screen.getByLabelText(/Initial Prompt/i).focus();
     document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
@@ -2518,11 +2435,7 @@ describe("resolveAgentDefaults", () => {
       oversizedDataUrl) as typeof HTMLCanvasElement.prototype.toDataURL;
 
     render(
-      <CreateEnvironmentDialog
-        open
-        onOpenChange={() => {}}
-        onCreate={mock(async () => {})}
-      />,
+      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
     );
     screen.getByLabelText(/Initial Prompt/i).focus();
     document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
@@ -2547,13 +2460,7 @@ describe("resolveAgentDefaults", () => {
 
     const onCreate = mock(async () => {});
 
-    render(
-      <CreateEnvironmentDialog
-        open={true}
-        onOpenChange={() => {}}
-        onCreate={onCreate}
-      />
-    );
+    render(<CreateEnvironmentDialog open={true} onOpenChange={() => {}} onCreate={onCreate} />);
 
     const prompt = screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement;
     prompt.focus();
@@ -2596,13 +2503,14 @@ describe("resolveAgentDefaults", () => {
       rgba: async () => new Uint8Array([255, 0, 0, 255]),
       size: async () => ({ width: 1, height: 1 }),
     }));
-    HTMLCanvasElement.prototype.getContext = (() => null) as unknown as typeof HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = (() =>
+      null) as unknown as typeof HTMLCanvasElement.prototype.getContext;
     render(
       <CreateEnvironmentDialog
         open={true}
         onOpenChange={() => {}}
         onCreate={mock(async () => {})}
-      />
+      />,
     );
     const prompt = screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement;
     prompt.focus();
@@ -2629,7 +2537,7 @@ describe("resolveAgentDefaults", () => {
         open={true}
         onOpenChange={() => {}}
         onCreate={mock(async () => {})}
-      />
+      />,
     );
     const prompt = screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement;
     prompt.focus();
@@ -2653,13 +2561,7 @@ describe("resolveAgentDefaults", () => {
   test("lets normal paste continue when the clipboard has no image", async () => {
     const onCreate = mock(async () => {});
 
-    render(
-      <CreateEnvironmentDialog
-        open={true}
-        onOpenChange={() => {}}
-        onCreate={onCreate}
-      />
-    );
+    render(<CreateEnvironmentDialog open={true} onOpenChange={() => {}} onCreate={onCreate} />);
 
     const prompt = screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement;
     prompt.focus();
@@ -2709,9 +2611,10 @@ describe("resolveAgentDefaults", () => {
     const rgba = mock(async () => new Uint8Array([255, 0, 0, 255]));
     const size = mock(async () => ({ width: 1, height: 1 }));
     mockReadImage.mockImplementation(
-      () => new Promise((resolve) => {
-        resolveImage = resolve;
-      }),
+      () =>
+        new Promise((resolve) => {
+          resolveImage = resolve;
+        }),
     );
     const onOpenChange = mock(() => {});
     render(
@@ -2747,9 +2650,10 @@ describe("resolveAgentDefaults", () => {
     const rgba = mock(async () => new Uint8Array([255, 0, 0, 255]));
     const size = mock(async () => ({ width: 1, height: 1 }));
     mockReadImage.mockImplementation(
-      () => new Promise((resolve) => {
-        resolveImage = resolve;
-      }),
+      () =>
+        new Promise((resolve) => {
+          resolveImage = resolve;
+        }),
     );
     const { unmount } = render(
       <CreateEnvironmentDialog
@@ -2782,11 +2686,7 @@ describe("resolveAgentDefaults", () => {
     mockReadImage.mockImplementation(async () => ({ rgba, size }));
     const onOpenChange = mock(() => {});
     render(
-      <CreateEnvironmentDialog
-        open
-        onOpenChange={onOpenChange}
-        onCreate={mock(async () => {})}
-      />,
+      <CreateEnvironmentDialog open onOpenChange={onOpenChange} onCreate={mock(async () => {})} />,
     );
     const prompt = screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement;
     prompt.focus();
@@ -2810,11 +2710,7 @@ describe("resolveAgentDefaults", () => {
     mockReadImage.mockImplementation(async () => ({ rgba, size }));
     const onOpenChange = mock(() => {});
     render(
-      <CreateEnvironmentDialog
-        open
-        onOpenChange={onOpenChange}
-        onCreate={mock(async () => {})}
-      />,
+      <CreateEnvironmentDialog open onOpenChange={onOpenChange} onCreate={mock(async () => {})} />,
     );
     const prompt = screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement;
     prompt.focus();
@@ -2840,11 +2736,7 @@ describe("resolveAgentDefaults", () => {
     const size = mock(async () => ({ width: 1, height: 1 }));
     mockReadImage.mockImplementation(() => pendingImage.promise);
     render(
-      <CreateEnvironmentDialog
-        open
-        onOpenChange={() => {}}
-        onCreate={mock(async () => {})}
-      />,
+      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
     );
     const prompt = screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement;
     prompt.focus();
@@ -2878,11 +2770,7 @@ describe("resolveAgentDefaults", () => {
       });
     });
     render(
-      <CreateEnvironmentDialog
-        open
-        onOpenChange={() => {}}
-        onCreate={mock(async () => {})}
-      />,
+      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
     );
     const prompt = screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement;
     prompt.focus();
@@ -2902,9 +2790,7 @@ describe("resolveAgentDefaults", () => {
 
   test("adds, validates, updates, and removes port mappings", async () => {
     const onCreate = mock(async () => {});
-    render(
-      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />,
-    );
+    render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
 
     fireEvent.click(screen.getByRole("button", { name: /Port Configuration/ }));
     fireEvent.click(screen.getByRole("button", { name: "Add Port Mapping" }));
@@ -2918,9 +2804,11 @@ describe("resolveAgentDefaults", () => {
     fireEvent.change(hostPort, { target: { value: "18080" } });
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
     await waitFor(() => {
-      expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({
-        portMappings: [{ containerPort: 8080, hostPort: 18080, protocol: "tcp" }],
-      }));
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          portMappings: [{ containerPort: 8080, hostPort: 18080, protocol: "tcp" }],
+        }),
+      );
     });
 
     cleanup();
@@ -2979,7 +2867,9 @@ describe("resolveAgentDefaults", () => {
     );
     const containerPort = screen.getByPlaceholderText("Container");
     const hostPort = screen.getByPlaceholderText("Host");
-    const createButton = screen.getByRole("button", { name: "Create Environment" }) as HTMLButtonElement;
+    const createButton = screen.getByRole("button", {
+      name: "Create Environment",
+    }) as HTMLButtonElement;
 
     for (const invalidHostPort of ["", "0", "-1"]) {
       fireEvent.change(hostPort, { target: { value: invalidHostPort } });
@@ -3039,7 +2929,9 @@ describe("resolveAgentDefaults", () => {
         defaultPortMappings={[{ containerPort: 3000, hostPort: 3000, protocol: "tcp" }]}
       />,
     );
-    const createButton = screen.getByRole("button", { name: "Create Environment" }) as HTMLButtonElement;
+    const createButton = screen.getByRole("button", {
+      name: "Create Environment",
+    }) as HTMLButtonElement;
 
     fireEvent.change(screen.getByPlaceholderText("Host"), { target: { value: "0" } });
     expect(createButton.disabled).toBe(true);
@@ -3062,9 +2954,7 @@ describe("resolveAgentDefaults", () => {
     const onCreate = mock(async () => {
       throw new Error("creation failed");
     });
-    render(
-      <CreateEnvironmentDialog open onOpenChange={onOpenChange} onCreate={onCreate} />,
-    );
+    render(<CreateEnvironmentDialog open onOpenChange={onOpenChange} onCreate={onCreate} />);
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
     await waitFor(() => expect(onCreate).toHaveBeenCalled());
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
@@ -3074,9 +2964,7 @@ describe("resolveAgentDefaults", () => {
   test("keeps the form intact when a creation preflight defers submission", async () => {
     const onOpenChange = mock(() => {});
     const onCreate = mock(async () => false);
-    render(
-      <CreateEnvironmentDialog open onOpenChange={onOpenChange} onCreate={onCreate} />,
-    );
+    render(<CreateEnvironmentDialog open onOpenChange={onOpenChange} onCreate={onCreate} />);
     const nameInput = screen.getByLabelText(/Environment Name/i);
     fireEvent.change(nameInput, { target: { value: "Keep this name" } });
 

@@ -40,9 +40,8 @@ function deferred<T>() {
 }
 
 afterEach(() => {
-  (
-    globalThis as typeof globalThis & { MonacoEnvironment?: unknown }
-  ).MonacoEnvironment = originalMonacoEnvironment;
+  (globalThis as typeof globalThis & { MonacoEnvironment?: unknown }).MonacoEnvironment =
+    originalMonacoEnvironment;
 });
 
 describe("createMonacoConfigurator", () => {
@@ -120,10 +119,7 @@ describe("installMonacoModules", () => {
           getWorker: (_workerId: string, label: string) => Worker;
         };
       }
-    ).MonacoEnvironment.getWorker as (
-      _workerId: string,
-      label: string,
-    ) => WorkerWithKind;
+    ).MonacoEnvironment.getWorker as (_workerId: string, label: string) => WorkerWithKind;
     for (const label of ["css", "less", "scss"]) {
       expect(getWorker("", label).kind).toBe("css");
     }

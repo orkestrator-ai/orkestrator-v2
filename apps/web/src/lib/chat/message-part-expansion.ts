@@ -33,9 +33,7 @@ export function useMessagePartExpansion(
   const storedIsOpen = useMessagePartExpansionStore((state) =>
     state.expandedKeys.has(expansionKey),
   );
-  const setStoredExpanded = useMessagePartExpansionStore(
-    (state) => state.setExpanded,
-  );
+  const setStoredExpanded = useMessagePartExpansionStore((state) => state.setExpanded);
   const setExpanded = useCallback(
     (open: boolean) => {
       setStoredExpanded(expansionKey, open);

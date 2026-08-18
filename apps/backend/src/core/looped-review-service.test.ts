@@ -75,7 +75,10 @@ const issueReport: StructuredReviewReport = {
   reviewSummary: "One high-confidence issue was found.",
 };
 
-function inputRequest(id = "question-1", provider: LoopedReviewAgent = "claude"): AgentInteractionRequest {
+function inputRequest(
+  id = "question-1",
+  provider: LoopedReviewAgent = "claude",
+): AgentInteractionRequest {
   return {
     version: AGENT_INTERACTION_CONTRACT_VERSION,
     id,
@@ -87,15 +90,17 @@ function inputRequest(id = "question-1", provider: LoopedReviewAgent = "claude")
     revision: 1,
     presentation: {
       title: "Choose an implementation",
-      questions: [{
-        id: "choice",
-        prompt: "Which safe default should be used?",
-        required: true,
-        multiple: false,
-        secret: false,
-        allowFreeText: false,
-        options: [{ id: "safe", label: "Safest", providerValue: "never-persist-this" }],
-      }],
+      questions: [
+        {
+          id: "choice",
+          prompt: "Which safe default should be used?",
+          required: true,
+          multiple: false,
+          secret: false,
+          allowFreeText: false,
+          options: [{ id: "safe", label: "Safest", providerValue: "never-persist-this" }],
+        },
+      ],
     },
     createdAt: Date.now(),
     updatedAt: Date.now(),
@@ -105,7 +110,8 @@ function inputRequest(id = "question-1", provider: LoopedReviewAgent = "claude")
 class FakeProvider implements BuildPipelineProvider {
   readonly agent: LoopedReviewAgent;
   readonly sent: Array<{ sessionId: string; requestId: string; schema?: JsonSchema }> = [];
-  readonly registrations: Array<{ sessionId: string; interaction?: ProviderSessionRegistration }> = [];
+  readonly registrations: Array<{ sessionId: string; interaction?: ProviderSessionRegistration }> =
+    [];
   readonly sessions = new Map<string, string>();
   readonly pending = new Map<string, AgentInteractionRequest[]>();
   statusValue: ProviderStatus = "idle";
@@ -129,8 +135,12 @@ class FakeProvider implements BuildPipelineProvider {
   reviewReport: StructuredReviewReport = cleanReport;
   reviewReports: StructuredReviewReport[] = [];
   reconciliationValue: unknown = {
-    newIssues: [], issueUpdates: [], newCoverageGaps: [], coverageGapUpdates: [],
-    issueOutcomes: [], coverageGapOutcomes: [],
+    newIssues: [],
+    issueUpdates: [],
+    newCoverageGaps: [],
+    coverageGapUpdates: [],
+    issueOutcomes: [],
+    coverageGapOutcomes: [],
   };
   reconciliationValues: unknown[] = [];
   disposeCount = 0;
@@ -154,8 +164,10 @@ class FakeProvider implements BuildPipelineProvider {
       resolveInteraction: async (sessionId, interactionId) => {
         this.resolveCount += 1;
         if (this.statusValue === "blocked") this.statusValue = "running";
-        this.pending.set(sessionId, (this.pending.get(sessionId) ?? [])
-          .filter((request) => request.id !== interactionId));
+        this.pending.set(
+          sessionId,
+          (this.pending.get(sessionId) ?? []).filter((request) => request.id !== interactionId),
+        );
         return { result: "applied" as const, revision: 2, sessionId, interactionId };
       },
       watchInteractions: () => () => undefined,
@@ -205,9 +217,14 @@ class FakeProvider implements BuildPipelineProvider {
     }
     return this.statusValue;
   }
-  async messages(): Promise<unknown[]> { return []; }
+  async messages(): Promise<unknown[]> {
+    return [];
+  }
 
-  async structured<T>(_sessionId: string, requestId: string): Promise<StructuredOutputResult<T> | null> {
+  async structured<T>(
+    _sessionId: string,
+    requestId: string,
+  ): Promise<StructuredOutputResult<T> | null> {
     this.structuredCount += 1;
     if (this.structuredRejectCount > 0) {
       this.structuredRejectCount -= 1;
@@ -227,9 +244,20 @@ class FakeProvider implements BuildPipelineProvider {
     } else if (required.includes("issueOutcomes")) {
       value = this.reconciliationValues.shift() ?? this.reconciliationValue;
     } else if (required.includes("url")) {
-      value = { status: "created", url: "https://github.com/acme/repo/pull/7", summary: "Created." };
+      value = {
+        status: "created",
+        url: "https://github.com/acme/repo/pull/7",
+        summary: "Created.",
+      };
     } else {
-      value = { complete: true, summary: "Fixed.", filesChanged: [], commandsRun: [], notes: [], limitations: [] };
+      value = {
+        complete: true,
+        summary: "Fixed.",
+        filesChanged: [],
+        commandsRun: [],
+        notes: [],
+        limitations: [],
+      };
     }
     return { ok: true, provider: this.agent, requestId, value: value as T };
   }
@@ -243,34 +271,51 @@ class FakeProvider implements BuildPipelineProvider {
   }
 }
 
-async function harness(run: (
-  service: LoopedReviewService,
-  storage: StorageService,
-  provider: FakeProvider,
-  invoke: <T>(command: string, args?: Record<string, unknown>) => Promise<T>,
-) => Promise<void>, agent: LoopedReviewAgent = "claude", serviceOptions: {
-  controllerLeaseMs?: number;
-  cancellationDeadlineMs?: number;
-  useProductionProvider?: boolean;
-  bridgeAuthToken?: string;
-} = {}): Promise<void> {
+async function harness(
+  run: (
+    service: LoopedReviewService,
+    storage: StorageService,
+    provider: FakeProvider,
+    invoke: <T>(command: string, args?: Record<string, unknown>) => Promise<T>,
+  ) => Promise<void>,
+  agent: LoopedReviewAgent = "claude",
+  serviceOptions: {
+    controllerLeaseMs?: number;
+    cancellationDeadlineMs?: number;
+    useProductionProvider?: boolean;
+    bridgeAuthToken?: string;
+  } = {},
+): Promise<void> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-looped-review-"));
   const storage = new StorageService(dataDir);
   await storage.init();
   // Two environments, because only one looped review may run per environment.
   for (const id of ["env-1", "env-2"]) {
     await storage.addEnvironment({
-      id, projectId: "project-1", name: "review", branch: "change",
-      containerId: null, status: "running", prUrl: null, prState: null,
-      hasMergeConflicts: null, createdAt: new Date(0).toISOString(),
-      networkAccessMode: "full", order: 0, environmentType: "local",
-      worktreePath: "/tmp/review", setupScriptsComplete: true,
+      id,
+      projectId: "project-1",
+      name: "review",
+      branch: "change",
+      containerId: null,
+      status: "running",
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+      createdAt: new Date(0).toISOString(),
+      networkAccessMode: "full",
+      order: 0,
+      environmentType: "local",
+      worktreePath: "/tmp/review",
+      setupScriptsComplete: true,
     });
   }
   const provider = new FakeProvider(agent);
   const bridgeCalls: string[] = [];
   const invoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
-    if (command.startsWith("start_local_") || command.startsWith("start_") && command.endsWith("_server")) {
+    if (
+      command.startsWith("start_local_") ||
+      (command.startsWith("start_") && command.endsWith("_server"))
+    ) {
       bridgeCalls.push(command);
       return {
         ...(command.startsWith("start_local_") ? { port: 4312 } : { hostPort: 4313 }),
@@ -283,10 +328,19 @@ async function harness(run: (
     }
     if (command === "generate_looped_review_package") {
       return {
-        id: args.packageId, round: args.round, preparedAt: new Date().toISOString(),
-        targetBranch: args.targetBranch, baseRef: "aaaaaaa", headRef: "bbbbbbb",
-        commit: null, completeDiff: "", changedFiles: [], validation: [],
-        skippedFiles: [], uncommittedFiles: [], limitations: [],
+        id: args.packageId,
+        round: args.round,
+        preparedAt: new Date().toISOString(),
+        targetBranch: args.targetBranch,
+        baseRef: "aaaaaaa",
+        headRef: "bbbbbbb",
+        commit: null,
+        completeDiff: "",
+        changedFiles: [],
+        validation: [],
+        skippedFiles: [],
+        uncommittedFiles: [],
+        limitations: [],
       } as T;
     }
     if (command === "verify_environment_pr") {
@@ -294,7 +348,11 @@ async function harness(run: (
     }
     throw new Error(`Unexpected command: ${command}`);
   };
-  const { useProductionProvider, bridgeAuthToken: _bridgeAuthToken, ...controllerOptions } = serviceOptions;
+  const {
+    useProductionProvider,
+    bridgeAuthToken: _bridgeAuthToken,
+    ...controllerOptions
+  } = serviceOptions;
   const service = new LoopedReviewService(storage, invoke, {
     autoAdvance: false,
     ...(useProductionProvider ? {} : { provider: async () => provider }),
@@ -303,8 +361,12 @@ async function harness(run: (
   });
   Object.assign(invoke, { bridgeCalls });
   await service.init();
-  try { await run(service, storage, provider, invoke); }
-  finally { await service.shutdown(); await fs.rm(dataDir, { recursive: true, force: true }); }
+  try {
+    await run(service, storage, provider, invoke);
+  } finally {
+    await service.shutdown();
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
 }
 
 async function snapshot(storage: StorageService, id: string): Promise<LoopedReviewWorkflow> {
@@ -362,93 +424,134 @@ function workflowFixture(overrides: Partial<LoopedReviewWorkflow> = {}): LoopedR
 describe("LoopedReviewService", () => {
   test("rejects invalid, missing, wrong-project, and deleting review environments", async () => {
     await harness(async (service, storage) => {
-      await expect(service.start({} as never)).rejects.toThrow("Invalid looped review start request");
+      await expect(service.start({} as never)).rejects.toThrow(
+        "Invalid looped review start request",
+      );
       const base = {
-        environmentId: "missing", projectId: "project-1", agent: "claude" as const,
-        model: "model", targetBranch: "main", allowance: 1,
+        environmentId: "missing",
+        projectId: "project-1",
+        agent: "claude" as const,
+        model: "model",
+        targetBranch: "main",
+        allowance: 1,
       };
       await expect(service.start(base)).rejects.toThrow("review environment is unavailable");
-      await expect(service.start({ ...base, environmentId: "env-1", projectId: "wrong" }))
-        .rejects.toThrow("review environment is unavailable");
+      await expect(
+        service.start({ ...base, environmentId: "env-1", projectId: "wrong" }),
+      ).rejects.toThrow("review environment is unavailable");
       await storage.updateEnvironment("env-1", { deletionRequestedAt: new Date().toISOString() });
-      await expect(service.start({ ...base, environmentId: "env-1" }))
-        .rejects.toThrow("review environment is unavailable");
+      await expect(service.start({ ...base, environmentId: "env-1" })).rejects.toThrow(
+        "review environment is unavailable",
+      );
     });
   });
 
   test("selects, caches, authenticates, and disposes the production local bridge provider", async () => {
-    await harness(async (service, _storage, _fakeProvider, invoke) => {
-      const started = await service.start({
-        environmentId: "env-1", projectId: "project-1", agent: "claude",
-        model: "review-model", targetBranch: "main", allowance: 1,
-      });
-      const internal = service as unknown as {
-        provider(workflow: LoopedReviewWorkflow): Promise<BuildPipelineProvider>;
-      };
+    await harness(
+      async (service, _storage, _fakeProvider, invoke) => {
+        const started = await service.start({
+          environmentId: "env-1",
+          projectId: "project-1",
+          agent: "claude",
+          model: "review-model",
+          targetBranch: "main",
+          allowance: 1,
+        });
+        const internal = service as unknown as {
+          provider(workflow: LoopedReviewWorkflow): Promise<BuildPipelineProvider>;
+        };
 
-      const first = await internal.provider(started);
-      const second = await internal.provider(started);
-      expect(second).toBe(first);
-      expect((first as unknown as { connection: unknown }).connection).toMatchObject({
-        agent: "claude",
-        baseUrl: "http://127.0.0.1:4312",
-        authToken: "test-bridge-token",
-        directory: "/tmp/review",
-        model: "review-model",
-      });
-      expect((invoke as typeof invoke & { bridgeCalls: string[] }).bridgeCalls)
-        .toEqual(["start_local_claude_server_cmd"]);
+        const first = await internal.provider(started);
+        const second = await internal.provider(started);
+        expect(second).toBe(first);
+        expect((first as unknown as { connection: unknown }).connection).toMatchObject({
+          agent: "claude",
+          baseUrl: "http://127.0.0.1:4312",
+          authToken: "test-bridge-token",
+          directory: "/tmp/review",
+          model: "review-model",
+        });
+        expect((invoke as typeof invoke & { bridgeCalls: string[] }).bridgeCalls).toEqual([
+          "start_local_claude_server_cmd",
+        ]);
 
-      const dispose = mock(async () => undefined);
-      first.dispose = dispose;
-      await service.shutdown();
-      expect(dispose).toHaveBeenCalledTimes(1);
-    }, "claude", { useProductionProvider: true });
+        const dispose = mock(async () => undefined);
+        first.dispose = dispose;
+        await service.shutdown();
+        expect(dispose).toHaveBeenCalledTimes(1);
+      },
+      "claude",
+      { useProductionProvider: true },
+    );
   });
 
   test("selects the production container bridge command", async () => {
-    await harness(async (service, storage, _fakeProvider, invoke) => {
-      await storage.updateEnvironment("env-1", {
-        environmentType: "containerized", containerId: "container-1", worktreePath: null,
-      });
-      const started = await service.start({
-        environmentId: "env-1", projectId: "project-1", agent: "codex",
-        model: "default", targetBranch: "main", allowance: 1,
-      });
-      const internal = service as unknown as {
-        provider(workflow: LoopedReviewWorkflow): Promise<BuildPipelineProvider>;
-      };
+    await harness(
+      async (service, storage, _fakeProvider, invoke) => {
+        await storage.updateEnvironment("env-1", {
+          environmentType: "containerized",
+          containerId: "container-1",
+          worktreePath: null,
+        });
+        const started = await service.start({
+          environmentId: "env-1",
+          projectId: "project-1",
+          agent: "codex",
+          model: "default",
+          targetBranch: "main",
+          allowance: 1,
+        });
+        const internal = service as unknown as {
+          provider(workflow: LoopedReviewWorkflow): Promise<BuildPipelineProvider>;
+        };
 
-      const provider = await internal.provider(started);
-      expect((provider as unknown as { connection: unknown }).connection).toMatchObject({
-        agent: "codex",
-        baseUrl: "http://127.0.0.1:4313",
-        authToken: "test-bridge-token",
-      });
-      expect((invoke as typeof invoke & { bridgeCalls: string[] }).bridgeCalls)
-        .toEqual(["start_codex_server"]);
-    }, "codex", { useProductionProvider: true });
+        const provider = await internal.provider(started);
+        expect((provider as unknown as { connection: unknown }).connection).toMatchObject({
+          agent: "codex",
+          baseUrl: "http://127.0.0.1:4313",
+          authToken: "test-bridge-token",
+        });
+        expect((invoke as typeof invoke & { bridgeCalls: string[] }).bridgeCalls).toEqual([
+          "start_codex_server",
+        ]);
+      },
+      "codex",
+      { useProductionProvider: true },
+    );
   });
 
   test("refuses to construct a production provider without bridge authentication", async () => {
-    await harness(async (service) => {
-      const started = await service.start({
-        environmentId: "env-1", projectId: "project-1", agent: "claude",
-        model: "default", targetBranch: "main", allowance: 1,
-      });
-      const internal = service as unknown as {
-        provider(workflow: LoopedReviewWorkflow): Promise<BuildPipelineProvider>;
-      };
-      await expect(internal.provider(started)).rejects
-        .toThrow("claude bridge authentication is unavailable");
-    }, "claude", { useProductionProvider: true, bridgeAuthToken: "" });
+    await harness(
+      async (service) => {
+        const started = await service.start({
+          environmentId: "env-1",
+          projectId: "project-1",
+          agent: "claude",
+          model: "default",
+          targetBranch: "main",
+          allowance: 1,
+        });
+        const internal = service as unknown as {
+          provider(workflow: LoopedReviewWorkflow): Promise<BuildPipelineProvider>;
+        };
+        await expect(internal.provider(started)).rejects.toThrow(
+          "claude bridge authentication is unavailable",
+        );
+      },
+      "claude",
+      { useProductionProvider: true, bridgeAuthToken: "" },
+    );
   });
 
   test("advances to PR completion without a renderer and marks every session unattended", async () => {
     await harness(async (service, storage, provider) => {
       const started = await service.start({
-        environmentId: "env-1", projectId: "project-1", agent: "claude",
-        model: "model", targetBranch: "main", allowance: 2,
+        environmentId: "env-1",
+        projectId: "project-1",
+        agent: "claude",
+        model: "model",
+        targetBranch: "main",
+        allowance: 2,
       });
       await pump(service, started.id);
       const finished = await snapshot(storage, started.id);
@@ -477,7 +580,10 @@ describe("LoopedReviewService", () => {
   test("applies new, updated, existing, and coverage-gap reconciliation across allowance rounds", async () => {
     await harness(async (service, storage, provider) => {
       const initialGap = { file: "src/controller.test.ts", untestedBehavior: "restart recovery" };
-      const updatedIssue = { ...reviewIssue, description: "The transition and fence must persist." };
+      const updatedIssue = {
+        ...reviewIssue,
+        description: "The transition and fence must persist.",
+      };
       const updatedGap = { ...initialGap, untestedBehavior: "restart and lease-loss recovery" };
       provider.reviewReports = [
         { ...issueReport, testCoverageGaps: [initialGap] },
@@ -486,14 +592,21 @@ describe("LoopedReviewService", () => {
       ];
       provider.reconciliationValues = [
         {
-          newIssues: [reviewIssue], issueUpdates: [], newCoverageGaps: [initialGap], coverageGapUpdates: [],
+          newIssues: [reviewIssue],
+          issueUpdates: [],
+          newCoverageGaps: [initialGap],
+          coverageGapUpdates: [],
           issueOutcomes: [{ reportIndex: 0, outcome: "new", poolId: null }],
           coverageGapOutcomes: [{ reportIndex: 0, outcome: "new", poolId: null }],
         },
       ];
       const started = await service.start({
-        environmentId: "env-1", projectId: "project-1", agent: "claude",
-        model: "model", targetBranch: "main", allowance: 2,
+        environmentId: "env-1",
+        projectId: "project-1",
+        agent: "claude",
+        model: "model",
+        targetBranch: "main",
+        allowance: 2,
       });
       // Complete the first pass so its generated pool IDs can be used by the
       // provider's second authoritative reconciliation.
@@ -504,8 +617,10 @@ describe("LoopedReviewService", () => {
           const issueId = current.activePool.issues[0]!.poolId;
           const gapId = current.activePool.coverageGaps[0]!.poolId;
           provider.reconciliationValues.push({
-            newIssues: [], issueUpdates: [{ poolId: issueId, finding: updatedIssue }],
-            newCoverageGaps: [], coverageGapUpdates: [{ poolId: gapId, finding: updatedGap }],
+            newIssues: [],
+            issueUpdates: [{ poolId: issueId, finding: updatedIssue }],
+            newCoverageGaps: [],
+            coverageGapUpdates: [{ poolId: gapId, finding: updatedGap }],
             issueOutcomes: [
               { reportIndex: 0, outcome: "updated", poolId: issueId },
               { reportIndex: 1, outcome: "existing", poolId: issueId },
@@ -527,8 +642,12 @@ describe("LoopedReviewService", () => {
   test("terminal workflows ignore lifecycle commands", async () => {
     await harness(async (service, storage, provider) => {
       const started = await service.start({
-        environmentId: "env-1", projectId: "project-1", agent: "claude",
-        model: "model", targetBranch: "main", allowance: 1,
+        environmentId: "env-1",
+        projectId: "project-1",
+        agent: "claude",
+        model: "model",
+        targetBranch: "main",
+        allowance: 1,
       });
       await pump(service, started.id);
       expect((await snapshot(storage, started.id)).phase).toBe("completed");
@@ -544,8 +663,12 @@ describe("LoopedReviewService", () => {
     await harness(async (service, storage, provider) => {
       provider.ambiguousOnce = true;
       const started = await service.start({
-        environmentId: "env-1", projectId: "project-1", agent: "claude",
-        model: "model", targetBranch: "main", allowance: 1,
+        environmentId: "env-1",
+        projectId: "project-1",
+        agent: "claude",
+        model: "model",
+        targetBranch: "main",
+        allowance: 1,
       });
       await service.advanceNow(started.id);
       expect(provider.sent).toHaveLength(1);
@@ -560,8 +683,12 @@ describe("LoopedReviewService", () => {
     await harness(async (service, storage, provider) => {
       provider.definiteRejectOnce = true;
       const started = await service.start({
-        environmentId: "env-1", projectId: "project-1", agent: "claude",
-        model: "model", targetBranch: "main", allowance: 1,
+        environmentId: "env-1",
+        projectId: "project-1",
+        agent: "claude",
+        model: "model",
+        targetBranch: "main",
+        allowance: 1,
       });
       await service.advanceNow(started.id);
       const failed = await snapshot(storage, started.id);
@@ -582,8 +709,12 @@ describe("LoopedReviewService", () => {
       await harness(async (service, storage, provider) => {
         provider.returnNull = true;
         const started = await service.start({
-          environmentId: "env-1", projectId: "project-1", agent: "claude",
-          model: "model", targetBranch: "main", allowance: 1,
+          environmentId: "env-1",
+          projectId: "project-1",
+          agent: "claude",
+          model: "model",
+          targetBranch: "main",
+          allowance: 1,
         });
         await service.advanceNow(started.id);
         provider.statusValue = status;
@@ -613,8 +744,12 @@ describe("LoopedReviewService", () => {
     await harness(async (service, storage, provider) => {
       provider.returnNull = true;
       const started = await service.start({
-        environmentId: "env-1", projectId: "project-1", agent: "claude",
-        model: "model", targetBranch: "main", allowance: 1,
+        environmentId: "env-1",
+        projectId: "project-1",
+        agent: "claude",
+        model: "model",
+        targetBranch: "main",
+        allowance: 1,
       });
       await service.advanceNow(started.id);
       provider.statusFailure = detail;
@@ -633,8 +768,12 @@ describe("LoopedReviewService", () => {
   test("retries malformed structured output with a fresh request", async () => {
     await harness(async (service, storage, provider) => {
       const started = await service.start({
-        environmentId: "env-1", projectId: "project-1", agent: "claude",
-        model: "model", targetBranch: "main", allowance: 1,
+        environmentId: "env-1",
+        projectId: "project-1",
+        agent: "claude",
+        model: "model",
+        targetBranch: "main",
+        allowance: 1,
       });
       await service.advanceNow(started.id);
       const firstRequestId = provider.sent[0]!.requestId;
@@ -652,8 +791,12 @@ describe("LoopedReviewService", () => {
     await harness(async (service, storage, provider) => {
       provider.returnNull = true;
       const started = await service.start({
-        environmentId: "env-1", projectId: "project-1", agent: "claude",
-        model: "model", targetBranch: "main", allowance: 1,
+        environmentId: "env-1",
+        projectId: "project-1",
+        agent: "claude",
+        model: "model",
+        targetBranch: "main",
+        allowance: 1,
       });
       await service.advanceNow(started.id);
       const original = (await snapshot(storage, started.id)).sessions[0]!;
@@ -675,8 +818,12 @@ describe("LoopedReviewService", () => {
   test("replaces a missing provider session when the structured read fails first", async () => {
     await harness(async (service, storage, provider) => {
       const started = await service.start({
-        environmentId: "env-1", projectId: "project-1", agent: "claude",
-        model: "model", targetBranch: "main", allowance: 1,
+        environmentId: "env-1",
+        projectId: "project-1",
+        agent: "claude",
+        model: "model",
+        targetBranch: "main",
+        allowance: 1,
       });
       await service.advanceNow(started.id);
       const original = (await snapshot(storage, started.id)).sessions[0]!;
@@ -701,8 +848,12 @@ describe("LoopedReviewService", () => {
   test("replaces a missing discovery session before retrying reconciliation", async () => {
     await harness(async (service, storage, provider) => {
       const started = await service.start({
-        environmentId: "env-1", projectId: "project-1", agent: "claude",
-        model: "model", targetBranch: "main", allowance: 1,
+        environmentId: "env-1",
+        projectId: "project-1",
+        agent: "claude",
+        model: "model",
+        targetBranch: "main",
+        allowance: 1,
       });
       for (let index = 0; index < 12; index += 1) {
         await service.advanceNow(started.id);
@@ -723,7 +874,8 @@ describe("LoopedReviewService", () => {
       await service.advanceNow(started.id);
       const retried = await snapshot(storage, started.id);
       const replacement = retried.sessions.find((entry) =>
-        entry.sessionKey.includes(":replacement-"));
+        entry.sessionKey.includes(":replacement-"),
+      );
       expect(replacement?.providerSessionId).not.toBe(originalSession.providerSessionId);
       expect(retried.rounds[0]?.passes[0]?.sessionId).toBe(replacement?.id);
       expect(retried.dispatch?.kind).toBe("reconcile");
@@ -734,8 +886,11 @@ describe("LoopedReviewService", () => {
     await harness(async (service, storage, provider) => {
       provider.returnNull = true;
       const started = await service.start({
-        environmentId: "env-1", projectId: "project-1", agent: "claude",
-        model: "model", targetBranch: "main",
+        environmentId: "env-1",
+        projectId: "project-1",
+        agent: "claude",
+        model: "model",
+        targetBranch: "main",
       });
       await pump(service, started.id, 8);
       const failed = await snapshot(storage, started.id);
@@ -752,8 +907,11 @@ describe("LoopedReviewService", () => {
   test("auto-declines input, continues, records bounded history, and increments counts", async () => {
     await harness(async (service, storage, provider) => {
       const started = await service.start({
-        environmentId: "env-1", projectId: "project-1", agent: "claude",
-        model: "model", targetBranch: "main",
+        environmentId: "env-1",
+        projectId: "project-1",
+        agent: "claude",
+        model: "model",
+        targetBranch: "main",
       });
       await service.advanceNow(started.id);
       const running = await snapshot(storage, started.id);
@@ -777,8 +935,11 @@ describe("LoopedReviewService", () => {
     await harness(async (initial, storage, provider, invoke) => {
       let service = initial;
       const started = await service.start({
-        environmentId: "env-1", projectId: "project-1", agent: "claude",
-        model: "model", targetBranch: "main",
+        environmentId: "env-1",
+        projectId: "project-1",
+        agent: "claude",
+        model: "model",
+        targetBranch: "main",
       });
       await service.advanceNow(started.id);
       const running = await snapshot(storage, started.id);
@@ -808,15 +969,20 @@ describe("LoopedReviewService", () => {
         title: request.presentation.title,
         questions: [],
       };
-      await storage.saveLoopedReviewWorkflow(
-        started.id, "env-1", 2, replay, record.revision,
-      );
+      await storage.saveLoopedReviewWorkflow(started.id, "env-1", 2, replay, record.revision);
       await storage.updateAgentInteractionResolutionJournal((current) => ({
         ...current,
-        entries: current.entries.map((entry) => entry.id === journalEntry.id
-          ? { ...entry, state: "provider-resolved" as const, outcome: "auto-declined" as const,
-              providerResolvedAt: Date.now(), workflowRecordedAt: undefined }
-          : entry),
+        entries: current.entries.map((entry) =>
+          entry.id === journalEntry.id
+            ? {
+                ...entry,
+                state: "provider-resolved" as const,
+                outcome: "auto-declined" as const,
+                providerResolvedAt: Date.now(),
+                workflowRecordedAt: undefined,
+              }
+            : entry,
+        ),
       }));
 
       service = new LoopedReviewService(storage, invoke, {
@@ -837,18 +1003,23 @@ describe("LoopedReviewService", () => {
   test("denies authorization and fails visibly with content-free context", async () => {
     await harness(async (service, storage, provider) => {
       const started = await service.start({
-        environmentId: "env-1", projectId: "project-1", agent: "claude",
-        model: "model", targetBranch: "main",
+        environmentId: "env-1",
+        projectId: "project-1",
+        agent: "claude",
+        model: "model",
+        targetBranch: "main",
       });
       await service.advanceNow(started.id);
       const running = await snapshot(storage, started.id);
       const session = running.sessions[0]!;
-      provider.pending.set(session.providerSessionId, [{
-        ...inputRequest("approval-1"),
-        sessionId: session.providerSessionId,
-        kind: "command-approval",
-        presentation: { title: "Run secret command", questions: [] },
-      }]);
+      provider.pending.set(session.providerSessionId, [
+        {
+          ...inputRequest("approval-1"),
+          sessionId: session.providerSessionId,
+          kind: "command-approval",
+          presentation: { title: "Run secret command", questions: [] },
+        },
+      ]);
       await service.advanceNow(started.id);
       const failed = await snapshot(storage, started.id);
       expect(failed.phase).toBe("failed");
@@ -864,8 +1035,12 @@ describe("LoopedReviewService", () => {
     await harness(async (initial, storage, provider, invoke) => {
       let service = initial;
       const started = await service.start({
-        environmentId: "env-1", projectId: "project-1", agent: "claude",
-        model: "model", targetBranch: "main", allowance: 1,
+        environmentId: "env-1",
+        projectId: "project-1",
+        agent: "claude",
+        model: "model",
+        targetBranch: "main",
+        allowance: 1,
       });
       for (let boundary = 0; boundary < 24; boundary += 1) {
         await service.advanceNow(started.id);
@@ -880,7 +1055,9 @@ describe("LoopedReviewService", () => {
       }
       const finished = await snapshot(storage, started.id);
       expect(finished.phase).toBe("completed");
-      expect(new Set(provider.sent.map((entry) => entry.requestId)).size).toBe(provider.sent.length);
+      expect(new Set(provider.sent.map((entry) => entry.requestId)).size).toBe(
+        provider.sent.length,
+      );
       expect(provider.sent).toHaveLength(4);
       await service.shutdown();
     });
@@ -894,8 +1071,12 @@ describe("LoopedReviewService", () => {
       });
       await second.init();
       const started = await first.start({
-        environmentId: "env-1", projectId: "project-1", agent: "claude",
-        model: "model", targetBranch: "main", allowance: 1,
+        environmentId: "env-1",
+        projectId: "project-1",
+        agent: "claude",
+        model: "model",
+        targetBranch: "main",
+        allowance: 1,
       });
       // Race both controllers on every step rather than relying on one
       // interleaving. Which controller wins a given step is genuinely
@@ -919,41 +1100,56 @@ describe("LoopedReviewService", () => {
   });
 
   test("expired lease takeover reconciles an ambiguous dispatch without sending twice", async () => {
-    await harness(async (first, storage, provider, invoke) => {
-      provider.ambiguousOnce = true;
-      const started = await first.start({
-        environmentId: "env-1", projectId: "project-1", agent: "claude",
-        model: "model", targetBranch: "main", allowance: 1,
-      });
-      await first.advanceNow(started.id);
-      expect(provider.sent).toHaveLength(1);
-      expect((await snapshot(storage, started.id)).dispatch?.state).toBe("dispatching");
+    await harness(
+      async (first, storage, provider, invoke) => {
+        provider.ambiguousOnce = true;
+        const started = await first.start({
+          environmentId: "env-1",
+          projectId: "project-1",
+          agent: "claude",
+          model: "model",
+          targetBranch: "main",
+          allowance: 1,
+        });
+        await first.advanceNow(started.id);
+        expect(provider.sent).toHaveLength(1);
+        expect((await snapshot(storage, started.id)).dispatch?.state).toBe("dispatching");
 
-      await new Promise((resolve) => setTimeout(resolve, 2_050));
-      const takeover = new LoopedReviewService(storage, invoke, {
-        autoAdvance: false,
-        controllerLeaseMs: 2_000,
-        provider: async () => provider,
-      });
-      await takeover.init();
-      await Promise.all([takeover.advanceNow(started.id), first.advanceNow(started.id)]);
-      expect(provider.sent).toHaveLength(1);
-      expect((await snapshot(storage, started.id)).phase).toBe("discovering");
-      await takeover.shutdown();
-    }, "claude", { controllerLeaseMs: 2_000 });
+        await new Promise((resolve) => setTimeout(resolve, 2_050));
+        const takeover = new LoopedReviewService(storage, invoke, {
+          autoAdvance: false,
+          controllerLeaseMs: 2_000,
+          provider: async () => provider,
+        });
+        await takeover.init();
+        await Promise.all([takeover.advanceNow(started.id), first.advanceNow(started.id)]);
+        expect(provider.sent).toHaveLength(1);
+        expect((await snapshot(storage, started.id)).phase).toBe("discovering");
+        await takeover.shutdown();
+      },
+      "claude",
+      { controllerLeaseMs: 2_000 },
+    );
   });
 
   test("input declines and continues in preparation, discovery, fix, and PR sessions", async () => {
     await harness(async (service, storage, provider) => {
       provider.reviewReport = issueReport;
       provider.reconciliationValue = {
-        newIssues: [reviewIssue], issueUpdates: [], newCoverageGaps: [], coverageGapUpdates: [],
+        newIssues: [reviewIssue],
+        issueUpdates: [],
+        newCoverageGaps: [],
+        coverageGapUpdates: [],
         issueOutcomes: [{ reportIndex: 0, outcome: "new", poolId: null }],
         coverageGapOutcomes: [],
       };
       const started = await service.start({
-        environmentId: "env-1", projectId: "project-1", agent: "claude",
-        model: "model", targetBranch: "main", allowance: 1,
+        environmentId: "env-1",
+        projectId: "project-1",
+        agent: "claude",
+        model: "model",
+        targetBranch: "main",
+        allowance: 1,
       });
 
       const resolveInPhase = async (phase: "preparation" | "discovery" | "fix" | "pr") => {
@@ -961,12 +1157,17 @@ describe("LoopedReviewService", () => {
         for (let index = 0; index < 20 && !active; index += 1) {
           await service.advanceNow(started.id);
           const current = await snapshot(storage, started.id);
-          active = current.sessions.find((session) => session.phase === phase && session.status === "running");
+          active = current.sessions.find(
+            (session) => session.phase === phase && session.status === "running",
+          );
         }
         expect(active).toBeDefined();
-        provider.pending.set(active!.providerSessionId, [{
-          ...inputRequest(`question-${phase}`), sessionId: active!.providerSessionId,
-        }]);
+        provider.pending.set(active!.providerSessionId, [
+          {
+            ...inputRequest(`question-${phase}`),
+            sessionId: active!.providerSessionId,
+          },
+        ]);
         await service.advanceNow(started.id);
       };
 
@@ -980,8 +1181,11 @@ describe("LoopedReviewService", () => {
       expect(finished.phase).toBe("completed");
       expect(finished.autoDeclineCount).toBe(4);
       expect(provider.resolveCount).toBe(4);
-      expect(finished.sessions.flatMap((session) => session.interactionTranscript ?? [])
-        .map((entry) => entry.phase)).toEqual(["preparation", "discovery", "fix", "pr"]);
+      expect(
+        finished.sessions
+          .flatMap((session) => session.interactionTranscript ?? [])
+          .map((entry) => entry.phase),
+      ).toEqual(["preparation", "discovery", "fix", "pr"]);
     });
   });
 
@@ -989,15 +1193,22 @@ describe("LoopedReviewService", () => {
     test(`${agent} applies the same unattended input policy`, async () => {
       await harness(async (service, storage, provider) => {
         const started = await service.start({
-          environmentId: "env-1", projectId: "project-1", agent,
-          model: "model", targetBranch: "main", allowance: 1,
+          environmentId: "env-1",
+          projectId: "project-1",
+          agent,
+          model: "model",
+          targetBranch: "main",
+          allowance: 1,
         });
         await service.advanceNow(started.id);
         const running = await snapshot(storage, started.id);
         const session = running.sessions[0]!;
-        provider.pending.set(session.providerSessionId, [{
-          ...inputRequest(`${agent}-question`, agent), sessionId: session.providerSessionId,
-        }]);
+        provider.pending.set(session.providerSessionId, [
+          {
+            ...inputRequest(`${agent}-question`, agent),
+            sessionId: session.providerSessionId,
+          },
+        ]);
         provider.statusValue = agent === "opencode" ? "blocked" : "running";
         await service.advanceNow(started.id);
         if (agent === "opencode") await service.advanceNow(started.id);
@@ -1013,8 +1224,12 @@ describe("LoopedReviewService", () => {
     await harness(async (service, storage, provider) => {
       provider.returnNull = true;
       const started = await service.start({
-        environmentId: "env-1", projectId: "project-1", agent: "claude",
-        model: "model", targetBranch: "main", allowance: 1,
+        environmentId: "env-1",
+        projectId: "project-1",
+        agent: "claude",
+        model: "model",
+        targetBranch: "main",
+        allowance: 1,
       });
       await service.advanceNow(started.id);
       const sentBeforePause = provider.sent.length;
@@ -1040,8 +1255,12 @@ describe("LoopedReviewService", () => {
       provider.statusValue = "running";
       provider.abortRejectCount = 1;
       const started = await service.start({
-        environmentId: "env-1", projectId: "project-1", agent: "claude",
-        model: "model", targetBranch: "main", allowance: 1,
+        environmentId: "env-1",
+        projectId: "project-1",
+        agent: "claude",
+        model: "model",
+        targetBranch: "main",
+        allowance: 1,
       });
       await service.advanceNow(started.id);
       const cancelling = await service.cancel(started.id);
@@ -1068,19 +1287,29 @@ describe("LoopedReviewService", () => {
   test("finalizes cancellation immediately when no provider session is active", async () => {
     await harness(async (service, storage) => {
       const started = await service.start({
-        environmentId: "env-1", projectId: "project-1", agent: "claude",
-        model: "model", targetBranch: "main", allowance: 1,
+        environmentId: "env-1",
+        projectId: "project-1",
+        agent: "claude",
+        model: "model",
+        targetBranch: "main",
+        allowance: 1,
       });
       await service.advanceNow(started.id);
       const current = await snapshot(storage, started.id);
       expect(current.sessions).toHaveLength(1);
-      await storage.saveLoopedReviewWorkflow(started.id, "env-1", 2, {
-        ...current,
-        phase: "cancelling",
-        cancellingFromPhase: "preparing",
-        cancellingSince: new Date().toISOString(),
-        activeSessionId: undefined,
-      }, current.backendRevision);
+      await storage.saveLoopedReviewWorkflow(
+        started.id,
+        "env-1",
+        2,
+        {
+          ...current,
+          phase: "cancelling",
+          cancellingFromPhase: "preparing",
+          cancellingSince: new Date().toISOString(),
+          activeSessionId: undefined,
+        },
+        current.backendRevision,
+      );
 
       await service.advanceNow(started.id);
       const cancelled = await snapshot(storage, started.id);
@@ -1091,63 +1320,96 @@ describe("LoopedReviewService", () => {
   });
 
   test("keeps cancellation waiting when the provider cannot be reached", async () => {
-    await harness(async (service, storage, provider) => {
-      const now = new Date().toISOString();
-      await storage.saveLoopedReviewWorkflow(
-        "workflow-1", "env-1", LOOPED_REVIEW_WORKFLOW_VERSION, workflowFixture({
-          phase: "cancelling",
-          cancellingFromPhase: "preparing",
-          cancellingSince: now,
-          activeSessionId: "session-1",
-          sessions: [{
-            id: "session-1", phase: "preparation", round: 1,
-            sessionKey: "session-key", providerSessionId: "provider-1",
-            requestIds: [], origin: "looped-review",
-            interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-            status: "running", startedAt: now,
-          }],
-        }), 0,
-      );
+    await harness(
+      async (service, storage, provider) => {
+        const now = new Date().toISOString();
+        await storage.saveLoopedReviewWorkflow(
+          "workflow-1",
+          "env-1",
+          LOOPED_REVIEW_WORKFLOW_VERSION,
+          workflowFixture({
+            phase: "cancelling",
+            cancellingFromPhase: "preparing",
+            cancellingSince: now,
+            activeSessionId: "session-1",
+            sessions: [
+              {
+                id: "session-1",
+                phase: "preparation",
+                round: 1,
+                sessionKey: "session-key",
+                providerSessionId: "provider-1",
+                requestIds: [],
+                origin: "looped-review",
+                interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+                status: "running",
+                startedAt: now,
+              },
+            ],
+          }),
+          0,
+        );
 
-      await service.advanceNow("workflow-1");
-      const cancelling = await snapshot(storage, "workflow-1");
-      expect(cancelling.phase).toBe("cancelling");
-      expect(cancelling.sessions[0]?.error).toContain("Cancellation is waiting for the provider");
-      expect(provider.abortCount).toBe(0);
-    }, "claude", { useProductionProvider: true, bridgeAuthToken: "" });
+        await service.advanceNow("workflow-1");
+        const cancelling = await snapshot(storage, "workflow-1");
+        expect(cancelling.phase).toBe("cancelling");
+        expect(cancelling.sessions[0]?.error).toContain("Cancellation is waiting for the provider");
+        expect(provider.abortCount).toBe(0);
+      },
+      "claude",
+      { useProductionProvider: true, bridgeAuthToken: "" },
+    );
   });
 
   test("force-finalizes a cancellation that exceeds the abort deadline", async () => {
-    await harness(async (service, storage, provider) => {
-      const started = await service.start({
-        environmentId: "env-1", projectId: "project-1", agent: "claude",
-        model: "model", targetBranch: "main", allowance: 1,
-      });
-      await service.advanceNow(started.id);
-      const current = await snapshot(storage, started.id);
-      provider.abortRejectCount = 10;
-      await storage.saveLoopedReviewWorkflow(started.id, "env-1", 2, {
-        ...current,
-        phase: "cancelling",
-        // Must match the in-flight dispatch's phase: a dispatch belongs to
-        // exactly one phase and the snapshot is rejected otherwise.
-        cancellingFromPhase: "preparing",
-        cancellingSince: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
-      }, current.backendRevision);
+    await harness(
+      async (service, storage, provider) => {
+        const started = await service.start({
+          environmentId: "env-1",
+          projectId: "project-1",
+          agent: "claude",
+          model: "model",
+          targetBranch: "main",
+          allowance: 1,
+        });
+        await service.advanceNow(started.id);
+        const current = await snapshot(storage, started.id);
+        provider.abortRejectCount = 10;
+        await storage.saveLoopedReviewWorkflow(
+          started.id,
+          "env-1",
+          2,
+          {
+            ...current,
+            phase: "cancelling",
+            // Must match the in-flight dispatch's phase: a dispatch belongs to
+            // exactly one phase and the snapshot is rejected otherwise.
+            cancellingFromPhase: "preparing",
+            cancellingSince: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+          },
+          current.backendRevision,
+        );
 
-      await service.advanceNow(started.id);
-      const cancelled = await snapshot(storage, started.id);
-      expect(cancelled.phase).toBe("cancelled");
-      expect(cancelled.sessions[0]?.error).toContain("Cancellation timed out");
-      expect(provider.abortCount).toBe(0);
-    }, "claude", { cancellationDeadlineMs: 0 });
+        await service.advanceNow(started.id);
+        const cancelled = await snapshot(storage, started.id);
+        expect(cancelled.phase).toBe("cancelled");
+        expect(cancelled.sessions[0]?.error).toContain("Cancellation timed out");
+        expect(provider.abortCount).toBe(0);
+      },
+      "claude",
+      { cancellationDeadlineMs: 0 },
+    );
   });
 
   test("preserves the dispatch when the structured read and status probe both fail", async () => {
     await harness(async (service, storage, provider) => {
       const started = await service.start({
-        environmentId: "env-1", projectId: "project-1", agent: "claude",
-        model: "model", targetBranch: "main", allowance: 1,
+        environmentId: "env-1",
+        projectId: "project-1",
+        agent: "claude",
+        model: "model",
+        targetBranch: "main",
+        allowance: 1,
       });
       await service.advanceNow(started.id);
       const firstRequestId = provider.sent[0]!.requestId;
@@ -1170,10 +1432,16 @@ describe("LoopedReviewService", () => {
   test("coalesces repeated supervisor wakeups while provider I/O is in flight", async () => {
     await harness(async (service, storage, provider) => {
       let release!: () => void;
-      provider.sendBarrier = new Promise<void>((resolve) => { release = resolve; });
+      provider.sendBarrier = new Promise<void>((resolve) => {
+        release = resolve;
+      });
       const started = await service.start({
-        environmentId: "env-1", projectId: "project-1", agent: "claude",
-        model: "model", targetBranch: "main", allowance: 1,
+        environmentId: "env-1",
+        projectId: "project-1",
+        agent: "claude",
+        model: "model",
+        targetBranch: "main",
+        allowance: 1,
       });
       // The start wakeup prepares the first dispatch. This wakeup blocks in send.
       const inFlight = service.advanceNow(started.id);
@@ -1191,17 +1459,22 @@ describe("LoopedReviewService", () => {
   test("resumes a legacy phase boundary and quarantines a legacy turn in flight", async () => {
     await harness(async (service, storage, provider, invoke) => {
       const safeStarted = await service.start({
-        environmentId: "env-1", projectId: "project-1", agent: "claude",
-        model: "model", targetBranch: "main", allowance: 1,
+        environmentId: "env-1",
+        projectId: "project-1",
+        agent: "claude",
+        model: "model",
+        targetBranch: "main",
+        allowance: 1,
       });
       const unsafeStarted = await service.start({
-        environmentId: "env-2", projectId: "project-1", agent: "claude",
-        model: "model", targetBranch: "main", allowance: 1,
+        environmentId: "env-2",
+        projectId: "project-1",
+        agent: "claude",
+        model: "model",
+        targetBranch: "main",
+        allowance: 1,
       });
-      await Promise.all([
-        service.advanceNow(safeStarted.id),
-        service.advanceNow(unsafeStarted.id),
-      ]);
+      await Promise.all([service.advanceNow(safeStarted.id), service.advanceNow(unsafeStarted.id)]);
       await service.shutdown();
 
       const safeRecord = (await storage.getLoopedReviewWorkflow(safeStarted.id))!;
@@ -1220,10 +1493,18 @@ describe("LoopedReviewService", () => {
       };
       expect(unsafeLegacy.dispatch).toBeDefined();
       await storage.saveLoopedReviewWorkflow(
-        safeStarted.id, "env-1", 1, safeLegacy, safeRecord.revision,
+        safeStarted.id,
+        "env-1",
+        1,
+        safeLegacy,
+        safeRecord.revision,
       );
       await storage.saveLoopedReviewWorkflow(
-        unsafeStarted.id, "env-2", 1, unsafeLegacy, unsafeRecord.revision,
+        unsafeStarted.id,
+        "env-2",
+        1,
+        unsafeLegacy,
+        unsafeRecord.revision,
       );
 
       const recovering = new LoopedReviewService(storage, invoke, {
@@ -1258,8 +1539,12 @@ describe("LoopedReviewService", () => {
   test("retries safe legacy adoption after a foreign controller lease expires", async () => {
     await harness(async (service, storage, provider, invoke) => {
       const started = await service.start({
-        environmentId: "env-1", projectId: "project-1", agent: "claude",
-        model: "model", targetBranch: "main", allowance: 1,
+        environmentId: "env-1",
+        projectId: "project-1",
+        agent: "claude",
+        model: "model",
+        targetBranch: "main",
+        allowance: 1,
       });
       await service.shutdown();
       const record = (await storage.getLoopedReviewWorkflow(started.id))!;
@@ -1286,8 +1571,7 @@ describe("LoopedReviewService", () => {
       // happen before the foreign lease expires, but *when* the poll observes
       // that afterwards depends on scheduling, and a starved worker turns a
       // fixed sleep into a spurious failure.
-      await waitFor(async () =>
-        (await storage.getLoopedReviewWorkflow(started.id))?.version === 2);
+      await waitFor(async () => (await storage.getLoopedReviewWorkflow(started.id))?.version === 2);
       expect((await storage.getLoopedReviewWorkflow(started.id))?.version).toBe(2);
       await recovering.shutdown();
     });
@@ -1295,8 +1579,12 @@ describe("LoopedReviewService", () => {
 });
 
 const startInput = {
-  environmentId: "env-1", projectId: "project-1", agent: "claude" as const,
-  model: "model", targetBranch: "main", allowance: 1,
+  environmentId: "env-1",
+  projectId: "project-1",
+  agent: "claude" as const,
+  model: "model",
+  targetBranch: "main",
+  allowance: 1,
 };
 
 describe("LoopedReviewService lifecycle guards", () => {
@@ -1304,32 +1592,46 @@ describe("LoopedReviewService lifecycle guards", () => {
     await harness(async (service, storage) => {
       const now = "2026-08-03T00:00:00.000Z";
       const session = {
-        id: "session-1", phase: "discovery" as const, round: 1, pass: 1,
-        sessionKey: "session-key", providerSessionId: "provider-1",
-        requestIds: [], origin: "looped-review" as const,
+        id: "session-1",
+        phase: "discovery" as const,
+        round: 1,
+        pass: 1,
+        sessionKey: "session-key",
+        providerSessionId: "provider-1",
+        requestIds: [],
+        origin: "looped-review" as const,
         interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-        status: "running" as const, startedAt: now,
+        status: "running" as const,
+        startedAt: now,
       };
       await storage.saveLoopedReviewWorkflow(
-        "workflow-1", "env-1", LOOPED_REVIEW_WORKFLOW_VERSION, workflowFixture({
+        "workflow-1",
+        "env-1",
+        LOOPED_REVIEW_WORKFLOW_VERSION,
+        workflowFixture({
           phase: "reconciling",
           currentPass: 1,
           activeSessionId: session.id,
           sessions: [session],
-          rounds: [{
-            round: 1,
-            allowance: 1,
-            status: "reviewing",
-            passes: [{
-              pass: 1,
-              sessionId: session.id,
-              status: "reconciling",
-              report: cleanReport,
+          rounds: [
+            {
+              round: 1,
+              allowance: 1,
+              status: "reviewing",
+              passes: [
+                {
+                  pass: 1,
+                  sessionId: session.id,
+                  status: "reconciling",
+                  report: cleanReport,
+                  startedAt: now,
+                },
+              ],
               startedAt: now,
-            }],
-            startedAt: now,
-          }],
-        }), 0,
+            },
+          ],
+        }),
+        0,
       );
 
       const internal = service as unknown as {
@@ -1420,10 +1722,16 @@ describe("LoopedReviewService lifecycle guards", () => {
       const started = await service.start(startInput);
       await service.advanceNow(started.id);
       const current = await snapshot(storage, started.id);
-      await storage.saveLoopedReviewWorkflow(started.id, "env-1", 2, {
-        ...current,
-        pr: { status: "running", sessionId: "provider-1" },
-      }, current.backendRevision);
+      await storage.saveLoopedReviewWorkflow(
+        started.id,
+        "env-1",
+        2,
+        {
+          ...current,
+          pr: { status: "running", sessionId: "provider-1" },
+        },
+        current.backendRevision,
+      );
 
       await service.cancel(started.id);
       const cancelled = await snapshot(storage, started.id);
@@ -1451,8 +1759,9 @@ describe("LoopedReviewService lifecycle guards", () => {
       expect(retried.failure).toBeUndefined();
       // A pass with no report must not be left occupying its slot.
       const round = retried.rounds.find((entry) => entry.round === retried.currentRound)!;
-      expect(round.passes.every((pass) => pass.report !== undefined || pass.pass <= retried.currentPass))
-        .toBe(true);
+      expect(
+        round.passes.every((pass) => pass.report !== undefined || pass.pass <= retried.currentPass),
+      ).toBe(true);
     });
   });
 
@@ -1491,12 +1800,15 @@ describe("LoopedReviewService lifecycle guards", () => {
       const current = await snapshot(storage, started.id);
       const session = current.sessions[0]!;
 
-      await expect(service.providerSession(started.id, session.id))
-        .resolves.toEqual({ providerSessionId: session.providerSessionId });
-      await expect(service.providerSession(started.id))
-        .resolves.toEqual({ providerSessionId: session.providerSessionId });
-      await expect(service.providerSession(started.id, "session-does-not-exist"))
-        .resolves.toBeNull();
+      await expect(service.providerSession(started.id, session.id)).resolves.toEqual({
+        providerSessionId: session.providerSessionId,
+      });
+      await expect(service.providerSession(started.id)).resolves.toEqual({
+        providerSessionId: session.providerSessionId,
+      });
+      await expect(
+        service.providerSession(started.id, "session-does-not-exist"),
+      ).resolves.toBeNull();
       await expect(service.providerSession("workflow-does-not-exist")).resolves.toBeNull();
     });
   });
@@ -1509,7 +1821,9 @@ describe("LoopedReviewService resource lifetime", () => {
       expect((await snapshot(storage, started.id)).phase).toBe("preparing");
 
       let release!: () => void;
-      provider.sendBarrier = new Promise<void>((resolve) => { release = resolve; });
+      provider.sendBarrier = new Promise<void>((resolve) => {
+        release = resolve;
+      });
 
       const autoAdvancing = new LoopedReviewService(storage, invoke, {
         pollIntervalMs: 5,
@@ -1566,21 +1880,29 @@ describe("LoopedReviewService resource lifetime", () => {
       expect(afterSecond.revision).toBe(afterFirst.revision);
 
       // A foreign owner is still refused while that lease is live.
-      expect((await storage.claimLoopedReviewController(started.id, "someone-else", 15_000)).granted)
-        .toBe(false);
+      expect(
+        (await storage.claimLoopedReviewController(started.id, "someone-else", 15_000)).granted,
+      ).toBe(false);
     });
   });
 
   test("a lease conflict reports an actionable message", async () => {
     // A two-second lease so a foreign controller can take it over in-test.
-    await harness(async (service, storage) => {
-      const started = await service.start(startInput);
-      await service.advanceNow(started.id);
-      await waitFor(async () =>
-        (await storage.claimLoopedReviewController(started.id, "another-controller", 2_000)).granted);
-      // Renderers surface error.message directly; an empty one is a blank toast.
-      await expect(service.pause(started.id)).rejects.toThrow(/lease/i);
-    }, "claude", { controllerLeaseMs: 2_000 });
+    await harness(
+      async (service, storage) => {
+        const started = await service.start(startInput);
+        await service.advanceNow(started.id);
+        await waitFor(
+          async () =>
+            (await storage.claimLoopedReviewController(started.id, "another-controller", 2_000))
+              .granted,
+        );
+        // Renderers surface error.message directly; an empty one is a blank toast.
+        await expect(service.pause(started.id)).rejects.toThrow(/lease/i);
+      },
+      "claude",
+      { controllerLeaseMs: 2_000 },
+    );
   });
 
   test("refuses to persist a snapshot that breaks the workflow contract", async () => {
@@ -1591,9 +1913,19 @@ describe("LoopedReviewService resource lifetime", () => {
       // Storage only checks that the snapshot is an object, so without the
       // service-side guard an invalid transition would persist silently and
       // every later read would reject the record.
-      await expect(storage.saveLoopedReviewWorkflow(started.id, "env-1", 2, {
-        ...current, phase: "cancelling", cancellingFromPhase: undefined,
-      }, current.backendRevision)).resolves.toBeDefined();
+      await expect(
+        storage.saveLoopedReviewWorkflow(
+          started.id,
+          "env-1",
+          2,
+          {
+            ...current,
+            phase: "cancelling",
+            cancellingFromPhase: undefined,
+          },
+          current.backendRevision,
+        ),
+      ).resolves.toBeDefined();
       const broken = await storage.getLoopedReviewWorkflow(started.id);
       const { isLoopedReviewWorkflow } = await import("@orkestrator/protocol/review-workflow");
       expect(isLoopedReviewWorkflow(broken?.snapshot)).toBe(false);

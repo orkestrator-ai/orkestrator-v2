@@ -16,17 +16,13 @@ describe("summarizeTodoList", () => {
   });
 
   test("handles single item", () => {
-    expect(summarizeTodoList([{ text: "Only task", completed: false }])).toBe(
-      "[ ] Only task",
-    );
+    expect(summarizeTodoList([{ text: "Only task", completed: false }])).toBe("[ ] Only task");
   });
 });
 
 describe("mapTodoArgs", () => {
   test("maps completed items to 'completed' status", () => {
-    const result = mapTodoArgs([
-      { text: "Finished", completed: true },
-    ]);
+    const result = mapTodoArgs([{ text: "Finished", completed: true }]);
 
     expect(result).toEqual({
       todos: [{ content: "Finished", status: "completed" }],
@@ -34,9 +30,7 @@ describe("mapTodoArgs", () => {
   });
 
   test("maps incomplete items to 'pending' status", () => {
-    const result = mapTodoArgs([
-      { text: "Not done", completed: false },
-    ]);
+    const result = mapTodoArgs([{ text: "Not done", completed: false }]);
 
     expect(result).toEqual({
       todos: [{ content: "Not done", status: "pending" }],

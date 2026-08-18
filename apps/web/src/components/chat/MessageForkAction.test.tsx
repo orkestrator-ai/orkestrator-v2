@@ -89,7 +89,8 @@ describe("useMessageForkAction", () => {
       />,
     );
     expect(
-      screen.getByRole("button", { name: "Fork Codex session from this prompt" })
+      screen
+        .getByRole("button", { name: "Fork Codex session from this prompt" })
         .hasAttribute("disabled"),
     ).toBe(false);
 
@@ -104,7 +105,8 @@ describe("useMessageForkAction", () => {
 
     expect(renders.at(-1)![0]).not.toBe(renders[0]![0]);
     expect(
-      screen.getByRole("button", { name: "Fork Codex session from this prompt" })
+      screen
+        .getByRole("button", { name: "Fork Codex session from this prompt" })
         .hasAttribute("disabled"),
     ).toBe(true);
   });
@@ -150,12 +152,7 @@ describe("useMessageForkAction", () => {
 
   test("describes a prompt action as an edit", () => {
     render(
-      <Harness
-        messageIds={["user-1"]}
-        disabled={false}
-        onFork={() => {}}
-        collect={() => {}}
-      />,
+      <Harness messageIds={["user-1"]} disabled={false} onFork={() => {}} collect={() => {}} />,
     );
 
     expect(
@@ -245,9 +242,7 @@ describe("MessageForkAction inside NativeMessage", () => {
       />,
     );
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Fork Codex session from this prompt" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Fork Codex session from this prompt" }));
     expect(onFork.mock.calls).toEqual([["user-1", "prompt"]]);
   });
 });

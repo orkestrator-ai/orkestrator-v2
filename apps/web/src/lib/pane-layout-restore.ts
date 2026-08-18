@@ -1,9 +1,6 @@
 import type { EnvironmentPaneState } from "@/stores/paneLayoutStore";
 import { isAgentPlatform, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import {
-  boundBrowserHistory,
-  sanitizeBrowserHistoryForPersistence,
-} from "@/lib/browser-history";
+import { boundBrowserHistory, sanitizeBrowserHistoryForPersistence } from "@/lib/browser-history";
 import {
   isGitFileStatus,
   LEGACY_PANE_LAYOUT_VERSION,
@@ -51,12 +48,9 @@ function restoreNativeAgentData(
   legacyPlatform?: AgentPlatform,
   legacyField?: string,
 ) {
-  const canonical = isRecord(value.nativeAgentData)
-    ? value.nativeAgentData
-    : undefined;
-  const legacy = legacyField && isRecord(value[legacyField])
-    ? value[legacyField] as JsonObject
-    : undefined;
+  const canonical = isRecord(value.nativeAgentData) ? value.nativeAgentData : undefined;
+  const legacy =
+    legacyField && isRecord(value[legacyField]) ? (value[legacyField] as JsonObject) : undefined;
   if (!canonical && !legacy) return null;
 
   const platformValue = canonical?.platform ?? legacyPlatform;
@@ -73,9 +67,9 @@ function restoreNativeAgentData(
 
 function sanitizeSizes(value: unknown): [number, number] {
   if (
-    !Array.isArray(value)
-    || value.length !== 2
-    || value.some((item) => typeof item !== "number" || !Number.isFinite(item) || item <= 0)
+    !Array.isArray(value) ||
+    value.length !== 2 ||
+    value.some((item) => typeof item !== "number" || !Number.isFinite(item) || item <= 0)
   ) {
     return [50, 50];
   }
@@ -124,19 +118,28 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
     return { ...common, type: "plain", isSetupTab: true };
   }
 
-  if (type === "plain" || type === "claude" || type === "opencode" || type === "codex" || type === "cursor" || type === "grok" || type === "root") {
+  if (
+    type === "plain" ||
+    type === "claude" ||
+    type === "opencode" ||
+    type === "codex" ||
+    type === "cursor" ||
+    type === "grok" ||
+    type === "root"
+  ) {
     return { ...common, type };
   }
 
   if (type === "browser") {
     if (!isRecord(value.browserData)) return null;
     const url = optionalString(value.browserData.url) ?? "";
-    const rawHistory = Array.isArray(value.browserData.history)
-      && value.browserData.history.every((entry) => typeof entry === "string")
-      ? value.browserData.history as string[]
-      : undefined;
+    const rawHistory =
+      Array.isArray(value.browserData.history) &&
+      value.browserData.history.every((entry) => typeof entry === "string")
+        ? (value.browserData.history as string[])
+        : undefined;
     const rawHistoryIndex = Number.isSafeInteger(value.browserData.historyIndex)
-      ? value.browserData.historyIndex as number
+      ? (value.browserData.historyIndex as number)
       : undefined;
     // No stored history means there is nothing for a cursor to address, so
     // `boundBrowserHistory` drops it rather than restoring an unvalidated index.
@@ -242,9 +245,10 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
   if (type === "multi-review") {
     if (!isRecord(value.multiReviewTabData)) return null;
     const workflowId = nonEmptyString(value.multiReviewTabData.workflowId);
-    const reviewerId = value.multiReviewTabData.reviewerId === undefined
-      ? undefined
-      : nonEmptyString(value.multiReviewTabData.reviewerId);
+    const reviewerId =
+      value.multiReviewTabData.reviewerId === undefined
+        ? undefined
+        : nonEmptyString(value.multiReviewTabData.reviewerId);
     if (value.multiReviewTabData.reviewerId !== undefined && !reviewerId) return null;
     if (!workflowId || !context.hasMultiReview?.(workflowId)) return null;
     return {
@@ -267,14 +271,12 @@ export function reconcilePersistedLayout(
   context: PaneLayoutRestoreContext,
 ): EnvironmentPaneState | null {
   if (
-    !saved
-    || (
-      saved.version !== PANE_LAYOUT_VERSION
-      && saved.version !== PROVIDER_NATIVE_PANE_LAYOUT_VERSION
-      && saved.version !== LEGACY_PANE_LAYOUT_VERSION
-    )
-    || saved.environmentId !== context.environmentId
-    || saved.containerId !== context.containerId
+    !saved ||
+    (saved.version !== PANE_LAYOUT_VERSION &&
+      saved.version !== PROVIDER_NATIVE_PANE_LAYOUT_VERSION &&
+      saved.version !== LEGACY_PANE_LAYOUT_VERSION) ||
+    saved.environmentId !== context.environmentId ||
+    saved.containerId !== context.containerId
   ) {
     return null;
   }
@@ -312,9 +314,10 @@ export function reconcilePersistedLayout(
       if (tabs.length === 0) return null;
 
       const requestedActiveTabId = nonEmptyString(value.activeTabId);
-      const activeTabId = requestedActiveTabId && tabs.some((tab) => tab.id === requestedActiveTabId)
-        ? requestedActiveTabId
-        : tabs[0]!.id;
+      const activeTabId =
+        requestedActiveTabId && tabs.some((tab) => tab.id === requestedActiveTabId)
+          ? requestedActiveTabId
+          : tabs[0]!.id;
       const leaf: PaneLeaf = { kind: "leaf", id, tabs, activeTabId };
       return leaf;
     }
@@ -324,9 +327,9 @@ export function reconcilePersistedLayout(
       return null;
     }
     if (
-      (value.direction !== "horizontal" && value.direction !== "vertical")
-      || !Array.isArray(value.children)
-      || value.children.length !== 2
+      (value.direction !== "horizontal" && value.direction !== "vertical") ||
+      !Array.isArray(value.children) ||
+      value.children.length !== 2
     ) {
       malformed = true;
       return null;
@@ -377,9 +380,7 @@ function preserveRendererLocalTabFields(
   if (!current || current.type !== authoritative.type) return authoritative;
   const preserved: TabInfo = {
     ...authoritative,
-    ...(current.initialPrompt !== undefined
-      ? { initialPrompt: current.initialPrompt }
-      : {}),
+    ...(current.initialPrompt !== undefined ? { initialPrompt: current.initialPrompt } : {}),
     ...(current.initialCommands !== undefined
       ? { initialCommands: [...current.initialCommands] }
       : {}),
@@ -416,17 +417,12 @@ export function preserveRendererLocalPaneFields(
     if (node.kind === "leaf") {
       return {
         ...node,
-        tabs: node.tabs.map((tab) =>
-          preserveRendererLocalTabFields(tab, currentTabs.get(tab.id))
-        ),
+        tabs: node.tabs.map((tab) => preserveRendererLocalTabFields(tab, currentTabs.get(tab.id))),
       };
     }
     return {
       ...node,
-      children: [
-        preserveTabFields(node.children[0]),
-        preserveTabFields(node.children[1]),
-      ],
+      children: [preserveTabFields(node.children[0]), preserveTabFields(node.children[1])],
     };
   };
 
@@ -459,22 +455,16 @@ export function preserveClientPaneSelection(
       const currentActiveTabId = currentLeaf?.activeTabId;
       return {
         ...node,
-        tabs: node.tabs.map((tab) =>
-          preserveRendererLocalTabFields(tab, currentTabs.get(tab.id))
-        ),
+        tabs: node.tabs.map((tab) => preserveRendererLocalTabFields(tab, currentTabs.get(tab.id))),
         activeTabId:
-          currentActiveTabId
-          && node.tabs.some((tab) => tab.id === currentActiveTabId)
+          currentActiveTabId && node.tabs.some((tab) => tab.id === currentActiveTabId)
             ? currentActiveTabId
             : node.activeTabId,
       };
     }
     return {
       ...node,
-      children: [
-        preserveLeafSelection(node.children[0]),
-        preserveLeafSelection(node.children[1]),
-      ],
+      children: [preserveLeafSelection(node.children[0]), preserveLeafSelection(node.children[1])],
     };
   };
 

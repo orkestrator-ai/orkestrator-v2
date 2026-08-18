@@ -1,16 +1,62 @@
 import { randomUUID } from "node:crypto";
-import type { BuildPipeline, BuildPipelineAgent, PipelineSession, PipelineSessionPhase, ResumableBuildPhase } from "@orkestrator/protocol/build-pipeline";
-import { executionModeForSessionPhase, isBuildPipeline, isActiveBuildPhase } from "@orkestrator/protocol/build-pipeline";
-import { STRUCTURED_REVIEW_REPORT_JSON_SCHEMA, safeParseStructuredReviewReport } from "@orkestrator/protocol/structured-review";
+import type {
+  BuildPipeline,
+  BuildPipelineAgent,
+  PipelineSession,
+  PipelineSessionPhase,
+  ResumableBuildPhase,
+} from "@orkestrator/protocol/build-pipeline";
+import {
+  executionModeForSessionPhase,
+  isBuildPipeline,
+  isActiveBuildPhase,
+} from "@orkestrator/protocol/build-pipeline";
+import {
+  STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
+  safeParseStructuredReviewReport,
+} from "@orkestrator/protocol/structured-review";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import type { Environment } from "./models.js";
-import { AmbiguousPromptDispatchError, ProviderUnavailableError, readProviderStatus, type BuildPipelineProvider, type ProviderExecutionMode } from "./build-pipeline-provider.js";
-import { addressPrompt, buildPrompt, fixPrompt, prPrompt, resolveConflictsPrompt, reviewPrompt, verificationPrompt, type ObservedWorktreeSnapshot, type ReviewWorktreeSnapshot } from "./build-pipeline-prompts.js";
+import {
+  AmbiguousPromptDispatchError,
+  ProviderUnavailableError,
+  readProviderStatus,
+  type BuildPipelineProvider,
+  type ProviderExecutionMode,
+} from "./build-pipeline-provider.js";
+import {
+  addressPrompt,
+  buildPrompt,
+  fixPrompt,
+  prPrompt,
+  resolveConflictsPrompt,
+  reviewPrompt,
+  verificationPrompt,
+  type ObservedWorktreeSnapshot,
+  type ReviewWorktreeSnapshot,
+} from "./build-pipeline-prompts.js";
 import { buildReviewHandoffPrompt, prependReviewHandoff } from "./build-pipeline-handoff.js";
 import { probeReviewWorktreeOnce } from "./review-worktree-probe.js";
 import { BuildPipelineServiceBase } from "./build-pipeline-service-base.js";
-import { WORKTREE_PROBE_ATTEMPTS, VALIDATION_STAGE_LABELS, VERIFICATION_SCHEMA, SESSION_LABELS, PreSessionStageStartError, sessionForCurrentPhase, resumablePhase, sessionAgent, sessionPhaseFor, executionModeOverrideForPhase, DEFAULT_STALL_WARNING_MS, withUnattendedPolicy, transcriptFingerprint, attachBeforeDispatch, elapsedSince, elapsedSinceLatest } from "./build-pipeline-service-helpers.js";
+import {
+  WORKTREE_PROBE_ATTEMPTS,
+  VALIDATION_STAGE_LABELS,
+  VERIFICATION_SCHEMA,
+  SESSION_LABELS,
+  PreSessionStageStartError,
+  sessionForCurrentPhase,
+  resumablePhase,
+  sessionAgent,
+  sessionPhaseFor,
+  executionModeOverrideForPhase,
+  DEFAULT_STALL_WARNING_MS,
+  withUnattendedPolicy,
+  transcriptFingerprint,
+  attachBeforeDispatch,
+  elapsedSince,
+  elapsedSinceLatest,
+} from "./build-pipeline-service-helpers.js";
 
 export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServiceBase {
   protected requestTick(): Promise<void> {
@@ -33,24 +79,21 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
   protected async tickPass(): Promise<void> {
     if (this.stopped) return;
     const records = await this.storage.listAllBuildPipelines();
-    await Promise.all(records.flatMap((record) => {
-      if (
-        !isBuildPipeline(record.snapshot)
-        || (
-          !isActiveBuildPhase(record.snapshot.phase)
-          && !this.needsTerminalReconciliation(record.snapshot)
-        )
-      ) {
-        return [];
-      }
-      return [this.runLocked(record.id)];
-    }));
+    await Promise.all(
+      records.flatMap((record) => {
+        if (
+          !isBuildPipeline(record.snapshot) ||
+          (!isActiveBuildPhase(record.snapshot.phase) &&
+            !this.needsTerminalReconciliation(record.snapshot))
+        ) {
+          return [];
+        }
+        return [this.runLocked(record.id)];
+      }),
+    );
   }
 
-  protected runLocked(
-    pipelineId: string,
-    namingPrompt?: string,
-  ): Promise<void> {
+  protected runLocked(pipelineId: string, namingPrompt?: string): Promise<void> {
     // Timer ticks are level-triggered. If a pass is already running, joining
     // it is sufficient; appending another promise every 1.5 seconds lets a
     // stalled provider call grow an unbounded queue.
@@ -71,10 +114,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     return next;
   }
 
-  protected async advance(
-    pipelineId: string,
-    namingPrompt?: string,
-  ): Promise<void> {
+  protected async advance(pipelineId: string, namingPrompt?: string): Promise<void> {
     const record = await this.requireRecord(pipelineId);
     const pipeline = record.snapshot as BuildPipeline;
     pipeline.backendRevision = record.revision;
@@ -89,18 +129,16 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     }
 
     if (pipeline.phase === "creating-environment") {
-      const environment = await this.findLinkedEnvironment(pipeline)
-        ?? await this.invoke<Environment>("create_environment", {
+      const environment =
+        (await this.findLinkedEnvironment(pipeline)) ??
+        (await this.invoke<Environment>("create_environment", {
           projectId: pipeline.projectId,
-          networkAccessMode: pipeline.environmentType === "containerized"
-            ? "restricted"
-            : "full",
+          networkAccessMode: pipeline.environmentType === "containerized" ? "restricted" : "full",
           environmentType: pipeline.environmentType,
           buildPipelineId: pipeline.id,
-          namingPrompt: namingPrompt
-            ?? this.provisioningPrompts.get(pipeline.id)
-            ?? pipeline.taskTitle,
-        });
+          namingPrompt:
+            namingPrompt ?? this.provisioningPrompts.get(pipeline.id) ?? pipeline.taskTitle,
+        }));
       pipeline.environmentId = environment.id;
       pipeline.environmentType = environment.environmentType;
       pipeline.phase = "starting-environment";
@@ -199,10 +237,10 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     // An attempt written before the agent was recorded has no harness to
     // disagree with, so it keeps the original behaviour.
     if (
-      pipeline.reconnectAttempt
-      && !pipeline.pendingPromptAttempt
-      && (pipeline.reconnectAttempt.agent === undefined
-        || pipeline.reconnectAttempt.agent === currentAgent)
+      pipeline.reconnectAttempt &&
+      !pipeline.pendingPromptAttempt &&
+      (pipeline.reconnectAttempt.agent === undefined ||
+        pipeline.reconnectAttempt.agent === currentAgent)
     ) {
       delete pipeline.reconnectAttempt;
       delete pipeline.error;
@@ -213,9 +251,11 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       throw new Error(`The ${session.label.toLowerCase()} is no longer available`);
     }
     if (status === "error") {
-      throw new Error(statusDetail
-        ? `The ${session.label.toLowerCase()} failed: ${statusDetail}`
-        : `The ${session.label.toLowerCase()} failed`);
+      throw new Error(
+        statusDetail
+          ? `The ${session.label.toLowerCase()} failed: ${statusDetail}`
+          : `The ${session.label.toLowerCase()} failed`,
+      );
     }
     if (status === "blocked") {
       // Observe-only Milestone 3 must not advance or fail a phase. The parked
@@ -224,8 +264,8 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       return;
     }
     if (
-      pipeline.pendingPromptAttempt
-      && pipeline.pendingPromptAttempt.sessionId === session.sdkSessionId
+      pipeline.pendingPromptAttempt &&
+      pipeline.pendingPromptAttempt.sessionId === session.sdkSessionId
     ) {
       if (status === "running") {
         delete pipeline.pendingPromptAttempt;
@@ -249,8 +289,8 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
           session.turnStartedAt,
           session.messagesPersistedAt,
           session.startedAt,
-        )! >= DEFAULT_STALL_WARNING_MS
-        && pipeline.stallWarning?.sessionId !== session.sdkSessionId
+        )! >= DEFAULT_STALL_WARNING_MS &&
+        pipeline.stallWarning?.sessionId !== session.sdkSessionId
       ) {
         pipeline.stallWarning = {
           sessionId: session.sdkSessionId,
@@ -262,9 +302,9 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       // transcript delta is throttled: it arrives on every tick of a streaming
       // turn, and each save rewrites the entire build-pipelines file.
       if (
-        statusChanged
-        || warningChanged
-        || (transcriptChanged && this.shouldPersistTranscript(session))
+        statusChanged ||
+        warningChanged ||
+        (transcriptChanged && this.shouldPersistTranscript(session))
       ) {
         session.messagesPersistedAt = new Date().toISOString();
         await this.save(pipeline, record.revision);
@@ -340,9 +380,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
    * still unknown afterwards is not survivable, because nothing downstream can
    * certify a turn whose starting point was never established.
    */
-  protected async reviewWorktreeSnapshot(
-    pipeline: BuildPipeline,
-  ): Promise<ReviewWorktreeSnapshot> {
+  protected async reviewWorktreeSnapshot(pipeline: BuildPipeline): Promise<ReviewWorktreeSnapshot> {
     let last = await this.probeWorktreeOnce(pipeline);
     for (
       let attempt = 1;
@@ -354,9 +392,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     return last;
   }
 
-  protected async probeWorktreeOnce(
-    pipeline: BuildPipeline,
-  ): Promise<ReviewWorktreeSnapshot> {
+  protected async probeWorktreeOnce(pipeline: BuildPipeline): Promise<ReviewWorktreeSnapshot> {
     return probeReviewWorktreeOnce(
       (command, args) => this.invoke(command, args),
       pipeline.environmentId,
@@ -405,14 +441,13 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     pipeline: BuildPipeline,
     session: PipelineSession,
   ): Promise<void> {
-    const stage = VALIDATION_STAGE_LABELS[
-      session.phase === "review" ? "review" : "verify"
-    ];
+    const stage = VALIDATION_STAGE_LABELS[session.phase === "review" ? "review" : "verify"];
     // A snapshot written before the path list existed still carries a status, and
     // "clean" pins the baseline to the empty set without it. "dirty" does not,
     // so that one case still fails closed rather than guessing.
-    const baselinePaths = session.validationUncommittedPathsAtStart
-      ?? (session.validationWorktreeStatusAtStart === "clean" ? [] : undefined);
+    const baselinePaths =
+      session.validationUncommittedPathsAtStart ??
+      (session.validationWorktreeStatusAtStart === "clean" ? [] : undefined);
     if (!session.validationHeadAtStart || !baselinePaths) {
       throw new Error(
         `${stage} cannot be certified because its starting Git state was not recorded`,
@@ -451,11 +486,10 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
   protected async findLinkedEnvironment(
     pipeline: Pick<BuildPipeline, "id" | "projectId">,
   ): Promise<Environment | undefined> {
-    return (await this.storage.getEnvironmentsByProject(pipeline.projectId))
-      .find((environment) =>
-        environment.buildPipelineId === pipeline.id
-        && !environment.deletionRequestedAt
-      );
+    return (await this.storage.getEnvironmentsByProject(pipeline.projectId)).find(
+      (environment) =>
+        environment.buildPipelineId === pipeline.id && !environment.deletionRequestedAt,
+    );
   }
 
   protected async refreshTranscript(
@@ -466,10 +500,9 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     const fingerprint = transcriptFingerprint(messages);
     // A snapshot restored before fingerprints existed has none, so fall back to
     // recomputing it from the stored transcript exactly once.
-    const previous = session.messagesFingerprint
-      ?? (session.messages === undefined
-        ? undefined
-        : transcriptFingerprint(session.messages));
+    const previous =
+      session.messagesFingerprint ??
+      (session.messages === undefined ? undefined : transcriptFingerprint(session.messages));
     if (previous === fingerprint) return false;
     session.messages = messages;
     session.messagesFingerprint = fingerprint;
@@ -546,27 +579,24 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
   }
 
   protected async restartMissingStage(pipeline: BuildPipeline): Promise<void> {
-    const stage = pipeline.phase === "building"
-      ? "build"
-      : pipeline.phase === "reviewing"
-        ? "review"
-        : pipeline.phase === "addressing"
-          ? "address"
-        : pipeline.phase === "verifying"
-          ? "verify"
-          : pipeline.phase === "fixing"
-            ? "fix"
-            : pipeline.phase === "creating-pr"
-              ? "pr"
-              : pipeline.phase === "resolving-conflicts"
-                ? "resolve-conflicts"
-                : null;
+    const stage =
+      pipeline.phase === "building"
+        ? "build"
+        : pipeline.phase === "reviewing"
+          ? "review"
+          : pipeline.phase === "addressing"
+            ? "address"
+            : pipeline.phase === "verifying"
+              ? "verify"
+              : pipeline.phase === "fixing"
+                ? "fix"
+                : pipeline.phase === "creating-pr"
+                  ? "pr"
+                  : pipeline.phase === "resolving-conflicts"
+                    ? "resolve-conflicts"
+                    : null;
     if (!stage) throw new Error(`Cannot recover pipeline phase ${pipeline.phase}`);
-    await this.startStage(
-      pipeline,
-      stage,
-      pipeline.phase as ResumableBuildPhase,
-    );
+    await this.startStage(pipeline, stage, pipeline.phase as ResumableBuildPhase);
   }
 
   protected async startStage(
@@ -589,19 +619,20 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       // Probed before the provider session exists so an unestablishable Git state
       // fails the stage without leaving a session behind or spending a turn on a
       // review that could never be certified.
-      const validationWorktree = !override
-          && (sessionPhase === "review" || sessionPhase === "verify")
-        ? await this.validationBaseline(pipeline, sessionPhase)
-        : undefined;
+      const validationWorktree =
+        !override && (sessionPhase === "review" || sessionPhase === "verify")
+          ? await this.validationBaseline(pipeline, sessionPhase)
+          : undefined;
       const { agent, model, effort } = await this.stepSettings(pipeline, sessionPhase);
       const provider = await this.provider(pipeline, agent);
       const label = SESSION_LABELS[sessionPhase];
       // Stated rather than left to each provider's own default, so the sandbox a
       // stage runs under is one decision in one place and does not move when a
       // step pins a different harness.
-      const mode = override?.mode
-        ?? executionModeOverrideForPhase(phase)
-        ?? executionModeForSessionPhase(sessionPhase, agent);
+      const mode =
+        override?.mode ??
+        executionModeOverrideForPhase(phase) ??
+        executionModeForSessionPhase(sessionPhase, agent);
       const sessionKey = `${pipeline.id}:${sessionPhase}:${pipeline.iteration}:${randomUUID()}`;
       // Codex binds model and effort at session creation, Claude and OpenCode at
       // prompt dispatch, so a per-step selection has to be supplied at both.
@@ -652,7 +683,9 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         validationHeadAtStart: validationWorktree?.head,
         validationWorktreeStatusAtStart: validationWorktree?.status,
         validationUncommittedPathsAtStart: validationWorktree
-          ? (validationWorktree.status === "dirty" ? [...validationWorktree.paths] : [])
+          ? validationWorktree.status === "dirty"
+            ? [...validationWorktree.paths]
+            : []
           : undefined,
       };
       pipeline.sessions.push(session);
@@ -690,7 +723,8 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       if (error instanceof ProviderUnavailableError) throw error;
       throw new PreSessionStageStartError(error, phase);
     });
-    const { provider, sessionId, prompt, requestId, images, schema, model, effort, mode } = dispatch;
+    const { provider, sessionId, prompt, requestId, images, schema, model, effort, mode } =
+      dispatch;
     await attachBeforeDispatch(provider, sessionId);
     try {
       await provider.send(sessionId, prompt, {
@@ -732,29 +766,25 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     // with: Claude and OpenCode take the model per prompt, so omitting it here
     // would quietly retry the turn on the connection default instead.
     const sessionPhase = sessionPhaseFor(attempt.phase);
-    const step = sessionPhase
-      ? await this.stepSettings(pipeline, sessionPhase)
-      : undefined;
+    const step = sessionPhase ? await this.stepSettings(pipeline, sessionPhase) : undefined;
     // Re-state the mode the session was opened with so a redispatch cannot land
     // in a different sandbox. Addressing is a writable, independent session.
-    const mode = executionModeOverrideForPhase(attempt.phase)
-      ?? (sessionPhase && step
-        ? executionModeForSessionPhase(sessionPhase, step.agent)
-        : undefined);
+    const mode =
+      executionModeOverrideForPhase(attempt.phase) ??
+      (sessionPhase && step ? executionModeForSessionPhase(sessionPhase, step.agent) : undefined);
     await attachBeforeDispatch(provider, attempt.sessionId);
     try {
       await provider.send(attempt.sessionId, attempt.prompt, {
         requestId: attempt.requestId,
-        images: attempt.useTaskImages
-          ? pipeline.taskSnapshot.images
-          : [],
+        images: attempt.useTaskImages ? pipeline.taskSnapshot.images : [],
         schema,
         mode,
         model: step?.model,
         effort: step?.effort,
       });
-      const session = pipeline.sessions.find((candidate) =>
-        candidate.sdkSessionId === attempt.sessionId);
+      const session = pipeline.sessions.find(
+        (candidate) => candidate.sdkSessionId === attempt.sessionId,
+      );
       if (session) session.status = "running";
       delete pipeline.pendingPromptAttempt;
       delete pipeline.reconnectAttempt;
@@ -805,9 +835,9 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       if (!pipeline.structuredReview) {
         throw new Error("Cannot address issues without the structured review");
       }
-      const sourceSession = [...pipeline.sessions].reverse().find(
-        (session) => session.phase === "review",
-      );
+      const sourceSession = [...pipeline.sessions]
+        .reverse()
+        .find((session) => session.phase === "review");
       if (!sourceSession) {
         throw new Error("Cannot address issues without the review session");
       }
@@ -818,10 +848,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         sourceSession,
       });
       return {
-        prompt: prependReviewHandoff(
-          handoff,
-          addressPrompt(pipeline.structuredReview),
-        ),
+        prompt: prependReviewHandoff(handoff, addressPrompt(pipeline.structuredReview)),
         images: [],
       };
     }
@@ -897,4 +924,3 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
    * repair turn is certified against the same worktree state the review was.
    */
 }
-

@@ -32,8 +32,7 @@ export type PromptQueueListLoader = (
 export type PromptQueueRetrier = (
   queueKey: string,
 ) => Promise<PersistedPromptQueue<QueuedItem> | null>;
-export type PromptQueueDispatchError =
-  NonNullable<PersistedPromptQueue["dispatchError"]>;
+export type PromptQueueDispatchError = NonNullable<PersistedPromptQueue["dispatchError"]>;
 
 /** Composite backend key. The separator cannot appear in an agent namespace. */
 export function promptQueueKey(agent: string, sessionKey: string): string {
@@ -57,9 +56,7 @@ const queueRevisions = new Map<string, number>();
 const dispatchErrors = new Map<string, PromptQueueDispatchError>();
 const dispatchErrorListeners = new Set<() => void>();
 
-export function subscribePromptQueueDispatchErrors(
-  listener: () => void,
-): () => void {
+export function subscribePromptQueueDispatchErrors(listener: () => void): () => void {
   dispatchErrorListeners.add(listener);
   return () => dispatchErrorListeners.delete(listener);
 }
@@ -70,10 +67,7 @@ export function getPromptQueueDispatchError(
   return dispatchErrors.get(queueKey);
 }
 
-function observeDispatchError(
-  queueKey: string,
-  error: PromptQueueDispatchError | undefined,
-): void {
+function observeDispatchError(queueKey: string, error: PromptQueueDispatchError | undefined): void {
   const previous = dispatchErrors.get(queueKey);
   if (JSON.stringify(previous) === JSON.stringify(error)) return;
   if (error) dispatchErrors.set(queueKey, error);
@@ -100,10 +94,12 @@ export function applyPromptQueueSnapshot<TItem extends QueuedItem>(
   }
 
   const messages = Array.isArray(persisted.messages)
-    ? persisted.messages.filter((message): message is TItem =>
-      typeof message === "object"
-      && message !== null
-      && typeof (message as QueuedItem).id === "string")
+    ? persisted.messages.filter(
+        (message): message is TItem =>
+          typeof message === "object" &&
+          message !== null &&
+          typeof (message as QueuedItem).id === "string",
+      )
     : [];
   queueRevisions.set(persisted.queueKey, persisted.revision);
   observeDispatchError(persisted.queueKey, persisted.dispatchError);
@@ -140,8 +136,7 @@ export type QueueDispatchOutcome = "accepted" | "rejected" | "unknown";
 export async function claimPromptQueueHead<TItem extends QueuedItem>(
   source: PromptQueueSource<TItem>,
   sessionKey: string,
-  claim: PromptQueueClaimer<TItem> =
-    backend.claimPromptQueueHead as PromptQueueClaimer<TItem>,
+  claim: PromptQueueClaimer<TItem> = backend.claimPromptQueueHead as PromptQueueClaimer<TItem>,
 ): Promise<ClaimedPrompt<TItem> | null> {
   const environmentId = source.environmentIdFor(sessionKey);
   if (!environmentId) return null;
@@ -151,12 +146,7 @@ export async function claimPromptQueueHead<TItem extends QueuedItem>(
   if (!expected) return null;
 
   const queueKey = promptQueueKey(source.agent, sessionKey);
-  const result = await claim(
-    queueKey,
-    environmentId,
-    expected.id,
-    projectedMessages,
-  );
+  const result = await claim(queueKey, environmentId, expected.id, projectedMessages);
   if (result.queue) {
     applyPromptQueueSnapshot(source, result.queue);
   } else {
@@ -165,14 +155,12 @@ export async function claimPromptQueueHead<TItem extends QueuedItem>(
   }
 
   const claimed = result.claimed;
-  return (
-    typeof claimed === "object"
-    && claimed !== null
-    && typeof claimed.id === "string"
-    && claimed.id === expected.id
-    && typeof result.claimToken === "string"
-    && result.claimToken.trim().length > 0
-  )
+  return typeof claimed === "object" &&
+    claimed !== null &&
+    typeof claimed.id === "string" &&
+    claimed.id === expected.id &&
+    typeof result.claimToken === "string" &&
+    result.claimToken.trim().length > 0
     ? { entry: claimed, claimToken: result.claimToken }
     : null;
 }

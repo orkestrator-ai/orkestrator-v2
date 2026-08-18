@@ -15,10 +15,7 @@ function message(id: string, content: string, extra: Partial<NativeMessage> = {}
 
 describe("deepEqualJson", () => {
   test("compares nested plain data structurally", () => {
-    expect(deepEqualJson(
-      { a: 1, b: [1, { c: "x" }] },
-      { a: 1, b: [1, { c: "x" }] },
-    )).toBe(true);
+    expect(deepEqualJson({ a: 1, b: [1, { c: "x" }] }, { a: 1, b: [1, { c: "x" }] })).toBe(true);
     expect(deepEqualJson({ a: 1 }, { a: 2 })).toBe(false);
     expect(deepEqualJson({ a: 1 }, { a: 1, b: undefined })).toBe(false);
     expect(deepEqualJson([1, 2], [1, 2, 3])).toBe(false);

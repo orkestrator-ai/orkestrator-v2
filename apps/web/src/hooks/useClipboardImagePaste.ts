@@ -23,10 +23,7 @@ const MAX_RGBA_SIZE = 32 * 1024 * 1024;
 
 /** Generate a unique filename for clipboard images */
 function generateImageFilename(): string {
-  const timestamp = new Date()
-    .toISOString()
-    .replace(/[:.]/g, "-")
-    .slice(0, 19);
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const random = Math.random().toString(36).substring(2, 8);
   // Native clipboard returns PNG images
   return `clipboard-${timestamp}-${random}.png`;
@@ -40,7 +37,7 @@ export async function processClipboardPaste(
   containerId: string,
   onImageSaved?: AsyncPasteCallback<string>,
   onTextPaste?: AsyncPasteCallback<string>,
-  onError?: AsyncPasteCallback<string>
+  onError?: AsyncPasteCallback<string>,
 ): Promise<boolean> {
   try {
     // First, try to read an image from clipboard
@@ -117,7 +114,7 @@ export async function processLocalClipboardPaste(
   worktreePath: string,
   onImageSaved?: AsyncPasteCallback<string>,
   onTextPaste?: AsyncPasteCallback<string>,
-  onError?: AsyncPasteCallback<string>
+  onError?: AsyncPasteCallback<string>,
 ): Promise<boolean> {
   try {
     let imageData: string | null = null;
@@ -251,15 +248,14 @@ export function useClipboardImagePaste({
           : await writeLocalFile(worktreePath!, filePath, base64Data);
         await onImageSaved?.(fullPath);
       } catch (error) {
-        const message =
-          error instanceof Error ? error.message : "Failed to save image";
+        const message = error instanceof Error ? error.message : "Failed to save image";
         console.error("[useClipboardImagePaste] Error:", message);
         await onError?.(message);
       } finally {
         isProcessingRef.current = false;
       }
     },
-    [containerId, worktreePath, isActive, onImageSaved, onError]
+    [containerId, worktreePath, isActive, onImageSaved, onError],
   );
 
   useEffect(() => {

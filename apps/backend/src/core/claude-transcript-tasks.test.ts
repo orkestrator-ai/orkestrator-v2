@@ -9,11 +9,7 @@ function toolUseLine(id: string, name: string, input: Record<string, unknown>) {
   };
 }
 
-function toolResultLine(
-  toolUseId: string,
-  content: unknown,
-  options?: { isError?: boolean },
-) {
+function toolResultLine(toolUseId: string, content: unknown, options?: { isError?: boolean }) {
   return {
     type: "user",
     message: {
@@ -36,7 +32,9 @@ describe("TranscriptTaskTracker", () => {
 
     // The tool_use carries the name and args; the result carries the id. Only
     // the pair says what happened.
-    expect(tracker.applyLine(toolUseLine("t1", "TaskCreate", { subject: "Wire it up" }))).toBeUndefined();
+    expect(
+      tracker.applyLine(toolUseLine("t1", "TaskCreate", { subject: "Wire it up" })),
+    ).toBeUndefined();
 
     expect(
       tracker.applyLine(toolResultLine("t1", "Task #1 created successfully: Wire it up")),
@@ -87,9 +85,7 @@ describe("TranscriptTaskTracker", () => {
       tracker.applyLine(toolResultLine("t2", "Task #1 not found", { isError: true })),
     ).toBeUndefined();
 
-    expect(tracker.snapshot().items).toEqual([
-      { id: "1", subject: "Kept", status: "pending" },
-    ]);
+    expect(tracker.snapshot().items).toEqual([{ id: "1", subject: "Kept", status: "pending" }]);
   });
 
   test("ignores results for tools it never saw used", () => {
@@ -154,9 +150,7 @@ describe("TranscriptTaskTracker", () => {
     for (const line of [...lines, ...lines]) twice.applyLine(line);
 
     expect(twice.snapshot()).toEqual(once.snapshot());
-    expect(once.snapshot().items).toEqual([
-      { id: "1", subject: "Alpha", status: "completed" },
-    ]);
+    expect(once.snapshot().items).toEqual([{ id: "1", subject: "Alpha", status: "completed" }]);
   });
 
   test("survives lines with no content at all", () => {

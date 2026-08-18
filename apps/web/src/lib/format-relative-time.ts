@@ -28,10 +28,7 @@ export function formatRelativeTime(
   const date = toDate(value);
   if (!date) return "unknown";
 
-  const ageSeconds = Math.max(
-    0,
-    Math.floor((now.getTime() - date.getTime()) / 1000),
-  );
+  const ageSeconds = Math.max(0, Math.floor((now.getTime() - date.getTime()) / 1000));
 
   if (ageSeconds < MINUTE_SECONDS) return "just now";
   if (ageSeconds < HOUR_SECONDS) {

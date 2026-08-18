@@ -11,10 +11,7 @@ import { execFile as execFileCallback } from "node:child_process";
 import { basename, join, relative, sep } from "node:path";
 import { promisify } from "node:util";
 import type { Input, UserInput } from "../codex-item-types.js";
-import {
-  refreshRuntimeEnvironment,
-  runtimeEnvironmentWithoutCredentials,
-} from "../runtime-env.js";
+import { refreshRuntimeEnvironment, runtimeEnvironmentWithoutCredentials } from "../runtime-env.js";
 import { getCodexHomeDir } from "../history/rollout.js";
 import type { PromptAttachmentInput } from "../sessions/thread-registry.js";
 
@@ -100,7 +97,10 @@ export function isCodexCliNativeSlashCommand(name: string): boolean {
   return name.toLowerCase() === "/goal";
 }
 
-export function extractFrontmatter(content: string): { body: string; fields: Record<string, string> } {
+export function extractFrontmatter(content: string): {
+  body: string;
+  fields: Record<string, string>;
+} {
   const match = content.match(/^---\s*\n([\s\S]*?)\n---\s*\n?/);
   if (!match) {
     return { body: content, fields: {} };
@@ -111,7 +111,10 @@ export function extractFrontmatter(content: string): { body: string; fields: Rec
     const separatorIndex = line.indexOf(":");
     if (separatorIndex === -1) continue;
     const key = line.slice(0, separatorIndex).trim();
-    const value = line.slice(separatorIndex + 1).trim().replace(/^["']|["']$/g, "");
+    const value = line
+      .slice(separatorIndex + 1)
+      .trim()
+      .replace(/^["']|["']$/g, "");
     if (key) {
       fields[key] = value;
     }
@@ -128,10 +131,10 @@ export function summarizePromptTemplate(content: string): string | undefined {
     .map((entry) => entry.trim())
     .find(
       (entry) =>
-        entry.length > 0
-        && !entry.startsWith("#")
-        && !entry.startsWith("- Current")
-        && !entry.includes("$ARGUMENTS"),
+        entry.length > 0 &&
+        !entry.startsWith("#") &&
+        !entry.startsWith("- Current") &&
+        !entry.includes("$ARGUMENTS"),
     );
 
   return line ? line.replace(/\s+/g, " ").trim() : undefined;
@@ -152,7 +155,7 @@ export async function collectPromptSlashCommandsFromDir(
     for (const entry of entries) {
       const absolutePath = join(dir, entry.name);
       if (entry.isDirectory()) {
-        commands.push(...await walk(absolutePath));
+        commands.push(...(await walk(absolutePath)));
         continue;
       }
 
@@ -175,10 +178,10 @@ export async function collectPromptSlashCommandsFromDir(
       commands.push({
         name,
         description:
-          fields.description
-          || fields.short_description
-          || summarizePromptTemplate(body)
-          || `Run ${basename(relativePath)} prompt`,
+          fields.description ||
+          fields.short_description ||
+          summarizePromptTemplate(body) ||
+          `Run ${basename(relativePath)} prompt`,
         argumentHint: fields.argument_hint || fields.arguments || undefined,
         source: "prompt",
         path: absolutePath,
@@ -196,10 +199,7 @@ export async function getAvailableSlashCommandDefinitions(
   cwd: string,
 ): Promise<SlashCommandDefinition[]> {
   const commandMap = new Map<string, SlashCommandDefinition>();
-  const promptDirs = [
-    join(cwd, ".codex", "prompts"),
-    join(getCodexHomeDir(), "prompts"),
-  ];
+  const promptDirs = [join(cwd, ".codex", "prompts"), join(getCodexHomeDir(), "prompts")];
 
   for (const promptDir of promptDirs) {
     const commands = await collectPromptSlashCommandsFromDir(promptDir);
@@ -259,9 +259,9 @@ export async function runInlinePromptCommand(command: string, cwd: string): Prom
         ? (error as { stderr: string }).stderr
         : "";
     const message =
-      stdout.trimEnd()
-      || stderr.trimEnd()
-      || (error instanceof Error ? error.message : "Command failed");
+      stdout.trimEnd() ||
+      stderr.trimEnd() ||
+      (error instanceof Error ? error.message : "Command failed");
     return message;
   }
 }
@@ -292,21 +292,15 @@ export async function expandPromptTemplate(
   return expanded;
 }
 
-
 export function resolveConversationMode(body: Record<string, unknown>): ConversationMode {
-  return body.mode === "plan" || body.mode === "build"
-    ? (body.mode as ConversationMode)
-    : "build";
+  return body.mode === "plan" || body.mode === "build" ? (body.mode as ConversationMode) : "build";
 }
 
 // NOTE: This is a soft hint prepended to the user message, not a true system
 // prompt.  The model may not enforce it perfectly and a determined user could
 // override it.  This is acceptable because plan mode is a UX convenience, not
 // a security boundary.
-export function wrapPromptForConversationMode(
-  prompt: string,
-  mode: ConversationMode,
-): string {
+export function wrapPromptForConversationMode(prompt: string, mode: ConversationMode): string {
   if (mode !== "plan") {
     return prompt;
   }
@@ -329,10 +323,7 @@ export function wrapPromptForConversationMode(
   return `${preamble}\n\n${prompt}`;
 }
 
-export function buildPromptInput(
-  prompt: string,
-  attachments: PromptAttachmentInput[],
-): Input {
+export function buildPromptInput(prompt: string, attachments: PromptAttachmentInput[]): Input {
   if (attachments.length === 0) {
     return prompt;
   }

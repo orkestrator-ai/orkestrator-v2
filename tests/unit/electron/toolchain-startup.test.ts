@@ -73,12 +73,14 @@ describe("toolchain startup orchestration", () => {
   test("retries progress window creation after a load failure", async () => {
     const error = new Error("preload failed");
     const window = fakeWindow();
-    const createWindow = mock()
-      .mockRejectedValueOnce(error)
-      .mockResolvedValueOnce(window);
+    const createWindow = mock().mockRejectedValueOnce(error).mockResolvedValueOnce(window);
     const logError = mock(() => undefined);
     const reportProgress = mock(() => undefined);
-    const controller = createToolchainProgressController({ createWindow, reportProgress, logError });
+    const controller = createToolchainProgressController({
+      createWindow,
+      reportProgress,
+      logError,
+    });
 
     controller.report(progress("downloading"));
     await Bun.sleep(0);
@@ -92,22 +94,26 @@ describe("toolchain startup orchestration", () => {
   });
 
   test("retries tool preparation and returns the verified bin directory", async () => {
-    const ensure = mock()
-      .mockRejectedValueOnce(new Error("network down"))
-      .mockResolvedValueOnce({ rootDir: "/data/toolchains", binDir: "/data/toolchains/bin", executables: {} });
+    const ensure = mock().mockRejectedValueOnce(new Error("network down")).mockResolvedValueOnce({
+      rootDir: "/data/toolchains",
+      binDir: "/data/toolchains/bin",
+      executables: {},
+    });
     const showMessageBox = mock(async () => ({ response: 0 }));
     const quit = mock(() => undefined);
     const logError = mock(() => undefined);
 
-    await expect(preparePinnedToolchains({
-      dataDir: "/data",
-      ensure,
-      fetchImpl: mock(async () => new Response()),
-      onProgress: mock(() => undefined),
-      showMessageBox,
-      quit,
-      logError,
-    })).resolves.toBe("/data/toolchains/bin");
+    await expect(
+      preparePinnedToolchains({
+        dataDir: "/data",
+        ensure,
+        fetchImpl: mock(async () => new Response()),
+        onProgress: mock(() => undefined),
+        showMessageBox,
+        quit,
+        logError,
+      }),
+    ).resolves.toBe("/data/toolchains/bin");
 
     expect(ensure).toHaveBeenCalledTimes(2);
     expect(showMessageBox.mock.calls[0]?.[0].detail).toContain("network down");
@@ -118,15 +124,19 @@ describe("toolchain startup orchestration", () => {
     const quit = mock(() => undefined);
     const showMessageBox = mock(async () => ({ response: 1 }));
 
-    await expect(preparePinnedToolchains({
-      dataDir: "/data",
-      ensure: mock(async () => { throw "offline"; }),
-      fetchImpl: mock(async () => new Response()),
-      onProgress: mock(() => undefined),
-      showMessageBox,
-      quit,
-      logError: mock(() => undefined),
-    })).resolves.toBeNull();
+    await expect(
+      preparePinnedToolchains({
+        dataDir: "/data",
+        ensure: mock(async () => {
+          throw "offline";
+        }),
+        fetchImpl: mock(async () => new Response()),
+        onProgress: mock(() => undefined),
+        showMessageBox,
+        quit,
+        logError: mock(() => undefined),
+      }),
+    ).resolves.toBeNull();
 
     expect(showMessageBox.mock.calls[0]?.[0].detail).toContain("offline");
     expect(quit).toHaveBeenCalledTimes(1);
@@ -137,21 +147,25 @@ describe("toolchain startup orchestration", () => {
     const showMessageBox = mock(async () => ({ response: 0 }));
     const quit = mock(() => undefined);
     const logError = mock(() => undefined);
-    const ensure = mock(async () => { throw error; });
+    const ensure = mock(async () => {
+      throw error;
+    });
 
     // Nobody answers a modal in an agent-driven `dev:test` run, so prompting
     // would hang the launcher: never ready, never exited, with the cause trapped
     // in a dialog instead of the log directory dev:status points at.
-    await expect(preparePinnedToolchains({
-      dataDir: "/data",
-      ensure,
-      fetchImpl: mock(async () => new Response()),
-      onProgress: mock(() => undefined),
-      showMessageBox,
-      quit,
-      logError,
-      interactive: false,
-    })).resolves.toBeNull();
+    await expect(
+      preparePinnedToolchains({
+        dataDir: "/data",
+        ensure,
+        fetchImpl: mock(async () => new Response()),
+        onProgress: mock(() => undefined),
+        showMessageBox,
+        quit,
+        logError,
+        interactive: false,
+      }),
+    ).resolves.toBeNull();
 
     expect(showMessageBox).not.toHaveBeenCalled();
     expect(ensure).toHaveBeenCalledTimes(1);

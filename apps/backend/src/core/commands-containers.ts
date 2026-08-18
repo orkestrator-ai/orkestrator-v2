@@ -1,18 +1,84 @@
-import { os, path, randomBytes, CLAUDE_BRIDGE_PORT, CODEX_BRIDGE_PORT, CURSOR_ACP_BRIDGE_PORT, DOCKER_IMAGE, DOCKER_LABEL_APP, DOCKER_LABEL_APP_VALUE, DOCKER_LABEL_ENVIRONMENT_ID, DOCKER_LABEL_ENVIRONMENT_NAME, DOCKER_LABEL_OWNER, DOCKER_LABEL_PROJECT_ID, GROK_ACP_BRIDGE_PORT, OPENCODE_SERVER_PORT, requiredAgentNetworkDomains, dockerContainerRuntimeName, dockerOwnerNamespace, defaultRepositoryConfig, ORKESTRATOR_AGENT_MCP_TOKEN_ENV, ORKESTRATOR_AGENT_MCP_URL_ENV, pathExists, runCommand } from "./commands-dependencies.js";
-import type { Environment, ClaudeEffortLevel, ClaudeModelCatalogEntry, ClaudeModelCatalogSnapshot, AgentToolConnection } from "./commands-dependencies.js";
-import { AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV, BRIDGE_TOKEN_PATTERN, retryableBridgeStartupError, CLAUDE_MODEL_CATALOG_TTL_MS, CLAUDE_MODEL_CATALOG_REQUEST_TIMEOUT_MS, CONTAINER_GITHUB_CREDENTIAL_FILE, CLAUDE_GITHUB_CREDENTIAL_FILE_ENV, CLAUDE_GITHUB_ENV_FINGERPRINT_FILE, CLAUDE_GITHUB_ENV_FINGERPRINT, OPENCODE_GITHUB_ENV_PLUGIN_PATH, OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT_FILE, OPENCODE_GITHUB_ENV_PLUGIN_SOURCE, OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT } from "./commands-runtime-state.js";
+import {
+  os,
+  path,
+  randomBytes,
+  CLAUDE_BRIDGE_PORT,
+  CODEX_BRIDGE_PORT,
+  CURSOR_ACP_BRIDGE_PORT,
+  DOCKER_IMAGE,
+  DOCKER_LABEL_APP,
+  DOCKER_LABEL_APP_VALUE,
+  DOCKER_LABEL_ENVIRONMENT_ID,
+  DOCKER_LABEL_ENVIRONMENT_NAME,
+  DOCKER_LABEL_OWNER,
+  DOCKER_LABEL_PROJECT_ID,
+  GROK_ACP_BRIDGE_PORT,
+  OPENCODE_SERVER_PORT,
+  requiredAgentNetworkDomains,
+  dockerContainerRuntimeName,
+  dockerOwnerNamespace,
+  defaultRepositoryConfig,
+  ORKESTRATOR_AGENT_MCP_TOKEN_ENV,
+  ORKESTRATOR_AGENT_MCP_URL_ENV,
+  pathExists,
+  runCommand,
+} from "./commands-dependencies.js";
+import type {
+  Environment,
+  ClaudeEffortLevel,
+  ClaudeModelCatalogEntry,
+  ClaudeModelCatalogSnapshot,
+  AgentToolConnection,
+} from "./commands-dependencies.js";
+import {
+  AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV,
+  BRIDGE_TOKEN_PATTERN,
+  retryableBridgeStartupError,
+  CLAUDE_MODEL_CATALOG_TTL_MS,
+  CLAUDE_MODEL_CATALOG_REQUEST_TIMEOUT_MS,
+  CONTAINER_GITHUB_CREDENTIAL_FILE,
+  CLAUDE_GITHUB_CREDENTIAL_FILE_ENV,
+  CLAUDE_GITHUB_ENV_FINGERPRINT_FILE,
+  CLAUDE_GITHUB_ENV_FINGERPRINT,
+  OPENCODE_GITHUB_ENV_PLUGIN_PATH,
+  OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT_FILE,
+  OPENCODE_GITHUB_ENV_PLUGIN_SOURCE,
+  OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT,
+} from "./commands-runtime-state.js";
 import { resolveAnthropicApiKey, resolveCursorApiKey } from "./commands-validation.js";
 import { quoteShell } from "./commands-agent-support.js";
-import { invalidateDockerContainerStateCache, isContainerRunning, getHostPort, shouldAddDockerHostGatewayAlias } from "./commands-container-exec.js";
-import { normalizeConfiguredProjectFiles, stageConfiguredProjectFilesForContainer } from "./commands-project-files.js";
+import {
+  invalidateDockerContainerStateCache,
+  isContainerRunning,
+  getHostPort,
+  shouldAddDockerHostGatewayAlias,
+} from "./commands-container-exec.js";
+import {
+  normalizeConfiguredProjectFiles,
+  stageConfiguredProjectFilesForContainer,
+} from "./commands-project-files.js";
 import { dockerExec } from "./commands-container-exec.js";
-import { dockerExecDetached, checkHttpHealth, isHttpServerReachable, waitForHealth, waitForLocalServerHealth, waitForHttpServerExit, waitForUnhealthy, openCodeHealthHeaders, claudeBridgeAuthHeaders, agentToolConnectionFingerprint } from "./commands-server-health.js";
+import {
+  dockerExecDetached,
+  checkHttpHealth,
+  isHttpServerReachable,
+  waitForHealth,
+  waitForLocalServerHealth,
+  waitForHttpServerExit,
+  waitForUnhealthy,
+  openCodeHealthHeaders,
+  claudeBridgeAuthHeaders,
+  agentToolConnectionFingerprint,
+} from "./commands-server-health.js";
 import type { LocalServerKind } from "./commands-runtime-state.js";
 import type { CommandContext } from "./commands-context.js";
 
 const AGENT_TEST_LOCAL_GIT_REMOTE_PATH = "/orkestrator-agent-test-origin.git";
 
-export async function createDockerContainer(environment: Environment, context: CommandContext): Promise<string> {
+export async function createDockerContainer(
+  environment: Environment,
+  context: CommandContext,
+): Promise<string> {
   const project = await context.storage.getProject(environment.projectId);
   if (!project) throw new Error(`Project not found: ${environment.projectId}`);
   const config = await context.storage.loadConfig();
@@ -31,12 +97,13 @@ export async function createDockerContainer(environment: Environment, context: C
     "fixtures",
     "origin.git",
   );
-  const agentTestLocalGitRemote = context.runtimeFlavor === "agent-test"
-    && path.isAbsolute(project.gitUrl)
-    && path.resolve(project.gitUrl) === path.resolve(expectedAgentTestGitRemote)
-    && await pathExists(project.gitUrl)
-    ? project.gitUrl
-    : null;
+  const agentTestLocalGitRemote =
+    context.runtimeFlavor === "agent-test" &&
+    path.isAbsolute(project.gitUrl) &&
+    path.resolve(project.gitUrl) === path.resolve(expectedAgentTestGitRemote) &&
+    (await pathExists(project.gitUrl))
+      ? project.gitUrl
+      : null;
   const containerGitUrl = agentTestLocalGitRemote
     ? AGENT_TEST_LOCAL_GIT_REMOTE_PATH
     : project.gitUrl;
@@ -92,8 +159,8 @@ export async function createDockerContainer(environment: Environment, context: C
 
   const dockerEnvironment: NodeJS.ProcessEnv = { ...process.env };
   const redactValues: string[] = [];
-  const allowClaudeCredentials = context.runtimeFlavor !== "agent-test"
-    || context.credentialSources?.has("claude");
+  const allowClaudeCredentials =
+    context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("claude");
   const anthropicApiKey = allowClaudeCredentials
     ? resolveAnthropicApiKey(config.global).apiKey
     : undefined;
@@ -109,10 +176,10 @@ export async function createDockerContainer(environment: Environment, context: C
   // The host-environment fallback inside `resolveCursorApiKey` is deliberate for
   // headless runs, and the same helper reports its `source` to the settings pane
   // so an inherited key is never forwarded invisibly.
-  const { apiKey: cursorApiKey } = context.runtimeFlavor === "agent-test"
-    && !context.credentialSources?.has("cursor")
-    ? { apiKey: undefined }
-    : resolveCursorApiKey(config.global);
+  const { apiKey: cursorApiKey } =
+    context.runtimeFlavor === "agent-test" && !context.credentialSources?.has("cursor")
+      ? { apiKey: undefined }
+      : resolveCursorApiKey(config.global);
   if (cursorApiKey) {
     dockerEnvironment.CURSOR_API_KEY = cursorApiKey;
     redactValues.push(cursorApiKey);
@@ -125,10 +192,12 @@ export async function createDockerContainer(environment: Environment, context: C
     // Only re-add hosts for platforms this install actually enabled. An
     // environment that runs neither Cursor nor Grok keeps exactly the allowlist
     // the user configured; widening it would quietly undo their isolation.
-    const domains = [...new Set([
-      ...(environment.allowedDomains ?? config.global.allowedDomains),
-      ...requiredAgentNetworkDomains(config.global.enabledAgentPlatforms),
-    ])];
+    const domains = [
+      ...new Set([
+        ...(environment.allowedDomains ?? config.global.allowedDomains),
+        ...requiredAgentNetworkDomains(config.global.enabledAgentPlatforms),
+      ]),
+    ];
     args.push("-e", "NETWORK_MODE=restricted", "-e", `ALLOWED_DOMAINS=${domains.join(",")}`);
   }
 
@@ -138,19 +207,22 @@ export async function createDockerContainer(environment: Environment, context: C
     if (await pathExists(source)) args.push("-v", `${source}:${target}${readonly ? ":ro" : ""}`);
   };
   if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("claude")) {
-    const claudeConfigDir = context.runtimeFlavor === "agent-test"
-      ? process.env[AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV]?.trim()
-      : path.join(home, ".claude");
-    const claudeConfigFile = context.runtimeFlavor === "agent-test" && agentTestHostHome
-      ? path.join(agentTestHostHome, ".claude.json")
-      : path.join(home, ".claude.json");
+    const claudeConfigDir =
+      context.runtimeFlavor === "agent-test"
+        ? process.env[AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV]?.trim()
+        : path.join(home, ".claude");
+    const claudeConfigFile =
+      context.runtimeFlavor === "agent-test" && agentTestHostHome
+        ? path.join(agentTestHostHome, ".claude.json")
+        : path.join(home, ".claude.json");
     if (claudeConfigDir) await bindIfExists(claudeConfigDir, "/claude-config");
     await bindIfExists(claudeConfigFile, "/claude-config.json");
   }
   if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("codex")) {
-    const codexHome = context.runtimeFlavor === "agent-test"
-      ? process.env.CODEX_HOME?.trim()
-      : path.join(home, ".codex");
+    const codexHome =
+      context.runtimeFlavor === "agent-test"
+        ? process.env.CODEX_HOME?.trim()
+        : path.join(home, ".codex");
     if (codexHome) await bindIfExists(codexHome, "/codex-home");
   }
   // Agent homes must remain writable. Cursor creates project/session state and
@@ -158,28 +230,29 @@ export async function createDockerContainer(environment: Environment, context: C
   // directories directly over their homes makes both bridges fail immediately.
   // Mount portable inputs separately; entrypoint.sh copies a bounded allowlist.
   if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("cursor")) {
-    const cursorHome = context.runtimeFlavor === "agent-test" && agentTestHostHome
-      ? agentTestHostHome
-      : home;
+    const cursorHome =
+      context.runtimeFlavor === "agent-test" && agentTestHostHome ? agentTestHostHome : home;
     await bindIfExists(path.join(cursorHome, ".cursor"), "/cursor-config");
   }
   if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("grok")) {
-    const grokHome = context.runtimeFlavor === "agent-test" && agentTestHostHome
-      ? agentTestHostHome
-      : home;
+    const grokHome =
+      context.runtimeFlavor === "agent-test" && agentTestHostHome ? agentTestHostHome : home;
     await bindIfExists(path.join(grokHome, ".grok"), "/grok-home");
     await bindIfExists(path.join(grokHome, ".config", "grok"), "/grok-config");
   }
   if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("opencode")) {
-    const configHome = context.runtimeFlavor === "agent-test"
-      ? process.env.XDG_CONFIG_HOME?.trim()
-      : path.join(home, ".config");
-    const dataHome = context.runtimeFlavor === "agent-test"
-      ? process.env.XDG_DATA_HOME?.trim()
-      : path.join(home, ".local", "share");
-    const stateHome = context.runtimeFlavor === "agent-test"
-      ? process.env.XDG_STATE_HOME?.trim()
-      : path.join(home, ".local", "state");
+    const configHome =
+      context.runtimeFlavor === "agent-test"
+        ? process.env.XDG_CONFIG_HOME?.trim()
+        : path.join(home, ".config");
+    const dataHome =
+      context.runtimeFlavor === "agent-test"
+        ? process.env.XDG_DATA_HOME?.trim()
+        : path.join(home, ".local", "share");
+    const stateHome =
+      context.runtimeFlavor === "agent-test"
+        ? process.env.XDG_STATE_HOME?.trim()
+        : path.join(home, ".local", "state");
     if (configHome) await bindIfExists(path.join(configHome, "opencode"), "/opencode-config");
     if (dataHome) await bindIfExists(path.join(dataHome, "opencode"), "/opencode-data");
     if (stateHome) {
@@ -200,7 +273,10 @@ export async function createDockerContainer(environment: Environment, context: C
   }
 
   for (const mapping of environment.portMappings ?? []) {
-    args.push("-p", `127.0.0.1:${mapping.hostPort}:${mapping.containerPort}/${mapping.protocol ?? "tcp"}`);
+    args.push(
+      "-p",
+      `127.0.0.1:${mapping.hostPort}:${mapping.containerPort}/${mapping.protocol ?? "tcp"}`,
+    );
   }
   args.push("-p", `127.0.0.1::${OPENCODE_SERVER_PORT}/tcp`);
   args.push("-p", `127.0.0.1::${CLAUDE_BRIDGE_PORT}/tcp`);
@@ -219,10 +295,16 @@ export async function createDockerContainer(environment: Environment, context: C
   invalidateDockerContainerStateCache();
   try {
     if (project.localPath) {
-      await stageConfiguredProjectFilesForContainer(containerId, project.localPath, configuredFilesToCopy);
+      await stageConfiguredProjectFilesForContainer(
+        containerId,
+        project.localPath,
+        configuredFilesToCopy,
+      );
     }
   } catch (error) {
-    await runCommand("docker", ["rm", "-f", containerId], { timeoutMs: 60_000 }).catch(() => undefined);
+    await runCommand("docker", ["rm", "-f", containerId], { timeoutMs: 60_000 }).catch(
+      () => undefined,
+    );
     throw error;
   }
   return containerId;
@@ -235,7 +317,7 @@ export async function startContainerServer(
   command: string,
   redactValues?: ReadonlyArray<string | null | undefined>,
 ): Promise<{ hostPort: number; wasRunning: boolean }> {
-  if (!await isContainerRunning(containerId)) {
+  if (!(await isContainerRunning(containerId))) {
     throw retryableBridgeStartupError("Container is not running");
   }
   const hostPort = await getHostPort(containerId, port);
@@ -243,15 +325,23 @@ export async function startContainerServer(
   if (await checkHttpHealth(hostPort)) return { hostPort, wasRunning: true };
   await dockerExecDetached(containerId, command, redactValues);
   await waitForLocalServerHealth(hostPort, processName).catch(async (error) => {
-    const logFile = processName === "opencode"
-      ? "/tmp/opencode-serve.log"
-      : processName === "claude"
-        ? "/tmp/claude-bridge.log"
-        : processName === "codex"
-          ? "/tmp/codex-bridge.log"
-          : `/tmp/${processName}-acp-bridge.log`;
-    const log = await dockerExec(containerId, `cat ${logFile} 2>/dev/null || true`, undefined, redactValues).catch(() => "");
-    throw new Error(`${error instanceof Error ? error.message : String(error)}${log.trim() ? `\n${log.trim()}` : ""}`);
+    const logFile =
+      processName === "opencode"
+        ? "/tmp/opencode-serve.log"
+        : processName === "claude"
+          ? "/tmp/claude-bridge.log"
+          : processName === "codex"
+            ? "/tmp/codex-bridge.log"
+            : `/tmp/${processName}-acp-bridge.log`;
+    const log = await dockerExec(
+      containerId,
+      `cat ${logFile} 2>/dev/null || true`,
+      undefined,
+      redactValues,
+    ).catch(() => "");
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)}${log.trim() ? `\n${log.trim()}` : ""}`,
+    );
   });
   return { hostPort, wasRunning: false };
 }
@@ -267,7 +357,7 @@ export async function startContainerServer(
 export async function startContainerOpenCodeServer(
   containerId: string,
 ): Promise<{ hostPort: number; wasRunning: boolean; authToken: string }> {
-  if (!await isContainerRunning(containerId)) {
+  if (!(await isContainerRunning(containerId))) {
     throw retryableBridgeStartupError("Container is not running");
   }
   const hostPort = await getHostPort(containerId, OPENCODE_SERVER_PORT);
@@ -298,13 +388,9 @@ export async function startContainerOpenCodeServer(
 
   const persistedPassword = await readPersistedPassword();
   if (
-    persistedPassword
-    && await checkHttpHealth(
-      hostPort,
-      "/global/health",
-      openCodeHealthHeaders(persistedPassword),
-    )
-    && await hasCurrentGitHubEnvironmentPlugin()
+    persistedPassword &&
+    (await checkHttpHealth(hostPort, "/global/health", openCodeHealthHeaders(persistedPassword))) &&
+    (await hasCurrentGitHubEnvironmentPlugin())
   ) {
     return { hostPort, wasRunning: true, authToken: persistedPassword };
   }
@@ -312,12 +398,14 @@ export async function startContainerOpenCodeServer(
   // A reachable server without our persisted credential predates authentication.
   // A persisted credential that no longer authenticates belongs to a stale
   // process. Replace either one before binding the new server.
-  if (persistedPassword || await isHttpServerReachable(hostPort)) {
+  if (persistedPassword || (await isHttpServerReachable(hostPort))) {
     await replaceRunningServer();
   }
 
   const authToken = randomBytes(32).toString("base64url");
-  await dockerExecDetached(containerId, `
+  await dockerExecDetached(
+    containerId,
+    `
     set -e
     cd /workspace
     rm -f /tmp/opencode-serve.log
@@ -333,23 +421,22 @@ export async function startContainerOpenCodeServer(
     export OPENCODE_SERVER_USERNAME=opencode
     export OPENCODE_SERVER_PASSWORD=${quoteShell(authToken)}
     setsid opencode serve --port ${OPENCODE_SERVER_PORT} --hostname 0.0.0.0 > /tmp/opencode-serve.log 2>&1 &
-  `, [authToken]);
-  await waitForHealth(
-    hostPort,
-    "/global/health",
-    75,
-    openCodeHealthHeaders(authToken),
-  ).catch(async (error) => {
-    const log = await dockerExec(
-      containerId,
-      "cat /tmp/opencode-serve.log 2>/dev/null || true",
-      undefined,
-      [authToken],
-    ).catch(() => "");
-    throw new Error(
-      `${error instanceof Error ? error.message : String(error)}${log.trim() ? `\n${log.trim()}` : ""}`,
-    );
-  });
+  `,
+    [authToken],
+  );
+  await waitForHealth(hostPort, "/global/health", 75, openCodeHealthHeaders(authToken)).catch(
+    async (error) => {
+      const log = await dockerExec(
+        containerId,
+        "cat /tmp/opencode-serve.log 2>/dev/null || true",
+        undefined,
+        [authToken],
+      ).catch(() => "");
+      throw new Error(
+        `${error instanceof Error ? error.message : String(error)}${log.trim() ? `\n${log.trim()}` : ""}`,
+      );
+    },
+  );
   return { hostPort, wasRunning: false, authToken };
 }
 
@@ -376,19 +463,13 @@ export async function startContainerClaudeServer(
   const hasCurrentAgentTools = async (): Promise<boolean> => {
     if (!expectedAgentToolsFingerprint) return true;
     const persisted = (
-      await dockerExec(
-        containerId,
-        "cat /tmp/claude-agent-tools-fingerprint 2>/dev/null || true",
-      )
+      await dockerExec(containerId, "cat /tmp/claude-agent-tools-fingerprint 2>/dev/null || true")
     ).trim();
     return persisted === expectedAgentToolsFingerprint;
   };
   const hasCurrentGitHubEnvironment = async (): Promise<boolean> => {
     const persisted = (
-      await dockerExec(
-        containerId,
-        `cat ${CLAUDE_GITHUB_ENV_FINGERPRINT_FILE} 2>/dev/null || true`,
-      )
+      await dockerExec(containerId, `cat ${CLAUDE_GITHUB_ENV_FINGERPRINT_FILE} 2>/dev/null || true`)
     ).trim();
     return persisted === CLAUDE_GITHUB_ENV_FINGERPRINT;
   };
@@ -399,18 +480,28 @@ export async function startContainerClaudeServer(
     );
     await waitForUnhealthy(port);
   };
-  const startWithFreshToken = async (): Promise<{ hostPort: number; wasRunning: boolean; authToken: string }> => {
+  const startWithFreshToken = async (): Promise<{
+    hostPort: number;
+    wasRunning: boolean;
+    authToken: string;
+  }> => {
     const authToken = randomBytes(32).toString("base64url");
-    const started = await startContainerServer(containerId, CLAUDE_BRIDGE_PORT, "claude", `
+    const started = await startContainerServer(
+      containerId,
+      CLAUDE_BRIDGE_PORT,
+      "claude",
+      `
       cd /workspace
       rm -f /tmp/claude-bridge.log
       umask 077
       mkdir -p /tmp/orkestrator-ai
       printf '%s' ${quoteShell(authToken)} > /tmp/claude-bridge-token
       printf '%s' ${quoteShell(CLAUDE_GITHUB_ENV_FINGERPRINT)} > ${CLAUDE_GITHUB_ENV_FINGERPRINT_FILE}
-      ${expectedAgentToolsFingerprint
-        ? `printf '%s' ${quoteShell(expectedAgentToolsFingerprint)} > /tmp/claude-agent-tools-fingerprint`
-        : "rm -f /tmp/claude-agent-tools-fingerprint"}
+      ${
+        expectedAgentToolsFingerprint
+          ? `printf '%s' ${quoteShell(expectedAgentToolsFingerprint)} > /tmp/claude-agent-tools-fingerprint`
+          : "rm -f /tmp/claude-agent-tools-fingerprint"
+      }
       source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true
       orkestrator_source_runtime_env 2>/dev/null || true
       export ${CLAUDE_GITHUB_CREDENTIAL_FILE_ENV}=${quoteShell(CONTAINER_GITHUB_CREDENTIAL_FILE)}
@@ -418,12 +509,16 @@ export async function startContainerClaudeServer(
       export PORT=${CLAUDE_BRIDGE_PORT}
       export HOSTNAME=0.0.0.0
       export CLAUDE_BRIDGE_TOKEN=${quoteShell(authToken)}
-      ${agentToolConnection
-        ? `export ${ORKESTRATOR_AGENT_MCP_URL_ENV}=${quoteShell(agentToolConnection.url)}
+      ${
+        agentToolConnection
+          ? `export ${ORKESTRATOR_AGENT_MCP_URL_ENV}=${quoteShell(agentToolConnection.url)}
       export ${ORKESTRATOR_AGENT_MCP_TOKEN_ENV}=${quoteShell(agentToolConnection.token)}`
-        : ""}
+          : ""
+      }
       setsid bun /opt/claude-bridge/dist/index.js > /tmp/claude-bridge.log 2>&1 &
-    `, [authToken, agentToolConnection?.token]);
+    `,
+      [authToken, agentToolConnection?.token],
+    );
     if (!started.wasRunning) {
       await waitForHealth(
         started.hostPort,
@@ -436,17 +531,17 @@ export async function startContainerClaudeServer(
   };
 
   const hostPort = await getHostPort(containerId, CLAUDE_BRIDGE_PORT);
-  if (hostPort && await checkHttpHealth(hostPort)) {
+  if (hostPort && (await checkHttpHealth(hostPort))) {
     const persistedToken = await readPersistedToken();
     if (
-      persistedToken
-      && await hasCurrentAgentTools()
-      && await hasCurrentGitHubEnvironment()
-      && await checkHttpHealth(
+      persistedToken &&
+      (await hasCurrentAgentTools()) &&
+      (await hasCurrentGitHubEnvironment()) &&
+      (await checkHttpHealth(
         hostPort,
         "/global/auth-check",
         claudeBridgeAuthHeaders(persistedToken),
-      )
+      ))
     ) {
       return { hostPort, wasRunning: true, authToken: persistedToken };
     }
@@ -463,14 +558,14 @@ export async function startContainerClaudeServer(
   // token that bridge actually holds — or replace the bridge if it has none.
   const persistedToken = await readPersistedToken();
   if (
-    persistedToken
-    && await hasCurrentAgentTools()
-    && await hasCurrentGitHubEnvironment()
-    && await checkHttpHealth(
+    persistedToken &&
+    (await hasCurrentAgentTools()) &&
+    (await hasCurrentGitHubEnvironment()) &&
+    (await checkHttpHealth(
       started.hostPort,
       "/global/auth-check",
       claudeBridgeAuthHeaders(persistedToken),
-    )
+    ))
   ) {
     return { ...started, authToken: persistedToken };
   }
@@ -555,7 +650,9 @@ export async function fetchClaudeBridgeModelCatalog(
   return parseClaudeBridgeModelCatalog(await response.json());
 }
 
-export function isFreshClaudeModelCatalog(snapshot: ClaudeModelCatalogSnapshot | undefined): boolean {
+export function isFreshClaudeModelCatalog(
+  snapshot: ClaudeModelCatalogSnapshot | undefined,
+): boolean {
   if (!snapshot || snapshot.models.length === 0) return false;
   const fetchedAt = Date.parse(snapshot.fetchedAt);
   return Number.isFinite(fetchedAt) && Date.now() - fetchedAt < CLAUDE_MODEL_CATALOG_TTL_MS;

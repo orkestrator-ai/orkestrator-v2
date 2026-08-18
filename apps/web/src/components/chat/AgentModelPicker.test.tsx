@@ -142,7 +142,9 @@ describe("AgentModelPicker", () => {
       const [platform, setPlatform] = useState<"claude" | "codex">("claude");
       return (
         <>
-          <button type="button" onClick={() => setPlatform("codex")}>Hydrate Codex</button>
+          <button type="button" onClick={() => setPlatform("codex")}>
+            Hydrate Codex
+          </button>
           <AgentModelPicker
             models={[
               { platform: "claude", id: "claude-model", label: "Claude model" },
@@ -163,8 +165,9 @@ describe("AgentModelPicker", () => {
     fireEvent.click(screen.getByRole("button", { name: "Hydrate Codex" }));
     fireEvent.pointerDown(screen.getByTitle("Choose model"));
 
-    expect(screen.getByRole("button", { name: "codex models" }).getAttribute("aria-pressed"))
-      .toBe("true");
+    expect(screen.getByRole("button", { name: "codex models" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
     expect(screen.getByRole("menuitemradio", { name: /Codex model/ })).toBeTruthy();
   });
 
@@ -180,20 +183,25 @@ describe("AgentModelPicker", () => {
 
     const picker = document.querySelector<HTMLElement>("[data-native-model-picker]");
     expect(picker?.className).toContain("w-[calc(100vw-1rem)]");
-    expect(picker?.className)
-      .toContain("max-h-(--radix-dropdown-menu-content-available-height)");
+    expect(picker?.className).toContain("max-h-(--radix-dropdown-menu-content-available-height)");
     showPlatformCatalog("codex");
     expect(document.querySelector("[data-native-model-list]")?.className).toContain("max-h-70");
     expect(screen.getByText("Scroll for 2 more models")).toBeTruthy();
     expect(document.querySelector("[data-native-mobile-reasoning-trigger]")).toBeTruthy();
-    expect(document.querySelector("[data-native-mobile-speed-trigger]")?.textContent)
-      .toContain("On");
+    expect(document.querySelector("[data-native-mobile-speed-trigger]")?.textContent).toContain(
+      "On",
+    );
     expect(getMobileTrigger("reasoning").getAttribute("aria-haspopup")).toBe("menu");
     expect(getMobileTrigger("reasoning").getAttribute("aria-expanded")).toBe("false");
     expect(getMobileTrigger("reasoning").getAttribute("aria-controls")).toBeTruthy();
-    expect(document.querySelectorAll("[data-native-mobile-reasoning-trigger], [data-native-mobile-speed-trigger]"))
-      .toHaveLength(2);
-    expect(container.querySelectorAll("button[title='Choose model, reasoning, and speed']")).toHaveLength(1);
+    expect(
+      document.querySelectorAll(
+        "[data-native-mobile-reasoning-trigger], [data-native-mobile-speed-trigger]",
+      ),
+    ).toHaveLength(2);
+    expect(
+      container.querySelectorAll("button[title='Choose model, reasoning, and speed']"),
+    ).toHaveLength(1);
   });
 
   test("shows the selected platform icon before the model name", () => {
@@ -209,7 +217,9 @@ describe("AgentModelPicker", () => {
     expect(icon?.querySelector("svg")).toBeTruthy();
     expect(label).toBeTruthy();
     expect(
-      Boolean(icon && label && (icon.compareDocumentPosition(label) & Node.DOCUMENT_POSITION_FOLLOWING)),
+      Boolean(
+        icon && label && icon.compareDocumentPosition(label) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ),
     ).toBe(true);
   });
 
@@ -350,12 +360,14 @@ describe("AgentModelPicker", () => {
   test("pairs the platform icon with a distinct provider label", () => {
     setMobileViewport(false);
     renderPicker({
-      models: [{
-        platform: "opencode",
-        id: "sonnet",
-        label: "Sonnet",
-        providerLabel: "Anthropic",
-      }],
+      models: [
+        {
+          platform: "opencode",
+          id: "sonnet",
+          label: "Sonnet",
+          providerLabel: "Anthropic",
+        },
+      ],
       enabledPlatforms: ["opencode"],
       selectedPlatform: "opencode",
       selectedModelId: "sonnet",
@@ -376,21 +388,24 @@ describe("AgentModelPicker", () => {
     ["opencode", "text-green-500"],
     ["cursor", "text-violet-400"],
     ["grok", "text-sky-400"],
-  ] as const)("renders the %s model-row platform icon in its accent colour", (platform, accentClass) => {
-    setMobileViewport(false);
-    renderPicker({
-      models: [{ platform, id: "model-1", label: "Model 1" }],
-      selectedPlatform: platform,
-      selectedModelId: "model-1",
-      selectedModelLabel: "Model 1",
-    });
-    openPicker();
-    showPlatformCatalog(platform);
+  ] as const)(
+    "renders the %s model-row platform icon in its accent colour",
+    (platform, accentClass) => {
+      setMobileViewport(false);
+      renderPicker({
+        models: [{ platform, id: "model-1", label: "Model 1" }],
+        selectedPlatform: platform,
+        selectedModelId: "model-1",
+        selectedModelLabel: "Model 1",
+      });
+      openPicker();
+      showPlatformCatalog(platform);
 
-    const icon = getModelRowPlatformIcon(platform);
-    expect(icon).toBeTruthy();
-    expect(icon?.querySelector("svg")?.getAttribute("class")).toContain(accentClass);
-  });
+      const icon = getModelRowPlatformIcon(platform);
+      expect(icon).toBeTruthy();
+      expect(icon?.querySelector("svg")?.getAttribute("class")).toContain(accentClass);
+    },
+  );
 
   test("keeps the model-row platform icon out of the accessibility tree", () => {
     setMobileViewport(false);
@@ -505,8 +520,11 @@ describe("AgentModelPicker", () => {
     const speed = getMobileTrigger("speed");
     speed.focus();
     fireEvent.keyDown(speed, { key: "ArrowRight" });
-    await waitFor(() => expect(document.activeElement)
-      .toBe(screen.getByRole("menuitem", { name: "Back to model choices" })));
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("menuitem", { name: "Back to model choices" }),
+      ),
+    );
     fireEvent.keyDown(screen.getByRole("menuitemradio", { name: /Fast/ }), {
       key: "ArrowLeft",
     });
@@ -540,7 +558,9 @@ describe("AgentModelPicker", () => {
     fireEvent.click(getMobileTrigger("reasoning"));
     const view = screen.getByRole("group", { name: "Reasoning choices" });
     fireEvent.keyDown(view, { key: "Escape" });
-    await waitFor(() => expect(document.querySelector("[data-native-model-picker]") === null).toBe(true));
+    await waitFor(() =>
+      expect(document.querySelector("[data-native-model-picker]") === null).toBe(true),
+    );
 
     fireEvent.pointerDown(trigger);
     expect((screen.getByPlaceholderText("Search models...") as HTMLInputElement).value).toBe("");
@@ -556,19 +576,24 @@ describe("AgentModelPicker", () => {
     const trigger = screen.getByTitle("Choose model, reasoning, and speed");
 
     fireEvent.pointerDown(trigger);
-    expect(document.querySelector("[data-native-model-picker] .grid")?.className)
-      .toContain("grid-cols-[3rem_repeat(3,minmax(0,1fr))]");
-    expect(document.querySelector("[data-native-model-picker]")?.className)
-      .toContain("md:h-[23.5rem]");
+    expect(document.querySelector("[data-native-model-picker] .grid")?.className).toContain(
+      "grid-cols-[3rem_repeat(3,minmax(0,1fr))]",
+    );
+    expect(document.querySelector("[data-native-model-picker]")?.className).toContain(
+      "md:h-[23.5rem]",
+    );
     expect(screen.getByRole("group", { name: "Models" })).toBeTruthy();
     expect(screen.getByRole("group", { name: "Reasoning" })).toBeTruthy();
     expect(screen.getByRole("group", { name: "Speed mode" })).toBeTruthy();
-    expect(document.querySelector("[data-native-model-list]")?.className)
-      .toContain("overflow-y-auto");
-    expect(document.querySelector("[data-native-reasoning-list]")?.className)
-      .toContain("overflow-y-auto");
-    expect(document.querySelector("[data-native-speed-list]")?.className)
-      .toContain("overflow-y-auto");
+    expect(document.querySelector("[data-native-model-list]")?.className).toContain(
+      "overflow-y-auto",
+    );
+    expect(document.querySelector("[data-native-reasoning-list]")?.className).toContain(
+      "overflow-y-auto",
+    );
+    expect(document.querySelector("[data-native-speed-list]")?.className).toContain(
+      "overflow-y-auto",
+    );
     showPlatformCatalog("codex");
     expect(screen.getByText("Scroll for 2 more models")).toBeTruthy();
     expect(screen.getByRole("menuitemradio", { name: /Model 7/ })).toBeTruthy();
@@ -600,8 +625,9 @@ describe("AgentModelPicker", () => {
     });
 
     openPicker();
-    expect(screen.getByRole("button", { name: "Favorite models" }).getAttribute("aria-pressed"))
-      .toBe("true");
+    expect(
+      screen.getByRole("button", { name: "Favorite models" }).getAttribute("aria-pressed"),
+    ).toBe("true");
     const rail = screen.getByRole("group", { name: "Agent platforms" });
     const railButtons = [...rail.querySelectorAll("button")];
     expect(railButtons[0]?.getAttribute("aria-label")).toBe("Favorite models");
@@ -610,26 +636,30 @@ describe("AgentModelPicker", () => {
     const list = document.querySelector("[data-native-model-list]")!;
     fireEvent.keyDown(list, { key: "ArrowRight" });
     expect(onPlatformChange).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: "claude models" }).getAttribute("aria-pressed"))
-      .toBe("true");
+    expect(screen.getByRole("button", { name: "claude models" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
     expect(screen.getByRole("menuitemradio", { name: /Claude model/ })).toBeTruthy();
 
     fireEvent.keyDown(list, { key: "ArrowRight" });
     expect(onPlatformChange).toHaveBeenCalledTimes(1);
     expect(onPlatformChange).toHaveBeenLastCalledWith("codex");
-    expect(screen.getByRole("button", { name: "codex models" }).getAttribute("aria-pressed"))
-      .toBe("true");
+    expect(screen.getByRole("button", { name: "codex models" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
     expect(screen.getByRole("menuitemradio", { name: /Codex model/ })).toBeTruthy();
 
     fireEvent.keyDown(list, { key: "ArrowLeft" });
-    expect(screen.getByRole("button", { name: "claude models" }).getAttribute("aria-pressed"))
-      .toBe("true");
+    expect(screen.getByRole("button", { name: "claude models" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
     // selectedPlatform is still Claude: returning to it is a view change.
     expect(onPlatformChange).toHaveBeenCalledTimes(1);
 
     fireEvent.keyDown(list, { key: "ArrowLeft" });
-    expect(screen.getByRole("button", { name: "Favorite models" }).getAttribute("aria-pressed"))
-      .toBe("true");
+    expect(
+      screen.getByRole("button", { name: "Favorite models" }).getAttribute("aria-pressed"),
+    ).toBe("true");
     expect(onPlatformChange).toHaveBeenCalledTimes(1);
 
     // And the ends wrap onto a different provider.
@@ -656,13 +686,15 @@ describe("AgentModelPicker", () => {
     openPicker();
     const list = document.querySelector("[data-native-model-list]")!;
     fireEvent.keyDown(list, { key: "ArrowRight" });
-    expect(screen.getByRole("button", { name: "claude models" }).getAttribute("aria-pressed"))
-      .toBe("true");
+    expect(screen.getByRole("button", { name: "claude models" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
     expect(onPlatformChange).not.toHaveBeenCalled();
 
     fireEvent.keyDown(list, { key: "ArrowLeft" });
-    expect(screen.getByRole("button", { name: "Favorite models" }).getAttribute("aria-pressed"))
-      .toBe("true");
+    expect(
+      screen.getByRole("button", { name: "Favorite models" }).getAttribute("aria-pressed"),
+    ).toBe("true");
     expect(screen.queryByRole("menuitemradio", { name: /Claude model/ }) === null).toBe(true);
     expect(onPlatformChange).not.toHaveBeenCalled();
   });
@@ -686,8 +718,9 @@ describe("AgentModelPicker", () => {
     openPicker();
     fireEvent.keyDown(document.querySelector("[data-native-model-list]")!, { key: "ArrowRight" });
     expect(onPlatformChange).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: "Favorite models" }).getAttribute("aria-pressed"))
-      .toBe("true");
+    expect(
+      screen.getByRole("button", { name: "Favorite models" }).getAttribute("aria-pressed"),
+    ).toBe("true");
   });
 
   test("keeps long desktop reasoning ladders inside their own scroll region", () => {
@@ -719,30 +752,36 @@ describe("AgentModelPicker", () => {
     fireEvent.pointerDown(screen.getByTitle("Choose model, reasoning, and speed"));
     showPlatformCatalog("codex");
 
-    expect(screen.getByRole("menuitemradio", { name: /Model 1/ }).getAttribute("aria-checked"))
-      .toBe("true");
-    expect(screen.getByRole("menuitemradio", { name: /High/ }).getAttribute("aria-checked"))
-      .toBe("true");
-    expect(screen.getByRole("menuitemradio", { name: /Fast/ }).getAttribute("aria-checked"))
-      .toBe("true");
-    expect(screen.getByRole("menuitemradio", { name: /Normal/ }).getAttribute("aria-checked"))
-      .toBe("false");
+    expect(
+      screen.getByRole("menuitemradio", { name: /Model 1/ }).getAttribute("aria-checked"),
+    ).toBe("true");
+    expect(screen.getByRole("menuitemradio", { name: /High/ }).getAttribute("aria-checked")).toBe(
+      "true",
+    );
+    expect(screen.getByRole("menuitemradio", { name: /Fast/ }).getAttribute("aria-checked")).toBe(
+      "true",
+    );
+    expect(screen.getByRole("menuitemradio", { name: /Normal/ }).getAttribute("aria-checked")).toBe(
+      "false",
+    );
   });
 
   test("disables unavailable reasoning choices and omits an empty ladder", () => {
     setMobileViewport(false);
     renderPicker({ onReasoningChange: undefined });
     fireEvent.pointerDown(screen.getByTitle("Choose model, reasoning, and speed"));
-    expect(screen.getByRole("menuitemradio", { name: /High/ }).hasAttribute("data-disabled"))
-      .toBe(true);
+    expect(screen.getByRole("menuitemradio", { name: /High/ }).hasAttribute("data-disabled")).toBe(
+      true,
+    );
     cleanup();
 
     renderPicker({ reasoningOptions: [], selectedReasoningId: undefined });
     fireEvent.pointerDown(screen.getByTitle("Choose model and speed"));
     expect(screen.queryByRole("group", { name: "Reasoning" }) === null).toBe(true);
     expect(screen.queryByText("No reasoning options") === null).toBe(true);
-    expect(document.querySelector("[data-native-model-picker] .grid")?.className)
-      .toContain("grid-cols-[3rem_repeat(2,minmax(0,1fr))]");
+    expect(document.querySelector("[data-native-model-picker] .grid")?.className).toContain(
+      "grid-cols-[3rem_repeat(2,minmax(0,1fr))]",
+    );
   });
 
   test("omits speed controls when the integration cannot change speed", () => {
@@ -751,8 +790,9 @@ describe("AgentModelPicker", () => {
     const trigger = screen.getByTitle("Choose model and reasoning");
     fireEvent.pointerDown(trigger);
 
-    expect(document.querySelector("[data-native-model-picker] .grid")?.className)
-      .toContain("grid-cols-[3rem_repeat(2,minmax(0,1fr))]");
+    expect(document.querySelector("[data-native-model-picker] .grid")?.className).toContain(
+      "grid-cols-[3rem_repeat(2,minmax(0,1fr))]",
+    );
     expect(screen.queryByRole("group", { name: "Speed mode" }) === null).toBe(true);
     expect(screen.queryByText("Normal") === null).toBe(true);
     expect(screen.queryByText("Fast") === null).toBe(true);
@@ -766,7 +806,12 @@ describe("AgentModelPicker", () => {
         { platform: "codex", id: "plain", label: "Plain" },
         { platform: "codex", id: "fav", label: "Favorite model" },
         { platform: "codex", id: "provider/SPECIAL-ID", label: "By id" },
-        { platform: "codex", id: "description", label: "By description", description: "Deep Reasoning" },
+        {
+          platform: "codex",
+          id: "description",
+          label: "By description",
+          description: "Deep Reasoning",
+        },
         { platform: "codex", id: "alias", label: "Hidden Alias" },
       ],
       favorites: [{ platform: "codex", modelId: "fav" }],
@@ -827,11 +872,13 @@ describe("AgentModelPicker", () => {
   test("keeps an omitted same-platform OpenCode favourite disabled in a locked catalog", () => {
     setMobileViewport(false);
     const { onModelChange } = renderPicker({
-      models: [{
-        platform: "opencode",
-        id: "opencode/current",
-        label: "Current",
-      }],
+      models: [
+        {
+          platform: "opencode",
+          id: "opencode/current",
+          label: "Current",
+        },
+      ],
       enabledPlatforms: ["opencode"],
       selectedPlatform: "opencode",
       selectedModelId: "opencode/current",
@@ -877,13 +924,15 @@ describe("AgentModelPicker", () => {
   test("keeps a catalogued model selectable whatever its description says", () => {
     setMobileViewport(false);
     const { onModelChange } = renderPicker({
-      models: [{
-        platform: "opencode",
-        id: "opencode-go/deepseek-v4-flash",
-        label: "deepseek-v4-flash",
-        providerLabel: "opencode-go",
-        description: "Unavailable in the current catalog",
-      }],
+      models: [
+        {
+          platform: "opencode",
+          id: "opencode-go/deepseek-v4-flash",
+          label: "deepseek-v4-flash",
+          providerLabel: "opencode-go",
+          description: "Unavailable in the current catalog",
+        },
+      ],
       enabledPlatforms: ["opencode"],
       selectedPlatform: "opencode",
       favorites: [{ platform: "opencode", modelId: "opencode-go/deepseek-v4-flash" }],
@@ -968,10 +1017,12 @@ describe("AgentModelPicker", () => {
     });
 
     openPicker();
-    expect(screen.getByRole("button", { name: "codex models" }).hasAttribute("disabled"))
-      .toBe(false);
-    expect(screen.getByRole("button", { name: "opencode models" }).hasAttribute("disabled"))
-      .toBe(true);
+    expect(screen.getByRole("button", { name: "codex models" }).hasAttribute("disabled")).toBe(
+      false,
+    );
+    expect(screen.getByRole("button", { name: "opencode models" }).hasAttribute("disabled")).toBe(
+      true,
+    );
     showPlatformCatalog("codex");
     expect(screen.getByRole("menuitemradio", { name: /Codex model/ })).toBeTruthy();
   });
@@ -992,9 +1043,11 @@ describe("AgentModelPicker", () => {
           reasoningOptions={[]}
           favorites={favorites}
           onToggleFavorite={(model) => {
-            setFavorites((current) => current.some((favorite) => favorite.modelId === model.id)
-              ? current.filter((favorite) => favorite.modelId !== model.id)
-              : [...current, { platform: "codex", modelId: model.id }]);
+            setFavorites((current) =>
+              current.some((favorite) => favorite.modelId === model.id)
+                ? current.filter((favorite) => favorite.modelId !== model.id)
+                : [...current, { platform: "codex", modelId: model.id }],
+            );
           }}
         />
       );
@@ -1061,10 +1114,12 @@ describe("AgentModelPicker", () => {
     });
     expect(trigger.textContent).toContain("? speed");
     fireEvent.pointerDown(trigger);
-    expect(screen.getByRole("menuitemradio", { name: /Normal/ }).getAttribute("aria-checked"))
-      .toBe("false");
-    expect(screen.getByRole("menuitemradio", { name: /Fast/ }).getAttribute("aria-checked"))
-      .toBe("false");
+    expect(screen.getByRole("menuitemradio", { name: /Normal/ }).getAttribute("aria-checked")).toBe(
+      "false",
+    );
+    expect(screen.getByRole("menuitemradio", { name: /Fast/ }).getAttribute("aria-checked")).toBe(
+      "false",
+    );
   });
 
   test("does not paint speed onto the trigger when the platform has no speed surface", () => {
@@ -1149,16 +1204,19 @@ describe("AgentModelPicker", () => {
   test("disables the trigger and unavailable fast selection", () => {
     setMobileViewport(false);
     renderPicker({ disabled: true });
-    expect(screen.getByTitle("Choose model, reasoning, and speed").hasAttribute("disabled"))
-      .toBe(true);
+    expect(screen.getByTitle("Choose model, reasoning, and speed").hasAttribute("disabled")).toBe(
+      true,
+    );
     cleanup();
 
     renderPicker({ fastModeAvailable: false, fastModeEnabled: false });
     fireEvent.pointerDown(screen.getByTitle("Choose model, reasoning, and speed"));
-    expect(screen.getByRole("menuitemradio", { name: /Fast/ }).hasAttribute("data-disabled"))
-      .toBe(true);
-    expect(screen.getByRole("menuitemradio", { name: /Normal/ }).hasAttribute("data-disabled"))
-      .toBe(true);
+    expect(screen.getByRole("menuitemradio", { name: /Fast/ }).hasAttribute("data-disabled")).toBe(
+      true,
+    );
+    expect(
+      screen.getByRole("menuitemradio", { name: /Normal/ }).hasAttribute("data-disabled"),
+    ).toBe(true);
   });
 
   test("shows only model names, providers, and reasoning names", () => {
@@ -1216,8 +1274,11 @@ describe("AgentModelPicker", () => {
     expect(speed.textContent).toContain("Unavailable");
     expect(speed.hasAttribute("data-disabled")).toBe(false);
     fireEvent.click(speed);
-    expect(screen.getByRole("menuitemradio", { name: /Fast.*Not available/ })
-      .hasAttribute("data-disabled")).toBe(true);
+    expect(
+      screen
+        .getByRole("menuitemradio", { name: /Fast.*Not available/ })
+        .hasAttribute("data-disabled"),
+    ).toBe(true);
   });
 
   test.each([
@@ -1232,10 +1293,12 @@ describe("AgentModelPicker", () => {
       const speed = getMobileTrigger("speed");
       expect(speed.textContent).toContain(summary);
       fireEvent.click(speed);
-      expect(screen.getByRole("menuitemradio", { name: /Normal/ }).getAttribute("aria-checked"))
-        .toBe(normalChecked);
-      expect(screen.getByRole("menuitemradio", { name: /Fast/ }).getAttribute("aria-checked"))
-        .toBe(fastChecked);
+      expect(
+        screen.getByRole("menuitemradio", { name: /Normal/ }).getAttribute("aria-checked"),
+      ).toBe(normalChecked);
+      expect(screen.getByRole("menuitemradio", { name: /Fast/ }).getAttribute("aria-checked")).toBe(
+        fastChecked,
+      );
     },
   );
 
@@ -1245,7 +1308,9 @@ describe("AgentModelPicker", () => {
       const [locked, setLocked] = useState(false);
       return (
         <>
-          <button type="button" onClick={() => setLocked(true)}>Lock settings</button>
+          <button type="button" onClick={() => setLocked(true)}>
+            Lock settings
+          </button>
           <AgentModelPicker
             models={models}
             selectedModelId="model-1"
@@ -1268,14 +1333,18 @@ describe("AgentModelPicker", () => {
     showPlatformCatalog("codex");
     fireEvent.click(screen.getByText("Lock settings"));
 
-    expect(screen.getByRole("menuitemradio", { name: /Model 2/ }).hasAttribute("data-disabled"))
-      .toBe(true);
-    expect(screen.getByRole("menuitemradio", { name: /High/ }).hasAttribute("data-disabled"))
-      .toBe(true);
-    expect(screen.getByRole("menuitemradio", { name: /Normal/ }).hasAttribute("data-disabled"))
-      .toBe(true);
-    expect(screen.getByRole("menuitemradio", { name: /Fast/ }).hasAttribute("data-disabled"))
-      .toBe(true);
+    expect(
+      screen.getByRole("menuitemradio", { name: /Model 2/ }).hasAttribute("data-disabled"),
+    ).toBe(true);
+    expect(screen.getByRole("menuitemradio", { name: /High/ }).hasAttribute("data-disabled")).toBe(
+      true,
+    );
+    expect(
+      screen.getByRole("menuitemradio", { name: /Normal/ }).hasAttribute("data-disabled"),
+    ).toBe(true);
+    expect(screen.getByRole("menuitemradio", { name: /Fast/ }).hasAttribute("data-disabled")).toBe(
+      true,
+    );
   });
 
   test("opens on favorites first and marks favourite rows as reorderable", () => {
@@ -1300,15 +1369,17 @@ describe("AgentModelPicker", () => {
 
     const rail = screen.getByRole("group", { name: "Agent platforms" });
     expect(rail.querySelector("button")?.getAttribute("aria-label")).toBe("Favorite models");
-    expect(screen.getByRole("button", { name: "Favorite models" }).getAttribute("aria-pressed"))
-      .toBe("true");
-    expect(document.querySelector("[data-native-model-list]")?.getAttribute("data-favorite-reorder"))
-      .toBe("drag");
+    expect(
+      screen.getByRole("button", { name: "Favorite models" }).getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(
+      document.querySelector("[data-native-model-list]")?.getAttribute("data-favorite-reorder"),
+    ).toBe("drag");
     expect(document.querySelector('[data-favorite-sortable="codex:model-2"]')).toBeTruthy();
     expect(document.querySelector('[data-favorite-sortable="codex:model-1"]')).toBeTruthy();
-    const favoriteRadios = screen.getAllByRole("menuitemradio").filter((item) =>
-      /Model [12]/.test(item.textContent ?? ""),
-    );
+    const favoriteRadios = screen
+      .getAllByRole("menuitemradio")
+      .filter((item) => /Model [12]/.test(item.textContent ?? ""));
     expect(favoriteRadios[0]?.textContent).toContain("Model 2");
     expect(favoriteRadios[1]?.textContent).toContain("Model 1");
 
@@ -1346,8 +1417,9 @@ describe("AgentModelPicker", () => {
     expect(document.querySelector("[data-favorite-sortable]")).toBeTruthy();
     expect(document.querySelector(".lucide-grip-vertical") === null).toBe(true);
     expect(
-      [...document.querySelectorAll("[data-native-model-list] svg")]
-        .some((svg) => (svg.getAttribute("class") ?? "").includes("grip")),
+      [...document.querySelectorAll("[data-native-model-list] svg")].some((svg) =>
+        (svg.getAttribute("class") ?? "").includes("grip"),
+      ),
     ).toBe(false);
   });
 
@@ -1371,8 +1443,9 @@ describe("AgentModelPicker", () => {
 
     expect(getReorderHint()?.textContent).toBe("Drag to reorder");
     expect(getReorderHint()?.getAttribute("data-native-favorite-reorder-hint")).toBe("drag");
-    expect(document.querySelector("[data-native-model-list]")?.getAttribute("data-favorite-reorder"))
-      .toBe("drag");
+    expect(
+      document.querySelector("[data-native-model-list]")?.getAttribute("data-favorite-reorder"),
+    ).toBe("drag");
 
     // Searching suspends reordering, so the hint must go with it.
     fireEvent.change(screen.getByPlaceholderText("Search models..."), {
@@ -1406,8 +1479,9 @@ describe("AgentModelPicker", () => {
     openPicker();
 
     expect(getReorderHint()?.textContent).toBe("Long-press to reorder");
-    expect(document.querySelector("[data-native-model-list]")?.getAttribute("data-favorite-reorder"))
-      .toBe("long-press");
+    expect(
+      document.querySelector("[data-native-model-list]")?.getAttribute("data-favorite-reorder"),
+    ).toBe("long-press");
   });
 
   test("omits the reorder hint when favorites cannot be reordered", () => {
@@ -1448,10 +1522,12 @@ describe("AgentModelPicker", () => {
     });
     openPicker();
 
-    expect(screen.getByRole("button", { name: "codex models" }).getAttribute("aria-pressed"))
-      .toBe("true");
-    expect(screen.getByRole("button", { name: "Favorite models" }).getAttribute("aria-pressed"))
-      .toBe("false");
+    expect(screen.getByRole("button", { name: "codex models" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    expect(
+      screen.getByRole("button", { name: "Favorite models" }).getAttribute("aria-pressed"),
+    ).toBe("false");
     expect(screen.getByRole("menuitemradio", { name: /Model 1/ })).toBeTruthy();
   });
 
@@ -1472,10 +1548,12 @@ describe("AgentModelPicker", () => {
 
     await dragFavoriteRow("codex:model-1", "codex:model-2");
 
-    await waitFor(() => expect(onReorderFavorites).toHaveBeenCalledWith([
-      { platform: "codex", modelId: "model-2" },
-      { platform: "codex", modelId: "model-1" },
-    ]));
+    await waitFor(() =>
+      expect(onReorderFavorites).toHaveBeenCalledWith([
+        { platform: "codex", modelId: "model-2" },
+        { platform: "codex", modelId: "model-1" },
+      ]),
+    );
   });
 
   test("supports keyboard drag activation and movement for favorite rows", async () => {
@@ -1557,10 +1635,12 @@ describe("AgentModelPicker", () => {
       pointerId: 2,
     });
 
-    await waitFor(() => expect(onReorderFavorites).toHaveBeenCalledWith([
-      { platform: "codex", modelId: "model-2" },
-      { platform: "codex", modelId: "model-1" },
-    ]));
+    await waitFor(() =>
+      expect(onReorderFavorites).toHaveBeenCalledWith([
+        { platform: "codex", modelId: "model-2" },
+        { platform: "codex", modelId: "model-1" },
+      ]),
+    );
   });
 
   test("uses a long-press drag on mobile favourite rows", () => {
@@ -1579,8 +1659,9 @@ describe("AgentModelPicker", () => {
     });
     openPicker();
 
-    expect(document.querySelector("[data-native-model-list]")?.getAttribute("data-favorite-reorder"))
-      .toBe("long-press");
+    expect(
+      document.querySelector("[data-native-model-list]")?.getAttribute("data-favorite-reorder"),
+    ).toBe("long-press");
     expect(document.querySelector('[data-favorite-sortable="codex:model-1"]')).toBeTruthy();
   });
 });

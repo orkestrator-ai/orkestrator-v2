@@ -1,14 +1,6 @@
 import * as shared from "./tmux-shared.js";
-import {
-  TranscriptTaskTracker,
-  bytesPayload,
-  randomUUID,
-} from "./tmux-shared.js";
-import {
-  AsyncMutex,
-  TmuxSession,
-  TmuxSessionManager,
-} from "./tmux-session-manager.js";
+import { TranscriptTaskTracker, bytesPayload, randomUUID } from "./tmux-shared.js";
+import { AsyncMutex, TmuxSession, TmuxSessionManager } from "./tmux-session-manager.js";
 type CommandContext = shared.CommandContext;
 type AgentToolConnection = shared.AgentToolConnection;
 type Environment = shared.Environment;
@@ -87,16 +79,11 @@ export function buildTmuxPaneUpdate(
   if (changed.length === 0) return { text: "", full: false };
   // Clear-heavy transitions and widespread redraws are both smaller and safer
   // as a full pane, especially around alternate-screen applications.
-  if (
-    changed.length * 2 >= after.length
-    || after.every((line) => line.trim().length === 0)
-  ) {
+  if (changed.length * 2 >= after.length || after.every((line) => line.trim().length === 0)) {
     return full();
   }
   return {
-    text: changed
-      .map((index) => `\x1b[${index + 1};1H\x1b[2K${after[index] ?? ""}`)
-      .join(""),
+    text: changed.map((index) => `\x1b[${index + 1};1H\x1b[2K${after[index] ?? ""}`).join(""),
     full: false,
   };
 }
@@ -138,7 +125,8 @@ export class InteractiveTmuxTerminalManager {
   private readonly cancelTimeout: (timer: unknown) => void;
 
   constructor(options: InteractiveTmuxTerminalManagerOptions = {}) {
-    this.scheduleTimeout = options.schedule ?? ((callback, delayMs) => setTimeout(callback, delayMs));
+    this.scheduleTimeout =
+      options.schedule ?? ((callback, delayMs) => setTimeout(callback, delayMs));
     this.cancelTimeout = options.cancel ?? ((timer) => clearTimeout(timer as NodeJS.Timeout));
   }
 
@@ -231,14 +219,8 @@ export class InteractiveTmuxTerminalManager {
     }
   }
 
-  private finishGeometryChange(
-    terminal: InteractiveTerminalSession,
-    generation: number,
-  ): void {
-    if (
-      this.terminals.get(terminal.id) !== terminal
-      || terminal.captureGeneration !== generation
-    ) {
+  private finishGeometryChange(terminal: InteractiveTerminalSession, generation: number): void {
+    if (this.terminals.get(terminal.id) !== terminal || terminal.captureGeneration !== generation) {
       return;
     }
     terminal.captureSuspended = false;
@@ -277,7 +259,11 @@ export class InteractiveTmuxTerminalManager {
     }, terminal.intervalMs);
   }
 
-  private async emitSnapshot(terminal: InteractiveTerminalSession, context: CommandContext, force: boolean): Promise<void> {
+  private async emitSnapshot(
+    terminal: InteractiveTerminalSession,
+    context: CommandContext,
+    force: boolean,
+  ): Promise<void> {
     if (terminal.captureSuspended) return;
     const generation = terminal.captureGeneration;
     const snapshot = await terminal.tmux.capturePane({ ansi: true, joinWrapped: false });
@@ -286,9 +272,9 @@ export class InteractiveTmuxTerminalManager {
     // resize or forced restart also makes an earlier capture stale even if it
     // finishes last.
     if (
-      this.terminals.get(terminal.id) !== terminal
-      || terminal.captureGeneration !== generation
-      || terminal.captureSuspended
+      this.terminals.get(terminal.id) !== terminal ||
+      terminal.captureGeneration !== generation ||
+      terminal.captureSuspended
     ) {
       return;
     }
@@ -303,10 +289,7 @@ export class InteractiveTmuxTerminalManager {
     terminal.lastSnapshot = snapshot;
     terminal.forceNextSnapshot = false;
     if (update.text) {
-      context.emit(
-        `terminal-output-${terminal.id}`,
-        bytesPayload(update.text, update.full),
-      );
+      context.emit(`terminal-output-${terminal.id}`, bytesPayload(update.text, update.full));
     }
   }
 }
@@ -316,4 +299,3 @@ export const interactiveTerminals = new InteractiveTmuxTerminalManager();
 export function detachInteractiveTerminalsForEnvironment(environmentId: string): void {
   interactiveTerminals.detachEnvironment(environmentId);
 }
-

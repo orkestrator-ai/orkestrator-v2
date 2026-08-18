@@ -7,9 +7,7 @@ const FALLBACK = "2026-07-29T00:00:00.000Z";
 function flattenedParts(messages: NativeMessage[]): NativeMessagePart[] {
   return messages.flatMap((message) =>
     message.parts.flatMap((part) =>
-      part.type === "tool-group" || part.type === "agent-group"
-        ? part.parts
-        : [part],
+      part.type === "tool-group" || part.type === "agent-group" ? part.parts : [part],
     ),
   );
 }
@@ -23,22 +21,31 @@ review context that remains available to the agent
 Address every review issue.`;
 
     for (const [agent, firstMessage] of [
-      ["codex", {
-        id: "codex-user",
-        role: "user",
-        content: handoff,
-        parts: [{ type: "text", content: handoff }],
-      }],
-      ["claude", {
-        id: "claude-user",
-        role: "user",
-        content: handoff,
-        parts: [{ type: "text", content: handoff }],
-      }],
-      ["opencode", {
-        info: { id: "opencode-user", role: "user", time: { created: 1_800_000_000_000 } },
-        parts: [{ type: "text", text: handoff }],
-      }],
+      [
+        "codex",
+        {
+          id: "codex-user",
+          role: "user",
+          content: handoff,
+          parts: [{ type: "text", content: handoff }],
+        },
+      ],
+      [
+        "claude",
+        {
+          id: "claude-user",
+          role: "user",
+          content: handoff,
+          parts: [{ type: "text", content: handoff }],
+        },
+      ],
+      [
+        "opencode",
+        {
+          info: { id: "opencode-user", role: "user", time: { created: 1_800_000_000_000 } },
+          parts: [{ type: "text", text: handoff }],
+        },
+      ],
     ] as const) {
       const transcript = toPipelineTranscript(
         [
@@ -75,41 +82,41 @@ quoted context
       FALLBACK,
     );
 
-    expect(transcript.map((message) => message.id)).toEqual([
-      "first",
-      "later",
-      "assistant",
-    ]);
+    expect(transcript.map((message) => message.id)).toEqual(["first", "later", "assistant"]);
   });
 
   test("renders bridge messages as native messages with their parts intact", () => {
     const transcript = toPipelineTranscript(
-      [{
-        id: "message-1",
-        role: "assistant",
-        content: "Ran the tests",
-        createdAt: "2026-07-29T00:01:00.000Z",
-        modelId: "gpt-5-codex",
-        parts: [
-          { type: "text", content: "Ran the tests" },
-          {
-            type: "tool-invocation",
-            content: "shell",
-            toolName: "shell",
-            toolArgs: { command: "bun test" },
-            toolState: "success",
-            toolOutput: "33 pass",
-          },
-        ],
-      }],
+      [
+        {
+          id: "message-1",
+          role: "assistant",
+          content: "Ran the tests",
+          createdAt: "2026-07-29T00:01:00.000Z",
+          modelId: "gpt-5-codex",
+          parts: [
+            { type: "text", content: "Ran the tests" },
+            {
+              type: "tool-invocation",
+              content: "shell",
+              toolName: "shell",
+              toolArgs: { command: "bun test" },
+              toolState: "success",
+              toolOutput: "33 pass",
+            },
+          ],
+        },
+      ],
       "codex",
       FALLBACK,
     );
 
-    expect(transcript.map((message) => ({
-      id: message.id,
-      partTypes: message.parts.map((part) => part.type),
-    }))).toEqual([
+    expect(
+      transcript.map((message) => ({
+        id: message.id,
+        partTypes: message.parts.map((part) => part.type),
+      })),
+    ).toEqual([
       { id: "message-1", partTypes: ["text"] },
       { id: "message-1:text-block:1", partTypes: ["tool-group"] },
     ]);
@@ -127,26 +134,28 @@ quoted context
 
   test("groups Claude child tools under the Task that spawned them", () => {
     const transcript = toPipelineTranscript(
-      [{
-        id: "message-1",
-        role: "assistant",
-        content: "",
-        timestamp: "2026-07-29T00:01:00.000Z",
-        parts: [
-          {
-            type: "tool-invocation",
-            toolName: "Task",
-            toolUseId: "task-1",
-            toolArgs: { description: "Audit the diff" },
-          },
-          {
-            type: "tool-invocation",
-            toolName: "Bash",
-            parentTaskUseId: "task-1",
-            toolArgs: { command: "git diff" },
-          },
-        ],
-      }],
+      [
+        {
+          id: "message-1",
+          role: "assistant",
+          content: "",
+          timestamp: "2026-07-29T00:01:00.000Z",
+          parts: [
+            {
+              type: "tool-invocation",
+              toolName: "Task",
+              toolUseId: "task-1",
+              toolArgs: { description: "Audit the diff" },
+            },
+            {
+              type: "tool-invocation",
+              toolName: "Bash",
+              parentTaskUseId: "task-1",
+              toolArgs: { command: "git diff" },
+            },
+          ],
+        },
+      ],
       "claude",
       FALLBACK,
     );
@@ -162,14 +171,16 @@ quoted context
 
   test("reads OpenCode's info/parts envelope", () => {
     const transcript = toPipelineTranscript(
-      [{
-        info: {
-          id: "message-1",
-          role: "assistant",
-          time: { created: 1_800_000_000_000 },
+      [
+        {
+          info: {
+            id: "message-1",
+            role: "assistant",
+            time: { created: 1_800_000_000_000 },
+          },
+          parts: [{ type: "text", text: "All criteria pass" }],
         },
-        parts: [{ type: "text", text: "All criteria pass" }],
-      }],
+      ],
       "opencode",
       FALLBACK,
     );
@@ -215,28 +226,30 @@ quoted context
     // A persisted snapshot from an older build can carry any shape at all, and
     // the renderer maps over these without checking.
     const transcript = toPipelineTranscript(
-      [{
-        id: "message-1",
-        role: "assistant",
-        content: "",
-        parts: [
-          {
-            type: "subagent",
-            content: "reviewer",
-            subagentActions: "not-an-array",
-          },
-          {
-            type: "tool-invocation",
-            toolName: "TaskCreate",
-            taskSnapshot: { items: "not-an-array" },
-          },
-          {
-            type: "tool-invocation",
-            toolName: "Read",
-            toolArgs: "not-a-record",
-          },
-        ],
-      }],
+      [
+        {
+          id: "message-1",
+          role: "assistant",
+          content: "",
+          parts: [
+            {
+              type: "subagent",
+              content: "reviewer",
+              subagentActions: "not-an-array",
+            },
+            {
+              type: "tool-invocation",
+              toolName: "TaskCreate",
+              taskSnapshot: { items: "not-an-array" },
+            },
+            {
+              type: "tool-invocation",
+              toolName: "Read",
+              toolArgs: "not-a-record",
+            },
+          ],
+        },
+      ],
       "codex",
       FALLBACK,
     );
@@ -249,17 +262,19 @@ quoted context
 
   test("drops empty groups and unanchored task groups", () => {
     const transcript = toPipelineTranscript(
-      [{
-        id: "message-1",
-        role: "assistant",
-        content: "kept",
-        parts: [
-          { type: "tool-group", content: "", parts: [] },
-          { type: "agent-group", content: "", parts: [{ type: "text", content: "x" }] },
-          { type: "task-group", content: "", task: { type: "text", content: "x" } },
-          { type: "text", content: "kept" },
-        ],
-      }],
+      [
+        {
+          id: "message-1",
+          role: "assistant",
+          content: "kept",
+          parts: [
+            { type: "tool-group", content: "", parts: [] },
+            { type: "agent-group", content: "", parts: [{ type: "text", content: "x" }] },
+            { type: "task-group", content: "", task: { type: "text", content: "x" } },
+            { type: "text", content: "kept" },
+          ],
+        },
+      ],
       "codex",
       FALLBACK,
     );
@@ -279,68 +294,76 @@ quoted context
 
   test("keeps the grouped part types it is handed", () => {
     const transcript = toPipelineTranscript(
-      [{
-        id: "message-1",
-        role: "assistant",
-        content: "",
-        parts: [
-          {
-            type: "tool-group",
-            content: "",
-            parts: [
-              { type: "tool-invocation", toolName: "Read", content: "Read" },
-              { type: "tool-invocation", toolName: "Grep", content: "Grep" },
-            ],
-          },
-          {
-            type: "agent-group",
-            content: "",
-            parts: [
-              { type: "subagent", content: "reviewer", subagentName: "reviewer" },
-              {
-                type: "task-group",
-                content: "",
-                task: { type: "tool-invocation", toolName: "Task", content: "Task" },
-                childTools: [
-                  { type: "tool-invocation", toolName: "Bash", content: "Bash" },
-                ],
-              },
-            ],
-          },
-        ],
-      }],
+      [
+        {
+          id: "message-1",
+          role: "assistant",
+          content: "",
+          parts: [
+            {
+              type: "tool-group",
+              content: "",
+              parts: [
+                { type: "tool-invocation", toolName: "Read", content: "Read" },
+                { type: "tool-invocation", toolName: "Grep", content: "Grep" },
+              ],
+            },
+            {
+              type: "agent-group",
+              content: "",
+              parts: [
+                { type: "subagent", content: "reviewer", subagentName: "reviewer" },
+                {
+                  type: "task-group",
+                  content: "",
+                  task: { type: "tool-invocation", toolName: "Task", content: "Task" },
+                  childTools: [{ type: "tool-invocation", toolName: "Bash", content: "Bash" }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
       "codex",
       FALLBACK,
     );
 
     const [group, agents] = transcript[0]!.parts;
-    expect(group?.type === "tool-group" && group.parts.map((p) => p.toolName))
-      .toEqual(["Read", "Grep"]);
-    expect(agents?.type === "agent-group" && agents.parts.map((p) => p.type))
-      .toEqual(["subagent", "task-group"]);
+    expect(group?.type === "tool-group" && group.parts.map((p) => p.toolName)).toEqual([
+      "Read",
+      "Grep",
+    ]);
+    expect(agents?.type === "agent-group" && agents.parts.map((p) => p.type)).toEqual([
+      "subagent",
+      "task-group",
+    ]);
   });
 
   test("rebuilds a subagent's own actions rather than trusting them", () => {
     const transcript = toPipelineTranscript(
-      [{
-        id: "message-1",
-        role: "assistant",
-        content: "",
-        parts: [{
-          type: "subagent",
-          content: "reviewer",
-          subagentId: "agent-1",
-          subagentName: "reviewer",
-          subagentRole: "reviewer",
-          subagentPrompt: "Audit the diff",
-          subagentActionCount: 2,
-          agentState: "finished",
-          subagentActions: [
-            { type: "tool-invocation", toolName: "Read", content: "Read" },
-            { type: "mystery", content: "dropped" },
+      [
+        {
+          id: "message-1",
+          role: "assistant",
+          content: "",
+          parts: [
+            {
+              type: "subagent",
+              content: "reviewer",
+              subagentId: "agent-1",
+              subagentName: "reviewer",
+              subagentRole: "reviewer",
+              subagentPrompt: "Audit the diff",
+              subagentActionCount: 2,
+              agentState: "finished",
+              subagentActions: [
+                { type: "tool-invocation", toolName: "Read", content: "Read" },
+                { type: "mystery", content: "dropped" },
+              ],
+            },
           ],
-        }],
-      }],
+        },
+      ],
       "codex",
       FALLBACK,
     );
@@ -356,8 +379,9 @@ quoted context
       agentState: "finished",
     });
     // The unreadable action is dropped; the readable one survives.
-    expect(part?.type === "subagent" && part.subagentActions?.map((a) => a.type))
-      .toEqual(["tool-invocation"]);
+    expect(part?.type === "subagent" && part.subagentActions?.map((a) => a.type)).toEqual([
+      "tool-invocation",
+    ]);
   });
 
   test("keeps the roles the renderer styles differently", () => {
@@ -373,8 +397,7 @@ quoted context
 
     // An unknown role becomes an assistant row rather than being dropped: the
     // text is real even when the label is not.
-    expect(transcript.map((message) => message.role))
-      .toEqual(["user", "system", "assistant"]);
+    expect(transcript.map((message) => message.role)).toEqual(["user", "system", "assistant"]);
   });
 
   test("gives a message with no id a stable, position-derived one", () => {
@@ -387,36 +410,41 @@ quoted context
     // backend push, so a value that changed per call would remount the row.
     const first = toPipelineTranscript(entries, "codex", FALLBACK);
     const second = toPipelineTranscript(entries, "codex", FALLBACK);
-    expect(first.map((message) => message.id))
-      .toEqual(["pipeline-message-0", "pipeline-message-1"]);
-    expect(second.map((message) => message.id))
-      .toEqual(first.map((message) => message.id));
+    expect(first.map((message) => message.id)).toEqual([
+      "pipeline-message-0",
+      "pipeline-message-1",
+    ]);
+    expect(second.map((message) => message.id)).toEqual(first.map((message) => message.id));
   });
 
   test("carries the scalar tool metadata the renderer reads", () => {
     const transcript = toPipelineTranscript(
-      [{
-        id: "message-1",
-        role: "assistant",
-        content: "",
-        turnId: "turn-7",
-        parts: [{
-          type: "tool-invocation",
-          content: "Edit",
-          toolName: "Edit",
-          toolState: "success",
-          toolUseId: "use-1",
-          toolUseCount: 3,
-          tokenCount: 1024,
-          tokenCountText: "1.0k tokens",
-          agentUsageDisplay: "token-only",
-          isMcpTool: true,
-          mcpServerName: "orkestrator",
-          _messageUuid: "uuid-1",
-          backgroundTask: { id: "bg-1", description: "dev server", status: "running" },
-          toolDiff: { filePath: "src/a.ts", diff: "@@", additions: 2, deletions: 1 },
-        }],
-      }],
+      [
+        {
+          id: "message-1",
+          role: "assistant",
+          content: "",
+          turnId: "turn-7",
+          parts: [
+            {
+              type: "tool-invocation",
+              content: "Edit",
+              toolName: "Edit",
+              toolState: "success",
+              toolUseId: "use-1",
+              toolUseCount: 3,
+              tokenCount: 1024,
+              tokenCountText: "1.0k tokens",
+              agentUsageDisplay: "token-only",
+              isMcpTool: true,
+              mcpServerName: "orkestrator",
+              _messageUuid: "uuid-1",
+              backgroundTask: { id: "bg-1", description: "dev server", status: "running" },
+              toolDiff: { filePath: "src/a.ts", diff: "@@", additions: 2, deletions: 1 },
+            },
+          ],
+        },
+      ],
       "codex",
       FALLBACK,
     );
@@ -439,22 +467,26 @@ quoted context
 
   test("drops enum and numeric fields it does not recognise", () => {
     const transcript = toPipelineTranscript(
-      [{
-        id: "message-1",
-        role: "assistant",
-        content: "",
-        parts: [{
-          type: "tool-invocation",
-          content: "Edit",
-          toolName: "Edit",
-          toolState: "exploded",
-          agentState: "confused",
-          toolUseCount: Number.NaN,
-          tokenCount: Number.POSITIVE_INFINITY,
-          isMcpTool: "yes",
-          backgroundTask: { description: "no id" },
-        }],
-      }],
+      [
+        {
+          id: "message-1",
+          role: "assistant",
+          content: "",
+          parts: [
+            {
+              type: "tool-invocation",
+              content: "Edit",
+              toolName: "Edit",
+              toolState: "exploded",
+              agentState: "confused",
+              toolUseCount: Number.NaN,
+              tokenCount: Number.POSITIVE_INFINITY,
+              isMcpTool: "yes",
+              backgroundTask: { description: "no id" },
+            },
+          ],
+        },
+      ],
       "codex",
       FALLBACK,
     );
@@ -472,25 +504,27 @@ quoted context
   test("rebuilds a diff field by field and drops one with nothing usable", () => {
     // `EditToolPart` calls `.split()` on filePath, diff, before and after.
     const transcript = toPipelineTranscript(
-      [{
-        id: "message-1",
-        role: "assistant",
-        content: "",
-        parts: [
-          {
-            type: "tool-invocation",
-            toolName: "Edit",
-            content: "Edit",
-            toolDiff: { filePath: 42, diff: 7, before: 1, additions: "many" },
-          },
-          {
-            type: "tool-invocation",
-            toolName: "Edit",
-            content: "Edit",
-            toolDiff: { filePath: "src/a.ts", before: 1 },
-          },
-        ],
-      }],
+      [
+        {
+          id: "message-1",
+          role: "assistant",
+          content: "",
+          parts: [
+            {
+              type: "tool-invocation",
+              toolName: "Edit",
+              content: "Edit",
+              toolDiff: { filePath: 42, diff: 7, before: 1, additions: "many" },
+            },
+            {
+              type: "tool-invocation",
+              toolName: "Edit",
+              content: "Edit",
+              toolDiff: { filePath: "src/a.ts", before: 1 },
+            },
+          ],
+        },
+      ],
       "codex",
       FALLBACK,
     );
@@ -504,42 +538,44 @@ quoted context
   test("rebuilds a task snapshot and drops one with an unreadable item", () => {
     // `TodoToolPart` dereferences id, subject and status on every element.
     const transcript = toPipelineTranscript(
-      [{
-        id: "message-1",
-        role: "assistant",
-        content: "",
-        parts: [
-          {
-            type: "tool-invocation",
-            toolName: "TaskList",
-            content: "TaskList",
-            taskSnapshot: {
-              items: [
-                { id: "t1", subject: "Write the adapter", status: "completed" },
-                { id: "t2", subject: "", status: "pending" },
-              ],
-              changedTaskId: "t2",
-              complete: true,
-              truncated: 3,
+      [
+        {
+          id: "message-1",
+          role: "assistant",
+          content: "",
+          parts: [
+            {
+              type: "tool-invocation",
+              toolName: "TaskList",
+              content: "TaskList",
+              taskSnapshot: {
+                items: [
+                  { id: "t1", subject: "Write the adapter", status: "completed" },
+                  { id: "t2", subject: "", status: "pending" },
+                ],
+                changedTaskId: "t2",
+                complete: true,
+                truncated: 3,
+              },
             },
-          },
-          {
-            type: "tool-invocation",
-            toolName: "TaskUpdate",
-            content: "TaskUpdate",
-            taskSnapshot: { items: [null], complete: true },
-          },
-          {
-            type: "tool-invocation",
-            toolName: "TaskGet",
-            content: "TaskGet",
-            taskSnapshot: {
-              items: [{ id: 1, subject: {}, status: "nope" }],
-              complete: true,
+            {
+              type: "tool-invocation",
+              toolName: "TaskUpdate",
+              content: "TaskUpdate",
+              taskSnapshot: { items: [null], complete: true },
             },
-          },
-        ],
-      }],
+            {
+              type: "tool-invocation",
+              toolName: "TaskGet",
+              content: "TaskGet",
+              taskSnapshot: {
+                items: [{ id: 1, subject: {}, status: "nope" }],
+                complete: true,
+              },
+            },
+          ],
+        },
+      ],
       "codex",
       FALLBACK,
     );
@@ -561,17 +597,21 @@ quoted context
 
   test("refuses to call a snapshot complete unless it said so", () => {
     const transcript = toPipelineTranscript(
-      [{
-        id: "message-1",
-        role: "assistant",
-        content: "",
-        parts: [{
-          type: "tool-invocation",
-          toolName: "TaskList",
-          content: "TaskList",
-          taskSnapshot: { items: [{ id: "t1", subject: "x", status: "pending" }] },
-        }],
-      }],
+      [
+        {
+          id: "message-1",
+          role: "assistant",
+          content: "",
+          parts: [
+            {
+              type: "tool-invocation",
+              toolName: "TaskList",
+              content: "TaskList",
+              taskSnapshot: { items: [{ id: "t1", subject: "x", status: "pending" }] },
+            },
+          ],
+        },
+      ],
       "codex",
       FALLBACK,
     );
@@ -581,32 +621,34 @@ quoted context
 
   test("splits a Claude turn at every text and tool boundary", () => {
     const transcript = toPipelineTranscript(
-      [{
-        id: "m1",
-        role: "assistant",
-        content: "",
-        timestamp: "2026-07-29T00:00:00.000Z",
-        parts: [
-          {
-            type: "text",
-            content: "starting",
-            timestamp: "2026-07-29T00:00:00.000Z",
-            _messageUuid: "uuid-a",
-          },
-          {
-            type: "tool-invocation",
-            toolName: "Bash",
-            content: "Bash",
-            toolArgs: { command: "bun test" },
-            timestamp: "2026-07-29T00:01:00.000Z",
-          },
-          {
-            type: "text",
-            content: "done",
-            timestamp: "2026-07-29T00:30:00.000Z",
-          },
-        ],
-      }],
+      [
+        {
+          id: "m1",
+          role: "assistant",
+          content: "",
+          timestamp: "2026-07-29T00:00:00.000Z",
+          parts: [
+            {
+              type: "text",
+              content: "starting",
+              timestamp: "2026-07-29T00:00:00.000Z",
+              _messageUuid: "uuid-a",
+            },
+            {
+              type: "tool-invocation",
+              toolName: "Bash",
+              content: "Bash",
+              toolArgs: { command: "bun test" },
+              timestamp: "2026-07-29T00:01:00.000Z",
+            },
+            {
+              type: "text",
+              content: "done",
+              timestamp: "2026-07-29T00:30:00.000Z",
+            },
+          ],
+        },
+      ],
       "claude",
       FALLBACK,
     );
@@ -614,10 +656,12 @@ quoted context
     // The Claude adapter reads `timestamp`/`_messageUuid`, not the native
     // `createdAt`/`sourcePartId` this module validates into. Without the names
     // being put back, every section would inherit the prompt time.
-    expect(transcript.map((message) => ({
-      id: message.id,
-      createdAt: message.createdAt,
-    }))).toEqual([
+    expect(
+      transcript.map((message) => ({
+        id: message.id,
+        createdAt: message.createdAt,
+      })),
+    ).toEqual([
       { id: "m1", createdAt: "2026-07-29T00:00:00.000Z" },
       { id: "m1:text-block:1", createdAt: "2026-07-29T00:01:00.000Z" },
       { id: "m1:text-block:2", createdAt: "2026-07-29T00:30:00.000Z" },
@@ -639,10 +683,12 @@ quoted context
   });
 
   test("anchors an OpenCode message with no id or time to its position", () => {
-    const entries = [{
-      info: { role: "assistant" },
-      parts: [{ type: "text", text: "building" }],
-    }];
+    const entries = [
+      {
+        info: { role: "assistant" },
+        parts: [{ type: "text", text: "building" }],
+      },
+    ];
 
     const first = toPipelineTranscript(entries, "opencode", FALLBACK);
     const second = toPipelineTranscript(entries, "opencode", FALLBACK);
@@ -676,8 +722,7 @@ quoted context
     );
 
     expect(transcript.map((message) => message.id)).toEqual(["m1", "m2"]);
-    expect(transcript.map((message) => message.createdAt))
-      .toEqual([FALLBACK, FALLBACK]);
+    expect(transcript.map((message) => message.createdAt)).toEqual([FALLBACK, FALLBACK]);
     expect(transcript[0]!.content).toBe("still readable");
   });
 
@@ -685,7 +730,10 @@ quoted context
     const transcript = toPipelineTranscript(
       [
         { info: { id: "m1", role: "assistant", time: { created: 1 } }, parts: [] },
-        { info: { id: "m2", role: "assistant", time: { created: 2 } }, parts: [{ type: "text", text: "kept" }] },
+        {
+          info: { id: "m2", role: "assistant", time: { created: 2 } },
+          parts: [{ type: "text", text: "kept" }],
+        },
       ],
       "opencode",
       FALLBACK,
@@ -699,34 +747,42 @@ quoted context
     // one row per text/activity section, each stamped from its own backend
     // parts rather than from the prompt that started the turn.
     const transcript = toPipelineTranscript(
-      [{
-        id: "m1",
-        role: "assistant",
-        content: "PlanningDone",
-        createdAt: "2026-07-29T00:00:00.000Z",
-        parts: [
-          { type: "text", content: "Planning", createdAt: "2026-07-29T00:00:05.000Z" },
-          {
-            type: "tool-invocation", content: "Read", toolName: "Read",
-            createdAt: "2026-07-29T00:00:20.000Z",
-          },
-          {
-            type: "tool-invocation", content: "Grep", toolName: "Grep",
-            createdAt: "2026-07-29T00:00:30.000Z",
-          },
-          { type: "text", content: "Done", createdAt: "2026-07-29T00:00:45.000Z" },
-        ],
-      }],
+      [
+        {
+          id: "m1",
+          role: "assistant",
+          content: "PlanningDone",
+          createdAt: "2026-07-29T00:00:00.000Z",
+          parts: [
+            { type: "text", content: "Planning", createdAt: "2026-07-29T00:00:05.000Z" },
+            {
+              type: "tool-invocation",
+              content: "Read",
+              toolName: "Read",
+              createdAt: "2026-07-29T00:00:20.000Z",
+            },
+            {
+              type: "tool-invocation",
+              content: "Grep",
+              toolName: "Grep",
+              createdAt: "2026-07-29T00:00:30.000Z",
+            },
+            { type: "text", content: "Done", createdAt: "2026-07-29T00:00:45.000Z" },
+          ],
+        },
+      ],
       "codex",
       FALLBACK,
     );
 
-    expect(transcript.map((message) => ({
-      id: message.id,
-      content: message.content,
-      createdAt: message.createdAt,
-      partTypes: message.parts.map((part) => part.type),
-    }))).toEqual([
+    expect(
+      transcript.map((message) => ({
+        id: message.id,
+        content: message.content,
+        createdAt: message.createdAt,
+        partTypes: message.parts.map((part) => part.type),
+      })),
+    ).toEqual([
       {
         id: "m1",
         content: "Planning",
@@ -746,32 +802,43 @@ quoted context
         partTypes: ["text"],
       },
     ]);
-    expect(flattenedParts(transcript).map((part) => part.content))
-      .toEqual(["Planning", "Read", "Grep", "Done"]);
+    expect(flattenedParts(transcript).map((part) => part.content)).toEqual([
+      "Planning",
+      "Read",
+      "Grep",
+      "Done",
+    ]);
   });
 
   test("splits an OpenCode turn on its own part clocks", () => {
     const transcript = toPipelineTranscript(
-      [{
-        info: { id: "m1", role: "assistant", time: { created: 1_800_000_000_000 } },
-        parts: [
-          { id: "p1", type: "text", text: "Looking", time: { start: 1_800_000_005_000 } },
-          {
-            id: "p2", type: "tool", tool: "bash", state: { status: "completed" },
-            time: { start: 1_800_000_020_000 },
-          },
-          { id: "p3", type: "text", text: "Finished", time: { start: 1_800_000_040_000 } },
-        ],
-      }],
+      [
+        {
+          info: { id: "m1", role: "assistant", time: { created: 1_800_000_000_000 } },
+          parts: [
+            { id: "p1", type: "text", text: "Looking", time: { start: 1_800_000_005_000 } },
+            {
+              id: "p2",
+              type: "tool",
+              tool: "bash",
+              state: { status: "completed" },
+              time: { start: 1_800_000_020_000 },
+            },
+            { id: "p3", type: "text", text: "Finished", time: { start: 1_800_000_040_000 } },
+          ],
+        },
+      ],
       "opencode",
       FALLBACK,
     );
 
-    expect(transcript.map((message) => ({
-      id: message.id,
-      createdAt: message.createdAt,
-      partTypes: message.parts.map((part) => part.type),
-    }))).toEqual([
+    expect(
+      transcript.map((message) => ({
+        id: message.id,
+        createdAt: message.createdAt,
+        partTypes: message.parts.map((part) => part.type),
+      })),
+    ).toEqual([
       {
         id: "m1",
         createdAt: "2027-01-15T08:00:05.000Z",
@@ -794,15 +861,17 @@ quoted context
     // Splitting can isolate a part the renderer draws nothing for. The filter
     // runs after the split so an empty section never reaches the list.
     const transcript = toPipelineTranscript(
-      [{
-        id: "m1",
-        role: "assistant",
-        content: "",
-        parts: [
-          { type: "text", content: "narration" },
-          { type: "tool-result", content: "" },
-        ],
-      }],
+      [
+        {
+          id: "m1",
+          role: "assistant",
+          content: "",
+          parts: [
+            { type: "text", content: "narration" },
+            { type: "tool-result", content: "" },
+          ],
+        },
+      ],
       "codex",
       FALLBACK,
     );
@@ -826,8 +895,10 @@ quoted context
       FALLBACK,
     );
 
-    expect(transcript.map((message) => message.content))
-      .toEqual(["from opencode", "from a bridge"]);
+    expect(transcript.map((message) => message.content)).toEqual([
+      "from opencode",
+      "from a bridge",
+    ]);
   });
 
   test("treats a non-record info as a flat message", () => {
@@ -848,34 +919,36 @@ quoted context
 
   test("keeps a background task's status only when the renderer knows it", () => {
     const transcript = toPipelineTranscript(
-      [{
-        id: "message-1",
-        role: "assistant",
-        content: "",
-        parts: [
-          {
-            type: "tool-invocation",
-            toolName: "Bash",
-            content: "Bash",
-            backgroundTask: { id: "bg-1", description: "dev server", status: "killed" },
-          },
-          {
-            type: "tool-invocation",
-            toolName: "Bash",
-            content: "Bash",
-            // `NativeBackgroundTaskStatus` has no such member. Casting it
-            // through would put a value in the part that its own type says
-            // cannot exist, for the next exhaustive consumer to trip over.
-            backgroundTask: { id: "bg-2", status: "cancelled" },
-          },
-          {
-            type: "tool-invocation",
-            toolName: "Bash",
-            content: "Bash",
-            backgroundTask: { id: "bg-3", status: 7 },
-          },
-        ],
-      }],
+      [
+        {
+          id: "message-1",
+          role: "assistant",
+          content: "",
+          parts: [
+            {
+              type: "tool-invocation",
+              toolName: "Bash",
+              content: "Bash",
+              backgroundTask: { id: "bg-1", description: "dev server", status: "killed" },
+            },
+            {
+              type: "tool-invocation",
+              toolName: "Bash",
+              content: "Bash",
+              // `NativeBackgroundTaskStatus` has no such member. Casting it
+              // through would put a value in the part that its own type says
+              // cannot exist, for the next exhaustive consumer to trip over.
+              backgroundTask: { id: "bg-2", status: "cancelled" },
+            },
+            {
+              type: "tool-invocation",
+              toolName: "Bash",
+              content: "Bash",
+              backgroundTask: { id: "bg-3", status: 7 },
+            },
+          ],
+        },
+      ],
       "codex",
       FALLBACK,
     );
@@ -883,10 +956,9 @@ quoted context
     // A shell row carrying a resolved task is a background-task card, so the
     // sanitized task rides on the group's launch row rather than on a flat one.
     const tasks = flattenedParts(transcript).map((part) =>
-      part.type === "task-group" ? part.task.backgroundTask : part.backgroundTask
+      part.type === "task-group" ? part.task.backgroundTask : part.backgroundTask,
     );
-    expect(tasks[0])
-      .toEqual({ id: "bg-1", description: "dev server", status: "killed" });
+    expect(tasks[0]).toEqual({ id: "bg-1", description: "dev server", status: "killed" });
     // The task itself survives; only the unreadable status is dropped.
     expect(tasks[1]).toEqual({ id: "bg-2", description: undefined });
     expect(tasks[2]).toEqual({ id: "bg-3", description: undefined });
@@ -894,56 +966,65 @@ quoted context
 
   test("accepts every task status spelling the protocol's own registry accepts", () => {
     const transcript = toPipelineTranscript(
-      [{
-        id: "message-1",
-        role: "assistant",
-        content: "",
-        parts: [{
-          type: "tool-invocation",
-          toolName: "TaskList",
-          content: "TaskList",
-          taskSnapshot: {
-            items: [
-              { id: "t1", subject: "a", status: "in progress" },
-              { id: "t2", subject: "b", status: "In-Progress" },
-              { id: "t3", subject: "c", status: "completed" },
-            ],
-            complete: true,
-          },
-        }],
-      }],
+      [
+        {
+          id: "message-1",
+          role: "assistant",
+          content: "",
+          parts: [
+            {
+              type: "tool-invocation",
+              toolName: "TaskList",
+              content: "TaskList",
+              taskSnapshot: {
+                items: [
+                  { id: "t1", subject: "a", status: "in progress" },
+                  { id: "t2", subject: "b", status: "In-Progress" },
+                  { id: "t3", subject: "c", status: "completed" },
+                ],
+                complete: true,
+              },
+            },
+          ],
+        },
+      ],
       "codex",
       FALLBACK,
     );
 
     // The vocabulary is the protocol's, not a copy kept here: a snapshot the
     // registry would have accepted must not be dropped on its way to the tab.
-    expect(flattenedParts(transcript)[0]!.taskSnapshot?.items.map((item) => item.status))
-      .toEqual(["in_progress", "in_progress", "completed"]);
+    expect(flattenedParts(transcript)[0]!.taskSnapshot?.items.map((item) => item.status)).toEqual([
+      "in_progress",
+      "in_progress",
+      "completed",
+    ]);
   });
 
   test("carries the part fields the renderer needs to place a row", () => {
     const transcript = toPipelineTranscript(
-      [{
-        id: "message-1",
-        role: "assistant",
-        content: "",
-        parts: [
-          {
-            type: "tool-invocation",
-            toolName: "Bash",
-            content: "Bash",
-            toolTitle: "Run the suite",
-            parentTaskUseId: "task-1",
-            sourceMessageId: "source-1",
-          },
-          {
-            type: "file",
-            content: "/workspace/shot.png",
-            fileUrl: "/workspace/shot.png",
-          },
-        ],
-      }],
+      [
+        {
+          id: "message-1",
+          role: "assistant",
+          content: "",
+          parts: [
+            {
+              type: "tool-invocation",
+              toolName: "Bash",
+              content: "Bash",
+              toolTitle: "Run the suite",
+              parentTaskUseId: "task-1",
+              sourceMessageId: "source-1",
+            },
+            {
+              type: "file",
+              content: "/workspace/shot.png",
+              fileUrl: "/workspace/shot.png",
+            },
+          ],
+        },
+      ],
       "codex",
       FALLBACK,
     );
@@ -964,12 +1045,14 @@ quoted context
 
   test("keeps the model badge on a Claude message", () => {
     const transcript = toPipelineTranscript(
-      [{
-        id: "m1",
-        role: "assistant",
-        content: "done",
-        modelId: "claude-opus-5",
-      }],
+      [
+        {
+          id: "m1",
+          role: "assistant",
+          content: "done",
+          modelId: "claude-opus-5",
+        },
+      ],
       "claude",
       FALLBACK,
     );
@@ -979,17 +1062,21 @@ quoted context
 
   test("keeps a task group whose child tools are unreadable", () => {
     const transcript = toPipelineTranscript(
-      [{
-        id: "message-1",
-        role: "assistant",
-        content: "",
-        parts: [{
-          type: "task-group",
+      [
+        {
+          id: "message-1",
+          role: "assistant",
           content: "",
-          task: { type: "tool-invocation", toolName: "Task", content: "Task" },
-          childTools: "not-an-array",
-        }],
-      }],
+          parts: [
+            {
+              type: "task-group",
+              content: "",
+              task: { type: "tool-invocation", toolName: "Task", content: "Task" },
+              childTools: "not-an-array",
+            },
+          ],
+        },
+      ],
       "codex",
       FALLBACK,
     );
@@ -1003,20 +1090,22 @@ quoted context
 
   test("drops the Claude part types its adapter has no renderer for", () => {
     const transcript = toPipelineTranscript(
-      [{
-        id: "m1",
-        role: "assistant",
-        content: "",
-        parts: [
-          {
-            type: "tool-group",
-            content: "",
-            parts: [{ type: "tool-invocation", toolName: "Read", content: "Read" }],
-          },
-          { type: "subagent", content: "reviewer", subagentName: "reviewer" },
-          { type: "text", content: "kept" },
-        ],
-      }],
+      [
+        {
+          id: "m1",
+          role: "assistant",
+          content: "",
+          parts: [
+            {
+              type: "tool-group",
+              content: "",
+              parts: [{ type: "tool-invocation", toolName: "Read", content: "Read" }],
+            },
+            { type: "subagent", content: "reviewer", subagentName: "reviewer" },
+            { type: "text", content: "kept" },
+          ],
+        },
+      ],
       "claude",
       FALLBACK,
     );
@@ -1029,10 +1118,12 @@ quoted context
 
   test("survives an OpenCode timestamp below the time clip", () => {
     const transcript = toPipelineTranscript(
-      [{
-        info: { id: "m1", role: "assistant", time: { created: -1e18 } },
-        parts: [{ type: "text", text: "still readable" }],
-      }],
+      [
+        {
+          info: { id: "m1", role: "assistant", time: { created: -1e18 } },
+          parts: [{ type: "text", text: "still readable" }],
+        },
+      ],
       "opencode",
       FALLBACK,
     );
@@ -1044,10 +1135,12 @@ quoted context
 
   test("reads an OpenCode entry whose time is not a record at all", () => {
     const transcript = toPipelineTranscript(
-      [{
-        info: { id: "m1", role: "assistant", time: 1_800_000_000_000 },
-        parts: [{ type: "text", text: "still readable" }],
-      }],
+      [
+        {
+          info: { id: "m1", role: "assistant", time: 1_800_000_000_000 },
+          parts: [{ type: "text", text: "still readable" }],
+        },
+      ],
       "opencode",
       FALLBACK,
     );
@@ -1073,11 +1166,7 @@ quoted context
       FALLBACK,
     );
 
-    expect(transcript.map((message) => message.id)).toEqual([
-      "first",
-      "second",
-      "third",
-    ]);
+    expect(transcript.map((message) => message.id)).toEqual(["first", "second", "third"]);
   });
 
   test("renders a muted, bounded auto-decline history entry without an answer", () => {
@@ -1085,21 +1174,25 @@ quoted context
       [{ id: "provider-message", role: "assistant", content: "Continuing safely" }],
       "codex",
       FALLBACK,
-      [{
-        id: "interaction-1",
-        provider: "codex",
-        kind: "question",
-        phase: "build",
-        requestedAt: 1,
-        resolvedAt: 2,
-        outcome: "auto-declined-headless",
-        title: "Choose an implementation",
-        body: "A decision was requested.",
-        questions: [{
-          prompt: "Which approach?",
-          options: ["Conservative", "Expansive"],
-        }],
-      }],
+      [
+        {
+          id: "interaction-1",
+          provider: "codex",
+          kind: "question",
+          phase: "build",
+          requestedAt: 1,
+          resolvedAt: 2,
+          outcome: "auto-declined-headless",
+          title: "Choose an implementation",
+          body: "A decision was requested.",
+          questions: [
+            {
+              prompt: "Which approach?",
+              options: ["Conservative", "Expansive"],
+            },
+          ],
+        },
+      ],
     );
 
     const history = transcript.find(
@@ -1114,35 +1207,30 @@ quoted context
   });
 
   test("appends multiple interaction entries in their persisted order", () => {
-    const transcript = toPipelineTranscript(
-      [],
-      "claude",
-      FALLBACK,
-      [
-        {
-          id: "interaction-1",
-          provider: "claude",
-          kind: "question",
-          phase: "build",
-          requestedAt: 1,
-          resolvedAt: 2,
-          outcome: "auto-declined-headless",
-          title: "First choice",
-          questions: [],
-        },
-        {
-          id: "interaction-2",
-          provider: "claude",
-          kind: "mcp-form",
-          phase: "build",
-          requestedAt: 3,
-          resolvedAt: 4,
-          outcome: "auto-declined-headless",
-          title: "Second choice",
-          questions: [],
-        },
-      ],
-    );
+    const transcript = toPipelineTranscript([], "claude", FALLBACK, [
+      {
+        id: "interaction-1",
+        provider: "claude",
+        kind: "question",
+        phase: "build",
+        requestedAt: 1,
+        resolvedAt: 2,
+        outcome: "auto-declined-headless",
+        title: "First choice",
+        questions: [],
+      },
+      {
+        id: "interaction-2",
+        provider: "claude",
+        kind: "mcp-form",
+        phase: "build",
+        requestedAt: 3,
+        resolvedAt: 4,
+        outcome: "auto-declined-headless",
+        title: "Second choice",
+        questions: [],
+      },
+    ]);
 
     expect(transcript.map((message) => message.id)).toEqual([
       "pipeline-interaction:interaction-1",
@@ -1159,11 +1247,8 @@ quoted context
 
   test("timestamps an interaction from its own resolution time", () => {
     const resolvedAt = Date.parse("2026-07-29T00:04:00.000Z");
-    const [history] = toPipelineTranscript(
-      [],
-      "codex",
-      FALLBACK,
-      [{
+    const [history] = toPipelineTranscript([], "codex", FALLBACK, [
+      {
         id: "in-range",
         provider: "codex",
         kind: "question",
@@ -1173,8 +1258,8 @@ quoted context
         outcome: "auto-declined-headless",
         title: "Choose safely",
         questions: [],
-      }],
-    );
+      },
+    ]);
 
     // The in-range branch of the numeric guard: the entry is placed at the
     // moment it was resolved, which is what the time merge below sorts on.
@@ -1182,11 +1267,8 @@ quoted context
   });
 
   test("omits the options line for a question that offered none", () => {
-    const [history] = toPipelineTranscript(
-      [],
-      "codex",
-      FALLBACK,
-      [{
+    const [history] = toPipelineTranscript([], "codex", FALLBACK, [
+      {
         id: "free-text",
         provider: "codex",
         kind: "question",
@@ -1196,19 +1278,16 @@ quoted context
         outcome: "auto-declined-headless",
         title: "Describe the approach",
         questions: [{ prompt: "How should the agent proceed?", options: [] }],
-      }],
-    );
+      },
+    ]);
 
     expect(history!.content).toContain("How should the agent proceed?");
     expect(history!.content).not.toContain("Offered options:");
   });
 
   test("places an interaction's body above the questions it introduces", () => {
-    const [history] = toPipelineTranscript(
-      [],
-      "codex",
-      FALLBACK,
-      [{
+    const [history] = toPipelineTranscript([], "codex", FALLBACK, [
+      {
         id: "with-body",
         provider: "codex",
         kind: "question",
@@ -1219,8 +1298,8 @@ quoted context
         title: "Choose an implementation",
         body: "A decision was requested.",
         questions: [{ prompt: "Which approach?", options: ["Conservative"] }],
-      }],
-    );
+      },
+    ]);
 
     // The body is the provider's framing of the questions, so it reads as
     // nonsense underneath them.
@@ -1230,11 +1309,8 @@ quoted context
   });
 
   test("joins every question of one interaction into the same entry", () => {
-    const [history] = toPipelineTranscript(
-      [],
-      "codex",
-      FALLBACK,
-      [{
+    const [history] = toPipelineTranscript([], "codex", FALLBACK, [
+      {
         id: "multi-question",
         provider: "codex",
         kind: "mcp-form",
@@ -1248,20 +1324,15 @@ quoted context
           { prompt: "Which reviewer?", options: [] },
           { prompt: "Which milestone?", options: [] },
         ],
-      }],
-    );
+      },
+    ]);
 
-    expect(history!.content).toContain(
-      "Which branch?\n\nWhich reviewer?\n\nWhich milestone?",
-    );
+    expect(history!.content).toContain("Which branch?\n\nWhich reviewer?\n\nWhich milestone?");
   });
 
   test("renders an interaction as one text part carrying the whole entry", () => {
-    const [history] = toPipelineTranscript(
-      [],
-      "codex",
-      FALLBACK,
-      [{
+    const [history] = toPipelineTranscript([], "codex", FALLBACK, [
+      {
         id: "single-part",
         provider: "codex",
         kind: "question",
@@ -1272,15 +1343,13 @@ quoted context
         title: "Choose safely",
         body: "A decision was requested.",
         questions: [{ prompt: "Which approach?", options: ["Conservative"] }],
-      }],
-    );
+      },
+    ]);
 
     // `hasRenderableContent` and the row renderer both read `parts`; a part that
     // disagreed with `content` would show a different entry from the one the
     // search index and the copy affordance work from.
-    expect(history!.parts).toEqual([
-      { type: "text", content: history!.content },
-    ]);
+    expect(history!.parts).toEqual([{ type: "text", content: history!.content }]);
   });
 
   test("places an interaction beside the work it interrupted", () => {
@@ -1301,17 +1370,19 @@ quoted context
       ],
       "codex",
       FALLBACK,
-      [{
-        id: "mid-stage",
-        provider: "codex",
-        kind: "question",
-        phase: "build",
-        requestedAt: Date.parse("2026-07-29T00:01:30.000Z"),
-        resolvedAt: Date.parse("2026-07-29T00:02:00.000Z"),
-        outcome: "auto-declined-headless",
-        title: "Choose an implementation",
-        questions: [],
-      }],
+      [
+        {
+          id: "mid-stage",
+          provider: "codex",
+          kind: "question",
+          phase: "build",
+          requestedAt: Date.parse("2026-07-29T00:01:30.000Z"),
+          resolvedAt: Date.parse("2026-07-29T00:02:00.000Z"),
+          outcome: "auto-declined-headless",
+          title: "Choose an implementation",
+          questions: [],
+        },
+      ],
     );
 
     // Appended instead, the decline would sit below a message stamped a minute
@@ -1342,17 +1413,19 @@ quoted context
       ],
       "codex",
       FALLBACK,
-      [{
-        id: "last",
-        provider: "codex",
-        kind: "question",
-        phase: "build",
-        requestedAt: 1,
-        resolvedAt: Date.parse("2026-07-29T00:07:00.000Z"),
-        outcome: "auto-declined-headless",
-        title: "Choose safely",
-        questions: [],
-      }],
+      [
+        {
+          id: "last",
+          provider: "codex",
+          kind: "question",
+          phase: "build",
+          requestedAt: 1,
+          resolvedAt: Date.parse("2026-07-29T00:07:00.000Z"),
+          outcome: "auto-declined-headless",
+          title: "Choose safely",
+          questions: [],
+        },
+      ],
     );
 
     // Sorting the unreadable one on a parsed NaN would send it to one end of
@@ -1366,11 +1439,8 @@ quoted context
   });
 
   test("clips each interaction field to its own budget", () => {
-    const [history] = toPipelineTranscript(
-      [],
-      "codex",
-      FALLBACK,
-      [{
+    const [history] = toPipelineTranscript([], "codex", FALLBACK, [
+      {
         id: "oversized",
         provider: "codex",
         kind: "question",
@@ -1381,8 +1451,8 @@ quoted context
         title: "T".repeat(600),
         body: "B".repeat(2_000),
         questions: [{ prompt: "P".repeat(600), options: ["O".repeat(200)] }],
-      }],
-    );
+      },
+    ]);
 
     // The protocol permits 16 KB a field, and this renders as one centred
     // italic block with no expand affordance, so the caps are the only guard.
@@ -1395,11 +1465,8 @@ quoted context
   });
 
   test("drops the questions and options past the counts it will render", () => {
-    const [history] = toPipelineTranscript(
-      [],
-      "codex",
-      FALLBACK,
-      [{
+    const [history] = toPipelineTranscript([], "codex", FALLBACK, [
+      {
         id: "too-many",
         provider: "codex",
         kind: "mcp-form",
@@ -1411,8 +1478,18 @@ quoted context
         questions: [
           {
             prompt: "Question 1",
-            options: ["Option A", "Option B", "Option C", "Option D", "Option E",
-              "Option F", "Option G", "Option H", "Option I", "Option J"],
+            options: [
+              "Option A",
+              "Option B",
+              "Option C",
+              "Option D",
+              "Option E",
+              "Option F",
+              "Option G",
+              "Option H",
+              "Option I",
+              "Option J",
+            ],
           },
           { prompt: "Question 2", options: [] },
           { prompt: "Question 3", options: [] },
@@ -1420,8 +1497,8 @@ quoted context
           { prompt: "Question 5", options: [] },
           { prompt: "Question 6", options: [] },
         ],
-      }],
-    );
+      },
+    ]);
 
     expect(history!.content).toContain("Question 4");
     expect(history!.content).not.toContain("Question 5");
@@ -1434,11 +1511,8 @@ quoted context
   });
 
   test("uses the stable fallback for an interaction timestamp outside the time clip", () => {
-    const [history] = toPipelineTranscript(
-      [],
-      "codex",
-      FALLBACK,
-      [{
+    const [history] = toPipelineTranscript([], "codex", FALLBACK, [
+      {
         id: "invalid-time",
         provider: "codex",
         kind: "question",
@@ -1448,8 +1522,8 @@ quoted context
         outcome: "auto-declined-headless",
         title: "Choose safely",
         questions: [],
-      }],
-    );
+      },
+    ]);
 
     expect(history).toMatchObject({
       id: "pipeline-interaction:invalid-time",

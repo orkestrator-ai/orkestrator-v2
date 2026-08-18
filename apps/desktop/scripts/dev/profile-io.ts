@@ -1,6 +1,19 @@
 import { spawnSync } from "node:child_process";
 import { constants, type Stats } from "node:fs";
-import { chmod, cp, link, lstat, mkdir, open, readFile, readdir, rename, rm, writeFile, type FileHandle } from "node:fs/promises";
+import {
+  chmod,
+  cp,
+  link,
+  lstat,
+  mkdir,
+  open,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  writeFile,
+  type FileHandle,
+} from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import process from "node:process";
@@ -26,7 +39,11 @@ import {
 const MAX_MODEL_CACHE_BYTES = 16 * 1024 * 1024;
 const MODEL_CACHE_COPY_CHUNK_BYTES = 64 * 1024;
 
-export async function atomicWriteJson(filePath: string, value: unknown, mode = 0o600): Promise<void> {
+export async function atomicWriteJson(
+  filePath: string,
+  value: unknown,
+  mode = 0o600,
+): Promise<void> {
   await mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
   const temporary = `${filePath}.${process.pid}.${Date.now()}.tmp`;
   try {
@@ -109,16 +126,15 @@ async function pathExists(filePath: string): Promise<boolean> {
   }
 }
 
-function isSameFile(
-  initial: Stats,
-  current: Stats,
-): boolean {
-  return current.isFile()
-    && current.dev === initial.dev
-    && current.ino === initial.ino
-    && current.size === initial.size
-    && current.mtimeMs === initial.mtimeMs
-    && current.ctimeMs === initial.ctimeMs;
+function isSameFile(initial: Stats, current: Stats): boolean {
+  return (
+    current.isFile() &&
+    current.dev === initial.dev &&
+    current.ino === initial.ino &&
+    current.size === initial.size &&
+    current.mtimeMs === initial.mtimeMs &&
+    current.ctimeMs === initial.ctimeMs
+  );
 }
 
 async function seedBoundedFiles(
@@ -131,11 +147,8 @@ async function seedBoundedFiles(
     let sourceHandle: FileHandle | undefined;
     let temporaryHandle: FileHandle | undefined;
     try {
-      if (!candidate.replace && await pathExists(candidate.destination)) continue;
-      sourceHandle = await open(
-        candidate.source,
-        constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
-      );
+      if (!candidate.replace && (await pathExists(candidate.destination))) continue;
+      sourceHandle = await open(candidate.source, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
       const initialSourceInfo = await sourceHandle.stat();
       if (!initialSourceInfo.isFile() || initialSourceInfo.size > MAX_MODEL_CACHE_BYTES) continue;
       await options.afterSourceValidation?.(candidate.label);
@@ -144,21 +157,19 @@ async function seedBoundedFiles(
       temporary = `${candidate.destination}.${process.pid}.${Date.now()}.tmp`;
       temporaryHandle = await open(
         temporary,
-        constants.O_WRONLY
-          | constants.O_CREAT
-          | constants.O_EXCL
-          | (constants.O_NOFOLLOW ?? 0),
+        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0),
         0o600,
       );
 
       let totalBytes = 0;
       while (totalBytes <= MAX_MODEL_CACHE_BYTES) {
-        const remaining = (MAX_MODEL_CACHE_BYTES + 1) - totalBytes;
+        const remaining = MAX_MODEL_CACHE_BYTES + 1 - totalBytes;
         const chunk = Buffer.allocUnsafe(Math.min(MODEL_CACHE_COPY_CHUNK_BYTES, remaining));
         const { bytesRead } = await sourceHandle.read(chunk, 0, chunk.length, null);
         if (bytesRead === 0) break;
         totalBytes += bytesRead;
-        if (totalBytes > MAX_MODEL_CACHE_BYTES) throw new Error("Seed source exceeds the size limit");
+        if (totalBytes > MAX_MODEL_CACHE_BYTES)
+          throw new Error("Seed source exceeds the size limit");
 
         let written = 0;
         while (written < bytesRead) {
@@ -173,10 +184,10 @@ async function seedBoundedFiles(
         lstat(candidate.source),
       ]);
       if (
-        !isSameFile(initialSourceInfo, finalSourceInfo)
-        || !currentSourceInfo.isFile()
-        || currentSourceInfo.dev !== initialSourceInfo.dev
-        || currentSourceInfo.ino !== initialSourceInfo.ino
+        !isSameFile(initialSourceInfo, finalSourceInfo) ||
+        !currentSourceInfo.isFile() ||
+        currentSourceInfo.dev !== initialSourceInfo.dev ||
+        currentSourceInfo.ino !== initialSourceInfo.ino
       ) {
         throw new Error("Seed source changed while it was being copied");
       }
@@ -298,9 +309,10 @@ export async function seedInstalledAgentToolchains(
   const architecture = options.architecture ?? process.arch;
   const selected = new Set<string>(profile.agentPlatforms);
   const artifacts = (options.artifacts ?? pinnedToolchainArtifacts()).filter(
-    (artifact) => selected.has(artifact.name)
-      && artifact.platform === platform
-      && artifact.architecture === architecture,
+    (artifact) =>
+      selected.has(artifact.name) &&
+      artifact.platform === platform &&
+      artifact.architecture === architecture,
   );
 
   const warn = options.warn ?? ((message: string) => console.warn(message));
@@ -362,18 +374,17 @@ export async function seedAgentTestProviderCredentials(
 ): Promise<string[]> {
   if (!profile.credentialSources.includes("grok")) return [];
   const roots = options.roots ?? defaultRuntimeProfileRoots();
-  return seedBoundedFiles([{
-    label: "grok/auth.json",
-    source: path.join(roots.homeDir, ".grok", "auth.json"),
-    destination: path.join(
-      profile.dataDir,
-      "agent-credentials",
-      "home",
-      ".grok",
-      "auth.json",
-    ),
-    replace: true,
-  }], options);
+  return seedBoundedFiles(
+    [
+      {
+        label: "grok/auth.json",
+        source: path.join(roots.homeDir, ".grok", "auth.json"),
+        destination: path.join(profile.dataDir, "agent-credentials", "home", ".grok", "auth.json"),
+        replace: true,
+      },
+    ],
+    options,
+  );
 }
 
 export async function readProfile(profilePath: string): Promise<RuntimeProfile> {
@@ -407,11 +418,14 @@ export async function reserveLoopbackPorts(count: number): Promise<number[]> {
         server.listen(0, "127.0.0.1", resolve);
       });
       const address = server.address();
-      if (!address || typeof address === "string") throw new Error("Could not reserve a loopback port");
+      if (!address || typeof address === "string")
+        throw new Error("Could not reserve a loopback port");
       ports.push(address.port);
     }
   } finally {
-    await Promise.all(servers.map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
+    await Promise.all(
+      servers.map((server) => new Promise<void>((resolve) => server.close(() => resolve()))),
+    );
   }
   return ports;
 }
@@ -427,7 +441,10 @@ export function processStartTime(pid: number): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-export function processMatches(pid: number | undefined, expectedStart: number | undefined): boolean {
+export function processMatches(
+  pid: number | undefined,
+  expectedStart: number | undefined,
+): boolean {
   if (!pid || !expectedStart) return false;
   try {
     process.kill(pid, 0);
@@ -438,7 +455,9 @@ export function processMatches(pid: number | undefined, expectedStart: number | 
   return actual !== null && Math.abs(actual - expectedStart) < 1_000;
 }
 
-export function liveness(status: RuntimeStatusManifest | null): Record<RuntimeProcessName, boolean> {
+export function liveness(
+  status: RuntimeStatusManifest | null,
+): Record<RuntimeProcessName, boolean> {
   return Object.fromEntries(
     (["launcher", "vite", "electron", "backend"] as const).map((name) => [
       name,

@@ -28,10 +28,7 @@ export class ReviewContractValidationError extends Error {
   readonly contract: ReviewContractName;
   readonly issues: readonly ReviewContractValidationIssue[];
 
-  constructor(
-    contract: ReviewContractName,
-    issues: readonly ReviewContractValidationIssue[],
-  ) {
+  constructor(contract: ReviewContractName, issues: readonly ReviewContractValidationIssue[]) {
     const suffix = issues.length === 1 ? "issue" : "issues";
     super(
       `Invalid ${contract}: ${issues.length} validation ${suffix}. ${
@@ -79,12 +76,7 @@ function readObject(
 ): JsonObject | null {
   if (value === MISSING_FIELD) return null;
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    addIssue(
-      issues,
-      path,
-      "invalid_type",
-      `Expected object, received ${describeType(value)}.`,
-    );
+    addIssue(issues, path, "invalid_type", `Expected object, received ${describeType(value)}.`);
     return null;
   }
 
@@ -92,30 +84,15 @@ function readObject(
   const allowed = new Set(allowedKeys);
   for (const key of Object.keys(object)) {
     if (!allowed.has(key)) {
-      addIssue(
-        issues,
-        `${path}.${key}`,
-        "unknown_field",
-        `Unknown field "${key}".`,
-      );
+      addIssue(issues, `${path}.${key}`, "unknown_field", `Unknown field "${key}".`);
     }
   }
   return object;
 }
 
-function readRequired(
-  object: JsonObject,
-  key: string,
-  path: string,
-  issues: Issues,
-): unknown {
+function readRequired(object: JsonObject, key: string, path: string, issues: Issues): unknown {
   if (!hasOwn(object, key)) {
-    addIssue(
-      issues,
-      `${path}.${key}`,
-      "missing_field",
-      `Required field "${key}" is missing.`,
-    );
+    addIssue(issues, `${path}.${key}`, "missing_field", `Required field "${key}" is missing.`);
     return MISSING_FIELD;
   }
   return object[key];
@@ -124,22 +101,13 @@ function readRequired(
 function validateString(value: unknown, path: string, issues: Issues): boolean {
   if (value === MISSING_FIELD) return false;
   if (typeof value !== "string") {
-    addIssue(
-      issues,
-      path,
-      "invalid_type",
-      `Expected string, received ${describeType(value)}.`,
-    );
+    addIssue(issues, path, "invalid_type", `Expected string, received ${describeType(value)}.`);
     return false;
   }
   return true;
 }
 
-function validateNonEmptyString(
-  value: unknown,
-  path: string,
-  issues: Issues,
-): boolean {
+function validateNonEmptyString(value: unknown, path: string, issues: Issues): boolean {
   if (!validateString(value, path, issues)) return false;
   if ((value as string).length === 0) {
     addIssue(issues, path, "invalid_value", "Expected a non-empty string.");
@@ -157,12 +125,7 @@ function validateInteger(
 ): boolean {
   if (value === MISSING_FIELD) return false;
   if (typeof value !== "number" || !Number.isInteger(value)) {
-    addIssue(
-      issues,
-      path,
-      "invalid_type",
-      `Expected integer, received ${describeType(value)}.`,
-    );
+    addIssue(issues, path, "invalid_type", `Expected integer, received ${describeType(value)}.`);
     return false;
   }
   if (value < minimum || value > maximum) {
@@ -177,11 +140,7 @@ function validateInteger(
   return true;
 }
 
-function validateNullableLine(
-  value: unknown,
-  path: string,
-  issues: Issues,
-): boolean {
+function validateNullableLine(value: unknown, path: string, issues: Issues): boolean {
   return value === null || validateInteger(value, path, issues, 1);
 }
 
@@ -193,12 +152,7 @@ function validateEnum(
 ): boolean {
   if (!validateString(value, path, issues)) return false;
   if (!allowed.includes(value as string)) {
-    addIssue(
-      issues,
-      path,
-      "invalid_value",
-      `Expected one of ${allowed.join(", ")}.`,
-    );
+    addIssue(issues, path, "invalid_value", `Expected one of ${allowed.join(", ")}.`);
     return false;
   }
   return true;
@@ -212,12 +166,7 @@ function validateArray(
 ): value is unknown[] {
   if (value === MISSING_FIELD) return false;
   if (!Array.isArray(value)) {
-    addIssue(
-      issues,
-      path,
-      "invalid_type",
-      `Expected array, received ${describeType(value)}.`,
-    );
+    addIssue(issues, path, "invalid_type", `Expected array, received ${describeType(value)}.`);
     return false;
   }
   value.forEach((item, index) => validateItem(item, `${path}[${index}]`, issues));
@@ -279,70 +228,32 @@ function validateCommit(value: unknown, path: string, issues: Issues): void {
   const object = readObject(value, path, issues, ["sha", "subject"]);
   if (!object) return;
   validateString(readRequired(object, "sha", path, issues), `${path}.sha`, issues);
-  validateString(
-    readRequired(object, "subject", path, issues),
-    `${path}.subject`,
-    issues,
-  );
+  validateString(readRequired(object, "subject", path, issues), `${path}.subject`, issues);
 }
 
 function validateScopedFile(value: unknown, path: string, issues: Issues): void {
   const object = readObject(value, path, issues, ["file", "reason"]);
   if (!object) return;
-  validateString(
-    readRequired(object, "file", path, issues),
-    `${path}.file`,
-    issues,
-  );
-  validateString(
-    readRequired(object, "reason", path, issues),
-    `${path}.reason`,
-    issues,
-  );
+  validateString(readRequired(object, "file", path, issues), `${path}.file`, issues);
+  validateString(readRequired(object, "reason", path, issues), `${path}.reason`, issues);
 }
 
-function validateCommandResult(
-  value: unknown,
-  path: string,
-  issues: Issues,
-): void {
+function validateCommandResult(value: unknown, path: string, issues: Issues): void {
   const object = readObject(value, path, issues, ["command", "result", "summary"]);
   if (!object) return;
-  validateString(
-    readRequired(object, "command", path, issues),
-    `${path}.command`,
-    issues,
-  );
-  validateEnum(
-    readRequired(object, "result", path, issues),
-    `${path}.result`,
-    issues,
-    ["passed", "failed"],
-  );
-  validateString(
-    readRequired(object, "summary", path, issues),
-    `${path}.summary`,
-    issues,
-  );
+  validateString(readRequired(object, "command", path, issues), `${path}.command`, issues);
+  validateEnum(readRequired(object, "result", path, issues), `${path}.result`, issues, [
+    "passed",
+    "failed",
+  ]);
+  validateString(readRequired(object, "summary", path, issues), `${path}.summary`, issues);
 }
 
-function validateSkippedCommand(
-  value: unknown,
-  path: string,
-  issues: Issues,
-): void {
+function validateSkippedCommand(value: unknown, path: string, issues: Issues): void {
   const object = readObject(value, path, issues, ["command", "reason"]);
   if (!object) return;
-  validateString(
-    readRequired(object, "command", path, issues),
-    `${path}.command`,
-    issues,
-  );
-  validateString(
-    readRequired(object, "reason", path, issues),
-    `${path}.reason`,
-    issues,
-  );
+  validateString(readRequired(object, "command", path, issues), `${path}.command`, issues);
+  validateString(readRequired(object, "reason", path, issues), `${path}.reason`, issues);
 }
 
 function validateReviewScope(value: unknown, path: string, issues: Issues): void {
@@ -364,16 +275,8 @@ function validateReviewScope(value: unknown, path: string, issues: Issues): void
     `${path}.targetBranch`,
     issues,
   );
-  validateString(
-    readRequired(object, "baseRef", path, issues),
-    `${path}.baseRef`,
-    issues,
-  );
-  validateCommit(
-    readRequired(object, "commit", path, issues),
-    `${path}.commit`,
-    issues,
-  );
+  validateString(readRequired(object, "baseRef", path, issues), `${path}.baseRef`, issues);
+  validateCommit(readRequired(object, "commit", path, issues), `${path}.commit`, issues);
   validateStringArray(
     readRequired(object, "filesReviewed", path, issues),
     `${path}.filesReviewed`,
@@ -413,21 +316,9 @@ function validateReviewScope(value: unknown, path: string, issues: Issues): void
 function validateCodeChange(value: unknown, path: string, issues: Issues): void {
   const object = readObject(value, path, issues, ["file", "line", "description"]);
   if (!object) return;
-  validateString(
-    readRequired(object, "file", path, issues),
-    `${path}.file`,
-    issues,
-  );
-  validateNullableLine(
-    readRequired(object, "line", path, issues),
-    `${path}.line`,
-    issues,
-  );
-  validateString(
-    readRequired(object, "description", path, issues),
-    `${path}.description`,
-    issues,
-  );
+  validateString(readRequired(object, "file", path, issues), `${path}.file`, issues);
+  validateNullableLine(readRequired(object, "line", path, issues), `${path}.line`, issues);
+  validateString(readRequired(object, "description", path, issues), `${path}.description`, issues);
 }
 
 function validateWhatChanged(value: unknown, path: string, issues: Issues): void {
@@ -440,11 +331,7 @@ function validateWhatChanged(value: unknown, path: string, issues: Issues): void
   ]);
   if (!object) return;
   for (const key of ["overview", "before", "after", "userImpact"] as const) {
-    validateString(
-      readRequired(object, key, path, issues),
-      `${path}.${key}`,
-      issues,
-    );
+    validateString(readRequired(object, key, path, issues), `${path}.${key}`, issues);
   }
   validateArray(
     readRequired(object, "keyCodeChanges", path, issues),
@@ -480,26 +367,14 @@ function validateRiskProfile(value: unknown, path: string, issues: Issues): void
     issues,
     REVIEW_OVERALL_RISKS,
   );
-  validateString(
-    readRequired(object, "reasoning", path, issues),
-    `${path}.reasoning`,
-    issues,
-  );
+  validateString(readRequired(object, "reasoning", path, issues), `${path}.reasoning`, issues);
 }
 
 function validateTestFailure(value: unknown, path: string, issues: Issues): void {
-  const object = readObject(value, path, issues, [
-    "testName",
-    "file",
-    "errorMessage",
-  ]);
+  const object = readObject(value, path, issues, ["testName", "file", "errorMessage"]);
   if (!object) return;
   for (const key of ["testName", "file", "errorMessage"] as const) {
-    validateString(
-      readRequired(object, key, path, issues),
-      `${path}.${key}`,
-      issues,
-    );
+    validateString(readRequired(object, key, path, issues), `${path}.${key}`, issues);
   }
 }
 
@@ -522,20 +397,14 @@ function validateTestResults(value: unknown, path: string, issues: Issues): void
   const validPassed = validateInteger(passed, `${path}.passed`, issues, 0);
   const validFailed = validateInteger(failed, `${path}.failed`, issues, 0);
   const validNotRun = validateInteger(notRun, `${path}.notRun`, issues, 0);
-  const validFailures = validateArray(
-    failures,
-    `${path}.failures`,
-    issues,
-    validateTestFailure,
-  );
+  const validFailures = validateArray(failures, `${path}.failures`, issues, validateTestFailure);
 
   if (
     validTotal &&
     validPassed &&
     validFailed &&
     validNotRun &&
-    (total as number) !==
-      (passed as number) + (failed as number) + (notRun as number)
+    (total as number) !== (passed as number) + (failed as number) + (notRun as number)
   ) {
     addIssue(
       issues,
@@ -544,11 +413,7 @@ function validateTestResults(value: unknown, path: string, issues: Issues): void
       "Total must equal passed plus failed plus notRun.",
     );
   }
-  if (
-    validFailed &&
-    validFailures &&
-    (failed as number) !== (failures as unknown[]).length
-  ) {
+  if (validFailed && validFailures && (failed as number) !== (failures as unknown[]).length) {
     addIssue(
       issues,
       `${path}.failures`,
@@ -561,29 +426,12 @@ function validateTestResults(value: unknown, path: string, issues: Issues): void
 function validateStrength(value: unknown, path: string, issues: Issues): void {
   const object = readObject(value, path, issues, ["description", "file", "line"]);
   if (!object) return;
-  validateString(
-    readRequired(object, "description", path, issues),
-    `${path}.description`,
-    issues,
-  );
-  validateString(
-    readRequired(object, "file", path, issues),
-    `${path}.file`,
-    issues,
-  );
-  validateNullableLine(
-    readRequired(object, "line", path, issues),
-    `${path}.line`,
-    issues,
-  );
+  validateString(readRequired(object, "description", path, issues), `${path}.description`, issues);
+  validateString(readRequired(object, "file", path, issues), `${path}.file`, issues);
+  validateNullableLine(readRequired(object, "line", path, issues), `${path}.line`, issues);
 }
 
-function validateReviewIssue(
-  value: unknown,
-  path: string,
-  issues: Issues,
-  pooled = false,
-): void {
+function validateReviewIssue(value: unknown, path: string, issues: Issues, pooled = false): void {
   const allowedKeys = [
     "severity",
     "confidence",
@@ -603,11 +451,7 @@ function validateReviewIssue(
   if (!object) return;
 
   if (pooled) {
-    validateNonEmptyString(
-      readRequired(object, "poolId", path, issues),
-      `${path}.poolId`,
-      issues,
-    );
+    validateNonEmptyString(readRequired(object, "poolId", path, issues), `${path}.poolId`, issues);
   }
   validateEnum(
     readRequired(object, "severity", path, issues),
@@ -637,32 +481,15 @@ function validateReviewIssue(
     "suggestion",
     "verification",
   ] as const) {
-    validateString(
-      readRequired(object, key, path, issues),
-      `${path}.${key}`,
-      issues,
-    );
+    validateString(readRequired(object, key, path, issues), `${path}.${key}`, issues);
   }
-  validateNullableLine(
-    readRequired(object, "line", path, issues),
-    `${path}.line`,
-    issues,
-  );
+  validateNullableLine(readRequired(object, "line", path, issues), `${path}.line`, issues);
   if (hasOwn(object, "alternativeFixes") && object.alternativeFixes !== null) {
-    validateStringArray(
-      object.alternativeFixes,
-      `${path}.alternativeFixes`,
-      issues,
-    );
+    validateStringArray(object.alternativeFixes, `${path}.alternativeFixes`, issues);
   }
 }
 
-function validateCoverageGap(
-  value: unknown,
-  path: string,
-  issues: Issues,
-  pooled = false,
-): void {
+function validateCoverageGap(value: unknown, path: string, issues: Issues, pooled = false): void {
   const object = readObject(value, path, issues, [
     "file",
     "untestedBehavior",
@@ -670,17 +497,9 @@ function validateCoverageGap(
   ]);
   if (!object) return;
   if (pooled) {
-    validateNonEmptyString(
-      readRequired(object, "poolId", path, issues),
-      `${path}.poolId`,
-      issues,
-    );
+    validateNonEmptyString(readRequired(object, "poolId", path, issues), `${path}.poolId`, issues);
   }
-  validateString(
-    readRequired(object, "file", path, issues),
-    `${path}.file`,
-    issues,
-  );
+  validateString(readRequired(object, "file", path, issues), `${path}.file`, issues);
   validateString(
     readRequired(object, "untestedBehavior", path, issues),
     `${path}.untestedBehavior`,
@@ -697,17 +516,10 @@ function validateVerdict(value: unknown, path: string, issues: Issues): void {
     issues,
     REVIEW_VERDICTS,
   );
-  validateString(
-    readRequired(object, "reasoning", path, issues),
-    `${path}.reasoning`,
-    issues,
-  );
+  validateString(readRequired(object, "reasoning", path, issues), `${path}.reasoning`, issues);
 }
 
-function validateStructuredReviewReportValue(
-  value: unknown,
-  issues: Issues,
-): void {
+function validateStructuredReviewReportValue(value: unknown, issues: Issues): void {
   const path = "$";
   const object = readObject(value, path, issues, [
     "reviewScope",
@@ -723,26 +535,10 @@ function validateStructuredReviewReportValue(
   ]);
   if (!object) return;
 
-  validateReviewScope(
-    readRequired(object, "reviewScope", path, issues),
-    "$.reviewScope",
-    issues,
-  );
-  validateWhatChanged(
-    readRequired(object, "whatChanged", path, issues),
-    "$.whatChanged",
-    issues,
-  );
-  validateRiskProfile(
-    readRequired(object, "riskProfile", path, issues),
-    "$.riskProfile",
-    issues,
-  );
-  validateTestResults(
-    readRequired(object, "testResults", path, issues),
-    "$.testResults",
-    issues,
-  );
+  validateReviewScope(readRequired(object, "reviewScope", path, issues), "$.reviewScope", issues);
+  validateWhatChanged(readRequired(object, "whatChanged", path, issues), "$.whatChanged", issues);
+  validateRiskProfile(readRequired(object, "riskProfile", path, issues), "$.riskProfile", issues);
+  validateTestResults(readRequired(object, "testResults", path, issues), "$.testResults", issues);
   validateArray(
     readRequired(object, "strengths", path, issues),
     "$.strengths",
@@ -761,21 +557,13 @@ function validateStructuredReviewReportValue(
     issues,
     validateCoverageGap,
   );
-  validateVerdict(
-    readRequired(object, "verdict", path, issues),
-    "$.verdict",
-    issues,
-  );
+  validateVerdict(readRequired(object, "verdict", path, issues), "$.verdict", issues);
   validateString(
     readRequired(object, "summaryOfChange", path, issues),
     "$.summaryOfChange",
     issues,
   );
-  validateString(
-    readRequired(object, "reviewSummary", path, issues),
-    "$.reviewSummary",
-    issues,
-  );
+  validateString(readRequired(object, "reviewSummary", path, issues), "$.reviewSummary", issues);
 }
 
 function reportDuplicatePoolIds(
@@ -813,14 +601,9 @@ function validateFindingPoolValue(value: unknown, issues: Issues): void {
   validateArray(issueEntries, "$.issues", issues, (entry, entryPath, nestedIssues) => {
     validateReviewIssue(entry, entryPath, nestedIssues, true);
   });
-  validateArray(
-    coverageEntries,
-    "$.coverageGaps",
-    issues,
-    (entry, entryPath, nestedIssues) => {
-      validateCoverageGap(entry, entryPath, nestedIssues, true);
-    },
-  );
+  validateArray(coverageEntries, "$.coverageGaps", issues, (entry, entryPath, nestedIssues) => {
+    validateCoverageGap(entry, entryPath, nestedIssues, true);
+  });
 
   const seen = new Map<string, string>();
   reportDuplicatePoolIds(issueEntries, "$.issues", issues, seen);
@@ -830,35 +613,15 @@ function validateFindingPoolValue(value: unknown, issues: Issues): void {
 function validateIssueUpdate(value: unknown, path: string, issues: Issues): void {
   const object = readObject(value, path, issues, ["poolId", "finding"]);
   if (!object) return;
-  validateNonEmptyString(
-    readRequired(object, "poolId", path, issues),
-    `${path}.poolId`,
-    issues,
-  );
-  validateReviewIssue(
-    readRequired(object, "finding", path, issues),
-    `${path}.finding`,
-    issues,
-  );
+  validateNonEmptyString(readRequired(object, "poolId", path, issues), `${path}.poolId`, issues);
+  validateReviewIssue(readRequired(object, "finding", path, issues), `${path}.finding`, issues);
 }
 
-function validateCoverageGapUpdate(
-  value: unknown,
-  path: string,
-  issues: Issues,
-): void {
+function validateCoverageGapUpdate(value: unknown, path: string, issues: Issues): void {
   const object = readObject(value, path, issues, ["poolId", "finding"]);
   if (!object) return;
-  validateNonEmptyString(
-    readRequired(object, "poolId", path, issues),
-    `${path}.poolId`,
-    issues,
-  );
-  validateCoverageGap(
-    readRequired(object, "finding", path, issues),
-    `${path}.finding`,
-    issues,
-  );
+  validateNonEmptyString(readRequired(object, "poolId", path, issues), `${path}.poolId`, issues);
+  validateCoverageGap(readRequired(object, "finding", path, issues), `${path}.finding`, issues);
 }
 
 function reportDuplicateUpdateIds(
@@ -899,39 +662,14 @@ function validateReconciliationValue(value: unknown, issues: Issues): void {
   const newIssues = readRequired(object, "newIssues", path, issues);
   const issueUpdates = readRequired(object, "issueUpdates", path, issues);
   const newCoverageGaps = readRequired(object, "newCoverageGaps", path, issues);
-  const coverageGapUpdates = readRequired(
-    object,
-    "coverageGapUpdates",
-    path,
-    issues,
-  );
+  const coverageGapUpdates = readRequired(object, "coverageGapUpdates", path, issues);
   validateArray(newIssues, "$.newIssues", issues, validateReviewIssue);
   validateArray(issueUpdates, "$.issueUpdates", issues, validateIssueUpdate);
-  validateArray(
-    newCoverageGaps,
-    "$.newCoverageGaps",
-    issues,
-    validateCoverageGap,
-  );
-  validateArray(
-    coverageGapUpdates,
-    "$.coverageGapUpdates",
-    issues,
-    validateCoverageGapUpdate,
-  );
+  validateArray(newCoverageGaps, "$.newCoverageGaps", issues, validateCoverageGap);
+  validateArray(coverageGapUpdates, "$.coverageGapUpdates", issues, validateCoverageGapUpdate);
   const seenUpdateIds = new Map<string, string>();
-  reportDuplicateUpdateIds(
-    issueUpdates,
-    "$.issueUpdates",
-    issues,
-    seenUpdateIds,
-  );
-  reportDuplicateUpdateIds(
-    coverageGapUpdates,
-    "$.coverageGapUpdates",
-    issues,
-    seenUpdateIds,
-  );
+  reportDuplicateUpdateIds(issueUpdates, "$.issueUpdates", issues, seenUpdateIds);
+  reportDuplicateUpdateIds(coverageGapUpdates, "$.coverageGapUpdates", issues, seenUpdateIds);
 }
 
 function parseContract<T>(
@@ -1000,11 +738,11 @@ export function backfillLegacyTestResults(value: unknown): unknown {
   if (!isPlainObject(value)) return value;
   const testResults = value.testResults;
   if (
-    !isPlainObject(testResults)
-    || Object.hasOwn(testResults, "notRun")
-    || typeof testResults.total !== "number"
-    || typeof testResults.passed !== "number"
-    || typeof testResults.failed !== "number"
+    !isPlainObject(testResults) ||
+    Object.hasOwn(testResults, "notRun") ||
+    typeof testResults.total !== "number" ||
+    typeof testResults.passed !== "number" ||
+    typeof testResults.failed !== "number"
   ) {
     return value;
   }
@@ -1012,10 +750,7 @@ export function backfillLegacyTestResults(value: unknown): unknown {
     ...value,
     testResults: {
       ...testResults,
-      notRun: Math.max(
-        0,
-        testResults.total - testResults.passed - testResults.failed,
-      ),
+      notRun: Math.max(0, testResults.total - testResults.passed - testResults.failed),
     },
   };
 }
@@ -1048,10 +783,7 @@ export interface StructuredReviewParseOptions {
   allowLegacyTestResults?: boolean;
 }
 
-function toReportCandidate(
-  value: unknown,
-  options?: StructuredReviewParseOptions,
-): unknown {
+function toReportCandidate(value: unknown, options?: StructuredReviewParseOptions): unknown {
   return options?.allowLegacyTestResults ? backfillLegacyTestResults(value) : value;
 }
 
@@ -1091,39 +823,23 @@ export function parseReviewFindingPool(value: unknown): ReviewFindingPool {
 export function safeParseReviewFindingPool(
   value: unknown,
 ): ReviewContractParseResult<ReviewFindingPool> {
-  return safeParseContract(
-    "review-finding-pool",
-    value,
-    validateFindingPoolValue,
-  );
+  return safeParseContract("review-finding-pool", value, validateFindingPoolValue);
 }
 
 export function isReviewFindingPool(value: unknown): value is ReviewFindingPool {
   return safeParseReviewFindingPool(value).success;
 }
 
-export function parseReviewReconciliation(
-  value: unknown,
-): ReviewReconciliation {
-  return parseContract(
-    "review-reconciliation",
-    value,
-    validateReconciliationValue,
-  );
+export function parseReviewReconciliation(value: unknown): ReviewReconciliation {
+  return parseContract("review-reconciliation", value, validateReconciliationValue);
 }
 
 export function safeParseReviewReconciliation(
   value: unknown,
 ): ReviewContractParseResult<ReviewReconciliation> {
-  return safeParseContract(
-    "review-reconciliation",
-    value,
-    validateReconciliationValue,
-  );
+  return safeParseContract("review-reconciliation", value, validateReconciliationValue);
 }
 
-export function isReviewReconciliation(
-  value: unknown,
-): value is ReviewReconciliation {
+export function isReviewReconciliation(value: unknown): value is ReviewReconciliation {
   return safeParseReviewReconciliation(value).success;
 }

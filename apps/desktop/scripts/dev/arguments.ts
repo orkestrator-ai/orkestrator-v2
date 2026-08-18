@@ -70,7 +70,7 @@ function parseArguments(args: string[], options: ParseOptions): DevArguments {
       if (values.some((value) => !isAgentPlatform(value))) {
         throw new Error(`--agent-platforms accepts ${AGENT_PLATFORMS.join(", ")}`);
       }
-      result.agentPlatforms.push(...values as RuntimeProfile["agentPlatforms"]);
+      result.agentPlatforms.push(...(values as RuntimeProfile["agentPlatforms"]));
     } else if (argument === "--credential-source") {
       const value = valueAfter(index++, argument);
       if (!isAgentPlatform(value)) {
@@ -104,9 +104,8 @@ function parseArguments(args: string[], options: ParseOptions): DevArguments {
  * installation makes the default cheap; `--agent-platforms` narrows it.
  */
 export function applyAgentTestDefaults(args: DevArguments): DevArguments {
-  const agentPlatforms = args.agentPlatforms.length > 0
-    ? args.agentPlatforms
-    : [...ALL_AGENT_PLATFORMS];
+  const agentPlatforms =
+    args.agentPlatforms.length > 0 ? args.agentPlatforms : [...ALL_AGENT_PLATFORMS];
   if (args.agentCredentialsDisabled || args.credentialSources.length > 0) {
     return { ...args, agentPlatforms };
   }
@@ -118,7 +117,5 @@ export function applyAgentTestDefaults(args: DevArguments): DevArguments {
 }
 
 export function parseAgentTestArguments(args: string[]): DevArguments {
-  return applyAgentTestDefaults(
-    parseArguments(args, { agentPlatformsAllowed: true }),
-  );
+  return applyAgentTestDefaults(parseArguments(args, { agentPlatformsAllowed: true }));
 }

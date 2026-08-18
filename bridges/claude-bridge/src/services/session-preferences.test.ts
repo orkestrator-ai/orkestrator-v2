@@ -1,27 +1,8 @@
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  test,
-} from "bun:test";
-import {
-  mkdir,
-  mkdtemp,
-  readFile,
-  readdir,
-  rm,
-  stat,
-  utimes,
-  writeFile,
-} from "node:fs/promises";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  claudeHome,
-  claudeSessionPreferencesDir,
-  setClaudeHomeForTesting,
-} from "./claude-home.js";
+import { claudeHome, claudeSessionPreferencesDir, setClaudeHomeForTesting } from "./claude-home.js";
 import {
   deleteSessionPreferences,
   MAX_DISPATCHED_REQUEST_IDS,
@@ -36,10 +17,7 @@ const OTHER_SESSION_ID = "123e4567-e89b-42d3-a456-426614174001";
 let testHome = "";
 
 function preferencePath(sessionId = SESSION_ID): string {
-  return join(
-    claudeSessionPreferencesDir(),
-    `${sessionId.toLowerCase()}.json`,
-  );
+  return join(claudeSessionPreferencesDir(), `${sessionId.toLowerCase()}.json`);
 }
 
 describe("session preferences", () => {
@@ -74,9 +52,7 @@ describe("session preferences", () => {
       planMode: false,
     });
 
-    expect(await readdir(claudeSessionPreferencesDir())).toEqual([
-      `${SESSION_ID}.json`,
-    ]);
+    expect(await readdir(claudeSessionPreferencesDir())).toEqual([`${SESSION_ID}.json`]);
     expect(await readSessionPreferences(SESSION_ID)).toEqual({
       planMode: true,
     });
@@ -87,7 +63,7 @@ describe("session preferences", () => {
     expect(await readSessionPreferences(SESSION_ID)).toBeUndefined();
 
     await mkdir(claudeSessionPreferencesDir(), { recursive: true });
-    for (const raw of ["{", "[]", "null", "\"plan\"", "1"]) {
+    for (const raw of ["{", "[]", "null", '"plan"', "1"]) {
       await writeFile(preferencePath(), raw, "utf-8");
       expect(await readSessionPreferences(SESSION_ID)).toEqual({
         planMode: true,
@@ -129,12 +105,8 @@ describe("session preferences", () => {
 
     const result = await readSessionPreferences(SESSION_ID);
     expect(result?.planMode).toBe(false);
-    expect(result?.dispatchedRequestIds).toHaveLength(
-      MAX_DISPATCHED_REQUEST_IDS,
-    );
-    expect(result?.dispatchedRequestIds).toEqual(
-      validIds.slice(-MAX_DISPATCHED_REQUEST_IDS),
-    );
+    expect(result?.dispatchedRequestIds).toHaveLength(MAX_DISPATCHED_REQUEST_IDS);
+    expect(result?.dispatchedRequestIds).toEqual(validIds.slice(-MAX_DISPATCHED_REQUEST_IDS));
   });
 
   test("fails closed for an incorrectly typed plan mode", async () => {
@@ -209,9 +181,9 @@ describe("session preferences", () => {
     // Rejecting the alias discards the whole document, so the dispatch journal
     // beside it is unknown and a later write must refuse rather than replace it
     // with one that has forgotten every accepted prompt.
-    await expect(
-      updateSessionPreferences(SESSION_ID, { planMode: false }),
-    ).rejects.toThrow("refusing to overwrite the durable prompt journal");
+    await expect(updateSessionPreferences(SESSION_ID, { planMode: false })).rejects.toThrow(
+      "refusing to overwrite the durable prompt journal",
+    );
   });
 
   test("merges fields and serializes concurrent updates to one session", async () => {
@@ -230,9 +202,11 @@ describe("session preferences", () => {
       planMode: true,
       dispatchedRequestIds: ["request-1"],
     });
-    expect((await readdir(claudeSessionPreferencesDir())).some(
-      (name) => name.endsWith(".tmp") || name.endsWith(".lock"),
-    )).toBe(false);
+    expect(
+      (await readdir(claudeSessionPreferencesDir())).some(
+        (name) => name.endsWith(".tmp") || name.endsWith(".lock"),
+      ),
+    ).toBe(false);
   });
 
   test("waits for a lock held by another process before merging", async () => {
@@ -240,10 +214,9 @@ describe("session preferences", () => {
     const lockPath = `${preferencePath()}.lock`;
     await writeFile(lockPath, "other process", "utf-8");
     let settled = false;
-    const update = updateSessionPreferences(SESSION_ID, { planMode: true })
-      .finally(() => {
-        settled = true;
-      });
+    const update = updateSessionPreferences(SESSION_ID, { planMode: true }).finally(() => {
+      settled = true;
+    });
     await new Promise((resolve) => setTimeout(resolve, 25));
     expect(settled).toBe(false);
 
@@ -257,19 +230,14 @@ describe("session preferences", () => {
   test("does not steal an old lock whose owner process is still alive", async () => {
     await mkdir(claudeSessionPreferencesDir(), { recursive: true });
     const lockPath = `${preferencePath()}.lock`;
-    await writeFile(
-      lockPath,
-      JSON.stringify({ token: "live-owner", pid: process.pid }),
-      "utf-8",
-    );
+    await writeFile(lockPath, JSON.stringify({ token: "live-owner", pid: process.pid }), "utf-8");
     const staleDate = new Date(Date.now() - 60_000);
     await utimes(lockPath, staleDate, staleDate);
 
     let settled = false;
-    const update = updateSessionPreferences(SESSION_ID, { planMode: true })
-      .finally(() => {
-        settled = true;
-      });
+    const update = updateSessionPreferences(SESSION_ID, { planMode: true }).finally(() => {
+      settled = true;
+    });
     await new Promise((resolve) => setTimeout(resolve, 25));
     expect(settled).toBe(false);
 
@@ -283,14 +251,9 @@ describe("session preferences", () => {
   test("recovers an abandoned stale-recovery marker and cleans it up", async () => {
     await mkdir(claudeSessionPreferencesDir(), { recursive: true });
     const lockPath = `${preferencePath()}.lock`;
-    await writeFile(
-      lockPath,
-      JSON.stringify({ token: "dead-owner", pid: 999_999_999 }),
-      "utf-8",
-    );
+    await writeFile(lockPath, JSON.stringify({ token: "dead-owner", pid: 999_999_999 }), "utf-8");
     const lockStat = await stat(lockPath);
-    const recoveryPath =
-      `${lockPath}.recover-${lockStat.dev}-${lockStat.ino}`;
+    const recoveryPath = `${lockPath}.recover-${lockStat.dev}-${lockStat.ino}`;
     await writeFile(
       recoveryPath,
       JSON.stringify({ token: "dead-recovery", pid: 999_999_999 }),
@@ -307,17 +270,17 @@ describe("session preferences", () => {
     expect(await readSessionPreferences(SESSION_ID)).toEqual({
       planMode: true,
     });
-    expect((await readdir(claudeSessionPreferencesDir())).some(
-      (name) => name.includes(".recover-") || name.endsWith(".lock"),
-    )).toBe(false);
+    expect(
+      (await readdir(claudeSessionPreferencesDir())).some(
+        (name) => name.includes(".recover-") || name.endsWith(".lock"),
+      ),
+    ).toBe(false);
   });
 
   test("removes temporary files when the atomic rename fails", async () => {
     await mkdir(preferencePath(), { recursive: true });
 
-    await expect(
-      updateSessionPreferences(SESSION_ID, { planMode: true }),
-    ).rejects.toBeTruthy();
+    await expect(updateSessionPreferences(SESSION_ID, { planMode: true })).rejects.toBeTruthy();
 
     const entries = await readdir(claudeSessionPreferencesDir());
     expect(entries.some((name) => name.endsWith(".tmp"))).toBe(false);
@@ -341,9 +304,7 @@ describe("session preferences", () => {
   test("recovers after a failed write instead of wedging the session queue", async () => {
     await writeFile(join(testHome, ".claude"), "not a directory", "utf-8");
 
-    await expect(
-      updateSessionPreferences(SESSION_ID, { planMode: true }),
-    ).rejects.toBeTruthy();
+    await expect(updateSessionPreferences(SESSION_ID, { planMode: true })).rejects.toBeTruthy();
 
     await rm(join(testHome, ".claude"));
     await updateSessionPreferences(SESSION_ID, { planMode: false });

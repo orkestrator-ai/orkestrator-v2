@@ -40,24 +40,37 @@ describe("reconcilePersistedLayout", () => {
   });
 
   test("rejects version, environment, and container mismatches", () => {
-    const root = { kind: "leaf", id: "pane", tabs: [{ id: "tab", type: "plain" }], activeTabId: "tab" };
+    const root = {
+      kind: "leaf",
+      id: "pane",
+      tabs: [{ id: "tab", type: "plain" }],
+      activeTabId: "tab",
+    };
     for (const version of [0, -1, PANE_LAYOUT_VERSION + 1, "2", undefined]) {
-      expect(reconcilePersistedLayout(
-        { ...saved(root), version } as unknown as PersistedPaneLayout,
-        context,
-      )).toBeNull();
+      expect(
+        reconcilePersistedLayout(
+          { ...saved(root), version } as unknown as PersistedPaneLayout,
+          context,
+        ),
+      ).toBeNull();
     }
     expect(reconcilePersistedLayout(saved(root, { environmentId: "other" }), context)).toBeNull();
     expect(reconcilePersistedLayout(saved(root, { containerId: "other" }), context)).toBeNull();
   });
 
   test("carries the record's revision onto the restored state", () => {
-    const root = { kind: "leaf", id: "pane", tabs: [{ id: "tab", type: "plain" }], activeTabId: "tab" };
+    const root = {
+      kind: "leaf",
+      id: "pane",
+      tabs: [{ id: "tab", type: "plain" }],
+      activeTabId: "tab",
+    };
 
     // This is the CAS token every later write is based on; losing it here would
     // make the first edit after a reload look like a create.
-    expect(reconcilePersistedLayout(saved(root, { revision: 12 }), context))
-      .toMatchObject({ backendRevision: 12 });
+    expect(reconcilePersistedLayout(saved(root, { revision: 12 }), context)).toMatchObject({
+      backendRevision: 12,
+    });
   });
 
   test("accepts legacy v1 layouts for one-time selection migration", () => {
@@ -68,47 +81,49 @@ describe("reconcilePersistedLayout", () => {
       activeTabId: "tab",
     };
 
-    expect(reconcilePersistedLayout(
-      saved(root, { version: LEGACY_PANE_LAYOUT_VERSION }),
-      context,
-    )).toMatchObject({ activePaneId: "pane", backendRevision: 1 });
+    expect(
+      reconcilePersistedLayout(saved(root, { version: LEGACY_PANE_LAYOUT_VERSION }), context),
+    ).toMatchObject({ activePaneId: "pane", backendRevision: 1 });
   });
 
   test("sanitizes tabs, one-shot fields, native connection data, and active pointers", () => {
-    const restored = reconcilePersistedLayout(saved({
-      kind: "leaf",
-      id: "pane-1",
-      tabs: [
-        { id: "unknown", type: "future-tab" },
-        {
-          id: "native",
-          type: "claude-native",
-          initialPrompt: "do not resend",
-          initialCommands: ["do not rerun"],
-          claudeNativeData: {
-            environmentId: "wrong",
-            containerId: "wrong",
-            hostPort: 9999,
-            sessionId: "session-1",
-            isLocal: true,
+    const restored = reconcilePersistedLayout(
+      saved({
+        kind: "leaf",
+        id: "pane-1",
+        tabs: [
+          { id: "unknown", type: "future-tab" },
+          {
+            id: "native",
+            type: "claude-native",
+            initialPrompt: "do not resend",
+            initialCommands: ["do not rerun"],
+            claudeNativeData: {
+              environmentId: "wrong",
+              containerId: "wrong",
+              hostPort: 9999,
+              sessionId: "session-1",
+              isLocal: true,
+            },
+            nativeAgentData: {
+              platform: "claude",
+              environmentId: "env-1",
+              containerId: "container-1",
+              sessionId: "session-1",
+              isLocal: false,
+            },
           },
-          nativeAgentData: {
-            platform: "claude",
-            environmentId: "env-1",
-            containerId: "container-1",
-            sessionId: "session-1",
-            isLocal: false,
+          {
+            id: "setup",
+            type: "plain",
+            initialCommands: ["setup"],
+            isSetupTab: true,
           },
-        },
-        {
-          id: "setup",
-          type: "plain",
-          initialCommands: ["setup"],
-          isSetupTab: true,
-        },
-      ],
-      activeTabId: "unknown",
-    }), context);
+        ],
+        activeTabId: "unknown",
+      }),
+      context,
+    );
 
     expect(restored).not.toBeNull();
     expect(restored?.activePaneId).toBe("pane-1");
@@ -138,25 +153,32 @@ describe("reconcilePersistedLayout", () => {
   });
 
   test("restores a native session from canonical data when the legacy payload is absent", () => {
-    const restored = reconcilePersistedLayout(saved({
-      kind: "leaf",
-      id: "pane",
-      tabs: [{
-        id: "codex",
-        type: "codex-native",
-        nativeAgentData: {
-          platform: "codex",
-          environmentId: "env-1",
-          sessionId: "thread-1",
-        },
-      }],
-      activeTabId: "codex",
-    }), context);
+    const restored = reconcilePersistedLayout(
+      saved({
+        kind: "leaf",
+        id: "pane",
+        tabs: [
+          {
+            id: "codex",
+            type: "codex-native",
+            nativeAgentData: {
+              platform: "codex",
+              environmentId: "env-1",
+              sessionId: "thread-1",
+            },
+          },
+        ],
+        activeTabId: "codex",
+      }),
+      context,
+    );
 
     expect(restored?.root).toMatchObject({
-      tabs: [{
-        nativeAgentData: { platform: "codex", sessionId: "thread-1" },
-      }],
+      tabs: [
+        {
+          nativeAgentData: { platform: "codex", sessionId: "thread-1" },
+        },
+      ],
     });
   });
 
@@ -196,10 +218,12 @@ describe("reconcilePersistedLayout", () => {
     );
 
     expect(restored?.root).toMatchObject({
-      tabs: [{
-        displayTitle: "Remote title",
-        nativeAgentData: { platform: "codex", sessionId: "thread-new" },
-      }],
+      tabs: [
+        {
+          displayTitle: "Remote title",
+          nativeAgentData: { platform: "codex", sessionId: "thread-new" },
+        },
+      ],
     });
   });
 
@@ -207,20 +231,23 @@ describe("reconcilePersistedLayout", () => {
     // The setup marker wins over the persisted type: the tab's identity is
     // "attach to the backend-owned `<environmentId>:setup` PTY", and any agent
     // surface restored on top of it would spawn its own session instead.
-    const restored = reconcilePersistedLayout(saved({
-      kind: "leaf",
-      id: "pane-1",
-      tabs: [
-        {
-          id: "setup-claude",
-          type: "claude-native",
-          isSetupTab: true,
-          claudeNativeData: { environmentId: "env-1", sessionId: "session-1" },
-        },
-        { id: "setup-codex", type: "codex", isSetupTab: true },
-      ],
-      activeTabId: "setup-claude",
-    }), context);
+    const restored = reconcilePersistedLayout(
+      saved({
+        kind: "leaf",
+        id: "pane-1",
+        tabs: [
+          {
+            id: "setup-claude",
+            type: "claude-native",
+            isSetupTab: true,
+            claudeNativeData: { environmentId: "env-1", sessionId: "session-1" },
+          },
+          { id: "setup-codex", type: "codex", isSetupTab: true },
+        ],
+        activeTabId: "setup-claude",
+      }),
+      context,
+    );
 
     expect(restored?.root).toMatchObject({
       kind: "leaf",
@@ -243,7 +270,11 @@ describe("reconcilePersistedLayout", () => {
     const agentTabs = [
       { id: "claude-native", type: "claude-native", claudeNativeData: { environmentId: "env-1" } },
       { id: "codex-native", type: "codex-native", codexNativeData: { environmentId: "env-1" } },
-      { id: "opencode-native", type: "opencode-native", openCodeNativeData: { environmentId: "env-1" } },
+      {
+        id: "opencode-native",
+        type: "opencode-native",
+        openCodeNativeData: { environmentId: "env-1" },
+      },
       { id: "claude-tmux", type: "claude-tmux", claudeTmuxData: { environmentId: "env-1" } },
       { id: "claude-terminal", type: "claude" },
       { id: "codex-terminal", type: "codex" },
@@ -255,15 +286,18 @@ describe("reconcilePersistedLayout", () => {
       initialExecutionProfileId: "plan",
     }));
 
-    const restored = reconcilePersistedLayout(saved({
-      kind: "leaf",
-      id: "pane-1",
-      tabs: agentTabs,
-      activeTabId: "claude-native",
-    }), context);
+    const restored = reconcilePersistedLayout(
+      saved({
+        kind: "leaf",
+        id: "pane-1",
+        tabs: agentTabs,
+        activeTabId: "claude-native",
+      }),
+      context,
+    );
 
     expect(restored).not.toBeNull();
-    const tabs = (restored?.root as unknown as { tabs: Array<Record<string, unknown>> }).tabs;
+    const tabs = (restored!.root as unknown as { tabs: Array<Record<string, unknown>> }).tabs;
     expect(tabs).toHaveLength(agentTabs.length);
     for (const tab of tabs) {
       expect(tab.initialAgentModel).toBe(`${tab.id}-model`);
@@ -274,25 +308,28 @@ describe("reconcilePersistedLayout", () => {
 
   test("ignores malformed one-shot agent launch and handoff values", () => {
     for (const agentHandoffId of [["not", "a", "string"], "", "   "]) {
-      const restored = reconcilePersistedLayout(saved({
-        kind: "leaf",
-        id: "pane-1",
-        tabs: [{
-          id: "native",
-          type: "claude-native",
-          claudeNativeData: { environmentId: "env-1" },
-          initialAgentModel: 42,
-          initialReasoningEffort: { nested: true },
-          initialExecutionProfileId: agentHandoffId,
-          agentHandoffId,
-          consumedAgentHandoffId: agentHandoffId,
-        }],
-        activeTabId: "native",
-      }), context);
+      const restored = reconcilePersistedLayout(
+        saved({
+          kind: "leaf",
+          id: "pane-1",
+          tabs: [
+            {
+              id: "native",
+              type: "claude-native",
+              claudeNativeData: { environmentId: "env-1" },
+              initialAgentModel: 42,
+              initialReasoningEffort: { nested: true },
+              initialExecutionProfileId: agentHandoffId,
+              agentHandoffId,
+              consumedAgentHandoffId: agentHandoffId,
+            },
+          ],
+          activeTabId: "native",
+        }),
+        context,
+      );
 
-      const tab = (
-        restored?.root as unknown as { tabs: Array<Record<string, unknown>> }
-      ).tabs[0]!;
+      const tab = (restored!.root as unknown as { tabs: Array<Record<string, unknown>> }).tabs[0]!;
       expect(tab.initialAgentModel).toBeUndefined();
       expect(tab.initialReasoningEffort).toBeUndefined();
       expect(tab.initialExecutionProfileId).toBeUndefined();
@@ -307,82 +344,95 @@ describe("reconcilePersistedLayout", () => {
      * restart because the bootstrap prompt is still the session's first message,
      * and without the id it would render as a raw JSON frame.
      */
-    const restored = reconcilePersistedLayout(saved({
-      kind: "leaf",
-      id: "pane-1",
-      tabs: [{
-        id: "native",
-        type: "codex-native",
-        codexNativeData: { environmentId: "env-1" },
-        agentHandoffId: "handoff-live",
-        consumedAgentHandoffId: "handoff-consumed",
-      }],
-      activeTabId: "native",
-    }), context);
+    const restored = reconcilePersistedLayout(
+      saved({
+        kind: "leaf",
+        id: "pane-1",
+        tabs: [
+          {
+            id: "native",
+            type: "codex-native",
+            codexNativeData: { environmentId: "env-1" },
+            agentHandoffId: "handoff-live",
+            consumedAgentHandoffId: "handoff-consumed",
+          },
+        ],
+        activeTabId: "native",
+      }),
+      context,
+    );
 
-    const tab = (
-      restored?.root as unknown as { tabs: Array<Record<string, unknown>> }
-    ).tabs[0]!;
+    const tab = (restored!.root as unknown as { tabs: Array<Record<string, unknown>> }).tabs[0]!;
     expect(tab.agentHandoffId).toBe("handoff-live");
     expect(tab.consumedAgentHandoffId).toBe("handoff-consumed");
   });
 
   test("restores the last browser address", () => {
-    const result = reconcilePersistedLayout(saved({
-      kind: "leaf",
-      id: "pane",
-      tabs: [{
-        id: "browser",
-        type: "browser",
-        browserData: {
-          url: "http://localhost:3000/app",
-          history: ["http://localhost:3000/", "http://localhost:3000/app"],
-          historyIndex: 1,
-        },
-      }],
-      activeTabId: "browser",
-    }), context);
+    const result = reconcilePersistedLayout(
+      saved({
+        kind: "leaf",
+        id: "pane",
+        tabs: [
+          {
+            id: "browser",
+            type: "browser",
+            browserData: {
+              url: "http://localhost:3000/app",
+              history: ["http://localhost:3000/", "http://localhost:3000/app"],
+              historyIndex: 1,
+            },
+          },
+        ],
+        activeTabId: "browser",
+      }),
+      context,
+    );
 
     expect(result?.root).toEqual({
       kind: "leaf",
       id: "pane",
-      tabs: [{
-        id: "browser",
-        type: "browser",
-        browserData: {
-          url: "http://localhost:3000/app",
-          history: ["http://localhost:3000/", "http://localhost:3000/app"],
-          historyIndex: 1,
+      tabs: [
+        {
+          id: "browser",
+          type: "browser",
+          browserData: {
+            url: "http://localhost:3000/app",
+            history: ["http://localhost:3000/", "http://localhost:3000/app"],
+            historyIndex: 1,
+          },
+          displayTitle: undefined,
+          isReviewTab: undefined,
         },
-        displayTitle: undefined,
-        isReviewTab: undefined,
-      }],
+      ],
       activeTabId: "browser",
     });
   });
 
   test("migrates sensitive restored history without changing the current URL", () => {
-    const result = reconcilePersistedLayout(saved({
-      kind: "leaf",
-      id: "pane",
-      tabs: [{
-        id: "browser",
-        type: "browser",
-        browserData: {
-          url: "https://example.com/current?token=current#live",
-          history: [
-            "https://alice:secret@example.com/previous?token=old#private",
-            "https://example.com/current?token=current#live",
-          ],
-          historyIndex: 1,
-        },
-      }],
-      activeTabId: "browser",
-    }), context);
+    const result = reconcilePersistedLayout(
+      saved({
+        kind: "leaf",
+        id: "pane",
+        tabs: [
+          {
+            id: "browser",
+            type: "browser",
+            browserData: {
+              url: "https://example.com/current?token=current#live",
+              history: [
+                "https://alice:secret@example.com/previous?token=old#private",
+                "https://example.com/current?token=current#live",
+              ],
+              historyIndex: 1,
+            },
+          },
+        ],
+        activeTabId: "browser",
+      }),
+      context,
+    );
 
-    const browserData = result?.root.kind === "leaf"
-      ? result.root.tabs[0]?.browserData
-      : undefined;
+    const browserData = result?.root.kind === "leaf" ? result.root.tabs[0]?.browserData : undefined;
     expect(browserData).toEqual({
       url: "https://example.com/current?token=current#live",
       history: ["https://example.com/previous", "https://example.com/current"],
@@ -392,16 +442,22 @@ describe("reconcilePersistedLayout", () => {
 
   test("bounds browser history and rebases and clamps its cursor", () => {
     const history = Array.from({ length: 125 }, (_, index) => `http://localhost/${index}`);
-    const restore = (historyIndex: unknown) => reconcilePersistedLayout(saved({
-      kind: "leaf",
-      id: "pane",
-      tabs: [{
-        id: "browser",
-        type: "browser",
-        browserData: { url: history[120], history, historyIndex },
-      }],
-      activeTabId: "browser",
-    }), context)?.root as Extract<EnvironmentPaneState["root"], { kind: "leaf" }>;
+    const restore = (historyIndex: unknown) =>
+      reconcilePersistedLayout(
+        saved({
+          kind: "leaf",
+          id: "pane",
+          tabs: [
+            {
+              id: "browser",
+              type: "browser",
+              browserData: { url: history[120], history, historyIndex },
+            },
+          ],
+          activeTabId: "browser",
+        }),
+        context,
+      )?.root as Extract<EnvironmentPaneState["root"], { kind: "leaf" }>;
 
     expect(restore(120).tabs[0]?.browserData).toMatchObject({
       history: history.slice(25),
@@ -417,20 +473,26 @@ describe("reconcilePersistedLayout", () => {
       { url: "http://localhost", history: ["valid"], historyIndex: 1.5 },
       { url: "http://localhost", history: "not-an-array", historyIndex: 0 },
     ]) {
-      const restored = reconcilePersistedLayout(saved({
-        kind: "leaf",
-        id: "pane",
-        tabs: [{ id: "browser", type: "browser", browserData }],
-        activeTabId: "browser",
-      }), context);
+      const restored = reconcilePersistedLayout(
+        saved({
+          kind: "leaf",
+          id: "pane",
+          tabs: [{ id: "browser", type: "browser", browserData }],
+          activeTabId: "browser",
+        }),
+        context,
+      );
       expect(restored?.root).toMatchObject({
         kind: "leaf",
-        tabs: [{
-          id: "browser",
-          browserData: { url: "http://localhost" },
-        }],
+        tabs: [
+          {
+            id: "browser",
+            browserData: { url: "http://localhost" },
+          },
+        ],
       });
-      const tab = (restored?.root as Extract<EnvironmentPaneState["root"], { kind: "leaf" }>).tabs[0];
+      const tab = (restored!.root as Extract<EnvironmentPaneState["root"], { kind: "leaf" }>)
+        .tabs[0];
       if (!Array.isArray(browserData.history)) {
         expect(tab?.browserData?.history).toBeUndefined();
       }
@@ -441,21 +503,27 @@ describe("reconcilePersistedLayout", () => {
   });
 
   test("drops malformed browser data and normalizes a missing or non-string URL", () => {
-    const malformed = reconcilePersistedLayout(saved({
-      kind: "leaf",
-      id: "pane",
-      tabs: [{ id: "browser", type: "browser", browserData: "invalid" }],
-      activeTabId: "browser",
-    }), context);
+    const malformed = reconcilePersistedLayout(
+      saved({
+        kind: "leaf",
+        id: "pane",
+        tabs: [{ id: "browser", type: "browser", browserData: "invalid" }],
+        activeTabId: "browser",
+      }),
+      context,
+    );
     expect(malformed).toBeNull();
 
     for (const browserData of [{}, { url: 123 }]) {
-      const restored = reconcilePersistedLayout(saved({
-        kind: "leaf",
-        id: "pane",
-        tabs: [{ id: "browser", type: "browser", browserData }],
-        activeTabId: "browser",
-      }), context);
+      const restored = reconcilePersistedLayout(
+        saved({
+          kind: "leaf",
+          id: "pane",
+          tabs: [{ id: "browser", type: "browser", browserData }],
+          activeTabId: "browser",
+        }),
+        context,
+      );
       expect(restored?.root).toMatchObject({
         kind: "leaf",
         tabs: [{ id: "browser", type: "browser", browserData: { url: "" } }],
@@ -464,33 +532,38 @@ describe("reconcilePersistedLayout", () => {
   });
 
   test("deduplicates tabs, drops missing build tabs, and collapses empty leaves", () => {
-    const restored = reconcilePersistedLayout(saved({
-      kind: "split",
-      id: "split-1",
-      direction: "horizontal",
-      sizes: [20, 80],
-      children: [
-        {
-          kind: "leaf",
-          id: "empty-pane",
-          tabs: [{
-            id: "build",
-            type: "claude-build",
-            buildTabData: { environmentId: "env-1", pipelineId: "missing", taskId: "task-1" },
-          }],
-          activeTabId: "build",
-        },
-        {
-          kind: "leaf",
-          id: "kept-pane",
-          tabs: [
-            { id: "tab-1", type: "plain" },
-            { id: "tab-1", type: "claude" },
-          ],
-          activeTabId: "tab-1",
-        },
-      ],
-    }), context);
+    const restored = reconcilePersistedLayout(
+      saved({
+        kind: "split",
+        id: "split-1",
+        direction: "horizontal",
+        sizes: [20, 80],
+        children: [
+          {
+            kind: "leaf",
+            id: "empty-pane",
+            tabs: [
+              {
+                id: "build",
+                type: "claude-build",
+                buildTabData: { environmentId: "env-1", pipelineId: "missing", taskId: "task-1" },
+              },
+            ],
+            activeTabId: "build",
+          },
+          {
+            kind: "leaf",
+            id: "kept-pane",
+            tabs: [
+              { id: "tab-1", type: "plain" },
+              { id: "tab-1", type: "claude" },
+            ],
+            activeTabId: "tab-1",
+          },
+        ],
+      }),
+      context,
+    );
 
     expect(restored?.root).toEqual({
       kind: "leaf",
@@ -502,17 +575,24 @@ describe("reconcilePersistedLayout", () => {
   });
 
   test("rejects malformed trees and duplicate node ids", () => {
-    expect(reconcilePersistedLayout(saved({ kind: "leaf", id: "pane", tabs: "bad" }), context)).toBeNull();
-    expect(reconcilePersistedLayout(saved({
-      kind: "split",
-      id: "split",
-      direction: "vertical",
-      sizes: [50, 50],
-      children: [
-        { kind: "leaf", id: "duplicate", tabs: [{ id: "a", type: "plain" }], activeTabId: "a" },
-        { kind: "leaf", id: "duplicate", tabs: [{ id: "b", type: "plain" }], activeTabId: "b" },
-      ],
-    }), context)).toBeNull();
+    expect(
+      reconcilePersistedLayout(saved({ kind: "leaf", id: "pane", tabs: "bad" }), context),
+    ).toBeNull();
+    expect(
+      reconcilePersistedLayout(
+        saved({
+          kind: "split",
+          id: "split",
+          direction: "vertical",
+          sizes: [50, 50],
+          children: [
+            { kind: "leaf", id: "duplicate", tabs: [{ id: "a", type: "plain" }], activeTabId: "a" },
+            { kind: "leaf", id: "duplicate", tabs: [{ id: "b", type: "plain" }], activeTabId: "b" },
+          ],
+        }),
+        context,
+      ),
+    ).toBeNull();
   });
 
   test("rehydrates local files and every specialized tab against current environment data", () => {
@@ -525,85 +605,137 @@ describe("reconcilePersistedLayout", () => {
       hasLoopedReview: (workflowId: string) => workflowId === "workflow-1",
       hasMultiReview: (workflowId: string) => workflowId === "multi-1",
     };
-    const restored = reconcilePersistedLayout(saved({
-      kind: "leaf",
-      id: "pane",
-      tabs: [
+    const restored = reconcilePersistedLayout(
+      saved(
         {
-          id: "file",
-          type: "file",
-          fileData: {
-            filePath: "src/index.ts",
-            containerId: "stale",
-            worktreePath: "/stale",
-            isLocalEnvironment: false,
-            language: "typescript",
-            isDiff: true,
-            gitStatus: "M",
-            baseBranch: "main",
-          },
+          kind: "leaf",
+          id: "pane",
+          tabs: [
+            {
+              id: "file",
+              type: "file",
+              fileData: {
+                filePath: "src/index.ts",
+                containerId: "stale",
+                worktreePath: "/stale",
+                isLocalEnvironment: false,
+                language: "typescript",
+                isDiff: true,
+                gitStatus: "M",
+                baseBranch: "main",
+              },
+            },
+            {
+              id: "codex",
+              type: "codex-native",
+              codexNativeData: { environmentId: "old", sessionId: "cx-1" },
+            },
+            {
+              id: "open",
+              type: "opencode-native",
+              openCodeNativeData: { environmentId: "old", sessionId: "oc-1" },
+            },
+            { id: "tmux", type: "claude-tmux", claudeTmuxData: { environmentId: "old" } },
+            {
+              id: "build",
+              type: "claude-build",
+              buildTabData: { environmentId: "old", pipelineId: "pipeline-1", taskId: "task-1" },
+            },
+            {
+              id: "looped",
+              type: "looped-review",
+              loopedReviewTabData: { environmentId: "old", workflowId: "workflow-1" },
+            },
+            {
+              id: "multi",
+              type: "multi-review",
+              multiReviewTabData: {
+                environmentId: "old",
+                workflowId: "multi-1",
+                reviewerId: "reviewer-1",
+              },
+            },
+          ],
+          activeTabId: "file",
         },
-        { id: "codex", type: "codex-native", codexNativeData: { environmentId: "old", sessionId: "cx-1" } },
-        { id: "open", type: "opencode-native", openCodeNativeData: { environmentId: "old", sessionId: "oc-1" } },
-        { id: "tmux", type: "claude-tmux", claudeTmuxData: { environmentId: "old" } },
-        {
-          id: "build",
-          type: "claude-build",
-          buildTabData: { environmentId: "old", pipelineId: "pipeline-1", taskId: "task-1" },
-        },
-        {
-          id: "looped",
-          type: "looped-review",
-          loopedReviewTabData: { environmentId: "old", workflowId: "workflow-1" },
-        },
-        {
-          id: "multi",
-          type: "multi-review",
-          multiReviewTabData: {
-            environmentId: "old", workflowId: "multi-1", reviewerId: "reviewer-1",
-          },
-        },
-      ],
-      activeTabId: "file",
-    }, { containerId: null }), localContext);
+        { containerId: null },
+      ),
+      localContext,
+    );
 
     expect(restored?.root).toMatchObject({
       kind: "leaf",
       tabs: [
         { id: "file", fileData: { worktreePath: "/worktrees/current", isLocalEnvironment: true } },
-        { id: "codex", nativeAgentData: { platform: "codex", environmentId: "env-1", sessionId: "cx-1", isLocal: true } },
-        { id: "open", nativeAgentData: { platform: "opencode", environmentId: "env-1", sessionId: "oc-1", isLocal: true } },
+        {
+          id: "codex",
+          nativeAgentData: {
+            platform: "codex",
+            environmentId: "env-1",
+            sessionId: "cx-1",
+            isLocal: true,
+          },
+        },
+        {
+          id: "open",
+          nativeAgentData: {
+            platform: "opencode",
+            environmentId: "env-1",
+            sessionId: "oc-1",
+            isLocal: true,
+          },
+        },
         { id: "tmux", claudeTmuxData: { environmentId: "env-1", isLocal: true } },
-        { id: "build", buildTabData: { environmentId: "env-1", pipelineId: "pipeline-1", taskId: "task-1", isLocal: true } },
-        { id: "looped", loopedReviewTabData: { environmentId: "env-1", workflowId: "workflow-1", isLocal: true } },
-        { id: "multi", multiReviewTabData: {
-          environmentId: "env-1", workflowId: "multi-1", reviewerId: "reviewer-1", isLocal: true,
-        } },
+        {
+          id: "build",
+          buildTabData: {
+            environmentId: "env-1",
+            pipelineId: "pipeline-1",
+            taskId: "task-1",
+            isLocal: true,
+          },
+        },
+        {
+          id: "looped",
+          loopedReviewTabData: { environmentId: "env-1", workflowId: "workflow-1", isLocal: true },
+        },
+        {
+          id: "multi",
+          multiReviewTabData: {
+            environmentId: "env-1",
+            workflowId: "multi-1",
+            reviewerId: "reviewer-1",
+            isLocal: true,
+          },
+        },
       ],
     });
     expect(JSON.stringify(restored)).not.toContain("stale");
   });
 
   test("drops looped-review tabs whose authoritative workflow no longer exists", () => {
-    const restored = reconcilePersistedLayout(saved({
-      kind: "leaf",
-      id: "pane",
-      tabs: [
-        { id: "plain", type: "plain" },
-        {
-          id: "missing-loop",
-          type: "looped-review",
-          loopedReviewTabData: {
-            environmentId: "env-1",
-            workflowId: "missing",
+    const restored = reconcilePersistedLayout(
+      saved({
+        kind: "leaf",
+        id: "pane",
+        tabs: [
+          { id: "plain", type: "plain" },
+          {
+            id: "missing-loop",
+            type: "looped-review",
+            loopedReviewTabData: {
+              environmentId: "env-1",
+              workflowId: "missing",
+            },
           },
-        },
-      ],
-      activeTabId: "missing-loop",
-    }), {
-      ...context,
-      hasLoopedReview: () => false,
-    });
+        ],
+        activeTabId: "missing-loop",
+      }),
+      {
+        ...context,
+        hasLoopedReview: () => false,
+      },
+    );
 
     expect(restored?.root).toEqual({
       kind: "leaf",
@@ -614,22 +746,25 @@ describe("reconcilePersistedLayout", () => {
   });
 
   test("drops Multi Review tabs whose authoritative workflow no longer exists", () => {
-    const restored = reconcilePersistedLayout(saved({
-      kind: "leaf",
-      id: "pane",
-      tabs: [
-        { id: "plain", type: "plain" },
-        {
-          id: "missing-multi",
-          type: "multi-review",
-          multiReviewTabData: { environmentId: "env-1", workflowId: "missing" },
-        },
-      ],
-      activeTabId: "missing-multi",
-    }), {
-      ...context,
-      hasMultiReview: () => false,
-    });
+    const restored = reconcilePersistedLayout(
+      saved({
+        kind: "leaf",
+        id: "pane",
+        tabs: [
+          { id: "plain", type: "plain" },
+          {
+            id: "missing-multi",
+            type: "multi-review",
+            multiReviewTabData: { environmentId: "env-1", workflowId: "missing" },
+          },
+        ],
+        activeTabId: "missing-multi",
+      }),
+      {
+        ...context,
+        hasMultiReview: () => false,
+      },
+    );
 
     expect(restored?.root).toEqual({
       kind: "leaf",
@@ -644,19 +779,22 @@ describe("reconcilePersistedLayout", () => {
     // workflow overview, so an unusable id drops the tab rather than changing
     // which view the user saved.
     for (const reviewerId of ["", "   ", 7, null]) {
-      const restored = reconcilePersistedLayout(saved({
-        kind: "leaf",
-        id: "pane",
-        tabs: [
-          { id: "plain", type: "plain" },
-          {
-            id: "bad-reviewer",
-            type: "multi-review",
-            multiReviewTabData: { environmentId: "env-1", workflowId: "multi-1", reviewerId },
-          },
-        ],
-        activeTabId: "bad-reviewer",
-      }), { ...context, hasMultiReview: () => true });
+      const restored = reconcilePersistedLayout(
+        saved({
+          kind: "leaf",
+          id: "pane",
+          tabs: [
+            { id: "plain", type: "plain" },
+            {
+              id: "bad-reviewer",
+              type: "multi-review",
+              multiReviewTabData: { environmentId: "env-1", workflowId: "multi-1", reviewerId },
+            },
+          ],
+          activeTabId: "bad-reviewer",
+        }),
+        { ...context, hasMultiReview: () => true },
+      );
 
       expect(restored?.root, JSON.stringify(reviewerId)).toEqual({
         kind: "leaf",
@@ -668,35 +806,45 @@ describe("reconcilePersistedLayout", () => {
   });
 
   test("restores a Multi Review overview tab that never named a reviewer", () => {
-    const restored = reconcilePersistedLayout(saved({
-      kind: "leaf",
-      id: "pane",
-      tabs: [{
-        id: "overview",
-        type: "multi-review",
-        multiReviewTabData: { environmentId: "env-1", workflowId: "multi-1" },
-      }],
-      activeTabId: "overview",
-    }), { ...context, hasMultiReview: () => true });
+    const restored = reconcilePersistedLayout(
+      saved({
+        kind: "leaf",
+        id: "pane",
+        tabs: [
+          {
+            id: "overview",
+            type: "multi-review",
+            multiReviewTabData: { environmentId: "env-1", workflowId: "multi-1" },
+          },
+        ],
+        activeTabId: "overview",
+      }),
+      { ...context, hasMultiReview: () => true },
+    );
 
-    const [tab] = (restored?.root as unknown as { tabs: Array<Record<string, unknown>> }).tabs;
+    const [tab] = (restored!.root as unknown as { tabs: Array<Record<string, unknown>> }).tabs;
     expect(tab?.multiReviewTabData).toEqual({
-      environmentId: "env-1", workflowId: "multi-1", isLocal: false,
+      environmentId: "env-1",
+      workflowId: "multi-1",
+      isLocal: false,
     });
     expect(tab?.multiReviewTabData).not.toHaveProperty("reviewerId");
   });
 
   test("preserves child order and direction while normalizing split sizes", () => {
-    const restored = reconcilePersistedLayout(saved({
-      kind: "split",
-      id: "split",
-      direction: "vertical",
-      sizes: [1, 999],
-      children: [
-        { kind: "leaf", id: "first", tabs: [{ id: "one", type: "plain" }], activeTabId: "one" },
-        { kind: "leaf", id: "second", tabs: [{ id: "two", type: "plain" }], activeTabId: "two" },
-      ],
-    }), context);
+    const restored = reconcilePersistedLayout(
+      saved({
+        kind: "split",
+        id: "split",
+        direction: "vertical",
+        sizes: [1, 999],
+        children: [
+          { kind: "leaf", id: "first", tabs: [{ id: "one", type: "plain" }], activeTabId: "one" },
+          { kind: "leaf", id: "second", tabs: [{ id: "two", type: "plain" }], activeTabId: "two" },
+        ],
+      }),
+      context,
+    );
 
     expect(restored?.root).toMatchObject({
       kind: "split",
@@ -712,17 +860,37 @@ describe("reconcilePersistedLayout", () => {
       { kind: "leaf", id: "first", tabs: [{ id: "one", type: "plain" }], activeTabId: "one" },
       { kind: "leaf", id: "second", tabs: [{ id: "two", type: "plain" }], activeTabId: "two" },
     ];
-    expect(reconcilePersistedLayout(saved({
-      kind: "split",
-      id: "split",
-      direction: "horizontal",
-      sizes: [0, Number.NaN],
-      children: leaves,
-    }), context)?.root).toMatchObject({ sizes: [50, 50] });
-    expect(reconcilePersistedLayout(saved({ ...leaves[0], kind: "split", direction: "diagonal", children: leaves }), context)).toBeNull();
-    expect(reconcilePersistedLayout(saved({ kind: "split", id: "split", direction: "horizontal", children: [leaves[0]] }), context)).toBeNull();
+    expect(
+      reconcilePersistedLayout(
+        saved({
+          kind: "split",
+          id: "split",
+          direction: "horizontal",
+          sizes: [0, Number.NaN],
+          children: leaves,
+        }),
+        context,
+      )?.root,
+    ).toMatchObject({ sizes: [50, 50] });
+    expect(
+      reconcilePersistedLayout(
+        saved({ ...leaves[0], kind: "split", direction: "diagonal", children: leaves }),
+        context,
+      ),
+    ).toBeNull();
+    expect(
+      reconcilePersistedLayout(
+        saved({ kind: "split", id: "split", direction: "horizontal", children: [leaves[0]] }),
+        context,
+      ),
+    ).toBeNull();
 
-    let tooDeep: unknown = { kind: "leaf", id: "deep-leaf", tabs: [{ id: "deep-tab", type: "plain" }], activeTabId: "deep-tab" };
+    let tooDeep: unknown = {
+      kind: "leaf",
+      id: "deep-leaf",
+      tabs: [{ id: "deep-tab", type: "plain" }],
+      activeTabId: "deep-tab",
+    };
     for (let depth = 0; depth < 10; depth += 1) {
       tooDeep = {
         kind: "split",
@@ -731,7 +899,12 @@ describe("reconcilePersistedLayout", () => {
         sizes: [50, 50],
         children: [
           tooDeep,
-          { kind: "leaf", id: `sibling-${depth}`, tabs: [{ id: `tab-${depth}`, type: "plain" }], activeTabId: `tab-${depth}` },
+          {
+            kind: "leaf",
+            id: `sibling-${depth}`,
+            tabs: [{ id: `tab-${depth}`, type: "plain" }],
+            activeTabId: `tab-${depth}`,
+          },
         ],
       };
     }
@@ -739,12 +912,17 @@ describe("reconcilePersistedLayout", () => {
   });
 
   test("returns null when every restored tab is filtered out", () => {
-    expect(reconcilePersistedLayout(saved({
-      kind: "leaf",
-      id: "empty",
-      tabs: [{ id: "future", type: "future-tab" }],
-      activeTabId: "future",
-    }), context)).toBeNull();
+    expect(
+      reconcilePersistedLayout(
+        saved({
+          kind: "leaf",
+          id: "empty",
+          tabs: [{ id: "future", type: "future-tab" }],
+          activeTabId: "future",
+        }),
+        context,
+      ),
+    ).toBeNull();
   });
 
   test("drops every malformed specialized tab shape while retaining a valid sibling", () => {
@@ -822,12 +1000,15 @@ describe("reconcilePersistedLayout", () => {
     };
 
     for (const { name, tab } of malformedTabs) {
-      const restored = reconcilePersistedLayout(saved({
-        kind: "leaf",
-        id: "pane",
-        tabs: [{ id: "valid", type: "plain" }, tab],
-        activeTabId: tab.id,
-      }), restoreContext);
+      const restored = reconcilePersistedLayout(
+        saved({
+          kind: "leaf",
+          id: "pane",
+          tabs: [{ id: "valid", type: "plain" }, tab],
+          activeTabId: tab.id,
+        }),
+        restoreContext,
+      );
 
       expect(restored?.root, name).toMatchObject({
         kind: "leaf",
@@ -836,12 +1017,17 @@ describe("reconcilePersistedLayout", () => {
       });
     }
 
-    expect(reconcilePersistedLayout(saved({
-      kind: "leaf",
-      id: "pane",
-      tabs: malformedTabs.map(({ tab }) => tab),
-      activeTabId: "bad-file-data",
-    }), restoreContext)).toBeNull();
+    expect(
+      reconcilePersistedLayout(
+        saved({
+          kind: "leaf",
+          id: "pane",
+          tabs: malformedTabs.map(({ tab }) => tab),
+          activeTabId: "bad-file-data",
+        }),
+        restoreContext,
+      ),
+    ).toBeNull();
   });
 });
 
@@ -1139,15 +1325,11 @@ describe("pane field preservation", () => {
         hostPort: 4101,
       },
     });
-    expect(
-      moved.tabs.find((tab) => tab.id === "codex")?.nativeAgentData,
-    ).toMatchObject({
+    expect(moved.tabs.find((tab) => tab.id === "codex")?.nativeAgentData).toMatchObject({
       sessionId: "authoritative-codex-session",
       hostPort: 4102,
     });
-    expect(
-      moved.tabs.find((tab) => tab.id === "opencode")?.nativeAgentData,
-    ).toMatchObject({
+    expect(moved.tabs.find((tab) => tab.id === "opencode")?.nativeAgentData).toMatchObject({
       sessionId: "authoritative-opencode-session",
       hostPort: 4103,
     });
@@ -1158,11 +1340,7 @@ describe("pane field preservation", () => {
     // `nativeAgentData`, so the live port only ever exists on whichever
     // projection its writer used. The pane renderer reads the canonical field,
     // so it has to inherit the port regardless of where it was recorded.
-    const nativeTab = (
-      id: string,
-      type: TabInfo["type"],
-      legacy: Partial<TabInfo>,
-    ): TabInfo => ({
+    const nativeTab = (id: string, type: TabInfo["type"], legacy: Partial<TabInfo>): TabInfo => ({
       id,
       type,
       nativeAgentData: {
@@ -1472,16 +1650,18 @@ describe("pane field preservation", () => {
       root: {
         kind: "leaf",
         id: "pane",
-        tabs: [{
-          id: "native",
-          type: "agent-native",
-          nativeAgentData: {
-            environmentId: "env-1",
-            containerId: "container-1",
-            hostPort: 4321,
-            sessionId: "session-1",
+        tabs: [
+          {
+            id: "native",
+            type: "agent-native",
+            nativeAgentData: {
+              environmentId: "env-1",
+              containerId: "container-1",
+              hostPort: 4321,
+              sessionId: "session-1",
+            },
           },
-        }],
+        ],
         activeTabId: "native",
       },
     };
@@ -1494,8 +1674,7 @@ describe("pane field preservation", () => {
       tabs: [{ id: "native", type: "agent-native" }],
     });
     expect(
-      (reconciled.root as { tabs: Array<{ nativeAgentData?: unknown }> })
-        .tabs[0]?.nativeAgentData,
+      (reconciled.root as { tabs: Array<{ nativeAgentData?: unknown }> }).tabs[0]?.nativeAgentData,
     ).toBeUndefined();
   });
 });

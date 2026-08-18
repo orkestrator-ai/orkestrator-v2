@@ -1,42 +1,33 @@
-import { afterEach,describe,expect,mock,test } from "bun:test";
-
+import { afterEach, describe, expect, mock, test } from "bun:test";
 
 import {
-compactOpenCodeSession,
-forkOpenCodeSession,
-getModels,
-getOpenCodeRuntimeHealth,
-getStructuredOutput,
-revertOpenCodeSession,
-sendPrompt,
-sendStructuredPrompt,
-shareOpenCodeSession,
-splitOpenCodeModelId,
-summarizeOpenCodeUsage,
-unrevertOpenCodeSession,
-unshareOpenCodeSession,
-type OpencodeClient,
-type OpenCodeMessage,
-type OpenCodeModel
+  compactOpenCodeSession,
+  forkOpenCodeSession,
+  getModels,
+  getOpenCodeRuntimeHealth,
+  getStructuredOutput,
+  revertOpenCodeSession,
+  sendPrompt,
+  sendStructuredPrompt,
+  shareOpenCodeSession,
+  splitOpenCodeModelId,
+  summarizeOpenCodeUsage,
+  unrevertOpenCodeSession,
+  unshareOpenCodeSession,
+  type OpencodeClient,
+  type OpenCodeMessage,
+  type OpenCodeModel,
 } from "./opencode-client";
-
 
 import { StructuredOutputReadUnavailableError } from "@orkestrator/protocol/structured-output";
 
-
 import { OPEN_CODE_MESSAGE_HISTORY_LIMIT } from "@orkestrator/protocol/opencode-message-id";
 
-
-
 const originalFetch = globalThis.fetch;
-
-
 
 function setTestUrl(url: string): void {
   (window as unknown as Window & { happyDOM: { setURL(url: string): void } }).happyDOM.setURL(url);
 }
-
-
 
 function expectedOpenCodeMessageId(requestId: string): string {
   let encoded = "";
@@ -46,16 +37,12 @@ function expectedOpenCodeMessageId(requestId: string): string {
   return `msg_00000000000000000000000000_ork_${encoded}`;
 }
 
-
-
 afterEach(() => {
   globalThis.fetch = originalFetch;
   delete window.orkestratorGateway;
   setTestUrl("about:blank");
   mock.restore();
 });
-
-
 
 describe("opencode-client sendPrompt", () => {
   /** Captures the request handed to `promptAsync` and answers with success. */
@@ -190,12 +177,16 @@ describe("opencode-client sendPrompt", () => {
   test("encodes msg-prefixed caller IDs without colliding with unprefixed IDs", async () => {
     const { client, captured } = capturePromptAsync();
 
-    await expect(sendPrompt(client, "session-1", "Hello", {
-      requestId: "msg_collision",
-    })).resolves.toEqual({ success: true, requestId: "msg_collision" });
-    await expect(sendPrompt(client, "session-1", "Hello", {
-      requestId: "collision",
-    })).resolves.toEqual({ success: true, requestId: "collision" });
+    await expect(
+      sendPrompt(client, "session-1", "Hello", {
+        requestId: "msg_collision",
+      }),
+    ).resolves.toEqual({ success: true, requestId: "msg_collision" });
+    await expect(
+      sendPrompt(client, "session-1", "Hello", {
+        requestId: "collision",
+      }),
+    ).resolves.toEqual({ success: true, requestId: "collision" });
 
     expect(captured[0]?.messageID).toMatch(/^msg_[0-9a-f]{12}z{14}[0-9a-f]{12}_ork_/);
     expect(captured[1]?.messageID).toMatch(/^msg_[0-9a-f]{12}z{14}[0-9a-f]{12}_ork_/);
@@ -210,9 +201,7 @@ describe("opencode-client sendPrompt", () => {
     const first = captured[0]?.messageID;
     if (typeof first !== "string") throw new Error("first message ID missing");
     const firstTime = BigInt(`0x${first.slice(4, 16)}`);
-    const assistantTime = ((firstTime + 0x1000n) & 0xffffffffffffn)
-      .toString(16)
-      .padStart(12, "0");
+    const assistantTime = ((firstTime + 0x1000n) & 0xffffffffffffn).toString(16).padStart(12, "0");
     const assistant = `msg_${assistantTime}hsJUIHGDARuWRB`;
     setHistory([
       { info: { id: first, role: "user" } },
@@ -239,12 +228,7 @@ describe("opencode-client sendPrompt", () => {
   });
 
   test("serializes concurrent same-snapshot sends and keeps retry reservations", async () => {
-    const {
-      client,
-      captured,
-      historyCalls,
-      setPromptGate,
-    } = capturePromptAsync();
+    const { client, captured, historyCalls, setPromptGate } = capturePromptAsync();
     let releaseFirst: () => void = () => undefined;
     const gate = new Promise<void>((resolve) => {
       releaseFirst = resolve;
@@ -298,38 +282,38 @@ describe("opencode-client sendPrompt", () => {
     [
       "too many messages",
       {
-        data: Array.from(
-          { length: OPEN_CODE_MESSAGE_HISTORY_LIMIT + 1 },
-          () => null,
-        ),
+        data: Array.from({ length: OPEN_CODE_MESSAGE_HISTORY_LIMIT + 1 }, () => null),
       },
     ],
-  ] as const)("does not dispatch from unavailable or malformed history: %s", async (_label, response) => {
-    const promptAsync = mock(async () => ({ data: null }));
-    const command = mock(async () => ({ data: null }));
-    const client = {
-      session: {
-        messages: async () => response,
-        promptAsync,
-        command,
-      },
-    } as unknown as OpencodeClient;
+  ] as const)(
+    "does not dispatch from unavailable or malformed history: %s",
+    async (_label, response) => {
+      const promptAsync = mock(async () => ({ data: null }));
+      const command = mock(async () => ({ data: null }));
+      const client = {
+        session: {
+          messages: async () => response,
+          promptAsync,
+          command,
+        },
+      } as unknown as OpencodeClient;
 
-    const promptResult = await sendPrompt(client, "session-1", "Hello", {
-      requestId: "request-1",
-    });
-    const commandResult = await sendPrompt(client, "session-1", "/init", {
-      requestId: "request-2",
-      command: { name: "init" },
-    });
+      const promptResult = await sendPrompt(client, "session-1", "Hello", {
+        requestId: "request-1",
+      });
+      const commandResult = await sendPrompt(client, "session-1", "/init", {
+        requestId: "request-2",
+        command: { name: "init" },
+      });
 
-    expect(promptResult.success).toBe(false);
-    expect(commandResult.success).toBe(false);
-    expect(promptResult.error).toMatch(/history unavailable|malformed|too many|oversized/i);
-    expect(commandResult.error).toMatch(/history unavailable|malformed|too many|oversized/i);
-    expect(promptAsync).not.toHaveBeenCalled();
-    expect(command).not.toHaveBeenCalled();
-  });
+      expect(promptResult.success).toBe(false);
+      expect(commandResult.success).toBe(false);
+      expect(promptResult.error).toMatch(/history unavailable|malformed|too many|oversized/i);
+      expect(commandResult.error).toMatch(/history unavailable|malformed|too many|oversized/i);
+      expect(promptAsync).not.toHaveBeenCalled();
+      expect(command).not.toHaveBeenCalled();
+    },
+  );
 
   describe("command branch", () => {
     /** Captures both dispatch routes so the selection itself is observable. */
@@ -514,25 +498,21 @@ describe("opencode-client sendPrompt", () => {
       required: ["summary"],
     };
 
-    const result = await sendStructuredPrompt(
-      client,
-      "session-1",
-      "Review this",
-      schema,
-      {
-        requestId: "structured-1",
-        retryCount: 3,
-        model: "openrouter/anthropic/claude-sonnet-4",
-        variant: "high",
-        mode: "plan",
-        attachments: [{
+    const result = await sendStructuredPrompt(client, "session-1", "Review this", schema, {
+      requestId: "structured-1",
+      retryCount: 3,
+      model: "openrouter/anthropic/claude-sonnet-4",
+      variant: "high",
+      mode: "plan",
+      attachments: [
+        {
           type: "image",
           path: "/workspace/screenshot.png",
           filename: "screenshot.png",
           dataUrl: "data:image/png;base64,AAAA",
-        }],
-      },
-    );
+        },
+      ],
+    });
 
     expect(result).toEqual({ success: true, requestId: "structured-1" });
     expect(capturedRequest).toMatchObject({
@@ -595,9 +575,9 @@ describe("opencode-client sendPrompt", () => {
         },
       },
     ];
-    await expect(
-      getStructuredOutput(client, "session-1", result.requestId),
-    ).resolves.toMatchObject({ ok: true, value: { ok: true } });
+    await expect(getStructuredOutput(client, "session-1", result.requestId)).resolves.toMatchObject(
+      { ok: true, value: { ok: true } },
+    );
   });
 
   test("reads only OpenCode's structured field and types malformed/retry failures", async () => {
@@ -667,9 +647,7 @@ describe("opencode-client sendPrompt", () => {
         }),
       },
     } as unknown as OpencodeClient;
-    expect(
-      await getStructuredOutput(msgPrefixed, "session-1", msgPrefixedRequestId),
-    ).toEqual({
+    expect(await getStructuredOutput(msgPrefixed, "session-1", msgPrefixedRequestId)).toEqual({
       ok: true,
       provider: "opencode",
       requestId: msgPrefixedRequestId,
@@ -711,9 +689,7 @@ describe("opencode-client sendPrompt", () => {
       },
     } as unknown as OpencodeClient;
     expect(await getStructuredOutput(retryPending, "session-1")).toBeNull();
-    expect(
-      await getStructuredOutput(retryPending, "session-1", "structured-retry"),
-    ).toBeNull();
+    expect(await getStructuredOutput(retryPending, "session-1", "structured-retry")).toBeNull();
 
     const plaintextOnly = {
       session: {
@@ -734,18 +710,17 @@ describe("opencode-client sendPrompt", () => {
                 parentID: expectedOpenCodeMessageId("structured-2"),
                 time: { created: 1, completed: 2 },
               },
-              parts: [{ type: "text", text: "{\"summary\":\"not trusted\"}" }],
+              parts: [{ type: "text", text: '{"summary":"not trusted"}' }],
             },
           ],
         }),
       },
     } as unknown as OpencodeClient;
-    expect(await getStructuredOutput(plaintextOnly, "session-1", "structured-2"))
-      .toMatchObject({
-        ok: false,
-        requestId: "structured-2",
-        error: { code: "malformed_output", retryable: true },
-      });
+    expect(await getStructuredOutput(plaintextOnly, "session-1", "structured-2")).toMatchObject({
+      ok: false,
+      requestId: "structured-2",
+      error: { code: "malformed_output", retryable: true },
+    });
 
     const exhausted = {
       session: {
@@ -768,16 +743,15 @@ describe("opencode-client sendPrompt", () => {
         }),
       },
     } as unknown as OpencodeClient;
-    expect(await getStructuredOutput(exhausted, "session-1", "structured-3"))
-      .toMatchObject({
-        ok: false,
-        requestId: "structured-3",
-        error: {
-          code: "schema_retry_exhausted",
-          retryable: true,
-          details: { retries: 3 },
-        },
-      });
+    expect(await getStructuredOutput(exhausted, "session-1", "structured-3")).toMatchObject({
+      ok: false,
+      requestId: "structured-3",
+      error: {
+        code: "schema_retry_exhausted",
+        retryable: true,
+        details: { retries: 3 },
+      },
+    });
   });
 
   test("keeps explicit structured lookup pinned when later unrelated turns exist", async () => {
@@ -824,10 +798,13 @@ describe("opencode-client sendPrompt", () => {
       },
     } as unknown as OpencodeClient;
 
-    await expect(getStructuredOutput(client, "session-1", "target-request"))
-      .resolves.toMatchObject({ ok: true, value: { request: "target" } });
-    await expect(getStructuredOutput(client, "session-1"))
-      .resolves.toMatchObject({ ok: true, value: { request: "later" } });
+    await expect(getStructuredOutput(client, "session-1", "target-request")).resolves.toMatchObject(
+      { ok: true, value: { request: "target" } },
+    );
+    await expect(getStructuredOutput(client, "session-1")).resolves.toMatchObject({
+      ok: true,
+      value: { request: "later" },
+    });
   });
 
   test.each(["", "  "])(
@@ -836,9 +813,9 @@ describe("opencode-client sendPrompt", () => {
       const messages = mock(async () => ({ data: [] }));
       const client = { session: { messages } } as unknown as OpencodeClient;
 
-      await expect(
-        getStructuredOutput(client, "session-1", requestId),
-      ).rejects.toThrow(/request id|non-empty/i);
+      await expect(getStructuredOutput(client, "session-1", requestId)).rejects.toThrow(
+        /request id|non-empty/i,
+      );
       expect(messages).not.toHaveBeenCalled();
     },
   );
@@ -898,25 +875,23 @@ describe("opencode-client sendPrompt", () => {
     const malformedTiming = {
       session: {
         messages: async () => ({
-          data: [{
-            info: {
-              id: "assistant-invalid-time",
-              role: "assistant",
-              parentID: expectedOpenCodeMessageId("structured-invalid-time"),
-              time: "completed yesterday",
-              structured: { summary: "Must not be accepted" },
+          data: [
+            {
+              info: {
+                id: "assistant-invalid-time",
+                role: "assistant",
+                parentID: expectedOpenCodeMessageId("structured-invalid-time"),
+                time: "completed yesterday",
+                structured: { summary: "Must not be accepted" },
+              },
+              parts: [],
             },
-            parts: [],
-          }],
+          ],
         }),
       },
     } as unknown as OpencodeClient;
     await expect(
-      getStructuredOutput(
-        malformedTiming,
-        "session-1",
-        "structured-invalid-time",
-      ),
+      getStructuredOutput(malformedTiming, "session-1", "structured-invalid-time"),
     ).resolves.toMatchObject({
       ok: false,
       requestId: "structured-invalid-time",
@@ -928,15 +903,19 @@ describe("opencode-client sendPrompt", () => {
   });
 });
 
-
-
 describe("opencode-client model and attachment edge cases", () => {
   test("getModels returns only the normalized model list", async () => {
     const client = {
-      provider: { list: async () => ({ data: { all: [{ id: "provider", models: { model: { id: "model", name: "Model" } } }] } }) },
+      provider: {
+        list: async () => ({
+          data: { all: [{ id: "provider", models: { model: { id: "model", name: "Model" } } }] },
+        }),
+      },
       config: { providers: async () => ({ data: undefined }) },
     } as unknown as OpencodeClient;
-    expect(await getModels(client)).toEqual([{ id: "provider/model", name: "Model", provider: "provider" }]);
+    expect(await getModels(client)).toEqual([
+      { id: "provider/model", name: "Model", provider: "provider" },
+    ]);
   });
 
   test("maps image and file attachment MIME types and file URL fallback", async () => {
@@ -945,7 +924,12 @@ describe("opencode-client model and attachment edge cases", () => {
     await sendPrompt(client, "session-1", "attachments", {
       attachments: [
         { type: "image", path: "/tmp/a.jpg", filename: "a.jpg" },
-        { type: "image", path: "/tmp/b.gif", filename: "b.gif", dataUrl: "data:image/gif;base64,AA==" },
+        {
+          type: "image",
+          path: "/tmp/b.gif",
+          filename: "b.gif",
+          dataUrl: "data:image/gif;base64,AA==",
+        },
         { type: "image", path: "/tmp/c.webp", filename: "c.webp" },
         { type: "file", path: "/tmp/d.ts", filename: "d.ts" },
         { type: "file", path: "/tmp/e.bin" },
@@ -961,11 +945,24 @@ describe("opencode-client model and attachment edge cases", () => {
         { type: "file", path: "/tmp/o.rs", filename: "o.rs" },
       ],
     });
-    const parts = (promptAsync.mock.calls[0]?.[0] as { parts: Array<Record<string, unknown>> }).parts;
+    const parts = (promptAsync.mock.calls[0]![0] as { parts: Array<Record<string, unknown>> })
+      .parts;
     expect(parts.slice(1).map((part) => part.mime)).toEqual([
-      "image/jpeg", "image/gif", "image/webp", "text/typescript", "application/octet-stream",
-      "text/plain", "application/json", "text/javascript", "text/javascript", "text/typescript",
-      "text/markdown", "text/html", "text/css", "text/x-python", "text/x-rust",
+      "image/jpeg",
+      "image/gif",
+      "image/webp",
+      "text/typescript",
+      "application/octet-stream",
+      "text/plain",
+      "application/json",
+      "text/javascript",
+      "text/javascript",
+      "text/typescript",
+      "text/markdown",
+      "text/html",
+      "text/css",
+      "text/x-python",
+      "text/x-rust",
     ]);
     expect(parts[1]?.url).toBe("file:///tmp/a.jpg");
     expect(parts[2]?.url).toBe("data:image/gif;base64,AA==");
@@ -984,9 +981,11 @@ describe("opencode-client model and attachment edge cases", () => {
       ],
     });
 
-    const parts = (promptAsync.mock.calls[0]?.[0] as {
-      parts: Array<Record<string, unknown>>;
-    }).parts;
+    const parts = (
+      promptAsync.mock.calls[0]![0] as {
+        parts: Array<Record<string, unknown>>;
+      }
+    ).parts;
     expect(parts.slice(1).map((part) => part.mime)).toEqual([
       "image/jpeg",
       "image/jpeg",
@@ -1030,9 +1029,11 @@ describe("opencode-client model and attachment edge cases", () => {
       ],
     });
 
-    const parts = (promptAsync.mock.calls[0]?.[0] as {
-      parts: Array<Record<string, unknown>>;
-    }).parts;
+    const parts = (
+      promptAsync.mock.calls[0]![0] as {
+        parts: Array<Record<string, unknown>>;
+      }
+    ).parts;
     expect(parts.slice(1).map((part) => part.url)).toEqual([
       "file:///workspace/hash%23name.txt",
       "file:///workspace/query%3Fname.txt",
@@ -1064,8 +1065,6 @@ describe("opencode-client model and attachment edge cases", () => {
     }
   });
 });
-
-
 
 describe("opencode-client summarizeOpenCodeUsage", () => {
   const MODELS: OpenCodeModel[] = [
@@ -1120,21 +1119,22 @@ describe("opencode-client summarizeOpenCodeUsage", () => {
     const messages = [turn({ inputTokens: 900, outputTokens: 100 })];
 
     expect(summarizeOpenCodeUsage(messages, [])).toBeNull();
-    expect(summarizeOpenCodeUsage(messages, [
-      { id: "openai/gpt-5", name: "GPT-5", provider: "openai", contextWindow: 400_000 },
-    ])).toBeNull();
+    expect(
+      summarizeOpenCodeUsage(messages, [
+        { id: "openai/gpt-5", name: "GPT-5", provider: "openai", contextWindow: 400_000 },
+      ]),
+    ).toBeNull();
   });
 
   test("returns null when the catalogue window is not positive", () => {
     expect(
-      summarizeOpenCodeUsage([turn({ totalTokens: 1_000 })], [
-        { ...MODELS[0]!, contextWindow: 0 },
-      ]),
+      summarizeOpenCodeUsage([turn({ totalTokens: 1_000 })], [{ ...MODELS[0]!, contextWindow: 0 }]),
     ).toBeNull();
     expect(
-      summarizeOpenCodeUsage([turn({ totalTokens: 1_000 })], [
-        { ...MODELS[0]!, contextWindow: undefined },
-      ]),
+      summarizeOpenCodeUsage(
+        [turn({ totalTokens: 1_000 })],
+        [{ ...MODELS[0]!, contextWindow: undefined }],
+      ),
     ).toBeNull();
   });
 
@@ -1165,13 +1165,15 @@ describe("opencode-client summarizeOpenCodeUsage", () => {
     // context window on the next turn.
     expect(
       summarizeOpenCodeUsage(
-        [turn({
-          inputTokens: 10_000,
-          outputTokens: 2_000,
-          cacheReadTokens: 3_000,
-          cacheWriteTokens: 500,
-          reasoningTokens: 700,
-        })],
+        [
+          turn({
+            inputTokens: 10_000,
+            outputTokens: 2_000,
+            cacheReadTokens: 3_000,
+            cacheWriteTokens: 500,
+            reasoningTokens: 700,
+          }),
+        ],
         MODELS,
       )?.usedTokens,
     ).toBe(15_000);
@@ -1187,9 +1189,7 @@ describe("opencode-client summarizeOpenCodeUsage", () => {
   });
 
   test("clamps the percentage at 100 when a turn overflows the window", () => {
-    expect(
-      summarizeOpenCodeUsage([turn({ totalTokens: 400_000 })], MODELS)?.percentUsed,
-    ).toBe(100);
+    expect(summarizeOpenCodeUsage([turn({ totalTokens: 400_000 })], MODELS)?.percentUsed).toBe(100);
   });
 
   test("sums every turn for the session-level figures", () => {
@@ -1243,14 +1243,10 @@ describe("opencode-client summarizeOpenCodeUsage", () => {
 
     expect(summary?.estimated).toBe(false);
     expect(summary?.source).toBe("opencode");
-    expect(summary?.updatedAt).toMatch(
-      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,
-    );
+    expect(summary?.updatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
     expect(new Date(summary!.updatedAt!).toISOString()).toBe(summary!.updatedAt!);
   });
 });
-
-
 
 describe("opencode-client getOpenCodeRuntimeHealth", () => {
   function healthClient(overrides: Record<string, unknown> = {}) {
@@ -1289,7 +1285,9 @@ describe("opencode-client getOpenCodeRuntimeHealth", () => {
       },
       session: {
         todo: async () => ({ data: [{ content: "ship", status: "pending", priority: "high" }] }),
-        diff: async () => ({ data: [{ file: "a.ts", additions: 3, deletions: 1, status: "modified" }] }),
+        diff: async () => ({
+          data: [{ file: "a.ts", additions: 3, deletions: 1, status: "modified" }],
+        }),
       },
       ...overrides,
     } as unknown as OpencodeClient;
@@ -1330,10 +1328,12 @@ describe("opencode-client getOpenCodeRuntimeHealth", () => {
     };
     const client = {
       app: { agents: record("agents"), skills: record("skills") },
-      mcp: { status: async (args: { directory?: string }) => {
-        seen.push(`mcp:${args.directory}`);
-        return { data: {} };
-      } },
+      mcp: {
+        status: async (args: { directory?: string }) => {
+          seen.push(`mcp:${args.directory}`);
+          return { data: {} };
+        },
+      },
       lsp: { status: record("lsp") },
       formatter: { status: record("formatter") },
       session: { todo: record("todo"), diff: record("diff") },
@@ -1358,7 +1358,11 @@ describe("opencode-client getOpenCodeRuntimeHealth", () => {
     const health = await getOpenCodeRuntimeHealth(
       healthClient({
         mcp: undefined,
-        lsp: { status: async () => { throw new Error("lsp unavailable"); } },
+        lsp: {
+          status: async () => {
+            throw new Error("lsp unavailable");
+          },
+        },
         formatter: { status: async () => ({ data: undefined }) },
       }),
       "/repo",
@@ -1414,19 +1418,23 @@ describe("opencode-client getOpenCodeRuntimeHealth", () => {
   });
 });
 
-
-
 describe("splitOpenCodeModelId", () => {
   test.each([
     ["anthropic/claude-sonnet-4", { providerID: "anthropic", modelID: "claude-sonnet-4" }],
-    ["openrouter/anthropic/claude-sonnet-4", {
-      providerID: "openrouter",
-      modelID: "anthropic/claude-sonnet-4",
-    }],
-    ["  anthropic/claude-sonnet-4  ", {
-      providerID: "anthropic",
-      modelID: "claude-sonnet-4",
-    }],
+    [
+      "openrouter/anthropic/claude-sonnet-4",
+      {
+        providerID: "openrouter",
+        modelID: "anthropic/claude-sonnet-4",
+      },
+    ],
+    [
+      "  anthropic/claude-sonnet-4  ",
+      {
+        providerID: "anthropic",
+        modelID: "claude-sonnet-4",
+      },
+    ],
   ] as const)("splits a complete model override (%s)", (model, expected) => {
     expect(splitOpenCodeModelId(model)).toEqual(expected);
   });
@@ -1438,8 +1446,6 @@ describe("splitOpenCodeModelId", () => {
     },
   );
 });
-
-
 
 describe("opencode-client session operations", () => {
   describe("forkOpenCodeSession", () => {
@@ -1470,9 +1476,7 @@ describe("opencode-client session operations", () => {
         session: { fork: async () => ({ data: undefined }) },
       } as unknown as OpencodeClient;
 
-      await expect(forkOpenCodeSession(client, "session-1")).rejects.toThrow(
-        "empty fork response",
-      );
+      await expect(forkOpenCodeSession(client, "session-1")).rejects.toThrow("empty fork response");
     });
   });
 
@@ -1508,11 +1512,7 @@ describe("opencode-client session operations", () => {
       // contain slashes; a plain destructure truncated to the middle segment.
       const { client, captured } = captureSummarize();
 
-      await compactOpenCodeSession(
-        client,
-        "session-1",
-        "openrouter/anthropic/claude-sonnet-4",
-      );
+      await compactOpenCodeSession(client, "session-1", "openrouter/anthropic/claude-sonnet-4");
 
       expect(captured[0]).toMatchObject({
         providerID: "openrouter",
@@ -1568,12 +1568,14 @@ describe("opencode-client session operations", () => {
 
     test("propagates a rejection", async () => {
       const client = {
-        session: { revert: async () => { throw new Error("nothing to revert"); } },
+        session: {
+          revert: async () => {
+            throw new Error("nothing to revert");
+          },
+        },
       } as unknown as OpencodeClient;
 
-      await expect(revertOpenCodeSession(client, "session-1")).rejects.toThrow(
-        "nothing to revert",
-      );
+      await expect(revertOpenCodeSession(client, "session-1")).rejects.toThrow("nothing to revert");
     });
   });
 
@@ -1598,13 +1600,13 @@ describe("opencode-client session operations", () => {
     test("returns the share url", async () => {
       const client = {
         session: {
-          share: async () => ({ data: { id: "session-1", share: { url: "https://share.test/s1" } } }),
+          share: async () => ({
+            data: { id: "session-1", share: { url: "https://share.test/s1" } },
+          }),
         },
       } as unknown as OpencodeClient;
 
-      expect(await shareOpenCodeSession(client, "session-1")).toBe(
-        "https://share.test/s1",
-      );
+      expect(await shareOpenCodeSession(client, "session-1")).toBe("https://share.test/s1");
     });
 
     test("returns undefined when the server shared without reporting a url", async () => {

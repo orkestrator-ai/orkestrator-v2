@@ -3,7 +3,11 @@
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { ImageBlockParam, TextBlockParam, ContentBlockParam } from "@anthropic-ai/sdk/resources/messages/messages";
+import type {
+  ImageBlockParam,
+  TextBlockParam,
+  ContentBlockParam,
+} from "@anthropic-ai/sdk/resources/messages/messages";
 import type {
   ModelInfo,
   SessionState,
@@ -31,10 +35,7 @@ import type {
 import { isSdkCompactBoundaryMessage, isSdkResultMessage } from "../types/index.js";
 import { TaskRegistry, isTaskListTool } from "@orkestrator/protocol/task-list";
 import { AGENT_INTERACTION_DEFAULT_TIMEOUT_MS } from "@orkestrator/protocol/agent-interactions";
-import {
-  isRootAssistantRecord,
-  normalizeBackendModelId,
-} from "@orkestrator/protocol/model-id";
+import { isRootAssistantRecord, normalizeBackendModelId } from "@orkestrator/protocol/model-id";
 import {
   structuredOutputFailure,
   type StructuredOutputResult,
@@ -62,9 +63,7 @@ import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import * as core from "./session-manager-core.js";
-import {
-  sessions,
-} from "./session-manager-core.js";
+import { sessions } from "./session-manager-core.js";
 type BackgroundTaskLaunch = {
   id: string;
   toolUseId?: string;
@@ -100,10 +99,10 @@ export function registerBackgroundTaskCandidate(
 ): void {
   const candidates = (session.backgroundTaskCandidates ??= new Map());
   if (!candidates.has(toolUseId) && candidates.size >= MAX_BACKGROUND_TASK_CANDIDATES) {
-    console.warn(
-      "[session-manager] Ignoring an unresolved Bash call past the candidate bound:",
-      { sessionId: session.id, bound: MAX_BACKGROUND_TASK_CANDIDATES },
-    );
+    console.warn("[session-manager] Ignoring an unresolved Bash call past the candidate bound:", {
+      sessionId: session.id,
+      bound: MAX_BACKGROUND_TASK_CANDIDATES,
+    });
     return;
   }
   candidates.set(toolUseId, control);
@@ -147,7 +146,7 @@ export function takeProvisionalBackgroundTask(
   const task = session.backgroundTasks?.[provisionalId];
   const owner = session.backgroundTaskControls?.get(provisionalId) ?? candidateOwner;
   if (task) {
-    const nextTasks = { ...(session.backgroundTasks ?? {}) };
+    const nextTasks = { ...session.backgroundTasks };
     delete nextTasks[provisionalId];
     session.backgroundTasks = Object.keys(nextTasks).length > 0 ? nextTasks : undefined;
   }
@@ -173,12 +172,13 @@ export function recordBackgroundTaskLaunch(
   const provisionalId = launch.toolUseId
     ? provisionalBackgroundTaskId(launch.toolUseId)
     : undefined;
-  const provisional = provisionalId && provisionalId !== launch.id
-    ? session.backgroundTasks?.[provisionalId]
-    : undefined;
+  const provisional =
+    provisionalId && provisionalId !== launch.id
+      ? session.backgroundTasks?.[provisionalId]
+      : undefined;
   const previous = session.backgroundTasks?.[launch.id] ?? provisional;
   const status = previous?.status ?? "running";
-  const nextTasks = { ...(session.backgroundTasks ?? {}) };
+  const nextTasks = { ...session.backgroundTasks };
   if (provisionalId && provisionalId !== launch.id) {
     delete nextTasks[provisionalId];
     session.backgroundTaskControls?.delete(provisionalId);
@@ -222,18 +222,17 @@ export function boundBackgroundTaskHistory(
 
   const retainedTerminalIds = new Set(
     terminalEntries
-      .sort((left, right) =>
-        (right.task.endedAt ?? right.task.startedAt ?? 0)
-        - (left.task.endedAt ?? left.task.startedAt ?? 0)
-        || right.index - left.index)
+      .sort(
+        (left, right) =>
+          (right.task.endedAt ?? right.task.startedAt ?? 0) -
+            (left.task.endedAt ?? left.task.startedAt ?? 0) || right.index - left.index,
+      )
       .slice(0, MAX_TERMINAL_BACKGROUND_TASKS)
       .map(({ id }) => id),
   );
   return Object.fromEntries(
     Object.entries(tasks).filter(
-      ([id, task]) =>
-        LIVE_BACKGROUND_TASK_STATUSES.has(task.status)
-        || retainedTerminalIds.has(id),
+      ([id, task]) => LIVE_BACKGROUND_TASK_STATUSES.has(task.status) || retainedTerminalIds.has(id),
     ),
   );
 }
@@ -262,10 +261,10 @@ export function parkSettlingBackgroundTask(
 ): void {
   const settling = (session.settlingBackgroundTasks ??= new Map());
   if (!settling.has(task.id) && settling.size >= MAX_SETTLING_BACKGROUND_TASKS) {
-    console.warn(
-      "[session-manager] Ignoring a settling task past the bound:",
-      { sessionId: session.id, bound: MAX_SETTLING_BACKGROUND_TASKS },
-    );
+    console.warn("[session-manager] Ignoring a settling task past the bound:", {
+      sessionId: session.id,
+      bound: MAX_SETTLING_BACKGROUND_TASKS,
+    });
     return;
   }
   settling.set(task.id, { task, owner });
@@ -274,9 +273,7 @@ export function parkSettlingBackgroundTask(
 export function takeSettlingBackgroundTask(
   session: SessionState,
   taskId: string,
-): { task: BackgroundTaskSnapshot; owner: NonNullable<SessionState["queryControl"]> }
-  | undefined
-{
+): { task: BackgroundTaskSnapshot; owner: NonNullable<SessionState["queryControl"]> } | undefined {
   const parked = session.settlingBackgroundTasks?.get(taskId);
   if (!parked) return undefined;
   session.settlingBackgroundTasks!.delete(taskId);
@@ -329,7 +326,7 @@ export function settleBackgroundTask(
   const previous = session.backgroundTasks?.[taskId];
   if (!previous || !LIVE_BACKGROUND_TASK_STATUSES.has(previous.status)) return false;
   session.backgroundTasks = boundBackgroundTaskHistory({
-    ...(session.backgroundTasks ?? {}),
+    ...session.backgroundTasks,
     [taskId]: {
       ...previous,
       status,
@@ -453,7 +450,9 @@ export function releaseQueryControl(session: SessionState): void {
   void releaseQueryControls(session);
 }
 
-export async function closeQueryControl(control: NonNullable<SessionState["queryControl"]>): Promise<void> {
+export async function closeQueryControl(
+  control: NonNullable<SessionState["queryControl"]>,
+): Promise<void> {
   if (typeof control.close !== "function") return;
   try {
     await control.close();

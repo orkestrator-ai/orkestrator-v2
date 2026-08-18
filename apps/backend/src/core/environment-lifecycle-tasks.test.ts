@@ -59,9 +59,11 @@ describe("EnvironmentLifecycleTaskTracker", () => {
     await tracker.beginShutdown();
     let invoked = false;
 
-    expect(() => tracker.admit(async () => {
-      invoked = true;
-    })).toThrow(ENVIRONMENT_LIFECYCLE_SHUTDOWN_ERROR);
+    expect(() =>
+      tracker.admit(async () => {
+        invoked = true;
+      }),
+    ).toThrow(ENVIRONMENT_LIFECYCLE_SHUTDOWN_ERROR);
     expect(invoked).toBe(false);
     expect(tracker.isAccepting()).toBe(false);
   });
@@ -115,9 +117,11 @@ describe("EnvironmentLifecycleTaskTracker", () => {
     const tracker = new EnvironmentLifecycleTaskTracker();
     const slow = deferred<void>();
     let settled = false;
-    const task = tracker.admit(() => slow.promise.then(() => {
-      settled = true;
-    }));
+    const task = tracker.admit(() =>
+      slow.promise.then(() => {
+        settled = true;
+      }),
+    );
 
     const shutdown = tracker.beginShutdown(5_000);
     slow.resolve();
@@ -170,11 +174,10 @@ test("startup reconciliation marks every interrupted creating environment as ret
       order: 1,
     });
 
-    await expect(reconcileInterruptedEnvironmentLifecycleTasks(storage))
-      .resolves.toEqual({
-        reconciledEnvironmentIds: ["interrupted-local"],
-        deletionRecoveryEnvironmentIds: [],
-      });
+    await expect(reconcileInterruptedEnvironmentLifecycleTasks(storage)).resolves.toEqual({
+      reconciledEnvironmentIds: ["interrupted-local"],
+      deletionRecoveryEnvironmentIds: [],
+    });
     await expect(storage.getEnvironment("interrupted-local")).resolves.toMatchObject({
       status: "error",
       lifecycleError: INTERRUPTED_ENVIRONMENT_LIFECYCLE_ERROR,
@@ -215,11 +218,10 @@ test("startup reconciliation keeps a recorded failure instead of replacing it", 
       lifecycleError: "The container runtime is unavailable. Start it and retry.",
     });
 
-    await expect(reconcileInterruptedEnvironmentLifecycleTasks(storage))
-      .resolves.toEqual({
-        reconciledEnvironmentIds: ["created-container"],
-        deletionRecoveryEnvironmentIds: [],
-      });
+    await expect(reconcileInterruptedEnvironmentLifecycleTasks(storage)).resolves.toEqual({
+      reconciledEnvironmentIds: ["created-container"],
+      deletionRecoveryEnvironmentIds: [],
+    });
     await expect(storage.getEnvironment("created-container")).resolves.toMatchObject({
       status: "error",
       lifecycleError: "The container runtime is unavailable. Start it and retry.",
@@ -255,11 +257,10 @@ test("startup reconciliation preserves deletion intent and exposes it for recove
       deletionRequestedAt: new Date(0).toISOString(),
     });
 
-    await expect(reconcileInterruptedEnvironmentLifecycleTasks(storage))
-      .resolves.toEqual({
-        reconciledEnvironmentIds: ["stranded-delete"],
-        deletionRecoveryEnvironmentIds: ["stranded-delete"],
-      });
+    await expect(reconcileInterruptedEnvironmentLifecycleTasks(storage)).resolves.toEqual({
+      reconciledEnvironmentIds: ["stranded-delete"],
+      deletionRecoveryEnvironmentIds: ["stranded-delete"],
+    });
     const reconciled = await storage.getEnvironment("stranded-delete");
     expect(reconciled?.lifecycleOperation).toBe("deleting");
     expect(reconciled?.lifecycleOperationStartedAt).toBe(new Date(0).toISOString());
@@ -300,11 +301,10 @@ test("startup reconciliation handles creating and deleting independently while p
       deletionRequestedAt: null,
     });
 
-    await expect(reconcileInterruptedEnvironmentLifecycleTasks(storage))
-      .resolves.toEqual({
-        reconciledEnvironmentIds: ["creating-delete"],
-        deletionRecoveryEnvironmentIds: ["creating-delete"],
-      });
+    await expect(reconcileInterruptedEnvironmentLifecycleTasks(storage)).resolves.toEqual({
+      reconciledEnvironmentIds: ["creating-delete"],
+      deletionRecoveryEnvironmentIds: ["creating-delete"],
+    });
     await expect(storage.getEnvironment("creating-delete")).resolves.toMatchObject({
       status: "error",
       lifecycleError: "The container runtime is unavailable. Start it and retry.",

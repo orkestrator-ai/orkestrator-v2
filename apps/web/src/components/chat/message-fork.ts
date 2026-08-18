@@ -47,10 +47,7 @@ export interface MessageForkPlanEntry {
 }
 
 function isPersistedConversationMessage(message: NativeMessage): boolean {
-  return (
-    message.role !== "system"
-    && !isClientOnlyNativeMessage(message)
-  );
+  return message.role !== "system" && !isClientOnlyNativeMessage(message);
 }
 
 /**
@@ -82,10 +79,7 @@ export function buildMessageForkActionKinds(
     }
 
     let nextIndex = index + 1;
-    while (
-      nextIndex < messages.length
-      && !isPersistedConversationMessage(messages[nextIndex]!)
-    ) {
+    while (nextIndex < messages.length && !isPersistedConversationMessage(messages[nextIndex]!)) {
       nextIndex += 1;
     }
     const nextMessage = messages[nextIndex];
@@ -123,17 +117,17 @@ export function buildMessageForkPlan(
     const kind = kinds.get(message.id);
     if (!kind) continue;
 
-    const boundary = kind === "prompt"
-      ? options.resolvePromptBoundary(message, messages)
-      : options.resolveResponseBoundary(message, messages);
+    const boundary =
+      kind === "prompt"
+        ? options.resolvePromptBoundary(message, messages)
+        : options.resolveResponseBoundary(message, messages);
     if (!boundary) continue;
 
     plan.set(message.id, {
       kind,
       boundary,
       draftText: kind === "prompt" ? getForkPromptText(message) : "",
-      droppedAttachmentCount:
-        kind === "prompt" ? countForkPromptAttachments(message) : 0,
+      droppedAttachmentCount: kind === "prompt" ? countForkPromptAttachments(message) : 0,
     });
   }
 

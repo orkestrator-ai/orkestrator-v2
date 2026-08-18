@@ -5,10 +5,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import type { CommandContext } from "./commands.js";
-import {
-  ORKESTRATOR_AGENT_MCP_SERVER_NAME,
-  type AgentToolConnection,
-} from "./agent-tools.js";
+import { ORKESTRATOR_AGENT_MCP_SERVER_NAME, type AgentToolConnection } from "./agent-tools.js";
 import type { Environment } from "./models.js";
 import type { JsonRecord } from "./storage.js";
 import { runCommand } from "./shell.js";
@@ -22,7 +19,10 @@ import {
   type TmuxAgentObservation,
 } from "@orkestrator/protocol/tmux-observation";
 
-export type CommandHandler = (args: JsonRecord, context: CommandContext) => Promise<unknown> | unknown;
+export type CommandHandler = (
+  args: JsonRecord,
+  context: CommandContext,
+) => Promise<unknown> | unknown;
 export type RegisterCommand = (name: string, handler: CommandHandler) => void;
 
 export type ExecOutput = {
@@ -48,9 +48,9 @@ export const LIVENESS_CHECK_EVERY_TICKS = 8;
 // The hook process owns the shared five-minute timeout. Renderers receive the
 // resulting absolute timestamps and only display them.
 if (
-  !Number.isSafeInteger(AGENT_INTERACTION_DEFAULT_TIMEOUT_MS)
-  || AGENT_INTERACTION_DEFAULT_TIMEOUT_MS <= 0
-  || AGENT_INTERACTION_DEFAULT_TIMEOUT_MS % 1_000 !== 0
+  !Number.isSafeInteger(AGENT_INTERACTION_DEFAULT_TIMEOUT_MS) ||
+  AGENT_INTERACTION_DEFAULT_TIMEOUT_MS <= 0 ||
+  AGENT_INTERACTION_DEFAULT_TIMEOUT_MS % 1_000 !== 0
 ) {
   throw new Error("Agent interaction timeout must be a positive whole number of seconds");
 }
@@ -83,10 +83,7 @@ export const RUNTIME_ROOT_PREFIX = "/tmp/orkestrator-v2-claude-tmux";
  * registry.
  */
 export function claudeTmuxRuntimeRootPrefix(dataDir: string): string {
-  const namespace = createHash("sha256")
-    .update(path.resolve(dataDir))
-    .digest("hex")
-    .slice(0, 16);
+  const namespace = createHash("sha256").update(path.resolve(dataDir)).digest("hex").slice(0, 16);
   return path.join(RUNTIME_ROOT_PREFIX, namespace);
 }
 
@@ -119,10 +116,10 @@ export function runtimeRootPrefixForContext(context: CommandContext): string {
 export function isMissingTmuxSessionError(value: unknown): boolean {
   const message = String(value);
   return (
-    /can't find session/i.test(message)
-    || /no server running/i.test(message)
-    || /failed to connect to server/i.test(message)
-    || /no sessions/i.test(message)
+    /can't find session/i.test(message) ||
+    /no server running/i.test(message) ||
+    /failed to connect to server/i.test(message) ||
+    /no sessions/i.test(message)
   );
 }
 /**
@@ -157,7 +154,11 @@ export const HOOK_EVENT_KINDS = new Set([
  * command — including the launch-time capability probes — goes through here, so
  * the argv must survive the wrapper unmodified.
  */
-export function containerExecArgs(containerId: string, args: string[], withStdin: boolean): string[] {
+export function containerExecArgs(
+  containerId: string,
+  args: string[],
+  withStdin: boolean,
+): string[] {
   const dockerArgs = ["exec", "-u", "node", "-w", "/workspace"];
   if (withStdin) dockerArgs.push("-i");
   dockerArgs.push(containerId, ...args);
@@ -193,7 +194,9 @@ export function asNonNegativeInt(value: unknown, name: string): number {
 }
 
 export function asStringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
 }
 
 export function shellArg(value: string): string {
@@ -201,7 +204,7 @@ export function shellArg(value: string): string {
 }
 
 export function shellDq(value: string): string {
-  return `"${value.replaceAll("\\", "\\\\").replaceAll("\"", "\\\"").replaceAll("$", "\\$").replaceAll("`", "\\`")}"`;
+  return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("$", "\\$").replaceAll("`", "\\`")}"`;
 }
 
 export function readableIdPrefix(id: string): string {
@@ -233,7 +236,10 @@ export function tmuxSessionNamePrefix(environmentId: string): string {
 
 /** One session name per line, as `tmux list-sessions -F '#{session_name}'` prints them. */
 export function parseTmuxSessionNames(stdout: string): string[] {
-  return stdout.split("\n").map((line) => line.trim()).filter(Boolean);
+  return stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
 }
 
 /**
@@ -339,9 +345,9 @@ export async function execWithRawOutput(
 
     const timeout = options.timeoutMs
       ? setTimeout(() => {
-        timedOut = true;
-        child.kill("SIGKILL");
-      }, options.timeoutMs)
+          timedOut = true;
+          child.kill("SIGKILL");
+        }, options.timeoutMs)
       : undefined;
 
     child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
@@ -354,7 +360,7 @@ export async function execWithRawOutput(
       if (timeout) clearTimeout(timeout);
       const stderrText = Buffer.concat(stderr).toString();
       resolve({
-        status: timedOut ? -1 : code ?? -1,
+        status: timedOut ? -1 : (code ?? -1),
         stdout: Buffer.concat(stdout),
         stderr: timedOut ? `${stderrText}\nCommand timed out`.trim() : stderrText,
       });
@@ -518,10 +524,12 @@ export function isDirectJsonlChild(dirPath: string, candidatePath: string): bool
   if (!candidatePath || candidatePath.includes("\0")) return false;
   const normalizedDir = path.posix.normalize(dirPath);
   const normalizedCandidate = path.posix.normalize(candidatePath);
-  return path.posix.isAbsolute(normalizedCandidate) === path.posix.isAbsolute(normalizedDir)
-    && path.posix.dirname(normalizedCandidate) === normalizedDir
-    && normalizedCandidate === candidatePath
-    && path.posix.basename(normalizedCandidate).endsWith(".jsonl");
+  return (
+    path.posix.isAbsolute(normalizedCandidate) === path.posix.isAbsolute(normalizedDir) &&
+    path.posix.dirname(normalizedCandidate) === normalizedDir &&
+    normalizedCandidate === candidatePath &&
+    path.posix.basename(normalizedCandidate).endsWith(".jsonl")
+  );
 }
 
 /**
@@ -544,25 +552,20 @@ export async function listLocalJsonlByMtime(
     .filter((candidatePath) => isDirectJsonlChild(dirPath, candidatePath));
   const entries: Array<{ path: string; mtime: number }> = [];
   let nextIndex = 0;
-  const workerCount = Math.min(
-    candidates.length,
-    Math.max(1, Math.floor(concurrency)),
+  const workerCount = Math.min(candidates.length, Math.max(1, Math.floor(concurrency)));
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < candidates.length) {
+        const candidatePath = candidates[nextIndex++]!;
+        entries.push({
+          path: candidatePath,
+          mtime: await fileMtimeUnix(candidatePath),
+        });
+      }
+    }),
   );
-  await Promise.all(Array.from({ length: workerCount }, async () => {
-    while (nextIndex < candidates.length) {
-      const candidatePath = candidates[nextIndex++]!;
-      entries.push({
-        path: candidatePath,
-        mtime: await fileMtimeUnix(candidatePath),
-      });
-    }
-  }));
-  return entries
-    .sort((a, b) => b.mtime - a.mtime)
-    .slice(0, Math.max(0, Math.floor(limit)));
+  return entries.sort((a, b) => b.mtime - a.mtime).slice(0, Math.max(0, Math.floor(limit)));
 }
-
-
 
 export type SessionHookPaths = {
   sessionDir: string;
@@ -572,7 +575,9 @@ export type SessionHookPaths = {
   timingDir: string;
 };
 
-export function parseFreshJsonlFindOutput(findOutput: string): Array<{ path: string; mtime: number }> {
+export function parseFreshJsonlFindOutput(
+  findOutput: string,
+): Array<{ path: string; mtime: number }> {
   if (!findOutput.endsWith("\0")) return [];
   return findOutput
     .split("\0")
@@ -614,7 +619,9 @@ export async function sendInteractiveData(
   };
 
   while (index < data.length) {
-    const matched = INTERACTIVE_KEY_SEQUENCES.find(([sequence]) => data.startsWith(sequence, index));
+    const matched = INTERACTIVE_KEY_SEQUENCES.find(([sequence]) =>
+      data.startsWith(sequence, index),
+    );
     if (matched) {
       await flushLiteral();
       await sendKeys(matched[1]);
@@ -661,8 +668,6 @@ export async function sendInteractiveData(
   }
   await flushLiteral();
 }
-
-
 
 export {
   existsSync,

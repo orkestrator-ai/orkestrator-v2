@@ -49,9 +49,7 @@ export function isEditTool(toolName?: string): boolean {
 /** Return the user-facing label for a tool while preserving raw names internally. */
 export function getToolDisplayName(toolName?: string, fallback = "Unknown tool"): string {
   if (!toolName) return fallback;
-  return formatToolDisplayLabel(
-    TOOL_DISPLAY_NAMES.get(toolName.toLowerCase()) ?? toolName,
-  );
+  return formatToolDisplayLabel(TOOL_DISPLAY_NAMES.get(toolName.toLowerCase()) ?? toolName);
 }
 
 /** Normalize a tool label to a comparison key, or null when empty. */
@@ -78,8 +76,7 @@ export function getToolTitleDisplayName(
   const isIdentifierLike = titleKey !== null && !/\s/.test(titleKey);
   if (
     isIdentifierLike &&
-    (titleKey === normalizeToolLabelKey(toolName) ||
-      titleKey === normalizeToolLabelKey(content))
+    (titleKey === normalizeToolLabelKey(toolName) || titleKey === normalizeToolLabelKey(content))
   ) {
     return getToolDisplayName(toolTitle);
   }

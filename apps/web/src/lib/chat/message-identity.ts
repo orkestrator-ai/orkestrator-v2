@@ -31,12 +31,7 @@ export function deepEqualJson(a: unknown, b: unknown): boolean {
 
     const [left, right] = pending.pop()!;
     if (Object.is(left, right)) continue;
-    if (
-      typeof left !== "object"
-      || typeof right !== "object"
-      || left === null
-      || right === null
-    ) {
+    if (typeof left !== "object" || typeof right !== "object" || left === null || right === null) {
       return false;
     }
 
@@ -120,8 +115,8 @@ export function preserveMessageIdentities<TMessage extends { id: string }>(
   });
 
   const sameAsExisting =
-    result.length === existing.length
-    && result.every((message, index) => message === existing[index]);
+    result.length === existing.length &&
+    result.every((message, index) => message === existing[index]);
   if (sameAsExisting) return existing;
 
   return changedAnything ? result : next;

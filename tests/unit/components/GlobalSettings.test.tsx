@@ -224,9 +224,7 @@ describe("GlobalSettings", () => {
   test("saves codexMode changes", async () => {
     const { container } = render(<GlobalSettings activeSection="codex" />);
 
-    const codexSection = screen
-      .getByText("Choose how Codex runs in environments")
-      .parentElement;
+    const codexSection = screen.getByText("Choose how Codex runs in environments").parentElement;
     if (!codexSection) {
       throw new Error("Expected Codex settings section");
     }
@@ -238,7 +236,7 @@ describe("GlobalSettings", () => {
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({
           codexMode: "terminal",
-        })
+        }),
       );
     });
   });
@@ -265,9 +263,9 @@ describe("GlobalSettings", () => {
     setSavedCodexMaxConcurrentThreads(9);
     render(<GlobalSettings activeSection="codex" />);
 
-    expect(
-      (screen.getByLabelText("Concurrent subagent limit") as HTMLInputElement).value,
-    ).toBe("9");
+    expect((screen.getByLabelText("Concurrent subagent limit") as HTMLInputElement).value).toBe(
+      "9",
+    );
     await waitFor(() => {
       expect(
         (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled,
@@ -349,10 +347,9 @@ describe("GlobalSettings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => {
-      expect(mockToastError).toHaveBeenCalledWith(
-        "Failed to save settings",
-        { description: "disk full" },
-      );
+      expect(mockToastError).toHaveBeenCalledWith("Failed to save settings", {
+        description: "disk full",
+      });
     });
     expect(input.value).toBe("10");
     expect(
@@ -389,7 +386,9 @@ describe("GlobalSettings", () => {
     fireEvent.click(within(container).getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => {
-      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(expect.objectContaining({ webClientEnabled: false }));
+      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ webClientEnabled: false }),
+      );
       expect(mockSetWebClientEnabled).toHaveBeenCalledWith(false);
     });
   });
@@ -421,7 +420,9 @@ describe("GlobalSettings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Reset Tailscale Serve" }));
 
     const dialog = await screen.findByRole("alertdialog");
-    expect(within(dialog).getByText(/removes the existing HTTPS listener on port 443/)).toBeTruthy();
+    expect(
+      within(dialog).getByText(/removes the existing HTTPS listener on port 443/),
+    ).toBeTruthy();
     // The load-bearing property is that the component default is *gone*: if
     // tailwind-merge ever stopped collapsing them, `z-50 … z-[80]` would still
     // satisfy a `toContain` check while the rendered layer became dependent on
@@ -492,10 +493,11 @@ describe("GlobalSettings", () => {
     };
 
     await confirmReset();
-    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(
-      "Failed to reset Tailscale Serve",
-      { description: "Tailscale daemon unavailable" },
-    ));
+    await waitFor(() =>
+      expect(mockToastError).toHaveBeenCalledWith("Failed to reset Tailscale Serve", {
+        description: "Tailscale daemon unavailable",
+      }),
+    );
     expect(screen.getByRole("button", { name: "Reset Tailscale Serve" })).toBeTruthy();
 
     await confirmReset();
@@ -512,12 +514,15 @@ describe("GlobalSettings", () => {
     fireEvent.click(screen.getByRole("switch", { name: "Allow web access" }));
     fireEvent.click(within(container).getByRole("button", { name: "Save Changes" }));
 
-    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(
-      "Failed to save settings",
-      { description: "control request failed" },
-    ));
+    await waitFor(() =>
+      expect(mockToastError).toHaveBeenCalledWith("Failed to save settings", {
+        description: "control request failed",
+      }),
+    );
     expect(screen.getByText("control request failed")).toBeTruthy();
-    const saveButton = within(container).getByRole("button", { name: "Save Changes" }) as HTMLButtonElement;
+    const saveButton = within(container).getByRole("button", {
+      name: "Save Changes",
+    }) as HTMLButtonElement;
     expect(saveButton.disabled).toBe(false);
 
     fireEvent.click(saveButton);
@@ -547,7 +552,7 @@ describe("GlobalSettings", () => {
 
   test("displays, reveals, edits, and saves the gateway token", async () => {
     const { container } = render(<GlobalSettings activeSection="web-client" />);
-    const input = await screen.findByLabelText("Gateway token") as HTMLInputElement;
+    const input = (await screen.findByLabelText("Gateway token")) as HTMLInputElement;
 
     expect(input.type).toBe("password");
     expect(input.value).toBe("gateway-token-123456");
@@ -558,7 +563,9 @@ describe("GlobalSettings", () => {
     expect(screen.getByText("Save changes to use this token for future sign-ins.")).toBeTruthy();
     fireEvent.click(within(container).getByRole("button", { name: "Save Changes" }));
 
-    await waitFor(() => expect(mockSetGatewayToken).toHaveBeenCalledWith("replacement-token-123456"));
+    await waitFor(() =>
+      expect(mockSetGatewayToken).toHaveBeenCalledWith("replacement-token-123456"),
+    );
   });
 
   test("copies the gateway token", async () => {
@@ -583,10 +590,14 @@ describe("GlobalSettings", () => {
       await screen.findByDisplayValue("gateway-token-123456");
 
       fireEvent.click(screen.getByRole("button", { name: "Copy web client URL" }));
-      await waitFor(() => expect(mockToastError).toHaveBeenCalledWith("Failed to copy web client URL"));
+      await waitFor(() =>
+        expect(mockToastError).toHaveBeenCalledWith("Failed to copy web client URL"),
+      );
 
       fireEvent.click(screen.getByRole("button", { name: "Copy gateway token" }));
-      await waitFor(() => expect(mockToastError).toHaveBeenCalledWith("Failed to copy gateway token"));
+      await waitFor(() =>
+        expect(mockToastError).toHaveBeenCalledWith("Failed to copy gateway token"),
+      );
       expect(mockWriteText).toHaveBeenCalledTimes(2);
     } finally {
       console.error = originalConsoleError;
@@ -601,7 +612,7 @@ describe("GlobalSettings", () => {
     });
     render(<GlobalSettings activeSection="web-client" />);
 
-    const input = await screen.findByLabelText("Gateway token") as HTMLInputElement;
+    const input = (await screen.findByLabelText("Gateway token")) as HTMLInputElement;
     await waitFor(() => expect(input.value).toBe("environment-token-123456"));
     expect(input.disabled).toBe(true);
     expect(screen.getByText(/ORKESTRATOR_GATEWAY_TOKEN/)).toBeTruthy();
@@ -609,7 +620,7 @@ describe("GlobalSettings", () => {
 
   test("validates gateway token character and encoded-cookie boundaries", async () => {
     render(<GlobalSettings activeSection="web-client" />);
-    const input = await screen.findByLabelText("Gateway token") as HTMLInputElement;
+    const input = (await screen.findByLabelText("Gateway token")) as HTMLInputElement;
     const saveButton = screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement;
 
     fireEvent.change(input, { target: { value: "short" } });
@@ -617,7 +628,9 @@ describe("GlobalSettings", () => {
     expect(saveButton.disabled).toBe(true);
 
     fireEvent.change(input, { target: { value: "😀".repeat(512) } });
-    expect(screen.getByText("Gateway token is too large to store in a browser cookie.")).toBeTruthy();
+    expect(
+      screen.getByText("Gateway token is too large to store in a browser cookie."),
+    ).toBeTruthy();
     expect(saveButton.disabled).toBe(true);
 
     fireEvent.change(input, { target: { value: "valid-token-value-123456" } });
@@ -627,7 +640,7 @@ describe("GlobalSettings", () => {
 
   test("resets an unsaved gateway token edit", async () => {
     render(<GlobalSettings activeSection="web-client" />);
-    const input = await screen.findByLabelText("Gateway token") as HTMLInputElement;
+    const input = (await screen.findByLabelText("Gateway token")) as HTMLInputElement;
 
     fireEvent.change(input, { target: { value: "replacement-token-123456" } });
     fireEvent.click(screen.getByRole("button", { name: "Reset" }));
@@ -649,23 +662,26 @@ describe("GlobalSettings", () => {
     console.error = mock(() => undefined);
     mockSetGatewayToken.mockRejectedValueOnce(new Error("credential write failed"));
     render(<GlobalSettings activeSection="web-client" />);
-    const input = await screen.findByLabelText("Gateway token") as HTMLInputElement;
+    const input = (await screen.findByLabelText("Gateway token")) as HTMLInputElement;
 
     fireEvent.change(input, { target: { value: "replacement-token-123456" } });
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
-    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(
-      "Failed to save settings",
-      { description: "credential write failed" },
-    ));
+    await waitFor(() =>
+      expect(mockToastError).toHaveBeenCalledWith("Failed to save settings", {
+        description: "credential write failed",
+      }),
+    );
     expect(input.value).toBe("replacement-token-123456");
-    expect((screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(
+      (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
     console.error = originalConsoleError;
   });
 
   test("does not let a remote client change the desktop web access lifecycle", async () => {
     render(<GlobalSettings activeSection="web-client" />);
-    const input = await screen.findByLabelText("Gateway token") as HTMLInputElement;
+    const input = (await screen.findByLabelText("Gateway token")) as HTMLInputElement;
 
     fireEvent.change(input, { target: { value: "replacement-token-123456" } });
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
@@ -693,10 +709,18 @@ describe("GlobalSettings", () => {
 
   test("ignores stale status and token loads after switching away and back", async () => {
     const firstStatus = deferred<{
-      enabled: boolean; running: boolean; url: string | null; error: string | null; resetAvailable: boolean;
+      enabled: boolean;
+      running: boolean;
+      url: string | null;
+      error: string | null;
+      resetAvailable: boolean;
     }>();
     const secondStatus = deferred<{
-      enabled: boolean; running: boolean; url: string | null; error: string | null; resetAvailable: boolean;
+      enabled: boolean;
+      running: boolean;
+      url: string | null;
+      error: string | null;
+      resetAvailable: boolean;
     }>();
     const firstToken = deferred<{ token: string; editable: boolean; source: "file" }>();
     const secondToken = deferred<{ token: string; editable: boolean; source: "file" }>();
@@ -743,7 +767,11 @@ describe("GlobalSettings", () => {
 
   test("discards pending web client results after unmount", async () => {
     const status = deferred<{
-      enabled: boolean; running: boolean; url: string | null; error: string | null; resetAvailable: boolean;
+      enabled: boolean;
+      running: boolean;
+      url: string | null;
+      error: string | null;
+      resetAvailable: boolean;
     }>();
     const token = deferred<{ token: string; editable: boolean; source: "file" }>();
     mockGetWebClientStatus.mockImplementationOnce(() => status.promise);
@@ -752,7 +780,13 @@ describe("GlobalSettings", () => {
     view.unmount();
 
     await act(async () => {
-      status.resolve({ enabled: true, running: true, url: null, error: null, resetAvailable: false });
+      status.resolve({
+        enabled: true,
+        running: true,
+        url: null,
+        error: null,
+        resetAvailable: false,
+      });
       token.resolve({ token: "late-gateway-token", editable: true, source: "file" });
       await Promise.resolve();
     });
@@ -783,13 +817,15 @@ describe("GlobalSettings", () => {
     await screen.findByText("Running");
 
     expect(screen.getByLabelText("Gateway token")).toBeTruthy();
-    expect((screen.getByRole("switch", { name: "Allow web access" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      (screen.getByRole("switch", { name: "Allow web access" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
     expect(mockSetWebClientEnabled).not.toHaveBeenCalled();
   });
 
   test("uses a normal browser link for the active remote gateway", async () => {
     render(<GlobalSettings activeSection="web-client" />);
-    const link = await screen.findByRole("link", { name: /100\.88\.12\.3/ }) as HTMLAnchorElement;
+    const link = (await screen.findByRole("link", { name: /100\.88\.12\.3/ })) as HTMLAnchorElement;
 
     expect(link.href).toBe("http://100.88.12.3:34121/");
     expect(link.target).toBe("_blank");
@@ -807,10 +843,9 @@ describe("GlobalSettings", () => {
 
   describe("OpenCode model providers", () => {
     const providerItems = () =>
-      screen.getAllByRole("button", { name: /^Remove .* provider$/ })
-        .map((button) =>
-          button.closest("li")?.querySelector("span")?.textContent ?? ""
-        );
+      screen
+        .getAllByRole("button", { name: /^Remove .* provider$/ })
+        .map((button) => button.closest("li")?.querySelector("span")?.textContent ?? "");
 
     test("defaults to the two managed provider catalogues", () => {
       render(<GlobalSettings activeSection="opencode" />);
@@ -844,9 +879,7 @@ describe("GlobalSettings", () => {
     test("removes a provider and saves the narrowed list", async () => {
       render(<GlobalSettings activeSection="opencode" />);
 
-      fireEvent.click(
-        screen.getByRole("button", { name: "Remove opencode-go provider" }),
-      );
+      fireEvent.click(screen.getByRole("button", { name: "Remove opencode-go provider" }));
       expect(providerItems()).toEqual(["opencode"]);
       fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
@@ -860,8 +893,7 @@ describe("GlobalSettings", () => {
     test("rejects a duplicate, a blank, and a pasted model id", () => {
       render(<GlobalSettings activeSection="opencode" />);
       const input = screen.getByLabelText("Add a provider");
-      const addButton = () =>
-        screen.getByRole("button", { name: "Add" }) as HTMLButtonElement;
+      const addButton = () => screen.getByRole("button", { name: "Add" }) as HTMLButtonElement;
 
       expect(addButton().disabled).toBe(true);
 
@@ -882,9 +914,7 @@ describe("GlobalSettings", () => {
       render(<GlobalSettings activeSection="opencode" />);
 
       for (const provider of ["opencode", "opencode-go"]) {
-        fireEvent.click(
-          screen.getByRole("button", { name: `Remove ${provider} provider` }),
-        );
+        fireEvent.click(screen.getByRole("button", { name: `Remove ${provider} provider` }));
       }
 
       expect(screen.getByText(/every provider OpenCode advertises/)).toBeTruthy();
@@ -900,9 +930,7 @@ describe("GlobalSettings", () => {
     test("restores the managed defaults after an edit", () => {
       render(<GlobalSettings activeSection="opencode" />);
 
-      fireEvent.click(
-        screen.getByRole("button", { name: "Remove opencode provider" }),
-      );
+      fireEvent.click(screen.getByRole("button", { name: "Remove opencode provider" }));
       fireEvent.click(screen.getByRole("button", { name: "Reset to defaults" }));
 
       expect(providerItems()).toEqual(["opencode", "opencode-go"]);
@@ -930,20 +958,16 @@ describe("GlobalSettings", () => {
 
       // The backend truncates a longer list, so an add that would be silently
       // dropped has to be refused here instead.
-      expect(
-        screen.getByText(`At most ${MAX_OPENCODE_MODEL_PROVIDERS} providers.`),
-      ).toBeTruthy();
-      expect(
-        (screen.getByRole("button", { name: "Add" }) as HTMLButtonElement).disabled,
-      ).toBe(true);
+      expect(screen.getByText(`At most ${MAX_OPENCODE_MODEL_PROVIDERS} providers.`)).toBeTruthy();
+      expect((screen.getByRole("button", { name: "Add" }) as HTMLButtonElement).disabled).toBe(
+        true,
+      );
 
       // Removing one frees a slot without needing a re-render of the list.
-      fireEvent.click(
-        screen.getByRole("button", { name: "Remove provider-0 provider" }),
+      fireEvent.click(screen.getByRole("button", { name: "Remove provider-0 provider" }));
+      expect((screen.getByRole("button", { name: "Add" }) as HTMLButtonElement).disabled).toBe(
+        false,
       );
-      expect(
-        (screen.getByRole("button", { name: "Add" }) as HTMLButtonElement).disabled,
-      ).toBe(false);
     });
   });
 
@@ -975,7 +999,9 @@ describe("GlobalSettings", () => {
 
     const instruction = screen.getByLabelText("Review instruction") as HTMLTextAreaElement;
     expect(instruction.value).toContain("{{targetBranch}}");
-    expect(screen.getByText(/Applied to normal, build-pipeline, and looped native reviews/)).toBeTruthy();
+    expect(
+      screen.getByText(/Applied to normal, build-pipeline, and looped native reviews/),
+    ).toBeTruthy();
     expect(screen.getByText(/cannot remove or override the fixed safety rules/)).toBeTruthy();
 
     fireEvent.change(instruction, {
@@ -1022,10 +1048,11 @@ describe("GlobalSettings", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
-    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(
-      "Failed to save settings",
-      { description: "disk full" },
-    ));
+    await waitFor(() =>
+      expect(mockToastError).toHaveBeenCalledWith("Failed to save settings", {
+        description: "disk full",
+      }),
+    );
     expect(onSaveSuccess).not.toHaveBeenCalled();
   });
 
@@ -1039,10 +1066,12 @@ describe("GlobalSettings", () => {
     fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
-    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(
-      "Settings saved, but containers were not updated",
-      { description: "container unavailable. Save Changes to retry." },
-    ));
+    await waitFor(() =>
+      expect(mockToastError).toHaveBeenCalledWith(
+        "Settings saved, but containers were not updated",
+        { description: "container unavailable. Save Changes to retry." },
+      ),
+    );
     expect(onSaveSuccess).not.toHaveBeenCalled();
   });
 
@@ -1075,8 +1104,14 @@ describe("GlobalSettings", () => {
       target: { value: "   " },
     });
 
-    expect(screen.getByText("Review instruction cannot be empty. Enter an instruction or reset to the default.")).toBeTruthy();
-    expect((screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      screen.getByText(
+        "Review instruction cannot be empty. Enter an instruction or reset to the default.",
+      ),
+    ).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
   });
 
   test("falls back to the built-in instruction for malformed persisted values", () => {
@@ -1105,12 +1140,19 @@ describe("GlobalSettings", () => {
       target: { value: "x".repeat(REVIEW_INSTRUCTION_MAX_LENGTH + 1) },
     });
 
-    expect(screen.getByText("Review instruction must be 100,000 characters or fewer.")).toBeTruthy();
-    expect(screen.queryByText(/Long review instructions are repeated across review passes/) === null).toBe(true);
-    expect(instruction.getAttribute("aria-describedby"))
-      .not.toContain("review-instruction-warning");
+    expect(
+      screen.getByText("Review instruction must be 100,000 characters or fewer."),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText(/Long review instructions are repeated across review passes/) === null,
+    ).toBe(true);
+    expect(instruction.getAttribute("aria-describedby")).not.toContain(
+      "review-instruction-warning",
+    );
     expect(instruction.getAttribute("aria-invalid")).toBe("true");
-    expect((screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
   });
 
   test("does not warn at the inclusive recommended-length boundary", async () => {
@@ -1122,9 +1164,12 @@ describe("GlobalSettings", () => {
       target: { value: "x".repeat(REVIEW_INSTRUCTION_RECOMMENDED_LENGTH) },
     });
 
-    expect(screen.queryByText(/Long review instructions are repeated across review passes/) === null).toBe(true);
-    expect(instruction.getAttribute("aria-describedby"))
-      .toBe("review-instruction-description review-instruction-status");
+    expect(
+      screen.queryByText(/Long review instructions are repeated across review passes/) === null,
+    ).toBe(true);
+    expect(instruction.getAttribute("aria-describedby")).toBe(
+      "review-instruction-description review-instruction-status",
+    );
   });
 
   test("keeps every described-by target present in the document", async () => {
@@ -1134,12 +1179,10 @@ describe("GlobalSettings", () => {
     await waitFor(() => expect(mockGetLogDirectory).toHaveBeenCalled());
     const instruction = screen.getByLabelText("Review instruction") as HTMLTextAreaElement;
 
-    for (
-      const value of [
-        "Short review instruction.",
-        "x".repeat(REVIEW_INSTRUCTION_RECOMMENDED_LENGTH + 1),
-      ]
-    ) {
+    for (const value of [
+      "Short review instruction.",
+      "x".repeat(REVIEW_INSTRUCTION_RECOMMENDED_LENGTH + 1),
+    ]) {
       fireEvent.change(instruction, { target: { value } });
       const ids = instruction.getAttribute("aria-describedby")!.split(" ");
       expect(ids).toContain("review-instruction-description");
@@ -1164,17 +1207,22 @@ describe("GlobalSettings", () => {
     expect(warning.textContent).toContain(
       `${REVIEW_INSTRUCTION_RECOMMENDED_LENGTH.toLocaleString()} characters or fewer`,
     );
-    expect(instruction.getAttribute("aria-describedby"))
-      .toBe("review-instruction-description review-instruction-status review-instruction-warning");
+    expect(instruction.getAttribute("aria-describedby")).toBe(
+      "review-instruction-description review-instruction-status review-instruction-warning",
+    );
     expect(warning.id).toBe("review-instruction-warning");
     expect(instruction.getAttribute("aria-invalid")).toBeNull();
-    expect((screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled)
-      .toBe(false);
+    expect(
+      (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
 
     fireEvent.change(instruction, { target: { value: "Short review instruction." } });
-    expect(screen.queryByText(/Long review instructions are repeated across review passes/) === null).toBe(true);
-    expect(instruction.getAttribute("aria-describedby"))
-      .not.toContain("review-instruction-warning");
+    expect(
+      screen.queryByText(/Long review instructions are repeated across review passes/) === null,
+    ).toBe(true);
+    expect(instruction.getAttribute("aria-describedby")).not.toContain(
+      "review-instruction-warning",
+    );
   });
 
   test("reports custom instructions that do not use the target branch token", async () => {
@@ -1185,9 +1233,11 @@ describe("GlobalSettings", () => {
     fireEvent.change(instruction, { target: { value: "Review the current diff." } });
 
     expect(screen.getByText("No dynamic target branch token")).toBeTruthy();
-    expect(screen.getByText(
-      `24 / ${REVIEW_INSTRUCTION_MAX_LENGTH.toLocaleString()} characters · ~6 tokens`,
-    )).toBeTruthy();
+    expect(
+      screen.getByText(
+        `24 / ${REVIEW_INSTRUCTION_MAX_LENGTH.toLocaleString()} characters · ~6 tokens`,
+      ),
+    ).toBeTruthy();
   });
 
   test("saves non-default editor and agent selections", async () => {
@@ -1204,9 +1254,11 @@ describe("GlobalSettings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Codex" }));
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
-    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
-      expect.objectContaining({ preferredEditor: "cursor", defaultAgent: "codex" }),
-    ));
+    await waitFor(() =>
+      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ preferredEditor: "cursor", defaultAgent: "codex" }),
+      ),
+    );
   });
 
   test("shows all platforms and persists visibility choices", async () => {
@@ -1228,12 +1280,14 @@ describe("GlobalSettings", () => {
     fireEvent.click(screen.getByRole("switch", { name: "Claude Code" }));
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
-    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
-      expect.objectContaining({
-        enabledAgentPlatforms: ["codex", "cursor", "grok", "opencode"],
-        defaultAgent: "codex",
-      }),
-    ));
+    await waitFor(() =>
+      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({
+          enabledAgentPlatforms: ["codex", "cursor", "grok", "opencode"],
+          defaultAgent: "codex",
+        }),
+      ),
+    );
   });
 
   test("saves container CPU and memory slider changes", async () => {
@@ -1244,11 +1298,13 @@ describe("GlobalSettings", () => {
     fireEvent.keyDown(memorySlider!, { key: "ArrowRight" });
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
-    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
-      expect.objectContaining({
-        containerResources: { cpuCores: 3, memoryGb: 5 },
-      }),
-    ));
+    await waitFor(() =>
+      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({
+          containerResources: { cpuCores: 3, memoryGb: 5 },
+        }),
+      ),
+    );
   });
 
   test("preserves the selected terminal font family while saving a size change", async () => {
@@ -1270,14 +1326,16 @@ describe("GlobalSettings", () => {
     fireEvent.keyDown(screen.getAllByRole("slider")[0]!, { key: "ArrowRight" });
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
-    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
-      expect.objectContaining({
-        terminalAppearance: expect.objectContaining({
-          fontFamily: "JetBrains Mono",
-          fontSize: 15,
+    await waitFor(() =>
+      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({
+          terminalAppearance: expect.objectContaining({
+            fontFamily: "JetBrains Mono",
+            fontSize: 15,
+          }),
         }),
-      }),
-    ));
+      ),
+    );
   });
 
   test("reveals and saves API credentials", async () => {
@@ -1305,17 +1363,11 @@ describe("GlobalSettings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => {
-      expect(mockUpdateGlobalConfig.mock.calls[0]?.[0]).not.toHaveProperty(
-        "anthropicApiKey",
-      );
+      expect(mockUpdateGlobalConfig.mock.calls[0]?.[0]).not.toHaveProperty("anthropicApiKey");
       expect(mockSetAnthropicApiKey).toHaveBeenCalledWith("test-anthropic-key");
-      expect(mockUpdateGlobalConfig.mock.calls[0]?.[0]).not.toHaveProperty(
-        "cursorApiKey",
-      );
+      expect(mockUpdateGlobalConfig.mock.calls[0]?.[0]).not.toHaveProperty("cursorApiKey");
       expect(mockSetCursorApiKey).toHaveBeenCalledWith("test-cursor-key");
-      expect(mockUpdateGlobalConfig.mock.calls[0]?.[0]).not.toHaveProperty(
-        "githubToken",
-      );
+      expect(mockUpdateGlobalConfig.mock.calls[0]?.[0]).not.toHaveProperty("githubToken");
       expect(mockSetGitHubToken).toHaveBeenCalledWith("test-github-token");
     });
   });
@@ -1337,8 +1389,9 @@ describe("GlobalSettings", () => {
     expect(input.placeholder).toBe("API key configured — enter a replacement");
 
     fireEvent.click(screen.getByRole("button", { name: "Clear stored Cursor API key" }));
-    expect(screen.getByText("The stored Cursor API key will be cleared when you save."))
-      .toBeTruthy();
+    expect(
+      screen.getByText("The stored Cursor API key will be cleared when you save."),
+    ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => expect(mockSetCursorApiKey).toHaveBeenCalledWith(null));
@@ -1364,8 +1417,9 @@ describe("GlobalSettings", () => {
     expect(input.value).toBe("");
 
     fireEvent.click(screen.getByRole("button", { name: "Clear stored Anthropic API key" }));
-    expect(screen.getByText("The stored Anthropic API key will be cleared when you save."))
-      .toBeTruthy();
+    expect(
+      screen.getByText("The stored Anthropic API key will be cleared when you save."),
+    ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => expect(mockSetAnthropicApiKey).toHaveBeenCalledWith(null));
@@ -1387,11 +1441,13 @@ describe("GlobalSettings", () => {
 
     // Nothing is stored, so there is no clear button and the field is empty —
     // without this notice the pane implies no key reaches new containers.
-    expect(screen.queryByRole("button", { name: "Clear stored Cursor API key" }) === null).toBe(true);
-    expect((screen.getByLabelText("Cursor API key") as HTMLInputElement).placeholder)
-      .toBe("Cursor API key");
-    expect(screen.getByText(/inherited CURSOR_API_KEY from its own environment/))
-      .toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Clear stored Cursor API key" }) === null).toBe(
+      true,
+    );
+    expect((screen.getByLabelText("Cursor API key") as HTMLInputElement).placeholder).toBe(
+      "Cursor API key",
+    );
+    expect(screen.getByText(/inherited CURSOR_API_KEY from its own environment/)).toBeTruthy();
   });
 
   test("shows no host-environment warning when the stored key is the one in use", async () => {
@@ -1407,7 +1463,9 @@ describe("GlobalSettings", () => {
     }));
     render(<GlobalSettings activeSection="cursor" />);
 
-    expect(screen.queryByText(/inherited CURSOR_API_KEY from its own environment/) === null).toBe(true);
+    expect(screen.queryByText(/inherited CURSOR_API_KEY from its own environment/) === null).toBe(
+      true,
+    );
     expect(screen.getByRole("button", { name: "Clear stored Cursor API key" })).toBeTruthy();
   });
 
@@ -1426,9 +1484,7 @@ describe("GlobalSettings", () => {
     fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
     const githubInput = screen.getByLabelText("GitHub token") as HTMLInputElement;
     expect(githubInput.value).toBe("");
-    expect(githubInput.placeholder).toBe(
-      "Token configured — enter a replacement",
-    );
+    expect(githubInput.placeholder).toBe("Token configured — enter a replacement");
 
     fireEvent.change(githubInput, { target: { value: "replacement-token" } });
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
@@ -1436,9 +1492,7 @@ describe("GlobalSettings", () => {
     await waitFor(() => {
       expect(mockSetGitHubToken).toHaveBeenCalledWith("replacement-token");
     });
-    expect(mockUpdateGlobalConfig.mock.calls[0]?.[0]).not.toHaveProperty(
-      "githubToken",
-    );
+    expect(mockUpdateGlobalConfig.mock.calls[0]?.[0]).not.toHaveProperty("githubToken");
     expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledWith();
   });
 
@@ -1456,9 +1510,7 @@ describe("GlobalSettings", () => {
 
     fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
     fireEvent.click(screen.getByRole("button", { name: "Clear stored token" }));
-    expect(
-      screen.getByText("The stored GitHub token will be cleared when you save."),
-    ).toBeTruthy();
+    expect(screen.getByText("The stored GitHub token will be cleared when you save.")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => {
@@ -1480,9 +1532,11 @@ describe("GlobalSettings", () => {
     expect(screen.getByLabelText("GitHub token")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
-    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
-      expect.objectContaining({ useHostGitHubCredentials: false }),
-    ));
+    await waitFor(() =>
+      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ useHostGitHubCredentials: false }),
+      ),
+    );
     expect(mockSetGitHubToken).not.toHaveBeenCalled();
     expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledWith();
   });
@@ -1501,14 +1555,17 @@ describe("GlobalSettings", () => {
       });
       fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
-      await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(
-        "Failed to save settings",
-        { description: "keychain unavailable" },
-      ));
+      await waitFor(() =>
+        expect(mockToastError).toHaveBeenCalledWith("Failed to save settings", {
+          description: "keychain unavailable",
+        }),
+      );
       expect(useConfigStore.getState().config.global.envFilePatterns).toEqual([".env.local"]);
       expect(useConfigStore.getState().config.global.useHostGitHubCredentials).toBe(false);
       expect(token.value).toBe("replacement-token");
-      expect((screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled).toBe(false);
+      expect(
+        (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled,
+      ).toBe(false);
     } finally {
       console.error = originalConsoleError;
     }
@@ -1524,10 +1581,11 @@ describe("GlobalSettings", () => {
       const token = screen.getByLabelText("GitHub token") as HTMLInputElement;
       fireEvent.change(token, { target: { value: "discarded-token" } });
       fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
-      await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(
-        "Failed to save settings",
-        { description: "keychain unavailable" },
-      ));
+      await waitFor(() =>
+        expect(mockToastError).toHaveBeenCalledWith("Failed to save settings", {
+          description: "keychain unavailable",
+        }),
+      );
       expect(token.value).toBe("discarded-token");
 
       fireEvent.click(screen.getAllByRole("button", { name: "Reset" }).at(-1)!);
@@ -1572,9 +1630,11 @@ describe("GlobalSettings", () => {
     fireEvent.click(hostCredentials);
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
-    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
-      expect.objectContaining({ useHostGitHubCredentials: true }),
-    ));
+    await waitFor(() =>
+      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ useHostGitHubCredentials: true }),
+      ),
+    );
     expect(mockSetGitHubToken).not.toHaveBeenCalled();
     expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledWith();
   });
@@ -1589,9 +1649,11 @@ describe("GlobalSettings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
     expect(mockRevealInFileManager).toHaveBeenCalledWith("/tmp/orkestrator-logs");
-    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
-      expect.objectContaining({ debugLogging: true }),
-    ));
+    await waitFor(() =>
+      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ debugLogging: true }),
+      ),
+    );
   });
 
   test("uses and restores the default terminal scrollback when legacy config omits it", () => {
@@ -1604,12 +1666,16 @@ describe("GlobalSettings", () => {
     const { container } = render(<GlobalSettings activeSection="terminal" />);
     expect(screen.getByText("1,000 lines")).toBeTruthy();
 
-    const colorTextInput = container.querySelector('input[type="text"][value="#000000"]') as HTMLInputElement;
+    const colorTextInput = container.querySelector(
+      'input[type="text"][value="#000000"]',
+    ) as HTMLInputElement;
     fireEvent.change(colorTextInput, { target: { value: "invalid" } });
     fireEvent.click(screen.getAllByRole("button", { name: "Reset" }).at(-1)!);
 
     expect(screen.getByText("1,000 lines")).toBeTruthy();
-    expect(screen.queryByText("Invalid hex color format. Use #RGB or #RRGGBB.") === null).toBe(true);
+    expect(screen.queryByText("Invalid hex color format. Use #RGB or #RRGGBB.") === null).toBe(
+      true,
+    );
   });
 
   test("saves terminal font and scrollback selections", async () => {
@@ -1628,24 +1694,34 @@ describe("GlobalSettings", () => {
     fireEvent.keyDown(scrollback, { key: "ArrowRight" });
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
-    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
-      expect.objectContaining({
-        terminalAppearance: expect.objectContaining({ fontFamily: "JetBrains Mono" }),
-        terminalScrollback: 5100,
-      }),
-    ));
+    await waitFor(() =>
+      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({
+          terminalAppearance: expect.objectContaining({ fontFamily: "JetBrains Mono" }),
+          terminalScrollback: 5100,
+        }),
+      ),
+    );
   });
 
   test("blocks saves for invalid domains and terminal colors", () => {
     const { container, rerender } = render(<GlobalSettings activeSection="network" />);
-    fireEvent.change(screen.getByPlaceholderText(/github\.com/), { target: { value: "not a domain" } });
+    fireEvent.change(screen.getByPlaceholderText(/github\.com/), {
+      target: { value: "not a domain" },
+    });
     expect(screen.getByText("Invalid domain format: not a domain")).toBeTruthy();
-    expect((within(container).getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      (within(container).getByRole("button", { name: "Save Changes" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
 
     rerender(<GlobalSettings activeSection="terminal" />);
     fireEvent.change(screen.getByPlaceholderText("#141414"), { target: { value: "invalid" } });
     expect(screen.getByText("Invalid hex color format. Use #RGB or #RRGGBB.")).toBeTruthy();
-    expect((within(container).getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      (within(container).getByRole("button", { name: "Save Changes" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
   });
 
   test("saves Claude native fast mode default changes", async () => {
@@ -1658,7 +1734,7 @@ describe("GlobalSettings", () => {
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({
           claudeNativeFastModeDefault: true,
-        })
+        }),
       );
     });
   });
@@ -1690,9 +1766,11 @@ describe("GlobalSettings", () => {
     expect(saveButton.disabled).toBe(false);
     fireEvent.click(saveButton);
 
-    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
-      expect.objectContaining({ claudeMode: "terminal" }),
-    ));
+    await waitFor(() =>
+      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ claudeMode: "terminal" }),
+      ),
+    );
   });
 
   test("saves the Claude native backend selection", async () => {
@@ -1701,9 +1779,11 @@ describe("GlobalSettings", () => {
     fireEvent.click(screen.getByRole("button", { name: /Tmux/ }));
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
-    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
-      expect.objectContaining({ claudeNativeBackend: "tmux" }),
-    ));
+    await waitFor(() =>
+      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ claudeNativeBackend: "tmux" }),
+      ),
+    );
   });
 
   test("trims and deduplicates environment patterns and allowed domains", async () => {
@@ -1719,13 +1799,15 @@ describe("GlobalSettings", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
-    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
-      expect.objectContaining({
-        envFilePatterns: [".env", ".env.local", ".ENV"],
-        // First spelling typed wins, in first-occurrence order.
-        allowedDomains: ["Example.com", "api.example.com"],
-      }),
-    ));
+    await waitFor(() =>
+      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({
+          envFilePatterns: [".env", ".env.local", ".ENV"],
+          // First spelling typed wins, in first-occurrence order.
+          allowedDomains: ["Example.com", "api.example.com"],
+        }),
+      ),
+    );
   });
 
   test("calls onSaveSuccess only after the success delay", async () => {
@@ -1754,9 +1836,7 @@ describe("GlobalSettings", () => {
 
     const { container } = render(<GlobalSettings activeSection="codex" />);
 
-    const codexSection = screen
-      .getByText("Choose how Codex runs in environments")
-      .parentElement;
+    const codexSection = screen.getByText("Choose how Codex runs in environments").parentElement;
     if (!codexSection) {
       throw new Error("Expected Codex settings section");
     }
@@ -1769,7 +1849,7 @@ describe("GlobalSettings", () => {
         expect.objectContaining({
           claudeModel: "default",
           codexMode: "terminal",
-        })
+        }),
       );
     });
   });
@@ -1792,7 +1872,7 @@ describe("GlobalSettings", () => {
     expect(
       screen
         .getByRole("switch", { name: "Claude fast mode for new native tabs" })
-        .getAttribute("aria-checked")
+        .getAttribute("aria-checked"),
     ).toBe("true");
 
     rerender(<GlobalSettings activeSection="codex" />);
@@ -1800,7 +1880,7 @@ describe("GlobalSettings", () => {
     expect(
       screen
         .getByRole("switch", { name: "Codex fast mode for new native tabs" })
-        .getAttribute("aria-checked")
+        .getAttribute("aria-checked"),
     ).toBe("true");
   });
 
@@ -1866,7 +1946,7 @@ describe("GlobalSettings", () => {
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({
           codexNativeFastModeDefault: true,
-        })
+        }),
       );
     });
   });
@@ -1912,8 +1992,12 @@ describe("GlobalSettings", () => {
 
     fireEvent.change(domains, { target: { value: "not a domain" } });
     expect(screen.getByText("Invalid domain format: not a domain")).toBeTruthy();
-    expect((screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole("button", { name: "Test DNS" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect((screen.getByRole("button", { name: "Test DNS" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
 
     fireEvent.change(domains, { target: { value: "example.com" } });
     fireEvent.click(screen.getByRole("button", { name: "Test DNS" }));
@@ -1960,19 +2044,27 @@ describe("GlobalSettings", () => {
 
   test("clears terminal color validation errors when changes are reset", () => {
     const { container } = render(<GlobalSettings activeSection="terminal" />);
-    const colorTextInput = container.querySelector('input[type="text"][value="#000000"]') as HTMLInputElement;
+    const colorTextInput = container.querySelector(
+      'input[type="text"][value="#000000"]',
+    ) as HTMLInputElement;
 
     fireEvent.change(colorTextInput, { target: { value: "invalid" } });
     expect(screen.getByText("Invalid hex color format. Use #RGB or #RRGGBB.")).toBeTruthy();
-    expect((screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
 
     fireEvent.change(colorTextInput, { target: { value: "#123456" } });
-    expect(screen.queryByText("Invalid hex color format. Use #RGB or #RRGGBB.") === null).toBe(true);
+    expect(screen.queryByText("Invalid hex color format. Use #RGB or #RRGGBB.") === null).toBe(
+      true,
+    );
     fireEvent.change(colorTextInput, { target: { value: "invalid" } });
 
     fireEvent.click(screen.getAllByRole("button", { name: "Reset" }).at(-1)!);
     expect(colorTextInput.value).toBe("#000000");
-    expect(screen.queryByText("Invalid hex color format. Use #RGB or #RRGGBB.") === null).toBe(true);
+    expect(screen.queryByText("Invalid hex color format. Use #RGB or #RRGGBB.") === null).toBe(
+      true,
+    );
   });
 
   test("propagates changed GitHub credentials without failing a saved config", async () => {
@@ -1991,20 +2083,25 @@ describe("GlobalSettings", () => {
   });
 
   test("keeps the config saved and offers a retry when credential propagation throws", async () => {
-    mockPropagateGithubCredentialsToContainers.mockRejectedValueOnce(new Error("container unavailable"));
+    mockPropagateGithubCredentialsToContainers.mockRejectedValueOnce(
+      new Error("container unavailable"),
+    );
     render(<GlobalSettings activeSection="general" />);
 
     fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
     fireEvent.change(screen.getByLabelText("GitHub token"), { target: { value: "new-token" } });
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
-    await waitFor(() => expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledTimes(1));
-    expect(mockToastError).toHaveBeenCalledWith(
-      "Settings saved, but containers were not updated",
-      { description: "container unavailable. Save Changes to retry." },
+    await waitFor(() =>
+      expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledTimes(1),
     );
+    expect(mockToastError).toHaveBeenCalledWith("Settings saved, but containers were not updated", {
+      description: "container unavailable. Save Changes to retry.",
+    });
     expect(mockToastSuccess).not.toHaveBeenCalledWith("Settings saved");
-    expect((screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(
+      (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
   });
 
   test("reports partial GitHub credential propagation failures with affected containers", async () => {
@@ -2017,15 +2114,19 @@ describe("GlobalSettings", () => {
     fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
-    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(
-      "Settings saved, but some containers were not updated",
-      {
-        description:
-          "Updated 1 container(s). Failed: environment-2: container unavailable. Save Changes to retry.",
-      },
-    ));
+    await waitFor(() =>
+      expect(mockToastError).toHaveBeenCalledWith(
+        "Settings saved, but some containers were not updated",
+        {
+          description:
+            "Updated 1 container(s). Failed: environment-2: container unavailable. Save Changes to retry.",
+        },
+      ),
+    );
     expect(mockToastSuccess).not.toHaveBeenCalledWith("Settings saved");
-    expect((screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(
+      (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
   });
 
   test("truncates long GitHub credential propagation failure details", async () => {
@@ -2043,13 +2144,15 @@ describe("GlobalSettings", () => {
     fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
-    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(
-      "Settings saved, but some containers were not updated",
-      {
-        description:
-          "Failed: environment-1: failed one; environment-2: failed two; environment-3: failed three; and 2 more. Save Changes to retry.",
-      },
-    ));
+    await waitFor(() =>
+      expect(mockToastError).toHaveBeenCalledWith(
+        "Settings saved, but some containers were not updated",
+        {
+          description:
+            "Failed: environment-1: failed one; environment-2: failed two; environment-3: failed three; and 2 more. Save Changes to retry.",
+        },
+      ),
+    );
   });
 
   test("reports complete GitHub credential propagation failures and retries on save", async () => {
@@ -2069,17 +2172,21 @@ describe("GlobalSettings", () => {
     fireEvent.click(screen.getByRole("switch", { name: "Use host GitHub CLI credentials" }));
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
-    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(
-      "Settings saved, but some containers were not updated",
-      {
-        description:
-          "Failed: environment-1: container unavailable; environment-2: permission denied. Save Changes to retry.",
-      },
-    ));
+    await waitFor(() =>
+      expect(mockToastError).toHaveBeenCalledWith(
+        "Settings saved, but some containers were not updated",
+        {
+          description:
+            "Failed: environment-1: container unavailable; environment-2: permission denied. Save Changes to retry.",
+        },
+      ),
+    );
     expect(mockToastSuccess).not.toHaveBeenCalledWith("Settings saved");
 
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
-    await waitFor(() => expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledTimes(2),
+    );
     expect(mockToastSuccess).toHaveBeenCalledWith("Updated GitHub credentials in 2 container(s)");
     expect(mockToastSuccess).toHaveBeenCalledWith("Settings saved");
   });
@@ -2091,11 +2198,14 @@ describe("GlobalSettings", () => {
     fireEvent.click(screen.getByRole("switch", { name: "Codex fast mode for new native tabs" }));
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
-    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(
-      "Failed to save settings",
-      { description: "disk full" },
-    ));
-    expect((screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled).toBe(false);
+    await waitFor(() =>
+      expect(mockToastError).toHaveBeenCalledWith("Failed to save settings", {
+        description: "disk full",
+      }),
+    );
+    expect(
+      (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
   });
 
   test("saves experimental Codex raw event logging changes", async () => {
@@ -2108,7 +2218,7 @@ describe("GlobalSettings", () => {
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({
           experimentalCodexRawEventLogging: false,
-        })
+        }),
       );
     });
   });

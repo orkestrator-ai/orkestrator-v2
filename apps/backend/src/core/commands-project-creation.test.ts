@@ -5,10 +5,7 @@ import path from "node:path";
 import { createCommandRegistry, type CommandContext } from "./commands.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
 import type { Project } from "./models.js";
-import {
-  CommandFailedError,
-  runCommand as shellRunCommand,
-} from "./shell.js";
+import { CommandFailedError, runCommand as shellRunCommand } from "./shell.js";
 import { StorageService } from "./storage.js";
 
 type Run = typeof shellRunCommand;
@@ -66,7 +63,11 @@ function successfulRunner(
       const source = args.find((arg) => arg.startsWith("--source="))?.slice(9);
       if (!source) throw new Error("missing source path");
       await shellRunCommand("git", [
-        "-C", source, "remote", "add", "origin",
+        "-C",
+        source,
+        "remote",
+        "add",
+        "origin",
         `https://github.com/test/${path.basename(source)}.git`,
       ]);
       return { stdout: "", stderr: "" };
@@ -78,7 +79,10 @@ function successfulRunner(
 
 async function remainsPending(promise: Promise<unknown>, timeoutMs = 50): Promise<boolean> {
   return Promise.race([
-    promise.then(() => false, () => false),
+    promise.then(
+      () => false,
+      () => false,
+    ),
     new Promise<true>((resolve) => setTimeout(() => resolve(true), timeoutMs)),
   ]);
 }
@@ -90,7 +94,7 @@ describe("create_project_from_scratch", () => {
 
     await withProjectCreation(runCommand, async (invoke, storage, root) => {
       const projectPath = path.join(root, "blank-canvas");
-      const project = await invoke(projectPath) as {
+      const project = (await invoke(projectPath)) as {
         name: string;
         gitUrl: string;
         localPath: string;
@@ -106,18 +110,29 @@ describe("create_project_from_scratch", () => {
         {
           command: "git",
           args: [
-            "-C", projectPath,
-            "-c", "user.name=Orkestrator",
-            "-c", "user.email=projects@orkestrator.local",
-            "commit", "--allow-empty", "--no-gpg-sign", "-m", "Initial commit",
+            "-C",
+            projectPath,
+            "-c",
+            "user.name=Orkestrator",
+            "-c",
+            "user.email=projects@orkestrator.local",
+            "commit",
+            "--allow-empty",
+            "--no-gpg-sign",
+            "-m",
+            "Initial commit",
           ],
           timeoutMs: 30_000,
         },
         {
           command: "gh",
           args: [
-            "repo", "create", "blank-canvas", "--private",
-            `--source=${projectPath}`, "--remote=origin",
+            "repo",
+            "create",
+            "blank-canvas",
+            "--private",
+            `--source=${projectPath}`,
+            "--remote=origin",
           ],
           timeoutMs: 120_000,
         },
@@ -132,10 +147,9 @@ describe("create_project_from_scratch", () => {
           timeoutMs: 120_000,
         },
       ]);
-      await expect(shellRunCommand(
-        "git",
-        ["-C", projectPath, "rev-parse", "--verify", "main^{commit}"],
-      )).resolves.toMatchObject({ stdout: expect.stringMatching(/^[0-9a-f]{40}\n$/) });
+      await expect(
+        shellRunCommand("git", ["-C", projectPath, "rev-parse", "--verify", "main^{commit}"]),
+      ).resolves.toMatchObject({ stdout: expect.stringMatching(/^[0-9a-f]{40}\n$/) });
       expect(await storage.loadProjects()).toHaveLength(1);
     });
   });
@@ -144,8 +158,9 @@ describe("create_project_from_scratch", () => {
     const runCommand = mock(async () => ({ stdout: "", stderr: "" }));
     await withProjectCreation(runCommand, async (invoke, _storage, root, invokeArgs) => {
       await expect(invokeArgs({ localPath: " " })).rejects.toThrow(/non-blank string/);
-      await expect(invokeArgs({ localPath: path.join(root, "new"), extra: true }))
-        .rejects.toThrow("Unexpected arguments field: extra");
+      await expect(invokeArgs({ localPath: path.join(root, "new"), extra: true })).rejects.toThrow(
+        "Unexpected arguments field: extra",
+      );
       await expect(invoke("relative/project")).rejects.toThrow("absolute path");
       await expect(invoke(path.parse(root).root)).rejects.toThrow("filesystem root");
 
@@ -168,16 +183,16 @@ describe("create_project_from_scratch", () => {
     });
   });
 
-  test.each([["double dash", "--public"], ["single dash", "-x"]])(
-    "rejects a leading-dash repository name (%s) before invoking a CLI",
-    async (_name, folder) => {
-      const runCommand = mock(async () => ({ stdout: "", stderr: "" }));
-      await withProjectCreation(runCommand, async (invoke, _storage, root) => {
-        await expect(invoke(path.join(root, folder))).rejects.toThrow("cannot begin with a dash");
-        expect(runCommand).not.toHaveBeenCalled();
-      });
-    },
-  );
+  test.each([
+    ["double dash", "--public"],
+    ["single dash", "-x"],
+  ])("rejects a leading-dash repository name (%s) before invoking a CLI", async (_name, folder) => {
+    const runCommand = mock(async () => ({ stdout: "", stderr: "" }));
+    await withProjectCreation(runCommand, async (invoke, _storage, root) => {
+      await expect(invoke(path.join(root, folder))).rejects.toThrow("cannot begin with a dash");
+      expect(runCommand).not.toHaveBeenCalled();
+    });
+  });
 
   test("add_project rejects a local path an existing project already uses", async () => {
     const runCommand = successfulRunner();
@@ -185,10 +200,12 @@ describe("create_project_from_scratch", () => {
       const projectPath = path.join(root, "shared-path");
       await invoke(projectPath);
 
-      await expect(invokeCommand("add_project", {
-        gitUrl: "https://example.invalid/other.git",
-        localPath: projectPath,
-      })).rejects.toThrow("A project already uses this local path");
+      await expect(
+        invokeCommand("add_project", {
+          gitUrl: "https://example.invalid/other.git",
+          localPath: projectPath,
+        }),
+      ).rejects.toThrow("A project already uses this local path");
       expect(await storage.loadProjects()).toHaveLength(1);
     });
   });
@@ -226,10 +243,20 @@ describe("create_project_from_scratch", () => {
   });
 
   test.each([
-    ["missing Git", new CommandFailedError("spawn git ENOENT", { executableMissing: true }), "Git is not installed"],
-    ["Git init timeout", new CommandFailedError("init timed out", { timedOut: true }), "init timed out"],
+    [
+      "missing Git",
+      new CommandFailedError("spawn git ENOENT", { executableMissing: true }),
+      "Git is not installed",
+    ],
+    [
+      "Git init timeout",
+      new CommandFailedError("init timed out", { timedOut: true }),
+      "init timed out",
+    ],
   ])("rolls back a new directory after %s", async (_name, failure, expected) => {
-    const runCommand = mock(async () => { throw failure; });
+    const runCommand = mock(async () => {
+      throw failure;
+    });
     await withProjectCreation(runCommand, async (invoke, _storage, root) => {
       const projectPath = path.join(root, "failed-init");
       await expect(invoke(projectPath)).rejects.toThrow(expected);
@@ -248,8 +275,12 @@ describe("create_project_from_scratch", () => {
     });
     await withProjectCreation(runCommand, async (invoke, _storage, root) => {
       const projectPath = path.join(root, "failed-commit");
-      await expect(invoke(projectPath)).rejects.toThrow("Could not create the initial Git commit: commit timed out");
-      await expect(fs.readFile(path.join(projectPath, "appeared.txt"), "utf8")).resolves.toBe("keep");
+      await expect(invoke(projectPath)).rejects.toThrow(
+        "Could not create the initial Git commit: commit timed out",
+      );
+      await expect(fs.readFile(path.join(projectPath, "appeared.txt"), "utf8")).resolves.toBe(
+        "keep",
+      );
       await expect(fs.access(path.join(projectPath, ".git"))).rejects.toThrow();
     });
   });
@@ -271,26 +302,28 @@ describe("create_project_from_scratch", () => {
   test.each([
     ["non-zero failure", new Error("not authenticated")],
     ["timeout", new CommandFailedError("gh timed out", { timedOut: true })],
-  ])("preserves the local repository after an ambiguous GitHub creation %s", async (_name, failure) => {
-    const runCommand = mock(async (command: string, args: string[] = [], options = {}) => {
-      if (command === "gh") throw failure;
-      return shellRunCommand(command, args, options);
-    });
-    await withProjectCreation(runCommand, async (invoke, storage, root) => {
-      const projectPath = path.join(root, "ambiguous-gh");
-      const error = await invoke(projectPath).catch((thrown: Error) => thrown);
-      expect((error as Error).message).toContain("GitHub may have created");
-      expect((error as Error).message).toContain(failure.message);
-      await fs.access(path.join(projectPath, ".git"));
-      // The preserved repository must still hold the commit that makes it
-      // resumable, not just an empty .git directory.
-      await expect(shellRunCommand(
-        "git",
-        ["-C", projectPath, "log", "-1", "--format=%an%n%s"],
-      )).resolves.toMatchObject({ stdout: "Orkestrator\nInitial commit\n" });
-      expect(await storage.loadProjects()).toEqual([]);
-    });
-  });
+  ])(
+    "preserves the local repository after an ambiguous GitHub creation %s",
+    async (_name, failure) => {
+      const runCommand = mock(async (command: string, args: string[] = [], options = {}) => {
+        if (command === "gh") throw failure;
+        return shellRunCommand(command, args, options);
+      });
+      await withProjectCreation(runCommand, async (invoke, storage, root) => {
+        const projectPath = path.join(root, "ambiguous-gh");
+        const error = await invoke(projectPath).catch((thrown: Error) => thrown);
+        expect((error as Error).message).toContain("GitHub may have created");
+        expect((error as Error).message).toContain(failure.message);
+        await fs.access(path.join(projectPath, ".git"));
+        // The preserved repository must still hold the commit that makes it
+        // resumable, not just an empty .git directory.
+        await expect(
+          shellRunCommand("git", ["-C", projectPath, "log", "-1", "--format=%an%n%s"]),
+        ).resolves.toMatchObject({ stdout: "Orkestrator\nInitial commit\n" });
+        expect(await storage.loadProjects()).toEqual([]);
+      });
+    },
+  );
 
   test.each([
     ["missing origin", "origin", "Could not verify the origin remote"],
@@ -302,7 +335,12 @@ describe("create_project_from_scratch", () => {
         if (failurePhase === "push") {
           const source = args.find((arg) => arg.startsWith("--source="))!.slice(9);
           await shellRunCommand("git", [
-            "-C", source, "remote", "add", "origin", "https://github.com/owner/project.git",
+            "-C",
+            source,
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/owner/project.git",
           ]);
         }
         return { stdout: "", stderr: "" };
@@ -332,7 +370,9 @@ describe("create_project_from_scratch", () => {
   test("preserves the repositories when project persistence fails", async () => {
     const runCommand = successfulRunner();
     await withProjectCreation(runCommand, async (invoke, storage, root) => {
-      storage.addProject = mock(async () => { throw new Error("disk is read-only"); });
+      storage.addProject = mock(async () => {
+        throw new Error("disk is read-only");
+      });
       const projectPath = path.join(root, "persist-failure");
       const failure = await invoke(projectPath).catch((error: Error) => error);
       expect((failure as Error).message).toContain("Add the existing repository instead");
@@ -362,24 +402,36 @@ describe("create_project_from_scratch", () => {
   });
 
   test.each([
-    ["password userinfo", "https://x-token:SECRET@github.com/test/x.git", "https://github.com/test/x.git"],
-    ["bare token userinfo", "https://SECRET@github.com/test/x.git", "https://github.com/test/x.git"],
+    [
+      "password userinfo",
+      "https://x-token:SECRET@github.com/test/x.git",
+      "https://github.com/test/x.git",
+    ],
+    [
+      "bare token userinfo",
+      "https://SECRET@github.com/test/x.git",
+      "https://github.com/test/x.git",
+    ],
     ["scp syntax is untouched", "git@github.com:test/x.git", "git@github.com:test/x.git"],
     ["ssh url userinfo", "ssh://git:SECRET@github.com/test/x.git", "ssh://github.com/test/x.git"],
-  ])("strips credentials from the persisted origin URL (%s)", async (_name, configured, expected) => {
-    const runCommand = mock(async (command: string, args: string[] = [], options = {}) => {
-      if (command === "gh") return { stdout: "", stderr: "" };
-      if (command === "git" && args[2] === "config") return { stdout: `${configured}\n`, stderr: "" };
-      if (command === "git" && args[2] === "push") return { stdout: "", stderr: "" };
-      return shellRunCommand(command, args, options);
-    });
-    await withProjectCreation(runCommand, async (invoke, storage, root) => {
-      await invoke(path.join(root, "credential"));
-      const [project] = await storage.loadProjects();
-      expect(project!.gitUrl).toBe(expected);
-      expect(project!.gitUrl).not.toContain("SECRET");
-    });
-  });
+  ])(
+    "strips credentials from the persisted origin URL (%s)",
+    async (_name, configured, expected) => {
+      const runCommand = mock(async (command: string, args: string[] = [], options = {}) => {
+        if (command === "gh") return { stdout: "", stderr: "" };
+        if (command === "git" && args[2] === "config")
+          return { stdout: `${configured}\n`, stderr: "" };
+        if (command === "git" && args[2] === "push") return { stdout: "", stderr: "" };
+        return shellRunCommand(command, args, options);
+      });
+      await withProjectCreation(runCommand, async (invoke, storage, root) => {
+        await invoke(path.join(root, "credential"));
+        const [project] = await storage.loadProjects();
+        expect(project!.gitUrl).toBe(expected);
+        expect(project!.gitUrl).not.toContain("SECRET");
+      });
+    },
+  );
 
   test("reports an ancestor that is a regular file as a directory problem", async () => {
     const runCommand = mock(async () => ({ stdout: "", stderr: "" }));
@@ -427,7 +479,9 @@ describe("create_project_from_scratch", () => {
       const projectPath = path.join(createdRoot, "project");
       await expect(invoke(projectPath)).rejects.toThrow("commit timed out");
       await expect(fs.access(projectPath)).rejects.toThrow();
-      await expect(fs.readFile(path.join(createdRoot, "sibling.txt"), "utf8")).resolves.toBe("keep");
+      await expect(fs.readFile(path.join(createdRoot, "sibling.txt"), "utf8")).resolves.toBe(
+        "keep",
+      );
     });
   });
 
@@ -501,47 +555,85 @@ describe("create_project_from_scratch", () => {
       await expect(invoke(projectPath)).resolves.toMatchObject({ localPath: projectPath });
       expect(await storage.loadProjects()).toHaveLength(1);
       // Resuming must not re-init or re-commit on top of the preserved repo.
-      await expect(shellRunCommand(
-        "git",
-        ["-C", projectPath, "rev-list", "--count", "HEAD"],
-      )).resolves.toMatchObject({ stdout: "1\n" });
+      await expect(
+        shellRunCommand("git", ["-C", projectPath, "rev-list", "--count", "HEAD"]),
+      ).resolves.toMatchObject({ stdout: "1\n" });
     });
   });
 
   test.each([
-    ["a foreign repository", async (projectPath: string) => {
-      await shellRunCommand("git", ["-C", projectPath, "init", "-b", "main"]);
-      await shellRunCommand("git", [
-        "-C", projectPath, "-c", "user.name=Someone", "-c", "user.email=someone@example.invalid",
-        "commit", "--allow-empty", "--no-gpg-sign", "-m", "Their work",
-      ]);
-    }],
-    ["a repository that already has a remote", async (projectPath: string) => {
-      await shellRunCommand("git", ["-C", projectPath, "init", "-b", "main"]);
-      await shellRunCommand("git", [
-        "-C", projectPath, "-c", "user.name=Orkestrator",
-        "-c", "user.email=projects@orkestrator.local",
-        "commit", "--allow-empty", "--no-gpg-sign", "-m", "Initial commit",
-      ]);
-      await shellRunCommand("git", [
-        "-C", projectPath, "remote", "add", "origin", "https://example.invalid/x.git",
-      ]);
-    }],
-    ["a repository with extra commits", async (projectPath: string) => {
-      await shellRunCommand("git", ["-C", projectPath, "init", "-b", "main"]);
-      for (const message of ["Initial commit", "More work"]) {
+    [
+      "a foreign repository",
+      async (projectPath: string) => {
+        await shellRunCommand("git", ["-C", projectPath, "init", "-b", "main"]);
         await shellRunCommand("git", [
-          "-C", projectPath, "-c", "user.name=Orkestrator",
-          "-c", "user.email=projects@orkestrator.local",
-          "commit", "--allow-empty", "--no-gpg-sign", "-m", message,
+          "-C",
+          projectPath,
+          "-c",
+          "user.name=Someone",
+          "-c",
+          "user.email=someone@example.invalid",
+          "commit",
+          "--allow-empty",
+          "--no-gpg-sign",
+          "-m",
+          "Their work",
         ]);
-      }
-    }],
+      },
+    ],
+    [
+      "a repository that already has a remote",
+      async (projectPath: string) => {
+        await shellRunCommand("git", ["-C", projectPath, "init", "-b", "main"]);
+        await shellRunCommand("git", [
+          "-C",
+          projectPath,
+          "-c",
+          "user.name=Orkestrator",
+          "-c",
+          "user.email=projects@orkestrator.local",
+          "commit",
+          "--allow-empty",
+          "--no-gpg-sign",
+          "-m",
+          "Initial commit",
+        ]);
+        await shellRunCommand("git", [
+          "-C",
+          projectPath,
+          "remote",
+          "add",
+          "origin",
+          "https://example.invalid/x.git",
+        ]);
+      },
+    ],
+    [
+      "a repository with extra commits",
+      async (projectPath: string) => {
+        await shellRunCommand("git", ["-C", projectPath, "init", "-b", "main"]);
+        for (const message of ["Initial commit", "More work"]) {
+          await shellRunCommand("git", [
+            "-C",
+            projectPath,
+            "-c",
+            "user.name=Orkestrator",
+            "-c",
+            "user.email=projects@orkestrator.local",
+            "commit",
+            "--allow-empty",
+            "--no-gpg-sign",
+            "-m",
+            message,
+          ]);
+        }
+      },
+    ],
   ])("refuses to resume %s", async (_name, prepare) => {
     const base = successfulRunner();
-    const runCommand = mock(async (command: string, args: string[] = [], options = {}) => (
-      base(command, args, options)
-    ));
+    const runCommand = mock(async (command: string, args: string[] = [], options = {}) =>
+      base(command, args, options),
+    );
     await withProjectCreation(runCommand, async (invoke, storage, root) => {
       const projectPath = path.join(root, "occupied-repo");
       await fs.mkdir(projectPath);
@@ -561,9 +653,17 @@ describe("create_project_from_scratch", () => {
       await fs.mkdir(projectPath);
       await shellRunCommand("git", ["-C", projectPath, "init", "-b", "main"]);
       await shellRunCommand("git", [
-        "-C", projectPath, "-c", "user.name=Orkestrator",
-        "-c", "user.email=projects@orkestrator.local",
-        "commit", "--allow-empty", "--no-gpg-sign", "-m", "Initial commit",
+        "-C",
+        projectPath,
+        "-c",
+        "user.name=Orkestrator",
+        "-c",
+        "user.email=projects@orkestrator.local",
+        "commit",
+        "--allow-empty",
+        "--no-gpg-sign",
+        "-m",
+        "Initial commit",
       ]);
       await fs.writeFile(path.join(projectPath, "draft.txt"), "mine");
 
@@ -614,9 +714,13 @@ describe("create_project_from_scratch", () => {
 
   test("rejects a duplicate local path inserted while the CLI work was running", async () => {
     let releaseGh!: () => void;
-    const ghGate = new Promise<void>((resolve) => { releaseGh = resolve; });
+    const ghGate = new Promise<void>((resolve) => {
+      releaseGh = resolve;
+    });
     let markGhEntered!: () => void;
-    const ghEntered = new Promise<void>((resolve) => { markGhEntered = resolve; });
+    const ghEntered = new Promise<void>((resolve) => {
+      markGhEntered = resolve;
+    });
     const base = successfulRunner();
     const runCommand = mock(async (command: string, args: string[] = [], options = {}) => {
       if (command === "gh") {
@@ -649,11 +753,17 @@ describe("create_project_from_scratch", () => {
 
   test("serializes two requests for the same canonical path", async () => {
     let releaseFirst!: () => void;
-    const gate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const gate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
     let markFirstInitEntered!: () => void;
-    const firstInitEntered = new Promise<void>((resolve) => { markFirstInitEntered = resolve; });
+    const firstInitEntered = new Promise<void>((resolve) => {
+      markFirstInitEntered = resolve;
+    });
     let markSecondInitEntered!: () => void;
-    const secondInitEntered = new Promise<void>((resolve) => { markSecondInitEntered = resolve; });
+    const secondInitEntered = new Promise<void>((resolve) => {
+      markSecondInitEntered = resolve;
+    });
     let initCalls = 0;
     const base = successfulRunner();
     const runCommand = mock(async (command: string, args: string[] = [], options = {}) => {
@@ -691,18 +801,27 @@ describe("create_project_from_scratch", () => {
     let caseInsensitive = false;
     try {
       await fs.mkdir(path.join(probeRoot, "Probe"));
-      caseInsensitive = await fs.access(path.join(probeRoot, "probe")).then(() => true, () => false);
+      caseInsensitive = await fs.access(path.join(probeRoot, "probe")).then(
+        () => true,
+        () => false,
+      );
     } finally {
       await fs.rm(probeRoot, { recursive: true, force: true });
     }
     if (!caseInsensitive) return;
 
     let releaseFirst!: () => void;
-    const gate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const gate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
     let markFirstInitEntered!: () => void;
-    const firstInitEntered = new Promise<void>((resolve) => { markFirstInitEntered = resolve; });
+    const firstInitEntered = new Promise<void>((resolve) => {
+      markFirstInitEntered = resolve;
+    });
     let markSecondInitEntered!: () => void;
-    const secondInitEntered = new Promise<void>((resolve) => { markSecondInitEntered = resolve; });
+    const secondInitEntered = new Promise<void>((resolve) => {
+      markSecondInitEntered = resolve;
+    });
     let initCalls = 0;
     const base = successfulRunner();
     const runCommand = mock(async (command: string, args: string[] = [], options = {}) => {
@@ -735,9 +854,13 @@ describe("create_project_from_scratch", () => {
 
   test("allows different paths to initialize concurrently and persists both", async () => {
     let release!: () => void;
-    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     let bothStarted!: () => void;
-    const started = new Promise<void>((resolve) => { bothStarted = resolve; });
+    const started = new Promise<void>((resolve) => {
+      bothStarted = resolve;
+    });
     let activeInits = 0;
     let maxActiveInits = 0;
     let initCalls = 0;

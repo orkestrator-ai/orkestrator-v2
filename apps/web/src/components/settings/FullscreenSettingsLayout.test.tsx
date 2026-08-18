@@ -27,7 +27,12 @@ const menuItems = [
 describe("FullscreenSettingsLayout", () => {
   test("renders nothing while closed", () => {
     const { container } = render(
-      <FullscreenSettingsLayout open={false} onOpenChange={() => undefined} title="Settings" menuItems={menuItems}>
+      <FullscreenSettingsLayout
+        open={false}
+        onOpenChange={() => undefined}
+        title="Settings"
+        menuItems={menuItems}
+      >
         {(section) => section}
       </FullscreenSettingsLayout>,
     );
@@ -68,7 +73,12 @@ describe("FullscreenSettingsLayout", () => {
   test("portals the fullscreen layer outside its triggering container", () => {
     const { container } = render(
       <div data-testid="transformed-tool-popover">
-        <FullscreenSettingsLayout open onOpenChange={() => undefined} title="Settings" menuItems={menuItems}>
+        <FullscreenSettingsLayout
+          open
+          onOpenChange={() => undefined}
+          title="Settings"
+          menuItems={menuItems}
+        >
           {(section) => <div>section:{section}</div>}
         </FullscreenSettingsLayout>
       </div>,
@@ -84,7 +94,12 @@ describe("FullscreenSettingsLayout", () => {
 
   test("changes sections through the mobile selector", () => {
     render(
-      <FullscreenSettingsLayout open onOpenChange={() => undefined} title="Settings" menuItems={menuItems}>
+      <FullscreenSettingsLayout
+        open
+        onOpenChange={() => undefined}
+        title="Settings"
+        menuItems={menuItems}
+      >
         {(section) => <div>section:{section}</div>}
       </FullscreenSettingsLayout>,
     );
@@ -100,10 +115,17 @@ describe("FullscreenSettingsLayout", () => {
   test("raises descendant select portals above the fullscreen surface", () => {
     const onValueChange = mock(() => undefined);
     render(
-      <FullscreenSettingsLayout open onOpenChange={() => undefined} title="Settings" menuItems={menuItems}>
+      <FullscreenSettingsLayout
+        open
+        onOpenChange={() => undefined}
+        title="Settings"
+        menuItems={menuItems}
+      >
         {() => (
           <Select value="one" onValueChange={onValueChange}>
-            <SelectTrigger aria-label="Nested setting"><SelectValue /></SelectTrigger>
+            <SelectTrigger aria-label="Nested setting">
+              <SelectValue />
+            </SelectTrigger>
             <SelectContent>
               <SelectItem value="one">One</SelectItem>
               <SelectItem value="two">Two</SelectItem>
@@ -116,8 +138,7 @@ describe("FullscreenSettingsLayout", () => {
     const selector = screen.getByRole("combobox", { name: "Nested setting" });
     fireEvent.keyDown(selector, { key: "Enter" });
     const option = screen.getByRole("option", { name: "Two" });
-    expect(option.closest('[data-slot="select-content"]')?.className)
-      .toContain("z-[70]");
+    expect(option.closest('[data-slot="select-content"]')?.className).toContain("z-[70]");
 
     fireEvent.click(option);
     expect(onValueChange).toHaveBeenCalledWith("two");
@@ -126,7 +147,12 @@ describe("FullscreenSettingsLayout", () => {
   test("raises descendant dropdown menus above the fullscreen surface", () => {
     const onSelect = mock(() => undefined);
     render(
-      <FullscreenSettingsLayout open onOpenChange={() => undefined} title="Settings" menuItems={menuItems}>
+      <FullscreenSettingsLayout
+        open
+        onOpenChange={() => undefined}
+        title="Settings"
+        menuItems={menuItems}
+      >
         {() => (
           <DropdownMenu>
             <DropdownMenuTrigger aria-label="Nested dropdown">Open</DropdownMenuTrigger>
@@ -155,12 +181,22 @@ describe("FullscreenSettingsLayout", () => {
   // behind the fullscreen surface with every other test still green.
   test("raises the real agent model picker above the fullscreen surface", () => {
     render(
-      <FullscreenSettingsLayout open onOpenChange={() => undefined} title="Settings" menuItems={menuItems}>
+      <FullscreenSettingsLayout
+        open
+        onOpenChange={() => undefined}
+        title="Settings"
+        menuItems={menuItems}
+      >
         {() => (
           <AgentModelPicker
             ariaLabel="Default model"
             models={[
-              { platform: "codex", id: "model-1", label: "Model 1", description: "Model 1 description" },
+              {
+                platform: "codex",
+                id: "model-1",
+                label: "Model 1",
+                description: "Model 1 description",
+              },
             ]}
             selectedModelId="model-1"
             selectedModelLabel="Model 1"
@@ -184,7 +220,12 @@ describe("FullscreenSettingsLayout", () => {
   test("uses Escape to close the mobile selector before closing settings", () => {
     const onOpenChange = mock(() => undefined);
     render(
-      <FullscreenSettingsLayout open onOpenChange={onOpenChange} title="Settings" menuItems={menuItems}>
+      <FullscreenSettingsLayout
+        open
+        onOpenChange={onOpenChange}
+        title="Settings"
+        menuItems={menuItems}
+      >
         {(section) => <div>section:{section}</div>}
       </FullscreenSettingsLayout>,
     );
@@ -229,11 +270,21 @@ describe("FullscreenSettingsLayout", () => {
   test("resets the active section when reopened", () => {
     const props = { onOpenChange: () => undefined, title: "Settings", menuItems };
     const { rerender } = render(
-      <FullscreenSettingsLayout open {...props}>{(section) => <div>section:{section}</div>}</FullscreenSettingsLayout>,
+      <FullscreenSettingsLayout open {...props}>
+        {(section) => <div>section:{section}</div>}
+      </FullscreenSettingsLayout>,
     );
     fireEvent.click(screen.getByRole("button", { name: /Network/ }));
-    rerender(<FullscreenSettingsLayout open={false} {...props}>{(section) => <div>section:{section}</div>}</FullscreenSettingsLayout>);
-    rerender(<FullscreenSettingsLayout open {...props}>{(section) => <div>section:{section}</div>}</FullscreenSettingsLayout>);
+    rerender(
+      <FullscreenSettingsLayout open={false} {...props}>
+        {(section) => <div>section:{section}</div>}
+      </FullscreenSettingsLayout>,
+    );
+    rerender(
+      <FullscreenSettingsLayout open {...props}>
+        {(section) => <div>section:{section}</div>}
+      </FullscreenSettingsLayout>,
+    );
     expect(screen.getByText("section:general")).toBeTruthy();
   });
 });

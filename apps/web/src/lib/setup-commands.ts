@@ -19,9 +19,7 @@ export async function forceResolveSetupRuntime(
 }
 
 /** Retry a failed setup and project its authoritative result into the store. */
-export async function retrySetupRuntime(
-  environmentId: string,
-): Promise<Environment | undefined> {
+export async function retrySetupRuntime(environmentId: string): Promise<Environment | undefined> {
   const store = useEnvironmentStore.getState();
   if (!store.getEnvironmentById(environmentId)) {
     console.warn("[setup-commands] retrySetupRuntime: unknown environment", {
@@ -34,16 +32,14 @@ export async function retrySetupRuntime(
   return updated;
 }
 
-export function isSetupPending(params: {
-  setupPhase?: Environment["setupPhase"];
-}): boolean {
-  return params.setupPhase === undefined
-    || params.setupPhase === "pending"
-    || params.setupPhase === "running";
+export function isSetupPending(params: { setupPhase?: Environment["setupPhase"] }): boolean {
+  return (
+    params.setupPhase === undefined ||
+    params.setupPhase === "pending" ||
+    params.setupPhase === "running"
+  );
 }
 
-export function isSetupBlocked(params: {
-  setupPhase?: Environment["setupPhase"];
-}): boolean {
+export function isSetupBlocked(params: { setupPhase?: Environment["setupPhase"] }): boolean {
   return params.setupPhase !== "ready";
 }

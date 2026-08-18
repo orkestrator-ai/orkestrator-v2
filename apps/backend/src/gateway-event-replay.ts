@@ -31,11 +31,11 @@ export type GatewayCursorParseResult =
   | { kind: "absent" }
   | { kind: "invalid"; raw: string }
   | {
-    kind: "valid";
-    raw: string;
-    generation: string;
-    revision: number;
-  };
+      kind: "valid";
+      raw: string;
+      generation: string;
+      revision: number;
+    };
 
 export interface GatewayReplayResult {
   complete: boolean;
@@ -92,7 +92,10 @@ export class GatewayEventReplay {
 
   constructor(generation: string, options: GatewayEventReplayOptions = {}) {
     this.generation = generation;
-    this.frameCapacity = Math.max(1, options.frameCapacity ?? DEFAULT_GATEWAY_REPLAY_FRAME_CAPACITY);
+    this.frameCapacity = Math.max(
+      1,
+      options.frameCapacity ?? DEFAULT_GATEWAY_REPLAY_FRAME_CAPACITY,
+    );
     this.maxBytes = Math.max(0, options.maxBytes ?? DEFAULT_GATEWAY_REPLAY_MAX_BYTES);
     this.idleRetentionMs = Math.max(
       0,
@@ -125,10 +128,7 @@ export class GatewayEventReplay {
     };
     this.frames.push(frame);
     this.retainedBytes += frame.encodedBytes;
-    while (
-      this.frames.length > this.frameCapacity
-      || this.retainedBytes > this.maxBytes
-    ) {
+    while (this.frames.length > this.frameCapacity || this.retainedBytes > this.maxBytes) {
       const removed = this.frames.shift();
       if (!removed) break;
       this.retainedBytes -= removed.encodedBytes;
@@ -159,9 +159,7 @@ export class GatewayEventReplay {
     const complete = oldestRevision !== 0 && revision + 1 >= oldestRevision;
     return {
       complete,
-      frames: complete
-        ? this.frames.filter((frame) => frame.revision > revision)
-        : [],
+      frames: complete ? this.frames.filter((frame) => frame.revision > revision) : [],
       latestRevision: this.revision,
       oldestRevision,
     };

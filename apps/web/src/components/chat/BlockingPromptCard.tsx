@@ -101,7 +101,10 @@ export function BlockingPromptCard({
               <span className="min-w-0 text-sm font-medium text-foreground">{title}</span>
               {meta && <span className="text-xs text-muted-foreground">{meta}</span>}
               {effectiveState === "submitting" && (
-                <Loader2 className="ml-auto h-3.5 w-3.5 animate-spin text-muted-foreground" aria-hidden />
+                <Loader2
+                  className="ml-auto h-3.5 w-3.5 animate-spin text-muted-foreground"
+                  aria-hidden
+                />
               )}
               {effectiveState === "pending" && deadline.remaining && (
                 <span
@@ -145,9 +148,11 @@ export function BlockingPromptCard({
               onClick={onRetry}
               className="h-7 shrink-0 gap-1 px-2"
             >
-              {retrying
-                ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
-                : <RotateCcw className="h-3.5 w-3.5" aria-hidden />}
+              {retrying ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+              ) : (
+                <RotateCcw className="h-3.5 w-3.5" aria-hidden />
+              )}
               Retry
             </Button>
           )}

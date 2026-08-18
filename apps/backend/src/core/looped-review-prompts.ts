@@ -62,8 +62,13 @@ export const REVIEW_PREPARATION_RESULT_JSON_SCHEMA: JsonSchema = {
         type: "object",
         additionalProperties: false,
         required: [
-          "command", "status", "exitCode", "stdoutPath", "stderrPath",
-          "durationMs", "limitation",
+          "command",
+          "status",
+          "exitCode",
+          "stdoutPath",
+          "stderrPath",
+          "durationMs",
+          "limitation",
         ],
         properties: {
           command: { type: "string" },
@@ -102,11 +107,7 @@ const findingOutcomeSchema = {
 
 export const LOOPED_REVIEW_RECONCILIATION_JSON_SCHEMA: JsonSchema = {
   ...REVIEW_RECONCILIATION_JSON_SCHEMA,
-  required: [
-    ...REVIEW_RECONCILIATION_JSON_SCHEMA.required,
-    "issueOutcomes",
-    "coverageGapOutcomes",
-  ],
+  required: [...REVIEW_RECONCILIATION_JSON_SCHEMA.required, "issueOutcomes", "coverageGapOutcomes"],
   properties: {
     ...REVIEW_RECONCILIATION_JSON_SCHEMA.properties,
     issueOutcomes: { type: "array", items: findingOutcomeSchema },
@@ -117,9 +118,7 @@ export const LOOPED_REVIEW_RECONCILIATION_JSON_SCHEMA: JsonSchema = {
 export const REVIEW_FIX_RESULT_JSON_SCHEMA: JsonSchema = {
   type: "object",
   additionalProperties: false,
-  required: [
-    "complete", "summary", "filesChanged", "commandsRun", "notes", "limitations",
-  ],
+  required: ["complete", "summary", "filesChanged", "commandsRun", "notes", "limitations"],
   properties: {
     complete: { type: "boolean" },
     summary: { type: "string" },
@@ -162,49 +161,80 @@ function textList(value: unknown): value is string[] {
 }
 
 export function parseReviewPreparationResult(value: unknown): ReviewPreparationResult {
-  if (!record(value) || !Array.isArray(value.validation)
-    || !value.validation.every((entry) => record(entry)
-      && typeof entry.command === "string" && entry.command.trim().length > 0
-      && ["passed", "failed", "skipped"].includes(String(entry.status))
-      && (entry.exitCode === null || Number.isInteger(entry.exitCode))
-      && (entry.stdoutPath === null || typeof entry.stdoutPath === "string")
-      && (entry.stderrPath === null || typeof entry.stderrPath === "string")
-      && Number.isInteger(entry.durationMs) && (entry.durationMs as number) >= 0
-      && (entry.limitation === null || typeof entry.limitation === "string")
-      && (entry.status === "skipped"
-        ? entry.exitCode === null && entry.stdoutPath === null && entry.stderrPath === null
-          && typeof entry.limitation === "string" && entry.limitation.trim().length > 0
-        : Number.isInteger(entry.exitCode)
-          && typeof entry.stdoutPath === "string" && entry.stdoutPath.trim().length > 0
-          && typeof entry.stderrPath === "string" && entry.stderrPath.trim().length > 0
-          && (entry.status === "passed" ? entry.exitCode === 0 : entry.exitCode !== 0)))
-    || !Array.isArray(value.uncommittedFiles)
-    || !value.uncommittedFiles.every((entry) => record(entry)
-      && typeof entry.path === "string" && entry.path.trim().length > 0
-      && typeof entry.reason === "string" && entry.reason.trim().length > 0)
-    || !textList(value.limitations)) {
+  if (
+    !record(value) ||
+    !Array.isArray(value.validation) ||
+    !value.validation.every(
+      (entry) =>
+        record(entry) &&
+        typeof entry.command === "string" &&
+        entry.command.trim().length > 0 &&
+        ["passed", "failed", "skipped"].includes(String(entry.status)) &&
+        (entry.exitCode === null || Number.isInteger(entry.exitCode)) &&
+        (entry.stdoutPath === null || typeof entry.stdoutPath === "string") &&
+        (entry.stderrPath === null || typeof entry.stderrPath === "string") &&
+        Number.isInteger(entry.durationMs) &&
+        (entry.durationMs as number) >= 0 &&
+        (entry.limitation === null || typeof entry.limitation === "string") &&
+        (entry.status === "skipped"
+          ? entry.exitCode === null &&
+            entry.stdoutPath === null &&
+            entry.stderrPath === null &&
+            typeof entry.limitation === "string" &&
+            entry.limitation.trim().length > 0
+          : Number.isInteger(entry.exitCode) &&
+            typeof entry.stdoutPath === "string" &&
+            entry.stdoutPath.trim().length > 0 &&
+            typeof entry.stderrPath === "string" &&
+            entry.stderrPath.trim().length > 0 &&
+            (entry.status === "passed" ? entry.exitCode === 0 : entry.exitCode !== 0)),
+    ) ||
+    !Array.isArray(value.uncommittedFiles) ||
+    !value.uncommittedFiles.every(
+      (entry) =>
+        record(entry) &&
+        typeof entry.path === "string" &&
+        entry.path.trim().length > 0 &&
+        typeof entry.reason === "string" &&
+        entry.reason.trim().length > 0,
+    ) ||
+    !textList(value.limitations)
+  ) {
     throw new Error("Review preparation result failed runtime validation");
   }
   return value as unknown as ReviewPreparationResult;
 }
 
-function finalCommandResults(commands: ReviewFixResult["commandsRun"]): ReviewFixResult["commandsRun"] {
+function finalCommandResults(
+  commands: ReviewFixResult["commandsRun"],
+): ReviewFixResult["commandsRun"] {
   const final = new Map<string, ReviewFixResult["commandsRun"][number]>();
   for (const command of commands) final.set(command.command.trim(), command);
   return [...final.values()];
 }
 
 export function parseFixResult(value: unknown): ReviewFixResult {
-  if (!record(value) || typeof value.complete !== "boolean"
-    || typeof value.summary !== "string" || value.summary.trim().length === 0
-    || !textList(value.filesChanged) || value.filesChanged.some((entry) => entry.trim().length === 0)
-    || new Set(value.filesChanged).size !== value.filesChanged.length
-    || !Array.isArray(value.commandsRun)
-    || !value.commandsRun.every((entry) => record(entry)
-      && typeof entry.command === "string" && entry.command.trim().length > 0
-      && (entry.result === "passed" || entry.result === "failed")
-      && typeof entry.summary === "string" && entry.summary.trim().length > 0)
-    || !textList(value.notes) || !textList(value.limitations)) {
+  if (
+    !record(value) ||
+    typeof value.complete !== "boolean" ||
+    typeof value.summary !== "string" ||
+    value.summary.trim().length === 0 ||
+    !textList(value.filesChanged) ||
+    value.filesChanged.some((entry) => entry.trim().length === 0) ||
+    new Set(value.filesChanged).size !== value.filesChanged.length ||
+    !Array.isArray(value.commandsRun) ||
+    !value.commandsRun.every(
+      (entry) =>
+        record(entry) &&
+        typeof entry.command === "string" &&
+        entry.command.trim().length > 0 &&
+        (entry.result === "passed" || entry.result === "failed") &&
+        typeof entry.summary === "string" &&
+        entry.summary.trim().length > 0,
+    ) ||
+    !textList(value.notes) ||
+    !textList(value.limitations)
+  ) {
     throw new Error("Fix result failed runtime validation");
   }
   const notes = value.notes as string[];
@@ -219,7 +249,9 @@ export function parseFixResult(value: unknown): ReviewFixResult {
     ...result.limitations,
   ];
   if (result.complete && blockers.length > 0) {
-    throw new Error("Fix result cannot be complete while validation failures or limitations remain");
+    throw new Error(
+      "Fix result cannot be complete while validation failures or limitations remain",
+    );
   }
   if (!result.complete && blockers.length === 0) {
     throw new Error("Fix result cannot be incomplete without a failed validation or limitation");
@@ -228,15 +260,31 @@ export function parseFixResult(value: unknown): ReviewFixResult {
 }
 
 export function parsePrResult(value: unknown): ReviewPrResult {
-  if (!record(value) || value.status !== "created" || typeof value.url !== "string"
-    || typeof value.summary !== "string" || value.summary.trim().length === 0) {
+  if (
+    !record(value) ||
+    value.status !== "created" ||
+    typeof value.url !== "string" ||
+    typeof value.summary !== "string" ||
+    value.summary.trim().length === 0
+  ) {
     throw new Error("PR result failed runtime validation");
   }
   let url: URL;
-  try { url = new URL(value.url); } catch { throw new Error("PR result failed runtime validation"); }
-  if (url.protocol !== "https:" || url.hostname !== "github.com" || url.port !== ""
-    || url.username !== "" || url.password !== "" || url.search !== "" || url.hash !== ""
-    || !/^\/[A-Za-z0-9.-]+\/[A-Za-z0-9_.-]+\/pull\/[1-9]\d*$/.test(url.pathname)) {
+  try {
+    url = new URL(value.url);
+  } catch {
+    throw new Error("PR result failed runtime validation");
+  }
+  if (
+    url.protocol !== "https:" ||
+    url.hostname !== "github.com" ||
+    url.port !== "" ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.search !== "" ||
+    url.hash !== "" ||
+    !/^\/[A-Za-z0-9.-]+\/[A-Za-z0-9_.-]+\/pull\/[1-9]\d*$/.test(url.pathname)
+  ) {
     throw new Error("PR result failed runtime validation");
   }
   return value as unknown as ReviewPrResult;

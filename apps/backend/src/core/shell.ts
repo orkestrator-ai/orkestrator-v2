@@ -66,15 +66,15 @@ function redactCommandValues(
   value: string,
   redactValues: ReadonlyArray<string | null | undefined> | undefined,
 ): string {
-  const secrets = Array.from(new Set(
-    (redactValues ?? [])
-      .filter((secret): secret is string => typeof secret === "string" && secret.length > 0),
-  )).sort((left, right) => right.length - left.length);
+  const secrets = Array.from(
+    new Set(
+      (redactValues ?? []).filter(
+        (secret): secret is string => typeof secret === "string" && secret.length > 0,
+      ),
+    ),
+  ).sort((left, right) => right.length - left.length);
 
-  return secrets.reduce(
-    (redacted, secret) => redacted.split(secret).join("[REDACTED]"),
-    value,
-  );
+  return secrets.reduce((redacted, secret) => redacted.split(secret).join("[REDACTED]"), value);
 }
 
 /**
@@ -125,7 +125,11 @@ export async function runCommand(
   } catch (error) {
     const outcome = commandFailureOutcome(error);
     if (error && typeof error === "object" && "stdout" in error && "stderr" in error) {
-      const withOutput = error as { message?: string; stdout?: Buffer | string; stderr?: Buffer | string };
+      const withOutput = error as {
+        message?: string;
+        stdout?: Buffer | string;
+        stderr?: Buffer | string;
+      };
       const stderr = withOutput.stderr?.toString() ?? "";
       const stdout = withOutput.stdout?.toString() ?? "";
       const message = (stderr || stdout || withOutput.message || "Command failed").trim();
@@ -186,10 +190,7 @@ export async function pathExists(filePath: string): Promise<boolean> {
   }
 }
 
-export async function readFileBase64(
-  filePath: string,
-  allowedRoots?: string[],
-): Promise<string> {
+export async function readFileBase64(filePath: string, allowedRoots?: string[]): Promise<string> {
   return (await readReadableHostFile(filePath, allowedRoots)).toString("base64");
 }
 
@@ -202,7 +203,11 @@ export async function readFileBase64(
  * root: callers echo it back to the renderer, which knows the worktree by the
  * path it asked for, not by its canonical form.
  */
-export async function writeFileBase64(rootPath: string, relativePath: string, base64Data: string): Promise<string> {
+export async function writeFileBase64(
+  rootPath: string,
+  relativePath: string,
+  base64Data: string,
+): Promise<string> {
   const safeRelativePath = validateRelativeFilePath(relativePath, "relative file path");
   await writeConfinedFile(rootPath, safeRelativePath, base64Data, {
     exclusive: false,
@@ -231,7 +236,10 @@ export function inferLanguage(filePath: string): string {
   return aliases[extension] ?? extension;
 }
 
-export async function readTextFile(rootPath: string, relativePath: string): Promise<{ path: string; content: string; language: string }> {
+export async function readTextFile(
+  rootPath: string,
+  relativePath: string,
+): Promise<{ path: string; content: string; language: string }> {
   const safeRelativePath = validateRelativeFilePath(relativePath, "relative file path");
 
   const fullPath = path.join(rootPath, safeRelativePath);

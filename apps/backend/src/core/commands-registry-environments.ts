@@ -1,14 +1,57 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
-import { createEnvironment, defaultEnvironmentName, sanitizeBranchName, sanitizeEnvironmentName, discoverAgentExtensions } from "./commands-dependencies.js";
+import {
+  createEnvironment,
+  defaultEnvironmentName,
+  sanitizeBranchName,
+  sanitizeEnvironmentName,
+  discoverAgentExtensions,
+} from "./commands-dependencies.js";
 import type { Environment } from "./commands-dependencies.js";
-import { terminalProcesses, mergingEnvironments, environmentSetupSessions, syncDiffStatsTracking, syncPrMonitorTracking, asString, assertOnlyKeys, asOptionalString, asRequiredBoolean, asNumber, asStringArray, asNonBlankString, asPortMappings, asEnvironmentType, makeUniqueEnvironmentSlug, createExtensionCommandRunner, listGitBranchesAtPath, renameEnvironmentFromPrompt, parsePrState, toClientEnvironment, toClientEnvironmentSetupStartResult, terminalOutputBufferLength, logSetupTerminal, getDockerStatus, getOrkestratorContainerStates, syncStoredEnvironmentStatus, clearPendingAgentLaunchUpdates, startEnvironmentSetup, admitEnvironmentStartTask, stopEnvironmentTask, recreateEnvironmentTask, runEnvironmentSetupNow, deleteEnvironmentTask, scheduleMergeCleanupRecovery, logEnvironmentLifecycleFailure } from "./commands-helpers.js";
+import {
+  terminalProcesses,
+  mergingEnvironments,
+  environmentSetupSessions,
+  syncDiffStatsTracking,
+  syncPrMonitorTracking,
+  asString,
+  assertOnlyKeys,
+  asOptionalString,
+  asRequiredBoolean,
+  asNumber,
+  asStringArray,
+  asNonBlankString,
+  asPortMappings,
+  asEnvironmentType,
+  makeUniqueEnvironmentSlug,
+  createExtensionCommandRunner,
+  listGitBranchesAtPath,
+  renameEnvironmentFromPrompt,
+  parsePrState,
+  toClientEnvironment,
+  toClientEnvironmentSetupStartResult,
+  terminalOutputBufferLength,
+  logSetupTerminal,
+  getDockerStatus,
+  getOrkestratorContainerStates,
+  syncStoredEnvironmentStatus,
+  clearPendingAgentLaunchUpdates,
+  startEnvironmentSetup,
+  admitEnvironmentStartTask,
+  stopEnvironmentTask,
+  recreateEnvironmentTask,
+  runEnvironmentSetupNow,
+  deleteEnvironmentTask,
+  scheduleMergeCleanupRecovery,
+  logEnvironmentLifecycleFailure,
+} from "./commands-helpers.js";
 import type { CommandContext } from "./commands-context.js";
 
 export function registerEnvironmentCommands(
   register: CommandRegistrar,
   dependencies: RegistryDependencies,
 ): void {
-  const { conditionalManifestSnapshot, schedulePendingEnvironmentRename, extensionDiscoveryCache } = dependencies;
+  const { conditionalManifestSnapshot, schedulePendingEnvironmentRename, extensionDiscoveryCache } =
+    dependencies;
   register("get_log_directory", (_args, { storage }) => storage.getLogDirectory());
 
   register("get_environments", async ({ projectId }, context) => {
@@ -23,14 +66,19 @@ export function registerEnvironmentCommands(
       : null;
     const synced = await Promise.all(
       environments.map((environment) =>
-        syncStoredEnvironmentStatus(environment, storage, knownContainerStates, context.strictDockerOwner)
+        syncStoredEnvironmentStatus(
+          environment,
+          storage,
+          knownContainerStates,
+          context.strictDockerOwner,
+        ),
       ),
     );
     for (let index = 0; index < synced.length; index += 1) {
       const environment = synced[index]!;
       if (
-        environment.lifecycleOperation === "merging"
-        && !mergingEnvironments.has(environment.id)
+        environment.lifecycleOperation === "merging" &&
+        !mergingEnvironments.has(environment.id)
       ) {
         synced[index] = await storage.updateEnvironment(environment.id, {
           lifecycleOperation: null,
@@ -62,52 +110,80 @@ export function registerEnvironmentCommands(
   });
   register("get_environment_snapshots", (args, { storage }) =>
     conditionalManifestSnapshot(args, storage, "environment", async () =>
-      (await storage.getEnvironmentsByProject(asString(args.projectId, "projectId")))
-        .map(toClientEnvironment)
-    )
+      (await storage.getEnvironmentsByProject(asString(args.projectId, "projectId"))).map(
+        toClientEnvironment,
+      ),
+    ),
   );
-  register("get_environment", ({ environmentId }, { storage }) => storage.getEnvironment(asString(environmentId, "environmentId")));
+  register("get_environment", ({ environmentId }, { storage }) =>
+    storage.getEnvironment(asString(environmentId, "environmentId")),
+  );
   register("reorder_environments", ({ projectId, environmentIds }, { storage }) =>
-    storage.reorderEnvironments(
-      asString(projectId, "projectId"),
-      asStringArray(environmentIds),
-    ).then((environments) => environments.map(toClientEnvironment))
+    storage
+      .reorderEnvironments(asString(projectId, "projectId"), asStringArray(environmentIds))
+      .then((environments) => environments.map(toClientEnvironment)),
   );
-  register("create_environment", async ({ projectId, name, networkAccessMode, initialPrompt, portMappings, environmentType, namingPrompt, buildPipelineId }, context) => {
-    const { storage } = context;
-    const project = await storage.getProject(asString(projectId, "projectId"));
-    if (!project) throw new Error(`Project not found: ${projectId}`);
-    const requestedEnvironmentType = asEnvironmentType(environmentType);
-    if (requestedEnvironmentType === "local" && !project.localPath) {
-      throw new Error("Project has no local path - cannot create a local worktree");
-    }
-    const repoConfig = await storage.getRepositoryConfig(project.id);
-    const explicitName = asOptionalString(name)?.trim();
-    const initialPromptText = asOptionalString(initialPrompt);
-    const pendingRenamePrompt = explicitName ? undefined : asOptionalString(namingPrompt)?.trim() || undefined;
-    const baseName = explicitName
-      ? sanitizeEnvironmentName(explicitName)
-      : defaultEnvironmentName();
-    const existingEnvironments = await storage.getEnvironmentsByProject(project.id);
-    const existingGitBranches = project.localPath
-      ? await listGitBranchesAtPath(project.localPath, false)
-      : [];
-    const uniqueName = makeUniqueEnvironmentSlug(baseName, existingEnvironments, existingGitBranches);
-    const env = createEnvironment(project.id, {
-      name: uniqueName,
-      buildPipelineId: asOptionalString(buildPipelineId),
-      networkAccessMode: networkAccessMode === "full" ? "full" : networkAccessMode === "restricted" ? "restricted" : undefined,
-      initialPrompt: initialPromptText,
-      portMappings: asPortMappings(portMappings),
-      environmentType: requestedEnvironmentType,
-      entryPort: repoConfig.entryPort,
-      pendingRenamePrompt,
-    });
-    await storage.patchRepositoryConfig(project.id, {
-      lastEnvironmentType: env.environmentType,
-    });
-    return toClientEnvironment(await storage.addEnvironment(env));
-  });
+  register(
+    "create_environment",
+    async (
+      {
+        projectId,
+        name,
+        networkAccessMode,
+        initialPrompt,
+        portMappings,
+        environmentType,
+        namingPrompt,
+        buildPipelineId,
+      },
+      context,
+    ) => {
+      const { storage } = context;
+      const project = await storage.getProject(asString(projectId, "projectId"));
+      if (!project) throw new Error(`Project not found: ${projectId}`);
+      const requestedEnvironmentType = asEnvironmentType(environmentType);
+      if (requestedEnvironmentType === "local" && !project.localPath) {
+        throw new Error("Project has no local path - cannot create a local worktree");
+      }
+      const repoConfig = await storage.getRepositoryConfig(project.id);
+      const explicitName = asOptionalString(name)?.trim();
+      const initialPromptText = asOptionalString(initialPrompt);
+      const pendingRenamePrompt = explicitName
+        ? undefined
+        : asOptionalString(namingPrompt)?.trim() || undefined;
+      const baseName = explicitName
+        ? sanitizeEnvironmentName(explicitName)
+        : defaultEnvironmentName();
+      const existingEnvironments = await storage.getEnvironmentsByProject(project.id);
+      const existingGitBranches = project.localPath
+        ? await listGitBranchesAtPath(project.localPath, false)
+        : [];
+      const uniqueName = makeUniqueEnvironmentSlug(
+        baseName,
+        existingEnvironments,
+        existingGitBranches,
+      );
+      const env = createEnvironment(project.id, {
+        name: uniqueName,
+        buildPipelineId: asOptionalString(buildPipelineId),
+        networkAccessMode:
+          networkAccessMode === "full"
+            ? "full"
+            : networkAccessMode === "restricted"
+              ? "restricted"
+              : undefined,
+        initialPrompt: initialPromptText,
+        portMappings: asPortMappings(portMappings),
+        environmentType: requestedEnvironmentType,
+        entryPort: repoConfig.entryPort,
+        pendingRenamePrompt,
+      });
+      await storage.patchRepositoryConfig(project.id, {
+        lastEnvironmentType: env.environmentType,
+      });
+      return toClientEnvironment(await storage.addEnvironment(env));
+    },
+  );
   register("delete_environment", async ({ environmentId }, context) => {
     const id = asString(environmentId, "environmentId");
     extensionDiscoveryCache.invalidate(id);
@@ -115,11 +191,12 @@ export function registerEnvironmentCommands(
   });
   register("rename_environment", ({ environmentId, name }, { storage }) => {
     const newName = sanitizeEnvironmentName(asString(name, "name"));
-    return storage.updateEnvironment(asString(environmentId, "environmentId"), {
-      name: newName,
-      branch: sanitizeBranchName(newName),
-      pendingRenamePrompt: undefined,
-    })
+    return storage
+      .updateEnvironment(asString(environmentId, "environmentId"), {
+        name: newName,
+        branch: sanitizeBranchName(newName),
+        pendingRenamePrompt: undefined,
+      })
       .then(toClientEnvironment);
   });
   register("rename_environment_from_prompt", async ({ environmentId, prompt }, context) => {
@@ -130,20 +207,34 @@ export function registerEnvironmentCommands(
     const { storage } = context;
     const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
     if (!environment) throw new Error(`Environment not found: ${environmentId}`);
-    const knownContainerStates = environment.environmentType !== "local" && environment.containerId
-      ? await getOrkestratorContainerStates(context)
-      : null;
-    return (await syncStoredEnvironmentStatus(environment, storage, knownContainerStates, context.strictDockerOwner)).status;
+    const knownContainerStates =
+      environment.environmentType !== "local" && environment.containerId
+        ? await getOrkestratorContainerStates(context)
+        : null;
+    return (
+      await syncStoredEnvironmentStatus(
+        environment,
+        storage,
+        knownContainerStates,
+        context.strictDockerOwner,
+      )
+    ).status;
   });
   register("sync_environment_status", async ({ environmentId }, context) => {
     const { storage } = context;
     const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
     if (!environment) throw new Error(`Environment not found: ${environmentId}`);
-    const knownContainerStates = environment.environmentType !== "local" && environment.containerId
-      ? await getOrkestratorContainerStates(context)
-      : null;
+    const knownContainerStates =
+      environment.environmentType !== "local" && environment.containerId
+        ? await getOrkestratorContainerStates(context)
+        : null;
     return toClientEnvironment(
-      await syncStoredEnvironmentStatus(environment, storage, knownContainerStates, context.strictDockerOwner),
+      await syncStoredEnvironmentStatus(
+        environment,
+        storage,
+        knownContainerStates,
+        context.strictDockerOwner,
+      ),
     );
   });
   register("sync_all_environments_with_docker", async (_args, context) => {
@@ -189,11 +280,7 @@ export function registerEnvironmentCommands(
     // Validate before acknowledging the request. Once accepted, the task is
     // backend-owned: a renderer, browser, or reverse proxy can disconnect
     // without cancelling Docker provisioning or losing the durable launch.
-    const { task } = await admitEnvironmentStartTask(
-      id,
-      context,
-      schedulePendingEnvironmentRename,
-    );
+    const { task } = await admitEnvironmentStartTask(id, context, schedulePendingEnvironmentRename);
     void task.catch((error) => {
       // `startEnvironmentOnce` has already logged the cause; this only records
       // that nobody was awaiting the result, so the rejection is not unhandled.
@@ -201,11 +288,9 @@ export function registerEnvironmentCommands(
     });
   });
   register("stop_environment", async ({ environmentId }, context) =>
-    stopEnvironmentTask(
-      asString(environmentId, "environmentId"),
-      context,
-      (id) => extensionDiscoveryCache.invalidate(id),
-    )
+    stopEnvironmentTask(asString(environmentId, "environmentId"), context, (id) =>
+      extensionDiscoveryCache.invalidate(id),
+    ),
   );
   register("recreate_environment", async ({ environmentId }, context) => {
     const result = await recreateEnvironmentTask(
@@ -230,11 +315,9 @@ export function registerEnvironmentCommands(
       prUrl,
       prState,
       hasMergeConflicts,
-      ...(
-        prState !== "open" || hasMergeConflicts === false
-          ? { prRecheckAfterAgentCompletionArmedAt: undefined }
-          : {}
-      ),
+      ...(prState !== "open" || hasMergeConflicts === false
+        ? { prRecheckAfterAgentCompletionArmedAt: undefined }
+        : {}),
     });
     // A PR recorded outside the monitor (e.g. right after a merge command) must
     // enter the monitored set without waiting for a client to rehydrate.
@@ -250,7 +333,11 @@ export function registerEnvironmentCommands(
     });
     void syncPrMonitorTracking(context).catch(() => undefined);
   });
-  register("get_environment_pr_url", async ({ environmentId }, { storage }) => (await storage.getEnvironment(asString(environmentId, "environmentId")))?.prUrl ?? null);
+  register(
+    "get_environment_pr_url",
+    async ({ environmentId }, { storage }) =>
+      (await storage.getEnvironment(asString(environmentId, "environmentId")))?.prUrl ?? null,
+  );
   register("override_environment_setup", async ({ environmentId }, context) => {
     const id = asString(environmentId, "environmentId");
     const current = await context.storage.getEnvironment(id);
@@ -268,7 +355,7 @@ export function registerEnvironmentCommands(
         // The launch intent remains durable. A transient bridge failure must not
         // roll back the user's explicit setup override.
       });
-      environment = await context.storage.getEnvironment(environment.id) ?? environment;
+      environment = (await context.storage.getEnvironment(environment.id)) ?? environment;
     }
     context.emit("environment-setup-complete", {
       environment_id: id,
@@ -284,7 +371,9 @@ export function registerEnvironmentCommands(
     );
   });
   register("ensure_environment_setup", async ({ environmentId }, context) => {
-    const environment = await context.storage.getEnvironment(asString(environmentId, "environmentId"));
+    const environment = await context.storage.getEnvironment(
+      asString(environmentId, "environmentId"),
+    );
     if (!environment) throw new Error(`Environment not found: ${environmentId}`);
     logSetupTerminal("renderer ensured setup", {
       environmentId: environment.id,
@@ -292,9 +381,7 @@ export function registerEnvironmentCommands(
       setupScriptsComplete: environment.setupScriptsComplete ?? false,
       status: environment.status,
     });
-    return toClientEnvironmentSetupStartResult(
-      await startEnvironmentSetup(environment, context),
-    );
+    return toClientEnvironmentSetupStartResult(await startEnvironmentSetup(environment, context));
   });
   const getEnvironmentSetupSessionSnapshot = async (
     environmentId: string,
@@ -311,11 +398,12 @@ export function registerEnvironmentCommands(
           running: environment.setupPhase === "running",
           startedAt: environment.setupStartedAt,
           completedAt: environment.setupCompletedAt,
-          success: environment.setupPhase === "ready"
-            ? true
-            : environment.setupPhase === "failed"
-              ? false
-              : undefined,
+          success:
+            environment.setupPhase === "ready"
+              ? true
+              : environment.setupPhase === "failed"
+                ? false
+                : undefined,
           terminalRunning: terminalProcesses.has(environment.setupSessionId),
         };
       }
@@ -350,9 +438,9 @@ export function registerEnvironmentCommands(
       if (snapshot) return snapshot;
       const environment = await context.storage.getEnvironment(id);
       if (
-        !environment
-        || (environment.setupPhase !== "pending" && environment.setupPhase !== "running")
-        || Date.now() >= deadline
+        !environment ||
+        (environment.setupPhase !== "pending" && environment.setupPhase !== "running") ||
+        Date.now() >= deadline
       ) {
         return null;
       }
@@ -360,82 +448,92 @@ export function registerEnvironmentCommands(
     }
   });
   register("update_port_mappings", ({ environmentId, portMappings }, { storage }) =>
-    storage.updateEnvironment(
-      asString(environmentId, "environmentId"),
-      { portMappings: asPortMappings(portMappings) ?? [] },
-    ).then(toClientEnvironment),
+    storage
+      .updateEnvironment(asString(environmentId, "environmentId"), {
+        portMappings: asPortMappings(portMappings) ?? [],
+      })
+      .then(toClientEnvironment),
   );
-  register("update_environment_agent_settings", async ({
-    environmentId,
-    defaultAgent,
-    claudeMode,
-    claudeNativeBackend,
-    opencodeMode,
-    codexMode,
-    pendingAgentLaunch,
-    initialAgentModel,
-    initialReasoningEffort,
-    initialPromptAttachments,
-  }, { storage }) => {
-    const id = asString(environmentId, "environmentId");
-    const updates = {
-      defaultAgent,
-      claudeMode,
-      claudeNativeBackend,
-      opencodeMode,
-      codexMode,
-    } as Partial<Environment>;
-    if (typeof pendingAgentLaunch === "boolean") {
-      updates.pendingAgentLaunch = pendingAgentLaunch;
-      if (!pendingAgentLaunch) {
-        updates.initialAgentModel = undefined;
-        updates.initialReasoningEffort = undefined;
-        updates.initialPromptAttachments = undefined;
+  register(
+    "update_environment_agent_settings",
+    async (
+      {
+        environmentId,
+        defaultAgent,
+        claudeMode,
+        claudeNativeBackend,
+        opencodeMode,
+        codexMode,
+        pendingAgentLaunch,
+        initialAgentModel,
+        initialReasoningEffort,
+        initialPromptAttachments,
+      },
+      { storage },
+    ) => {
+      const id = asString(environmentId, "environmentId");
+      const updates = {
+        defaultAgent,
+        claudeMode,
+        claudeNativeBackend,
+        opencodeMode,
+        codexMode,
+      } as Partial<Environment>;
+      if (typeof pendingAgentLaunch === "boolean") {
+        updates.pendingAgentLaunch = pendingAgentLaunch;
+        if (!pendingAgentLaunch) {
+          updates.initialAgentModel = undefined;
+          updates.initialReasoningEffort = undefined;
+          updates.initialPromptAttachments = undefined;
+        }
       }
-    }
-    if (pendingAgentLaunch !== false && typeof initialAgentModel === "string") {
-      updates.initialAgentModel = initialAgentModel;
-    }
-    if (pendingAgentLaunch !== false && typeof initialReasoningEffort === "string") {
-      updates.initialReasoningEffort = initialReasoningEffort;
-    }
-    if (pendingAgentLaunch !== false && Array.isArray(initialPromptAttachments)) {
-      updates.initialPromptAttachments =
-        initialPromptAttachments as Environment["initialPromptAttachments"];
-    }
-    return toClientEnvironment(await storage.updateEnvironment(id, updates));
-  });
+      if (pendingAgentLaunch !== false && typeof initialAgentModel === "string") {
+        updates.initialAgentModel = initialAgentModel;
+      }
+      if (pendingAgentLaunch !== false && typeof initialReasoningEffort === "string") {
+        updates.initialReasoningEffort = initialReasoningEffort;
+      }
+      if (pendingAgentLaunch !== false && Array.isArray(initialPromptAttachments)) {
+        updates.initialPromptAttachments =
+          initialPromptAttachments as Environment["initialPromptAttachments"];
+      }
+      return toClientEnvironment(await storage.updateEnvironment(id, updates));
+    },
+  );
   register("set_environment_pending_agent_launch", ({ environmentId, pending }, { storage }) => {
     const nextPending = asRequiredBoolean(pending, "pending");
-    return storage.updateEnvironment(asString(environmentId, "environmentId"), {
-      ...(nextPending
-        ? { pendingAgentLaunch: true }
-        : clearPendingAgentLaunchUpdates()),
-    })
+    return storage
+      .updateEnvironment(asString(environmentId, "environmentId"), {
+        ...(nextPending ? { pendingAgentLaunch: true } : clearPendingAgentLaunchUpdates()),
+      })
       .then(toClientEnvironment);
   });
   register(
     "acknowledge_startup_agent_session",
     ({ environmentId, providerSessionId, startedAt }, { storage }) =>
-      storage.acknowledgeStartupAgentSession(
-        asString(environmentId, "environmentId"),
-        providerSessionId === undefined
-          ? undefined
-          : asNonBlankString(providerSessionId, "providerSessionId"),
-        startedAt === undefined ? undefined : asNonBlankString(startedAt, "startedAt"),
-      )
+      storage
+        .acknowledgeStartupAgentSession(
+          asString(environmentId, "environmentId"),
+          providerSessionId === undefined
+            ? undefined
+            : asNonBlankString(providerSessionId, "providerSessionId"),
+          startedAt === undefined ? undefined : asNonBlankString(startedAt, "startedAt"),
+        )
         .then(toClientEnvironment),
   );
   // The renderer rewrites the initial prompt once it has uploaded the create
   // dialog's attachments and knows their in-workspace paths. Persisting that
   // rewritten text is what lets a post-eviction launch recover a prompt whose
   // attachment references still resolve.
-  register("set_environment_initial_prompt", ({ environmentId, initialPrompt, initialPromptAttachments }, { storage }) =>
-    storage.updateEnvironment(asString(environmentId, "environmentId"), {
-      initialPrompt: asString(initialPrompt, "initialPrompt"),
-      ...(Array.isArray(initialPromptAttachments) ? { initialPromptAttachments } : {}),
-    })
-      .then(toClientEnvironment),
+  register(
+    "set_environment_initial_prompt",
+    ({ environmentId, initialPrompt, initialPromptAttachments }, { storage }) =>
+      storage
+        .updateEnvironment(asString(environmentId, "environmentId"), {
+          initialPrompt: asString(initialPrompt, "initialPrompt"),
+          ...(Array.isArray(initialPromptAttachments) ? { initialPromptAttachments } : {}),
+        })
+        .then(toClientEnvironment),
   );
   register("get_environment_extensions", async ({ environmentId, refresh }, context) => {
     const id = asString(environmentId, "environmentId");
@@ -450,16 +548,18 @@ export function registerEnvironmentCommands(
     );
   });
   register("update_environment_allowed_domains", ({ environmentId, domains }, { storage }) =>
-    storage.updateEnvironment(
-      asString(environmentId, "environmentId"),
-      { allowedDomains: asStringArray(domains) },
-    )
+    storage
+      .updateEnvironment(asString(environmentId, "environmentId"), {
+        allowedDomains: asStringArray(domains),
+      })
       .then(toClientEnvironment),
   );
   register("add_environment_domains", async ({ environmentId, domains }, { storage }) => {
     const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
     if (!environment) throw new Error(`Environment not found: ${environmentId}`);
-    const updated = Array.from(new Set([...(environment.allowedDomains ?? []), ...asStringArray(domains)]));
+    const updated = Array.from(
+      new Set([...(environment.allowedDomains ?? []), ...asStringArray(domains)]),
+    );
     await storage.updateEnvironment(environment.id, { allowedDomains: updated });
     return updated.join(",");
   });
@@ -471,6 +571,4 @@ export function registerEnvironmentCommands(
     await storage.updateEnvironment(environment.id, { allowedDomains: updated });
     return updated.join(",");
   });
-
-
 }

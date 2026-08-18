@@ -113,7 +113,9 @@ describe("HTTP bridge provider (codex)", () => {
     let message = "old transcript";
     let runtimeReads = 0;
     let releaseRuntime!: () => void;
-    const runtimeGate = new Promise<void>((resolve) => { releaseRuntime = resolve; });
+    const runtimeGate = new Promise<void>((resolve) => {
+      releaseRuntime = resolve;
+    });
     const { provider } = httpProvider(async (url) => {
       if (url.endsWith("/messages")) return Response.json({ messages: [message] });
       if (url.endsWith("/config")) {
@@ -135,9 +137,11 @@ describe("HTTP bridge provider (codex)", () => {
 
     const first = await provider.interactiveSnapshot?.("codex-1");
     expect(first?.runtime?.state).toBe("ready");
-    const metadata = (provider as unknown as {
-      interactiveMetadata: Map<string, { expiresAt: number }>;
-    }).interactiveMetadata.get("codex-1");
+    const metadata = (
+      provider as unknown as {
+        interactiveMetadata: Map<string, { expiresAt: number }>;
+      }
+    ).interactiveMetadata.get("codex-1");
     expect(metadata).toBeDefined();
     metadata!.expiresAt = 0;
     message = "latest transcript";
@@ -153,9 +157,11 @@ describe("HTTP bridge provider (codex)", () => {
     expect(runtimeReads).toBe(2);
 
     releaseRuntime();
-    const refreshes = (provider as unknown as {
-      codexRuntimeMetadataRefreshes: Map<string, Promise<void>>;
-    }).codexRuntimeMetadataRefreshes;
+    const refreshes = (
+      provider as unknown as {
+        codexRuntimeMetadataRefreshes: Map<string, Promise<void>>;
+      }
+    ).codexRuntimeMetadataRefreshes;
     await waitUntil(() => refreshes.size === 0);
 
     const third = await provider.interactiveSnapshot?.("codex-1");
@@ -187,10 +193,13 @@ describe("HTTP bridge provider (codex)", () => {
     const first = await provider.interactiveSnapshot?.("codex-1");
     expect(first?.runtime?.state).toBe("ready");
     const internals = provider as unknown as {
-      interactiveMetadata: Map<string, {
-        expiresAt: number;
-        runtime?: { state?: string };
-      }>;
+      interactiveMetadata: Map<
+        string,
+        {
+          expiresAt: number;
+          runtime?: { state?: string };
+        }
+      >;
       codexRuntimeMetadataRefreshes: Map<string, Promise<void>>;
     };
     const retained = internals.interactiveMetadata.get("codex-1");
@@ -216,7 +225,9 @@ describe("HTTP bridge provider (codex)", () => {
   test("drops a background Codex runtime refresh an explicit catalog refresh superseded", async () => {
     let runtimeReads = 0;
     let releaseRuntime!: () => void;
-    const runtimeGate = new Promise<void>((resolve) => { releaseRuntime = resolve; });
+    const runtimeGate = new Promise<void>((resolve) => {
+      releaseRuntime = resolve;
+    });
     const { provider } = httpProvider(async (url) => {
       if (url.endsWith("/messages")) return Response.json({ messages: [] });
       if (url.endsWith("/config")) {
@@ -227,9 +238,8 @@ describe("HTTP bridge provider (codex)", () => {
         if (runtimeReads === 2) await runtimeGate;
         return Response.json({
           engine: {
-            state: runtimeReads === 1
-              ? "ready"
-              : runtimeReads === 2 ? "superseded" : "rediscovered",
+            state:
+              runtimeReads === 1 ? "ready" : runtimeReads === 2 ? "superseded" : "rediscovered",
           },
           mcp: { data: [] },
           skills: { data: [] },
@@ -243,10 +253,13 @@ describe("HTTP bridge provider (codex)", () => {
     const first = await provider.interactiveSnapshot?.("codex-1");
     expect(first?.runtime?.state).toBe("ready");
     const internals = provider as unknown as {
-      interactiveMetadata: Map<string, {
-        expiresAt: number;
-        runtime?: { state?: string };
-      }>;
+      interactiveMetadata: Map<
+        string,
+        {
+          expiresAt: number;
+          runtime?: { state?: string };
+        }
+      >;
       codexRuntimeMetadataRefreshes: Map<string, Promise<void>>;
     };
     internals.interactiveMetadata.get("codex-1")!.expiresAt = 0;
@@ -284,12 +297,14 @@ describe("HTTP bridge provider (codex)", () => {
     });
 
     const body = JSON.parse(String(requests[0]!.init.body));
-    expect(body.attachments).toEqual([{
-      type: "image",
-      path: "/workspace/.orkestrator/initial-prompt/shot.jpeg",
-      filename: "shot.jpeg",
-      dataUrl: "data:image/jpeg;base64,AAAA",
-    }]);
+    expect(body.attachments).toEqual([
+      {
+        type: "image",
+        path: "/workspace/.orkestrator/initial-prompt/shot.jpeg",
+        filename: "shot.jpeg",
+        dataUrl: "data:image/jpeg;base64,AAAA",
+      },
+    ]);
     expect(body.fastMode).toBe(false);
     // permissionMode/model/effort are claude prompt options; codex takes its
     // model at session creation and would reject them here.
@@ -415,10 +430,12 @@ describe("HTTP bridge provider (codex)", () => {
       requestId: "request-address",
       mode: "build" as const,
     };
-    await expect(provider.send("review-1", "Address the findings", options))
-      .rejects.toBeInstanceOf(ProviderUnavailableError);
-    await expect(provider.send("review-1", "Address the findings", options))
-      .resolves.toBeUndefined();
+    await expect(provider.send("review-1", "Address the findings", options)).rejects.toBeInstanceOf(
+      ProviderUnavailableError,
+    );
+    await expect(
+      provider.send("review-1", "Address the findings", options),
+    ).resolves.toBeUndefined();
 
     const promptBodies = requests
       .filter(({ url }) => url.endsWith("/prompt"))
@@ -445,10 +462,12 @@ describe("HTTP bridge provider (codex)", () => {
       return new Response(null, { status: 204 });
     }, codexConnection);
 
-    await expect(provider.send("review-1", "Address the findings", {
-      requestId: "request-address",
-      mode: "build",
-    })).rejects.toThrow("not durably persisted");
+    await expect(
+      provider.send("review-1", "Address the findings", {
+        requestId: "request-address",
+        mode: "build",
+      }),
+    ).rejects.toThrow("not durably persisted");
 
     expect(requests.map(({ url }) => url)).toEqual([
       "http://codex.test/session/review-1/config",
@@ -461,11 +480,15 @@ describe("HTTP bridge provider (codex)", () => {
   });
 
   test.each([
-    ["invalid JSON", () => new Response("{", {
-      headers: { "Content-Type": "application/json" },
-    }), SyntaxError],
-    ["missing durability", () => Response.json({ status: "updated" }),
-      ProviderUnavailableError],
+    [
+      "invalid JSON",
+      () =>
+        new Response("{", {
+          headers: { "Content-Type": "application/json" },
+        }),
+      SyntaxError,
+    ],
+    ["missing durability", () => Response.json({ status: "updated" }), ProviderUnavailableError],
   ] as const)(
     "rejects a codex config update with %s and suppresses the prompt",
     async (_case, updateResponse, errorType) => {
@@ -480,10 +503,12 @@ describe("HTTP bridge provider (codex)", () => {
         return updateResponse();
       }, codexConnection);
 
-      await expect(provider.send("review-1", "Address", {
-        requestId: "request-address",
-        mode: "build",
-      })).rejects.toBeInstanceOf(errorType);
+      await expect(
+        provider.send("review-1", "Address", {
+          requestId: "request-address",
+          mode: "build",
+        }),
+      ).rejects.toBeInstanceOf(errorType);
       expect(requests).toHaveLength(2);
       expect(requests.some(({ url }) => url.endsWith("/prompt"))).toBe(false);
     },
@@ -497,13 +522,13 @@ describe("HTTP bridge provider (codex)", () => {
         codexConnection,
       );
 
-      await expect(provider.send("review-1", "Address", {
-        requestId: "request-address",
-        mode: "build",
-      })).rejects.toBeInstanceOf(ProviderUnavailableError);
-      expect(requests.map(({ url }) => url)).toEqual([
-        "http://codex.test/session/review-1/config",
-      ]);
+      await expect(
+        provider.send("review-1", "Address", {
+          requestId: "request-address",
+          mode: "build",
+        }),
+      ).rejects.toBeInstanceOf(ProviderUnavailableError);
+      expect(requests.map(({ url }) => url)).toEqual(["http://codex.test/session/review-1/config"]);
     },
   );
 
@@ -536,10 +561,12 @@ describe("HTTP bridge provider (codex)", () => {
         return new Response(null, { status });
       }, codexConnection);
 
-      await expect(provider.send("review-1", "Address", {
-        requestId: "request-address",
-        mode: "build",
-      })).rejects.toBeInstanceOf(ProviderUnavailableError);
+      await expect(
+        provider.send("review-1", "Address", {
+          requestId: "request-address",
+          mode: "build",
+        }),
+      ).rejects.toBeInstanceOf(ProviderUnavailableError);
       expect(requests.map(({ url }) => url)).toEqual([
         "http://codex.test/session/review-1/config",
         "http://codex.test/session/review-1/config",
@@ -573,40 +600,42 @@ describe("HTTP bridge provider (codex)", () => {
     ["fastMode", { mode: "build", fastMode: "false", durable: true }],
     ["durable", { mode: "build", fastMode: false, durable: "true" }],
     ["model", { mode: "build", model: 42, fastMode: false, durable: true }],
-    ["modelReasoningEffort", {
-      mode: "build",
-      modelReasoningEffort: 42,
-      fastMode: false,
-      durable: true,
-    }],
-  ] as const)("rejects malformed codex config field %s before dispatch", async (
-    _field,
-    body,
-  ) => {
-    const { provider, requests } = httpProvider(
-      () => Response.json(body),
-      codexConnection,
-    );
+    [
+      "modelReasoningEffort",
+      {
+        mode: "build",
+        modelReasoningEffort: 42,
+        fastMode: false,
+        durable: true,
+      },
+    ],
+  ] as const)("rejects malformed codex config field %s before dispatch", async (_field, body) => {
+    const { provider, requests } = httpProvider(() => Response.json(body), codexConnection);
 
-    await expect(provider.send("review-1", "Address", {
-      requestId: "request-address",
-      mode: "build",
-    })).rejects.toThrow("malformed session config");
+    await expect(
+      provider.send("review-1", "Address", {
+        requestId: "request-address",
+        mode: "build",
+      }),
+    ).rejects.toThrow("malformed session config");
     expect(requests).toHaveLength(1);
   });
 
   test("rejects invalid codex config JSON before dispatch", async () => {
     const { provider, requests } = httpProvider(
-      () => new Response("{", {
-        headers: { "Content-Type": "application/json" },
-      }),
+      () =>
+        new Response("{", {
+          headers: { "Content-Type": "application/json" },
+        }),
       codexConnection,
     );
 
-    await expect(provider.send("review-1", "Address", {
-      requestId: "request-address",
-      mode: "build",
-    })).rejects.toBeInstanceOf(SyntaxError);
+    await expect(
+      provider.send("review-1", "Address", {
+        requestId: "request-address",
+        mode: "build",
+      }),
+    ).rejects.toBeInstanceOf(SyntaxError);
     expect(requests).toHaveLength(1);
   });
 
@@ -614,8 +643,7 @@ describe("HTTP bridge provider (codex)", () => {
     "maps a codex config %s network failure to unavailable and suppresses dispatch",
     async (failurePoint) => {
       const { provider, requests } = httpProvider((url, init) => {
-        if (failurePoint === "update" && url.endsWith("/config")
-          && init.method !== "POST") {
+        if (failurePoint === "update" && url.endsWith("/config") && init.method !== "POST") {
           return Response.json({
             mode: "plan",
             fastMode: false,
@@ -625,10 +653,12 @@ describe("HTTP bridge provider (codex)", () => {
         throw new Error("socket closed");
       }, codexConnection);
 
-      await expect(provider.send("review-1", "Address", {
-        requestId: "request-address",
-        mode: "build",
-      })).rejects.toBeInstanceOf(ProviderUnavailableError);
+      await expect(
+        provider.send("review-1", "Address", {
+          requestId: "request-address",
+          mode: "build",
+        }),
+      ).rejects.toBeInstanceOf(ProviderUnavailableError);
       expect(requests).toHaveLength(failurePoint === "read" ? 1 : 2);
       expect(requests.some(({ url }) => url.endsWith("/prompt"))).toBe(false);
     },
@@ -679,8 +709,9 @@ describe("HTTP bridge provider (codex)", () => {
       images: [{ filename, data: "AAAA" }],
     });
 
-    expect(JSON.parse(String(requests[0]!.init.body)).attachments[0].dataUrl)
-      .toBe(`data:${mime};base64,AAAA`);
+    expect(JSON.parse(String(requests[0]!.init.body)).attachments[0].dataUrl).toBe(
+      `data:${mime};base64,AAAA`,
+    );
   });
 
   test("escapes session ids in every codex route", async () => {

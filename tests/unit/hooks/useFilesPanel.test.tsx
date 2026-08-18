@@ -12,57 +12,70 @@ import { createMockEnvironment } from "../utils/testFactories";
 const realBackendSnapshot = { ...realBackend };
 const realConsoleError = console.error;
 
-const mockGetGitStatus = mock<(containerId: string, targetBranch?: string, includeUncommitted?: boolean) => Promise<GitFileChange[]>>(
-  () => Promise.resolve([]),
+const mockGetGitStatus = mock<
+  (
+    containerId: string,
+    targetBranch?: string,
+    includeUncommitted?: boolean,
+  ) => Promise<GitFileChange[]>
+>(() => Promise.resolve([]));
+const mockGetLocalGitStatus = mock<
+  (
+    worktreePath: string,
+    targetBranch?: string,
+    includeUncommitted?: boolean,
+  ) => Promise<GitFileChange[]>
+>(() => Promise.resolve([]));
+const mockGetFileTree = mock<(containerId: string) => Promise<FileNode[]>>(() =>
+  Promise.resolve([]),
 );
-const mockGetLocalGitStatus = mock<(worktreePath: string, targetBranch?: string, includeUncommitted?: boolean) => Promise<GitFileChange[]>>(
-  () => Promise.resolve([]),
+const mockGetLocalFileTree = mock<(worktreePath: string) => Promise<FileNode[]>>(() =>
+  Promise.resolve([]),
 );
-const mockGetFileTree = mock<(containerId: string) => Promise<FileNode[]>>(() => Promise.resolve([]));
-const mockGetLocalFileTree = mock<(worktreePath: string) => Promise<FileNode[]>>(() => Promise.resolve([]));
 const snapshot = <T,>(value: T): realBackend.ConditionalSnapshot<T> => ({
   unchanged: false,
   digest: JSON.stringify(value),
   value,
 });
-const mockGetGitStatusSnapshot = mock<(
-  containerId: string,
-  targetBranch: string,
-  knownDigest?: string,
-) => Promise<realBackend.ConditionalSnapshot<GitFileChange[]>>>(
-  async (containerId: string, targetBranch: string) =>
-    snapshot(await mockGetGitStatus(containerId, targetBranch, true)),
+const mockGetGitStatusSnapshot = mock<
+  (
+    containerId: string,
+    targetBranch: string,
+    knownDigest?: string,
+  ) => Promise<realBackend.ConditionalSnapshot<GitFileChange[]>>
+>(async (containerId: string, targetBranch: string) =>
+  snapshot(await mockGetGitStatus(containerId, targetBranch, true)),
 );
-const mockGetLocalGitStatusSnapshot = mock<(
-  worktreePath: string,
-  targetBranch: string,
-  knownDigest?: string,
-) => Promise<realBackend.ConditionalSnapshot<GitFileChange[]>>>(
-  async (worktreePath: string, targetBranch: string) =>
-    snapshot(await mockGetLocalGitStatus(worktreePath, targetBranch, true)),
+const mockGetLocalGitStatusSnapshot = mock<
+  (
+    worktreePath: string,
+    targetBranch: string,
+    knownDigest?: string,
+  ) => Promise<realBackend.ConditionalSnapshot<GitFileChange[]>>
+>(async (worktreePath: string, targetBranch: string) =>
+  snapshot(await mockGetLocalGitStatus(worktreePath, targetBranch, true)),
 );
-const mockGetFileTreeSnapshot = mock<(
-  containerId: string,
-  knownDigest?: string,
-) => Promise<realBackend.ConditionalSnapshot<FileNode[]>>>(
-  async (containerId: string) => snapshot(await mockGetFileTree(containerId)),
-);
-const mockGetLocalFileTreeSnapshot = mock<(
-  worktreePath: string,
-  knownDigest?: string,
-) => Promise<realBackend.ConditionalSnapshot<FileNode[]>>>(
-  async (worktreePath: string) =>
-    snapshot(await mockGetLocalFileTree(worktreePath)),
-);
-const mockRevertContainerFile = mock<(environmentId: string, filePath: string, targetBranch: string) => Promise<string>>(
-  (_environmentId, filePath) => Promise.resolve(filePath),
-);
+const mockGetFileTreeSnapshot = mock<
+  (
+    containerId: string,
+    knownDigest?: string,
+  ) => Promise<realBackend.ConditionalSnapshot<FileNode[]>>
+>(async (containerId: string) => snapshot(await mockGetFileTree(containerId)));
+const mockGetLocalFileTreeSnapshot = mock<
+  (
+    worktreePath: string,
+    knownDigest?: string,
+  ) => Promise<realBackend.ConditionalSnapshot<FileNode[]>>
+>(async (worktreePath: string) => snapshot(await mockGetLocalFileTree(worktreePath)));
+const mockRevertContainerFile = mock<
+  (environmentId: string, filePath: string, targetBranch: string) => Promise<string>
+>((_environmentId, filePath) => Promise.resolve(filePath));
 const mockDeleteContainerFile = mock<(environmentId: string, filePath: string) => Promise<string>>(
   (_environmentId, filePath) => Promise.resolve(filePath),
 );
-const mockRevertLocalFile = mock<(environmentId: string, filePath: string, targetBranch: string) => Promise<string>>(
-  (_environmentId, filePath) => Promise.resolve(filePath),
-);
+const mockRevertLocalFile = mock<
+  (environmentId: string, filePath: string, targetBranch: string) => Promise<string>
+>((_environmentId, filePath) => Promise.resolve(filePath));
 const mockDeleteLocalFile = mock<(environmentId: string, filePath: string) => Promise<string>>(
   (_environmentId, filePath) => Promise.resolve(filePath),
 );
@@ -159,11 +172,12 @@ function resetStores(
         codexNativeFastModeDefault: false,
         experimentalCodexRawEventLogging: true,
       },
-      repositories: environment && repositoryConfig
-        ? {
-            [environment.projectId]: repositoryConfig,
-          }
-        : {},
+      repositories:
+        environment && repositoryConfig
+          ? {
+              [environment.projectId]: repositoryConfig,
+            }
+          : {},
     },
     isLoading: false,
     error: null,
@@ -189,23 +203,24 @@ describe("useFilesPanel", () => {
     mockGetLocalGitStatus.mockImplementation(() => Promise.resolve([]));
     mockGetFileTree.mockImplementation(() => Promise.resolve([]));
     mockGetLocalFileTree.mockImplementation(() => Promise.resolve([]));
-    mockGetGitStatusSnapshot.mockImplementation(
-      async (containerId, targetBranch) =>
-        snapshot(await mockGetGitStatus(containerId, targetBranch, true)),
+    mockGetGitStatusSnapshot.mockImplementation(async (containerId, targetBranch) =>
+      snapshot(await mockGetGitStatus(containerId, targetBranch, true)),
     );
-    mockGetLocalGitStatusSnapshot.mockImplementation(
-      async (worktreePath, targetBranch) =>
-        snapshot(await mockGetLocalGitStatus(worktreePath, targetBranch, true)),
+    mockGetLocalGitStatusSnapshot.mockImplementation(async (worktreePath, targetBranch) =>
+      snapshot(await mockGetLocalGitStatus(worktreePath, targetBranch, true)),
     );
-    mockGetFileTreeSnapshot.mockImplementation(
-      async (containerId) => snapshot(await mockGetFileTree(containerId)),
+    mockGetFileTreeSnapshot.mockImplementation(async (containerId) =>
+      snapshot(await mockGetFileTree(containerId)),
     );
-    mockGetLocalFileTreeSnapshot.mockImplementation(
-      async (worktreePath) =>
-        snapshot(await mockGetLocalFileTree(worktreePath)),
+    mockGetLocalFileTreeSnapshot.mockImplementation(async (worktreePath) =>
+      snapshot(await mockGetLocalFileTree(worktreePath)),
     );
-    mockRevertContainerFile.mockImplementation((_environmentId, filePath) => Promise.resolve(filePath));
-    mockDeleteContainerFile.mockImplementation((_environmentId, filePath) => Promise.resolve(filePath));
+    mockRevertContainerFile.mockImplementation((_environmentId, filePath) =>
+      Promise.resolve(filePath),
+    );
+    mockDeleteContainerFile.mockImplementation((_environmentId, filePath) =>
+      Promise.resolve(filePath),
+    );
     mockRevertLocalFile.mockImplementation((_environmentId, filePath) => Promise.resolve(filePath));
     mockDeleteLocalFile.mockImplementation((_environmentId, filePath) => Promise.resolve(filePath));
   });
@@ -325,12 +340,8 @@ describe("useFilesPanel", () => {
     });
     resetStores(environment);
     useFilesPanelStore.setState({ isOpen: true, activeTab: "all-files" });
-    mockGetGitStatus.mockImplementation(() =>
-      Promise.resolve([{ ...change }])
-    );
-    mockGetFileTree.mockImplementation(() =>
-      Promise.resolve(JSON.parse(JSON.stringify(tree)))
-    );
+    mockGetGitStatus.mockImplementation(() => Promise.resolve([{ ...change }]));
+    mockGetFileTree.mockImplementation(() => Promise.resolve(JSON.parse(JSON.stringify(tree))));
 
     const { result } = renderHook(() => useFilesPanel());
     await waitFor(() => {
@@ -341,10 +352,7 @@ describe("useFilesPanel", () => {
     const treeBefore = useFilesPanelStore.getState().fileTree;
 
     await act(async () => {
-      await Promise.all([
-        result.current.loadChanges(true),
-        result.current.loadFileTree(true),
-      ]);
+      await Promise.all([result.current.loadChanges(true), result.current.loadFileTree(true)]);
     });
 
     expect(useFilesPanelStore.getState().changes).toBe(changesBefore);
@@ -360,11 +368,13 @@ describe("useFilesPanel", () => {
       status: "running",
     });
     const nextChange = { ...change, additions: 9 };
-    const nextTree: FileNode[] = [{
-      name: "README.md",
-      path: "README.md",
-      isDirectory: false,
-    }];
+    const nextTree: FileNode[] = [
+      {
+        name: "README.md",
+        path: "README.md",
+        isDirectory: false,
+      },
+    ];
     resetStores(environment);
     useFilesPanelStore.setState({ isOpen: true, activeTab: "all-files" });
     mockGetGitStatusSnapshot
@@ -407,10 +417,7 @@ describe("useFilesPanel", () => {
     const treeBefore = useFilesPanelStore.getState().fileTree;
 
     await act(async () => {
-      await Promise.all([
-        result.current.loadChanges(true),
-        result.current.loadFileTree(true),
-      ]);
+      await Promise.all([result.current.loadChanges(true), result.current.loadFileTree(true)]);
     });
 
     expect(mockGetGitStatusSnapshot).toHaveBeenNthCalledWith(
@@ -419,19 +426,12 @@ describe("useFilesPanel", () => {
       "develop",
       "changes-v1",
     );
-    expect(mockGetFileTreeSnapshot).toHaveBeenNthCalledWith(
-      2,
-      "container-1",
-      "tree-v1",
-    );
+    expect(mockGetFileTreeSnapshot).toHaveBeenNthCalledWith(2, "container-1", "tree-v1");
     expect(useFilesPanelStore.getState().changes).toBe(changesBefore);
     expect(useFilesPanelStore.getState().fileTree).toBe(treeBefore);
 
     await act(async () => {
-      await Promise.all([
-        result.current.loadChanges(true),
-        result.current.loadFileTree(true),
-      ]);
+      await Promise.all([result.current.loadChanges(true), result.current.loadFileTree(true)]);
     });
 
     expect(mockGetGitStatusSnapshot).toHaveBeenNthCalledWith(
@@ -440,11 +440,7 @@ describe("useFilesPanel", () => {
       "develop",
       "changes-v1",
     );
-    expect(mockGetFileTreeSnapshot).toHaveBeenNthCalledWith(
-      3,
-      "container-1",
-      "tree-v1",
-    );
+    expect(mockGetFileTreeSnapshot).toHaveBeenNthCalledWith(3, "container-1", "tree-v1");
     expect(useFilesPanelStore.getState().changes).toEqual([nextChange]);
     expect(useFilesPanelStore.getState().fileTree).toEqual(nextTree);
   });
@@ -525,9 +521,9 @@ describe("useFilesPanel", () => {
     const releaseChange = { ...change, additions: 11 };
     resetStores(environment, { defaultBranch: "trunk", prBaseBranch: "develop" });
     useFilesPanelStore.setState({ isOpen: true, activeTab: "changes" });
-    mockGetLocalGitStatus.mockImplementation((_path, comparisonRef) => (
-      Promise.resolve(comparisonRef === "release" ? [releaseChange] : [change])
-    ));
+    mockGetLocalGitStatus.mockImplementation((_path, comparisonRef) =>
+      Promise.resolve(comparisonRef === "release" ? [releaseChange] : [change]),
+    );
 
     renderHook(() => useFilesPanel());
     await waitFor(() => {
@@ -646,9 +642,12 @@ describe("useFilesPanel", () => {
     });
     resetStores(environment);
     let resolveTree: (nodes: FileNode[]) => void = () => {};
-    mockGetFileTree.mockImplementation(() => new Promise((resolve) => {
-      resolveTree = resolve;
-    }));
+    mockGetFileTree.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveTree = resolve;
+        }),
+    );
     const { result } = renderHook(() => useFilesPanel());
 
     let firstLoad: Promise<void>;
@@ -771,19 +770,29 @@ describe("useFilesPanel", () => {
       status: "running",
     });
     const secondChange = { ...change, path: "src/Second.tsx", filename: "Second.tsx" };
-    const secondTree: FileNode[] = [{ name: "Second.tsx", path: "src/Second.tsx", isDirectory: false }];
+    const secondTree: FileNode[] = [
+      { name: "Second.tsx", path: "src/Second.tsx", isDirectory: false },
+    ];
     let resolveFirstChanges: (changes: GitFileChange[]) => void = () => {};
     let resolveFirstTree: (tree: FileNode[]) => void = () => {};
 
     resetStores(firstEnvironment);
     useEnvironmentStore.setState({ environments: [firstEnvironment, secondEnvironment] });
     useFilesPanelStore.setState({ isOpen: true, activeTab: "all-files" });
-    mockGetGitStatus.mockImplementation((containerId) => containerId === "container-a"
-      ? new Promise((resolve) => { resolveFirstChanges = resolve; })
-      : Promise.resolve([secondChange]));
-    mockGetFileTree.mockImplementation((containerId) => containerId === "container-a"
-      ? new Promise((resolve) => { resolveFirstTree = resolve; })
-      : Promise.resolve(secondTree));
+    mockGetGitStatus.mockImplementation((containerId) =>
+      containerId === "container-a"
+        ? new Promise((resolve) => {
+            resolveFirstChanges = resolve;
+          })
+        : Promise.resolve([secondChange]),
+    );
+    mockGetFileTree.mockImplementation((containerId) =>
+      containerId === "container-a"
+        ? new Promise((resolve) => {
+            resolveFirstTree = resolve;
+          })
+        : Promise.resolve(secondTree),
+    );
 
     const { result } = renderHook(() => useFilesPanel());
 
@@ -834,13 +843,17 @@ describe("useFilesPanel", () => {
     mockGetGitStatus.mockImplementation(() => {
       changesCallCount += 1;
       return changesCallCount === 1
-        ? new Promise((resolve) => { resolveStaleChanges = resolve; })
+        ? new Promise((resolve) => {
+            resolveStaleChanges = resolve;
+          })
         : Promise.resolve([freshChange]);
     });
     mockGetFileTree.mockImplementation(() => {
       treeCallCount += 1;
       return treeCallCount === 1
-        ? new Promise((resolve) => { resolveStaleTree = resolve; })
+        ? new Promise((resolve) => {
+            resolveStaleTree = resolve;
+          })
         : Promise.resolve(freshTree);
     });
 
@@ -891,13 +904,18 @@ describe("useFilesPanel", () => {
       status: "running",
     });
     const secondChange = { ...change, path: "src/Second.tsx", filename: "Second.tsx" };
-    const secondTree: FileNode[] = [{ name: "Second.tsx", path: "src/Second.tsx", isDirectory: false }];
+    const secondTree: FileNode[] = [
+      { name: "Second.tsx", path: "src/Second.tsx", isDirectory: false },
+    ];
     let resolveDelete: (path: string) => void = () => {};
     resetStores(firstEnvironment);
     useEnvironmentStore.setState({ environments: [firstEnvironment, secondEnvironment] });
-    mockDeleteContainerFile.mockImplementation(() => new Promise((resolve) => {
-      resolveDelete = resolve;
-    }));
+    mockDeleteContainerFile.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveDelete = resolve;
+        }),
+    );
 
     const { result } = renderHook(() => useFilesPanel());
     let mutation: Promise<void>;
@@ -942,11 +960,7 @@ describe("useFilesPanel", () => {
       await result.current.revertFile("src/App.tsx");
     });
 
-    expect(mockRevertLocalFile).toHaveBeenCalledWith(
-      "env-local",
-      "src/App.tsx",
-      "abc123def456",
-    );
+    expect(mockRevertLocalFile).toHaveBeenCalledWith("env-local", "src/App.tsx", "abc123def456");
     expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "abc123def456", true);
     expect(mockGetLocalFileTree).toHaveBeenCalledWith("/tmp/worktree");
     expect(result.current.fileActionPending).toBeNull();
@@ -1015,9 +1029,12 @@ describe("useFilesPanel", () => {
     });
     resetStores(environment);
     let rejectDelete: (error: Error) => void = () => {};
-    mockDeleteContainerFile.mockImplementation(() => new Promise((_resolve, reject) => {
-      rejectDelete = reject;
-    }));
+    mockDeleteContainerFile.mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectDelete = reject;
+        }),
+    );
     const { result } = renderHook(() => useFilesPanel());
 
     let mutation: Promise<void>;
@@ -1102,7 +1119,9 @@ describe("useFilesPanel", () => {
       });
       resetStores(environment);
       useFilesPanelStore.setState({ isOpen: true, activeTab: "changes" });
-      mockGetGitStatus.mockImplementationOnce(() => Promise.resolve([])).mockImplementationOnce(() => Promise.resolve([change]));
+      mockGetGitStatus
+        .mockImplementationOnce(() => Promise.resolve([]))
+        .mockImplementationOnce(() => Promise.resolve([change]));
 
       const { unmount } = renderHook(() => useFilesPanel());
 
@@ -1156,11 +1175,13 @@ describe("useFilesPanel", () => {
         status: "running",
       });
       const refreshedChange = { ...change, additions: 12 };
-      const refreshedTree: FileNode[] = [{
-        name: "updated.ts",
-        path: "src/updated.ts",
-        isDirectory: false,
-      }];
+      const refreshedTree: FileNode[] = [
+        {
+          name: "updated.ts",
+          path: "src/updated.ts",
+          isDirectory: false,
+        },
+      ];
       resetStores(environment);
       useFilesPanelStore.setState({ isOpen: true, activeTab: "all-files" });
       mockGetGitStatus

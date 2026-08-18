@@ -14,25 +14,46 @@ import { cn } from "@/lib/utils";
 function getBuildPhaseDisplay(phase: BuildPhase): { label: string; className: string } {
   switch (phase) {
     case "creating-environment":
-      return { label: "Creating Env", className: "bg-blue-500/15 text-blue-400 border-blue-500/30" };
+      return {
+        label: "Creating Env",
+        className: "bg-blue-500/15 text-blue-400 border-blue-500/30",
+      };
     case "starting-environment":
-      return { label: "Starting Env", className: "bg-blue-500/15 text-blue-400 border-blue-500/30" };
+      return {
+        label: "Starting Env",
+        className: "bg-blue-500/15 text-blue-400 border-blue-500/30",
+      };
     case "waiting-for-setup":
       return { label: "Setting Up", className: "bg-blue-500/15 text-blue-400 border-blue-500/30" };
     case "building":
       return { label: "Building", className: "bg-amber-500/15 text-amber-400 border-amber-500/30" };
     case "reviewing":
-      return { label: "Reviewing", className: "bg-purple-500/15 text-purple-400 border-purple-500/30" };
+      return {
+        label: "Reviewing",
+        className: "bg-purple-500/15 text-purple-400 border-purple-500/30",
+      };
     case "addressing":
-      return { label: "Addressing", className: "bg-amber-500/15 text-amber-400 border-amber-500/30" };
+      return {
+        label: "Addressing",
+        className: "bg-amber-500/15 text-amber-400 border-amber-500/30",
+      };
     case "verifying":
       return { label: "Verifying", className: "bg-cyan-500/15 text-cyan-400 border-cyan-500/30" };
     case "fixing":
-      return { label: "Fixing", className: "bg-orange-500/15 text-orange-400 border-orange-500/30" };
+      return {
+        label: "Fixing",
+        className: "bg-orange-500/15 text-orange-400 border-orange-500/30",
+      };
     case "creating-pr":
-      return { label: "Creating PR", className: "bg-indigo-500/15 text-indigo-400 border-indigo-500/30" };
+      return {
+        label: "Creating PR",
+        className: "bg-indigo-500/15 text-indigo-400 border-indigo-500/30",
+      };
     case "resolving-conflicts":
-      return { label: "Resolving", className: "bg-orange-500/15 text-orange-400 border-orange-500/30" };
+      return {
+        label: "Resolving",
+        className: "bg-orange-500/15 text-orange-400 border-orange-500/30",
+      };
     case "paused":
       return { label: "Paused", className: "bg-amber-500/15 text-amber-400 border-amber-500/30" };
     case "complete":
@@ -59,13 +80,7 @@ export function KanbanCard({
   canClearStatus,
   onClearStatus,
 }: KanbanCardProps) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    isDragging,
-  } = useDraggable({
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: task.id,
     data: { type: "task", task },
   });
@@ -109,7 +124,7 @@ export function KanbanCard({
         "hover:shadow-md transition-[border-color,box-shadow]",
         "border-border hover:border-primary/50",
         isDragging && "opacity-30",
-        isDragOverlay && "shadow-lg border-primary/50 rotate-2"
+        isDragOverlay && "shadow-lg border-primary/50 rotate-2",
       )}
       {...attributes}
       {...listeners}
@@ -123,7 +138,7 @@ export function KanbanCard({
               className={cn(
                 "inline-flex items-center shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold leading-none",
                 phaseDisplay.className,
-                isActivelyBuilding && "animate-pulse"
+                isActivelyBuilding && "animate-pulse",
               )}
             >
               {phaseDisplay.label}
@@ -131,9 +146,7 @@ export function KanbanCard({
           )}
         </div>
         {task.description && (
-          <p className="mt-1 text-xs text-muted-foreground line-clamp-2">
-            {task.description}
-          </p>
+          <p className="mt-1 text-xs text-muted-foreground line-clamp-2">{task.description}</p>
         )}
         {task.comments.length > 0 && (
           <div className="mt-2 flex items-center gap-1 text-xs text-muted-foreground">

@@ -1,7 +1,4 @@
-import type {
-  OpenCodeModelPreferences,
-  OpenCodeModelRef,
-} from "@/lib/backend";
+import type { OpenCodeModelPreferences, OpenCodeModelRef } from "@/lib/backend";
 
 export const EMPTY_OPENCODE_MODEL_PREFERENCES: OpenCodeModelPreferences = {
   recent: [],
@@ -9,24 +6,17 @@ export const EMPTY_OPENCODE_MODEL_PREFERENCES: OpenCodeModelPreferences = {
   variant: {},
 };
 
-export function openCodeModelRefToId(
-  modelRef?: OpenCodeModelRef,
-): string | undefined {
+export function openCodeModelRefToId(modelRef?: OpenCodeModelRef): string | undefined {
   const normalizeId = (value: string): string | undefined => {
     const segments = value.split("/").map((segment) => segment.trim());
-    return segments.length >= 2 && segments.every(Boolean)
-      ? segments.join("/")
-      : undefined;
+    return segments.length >= 2 && segments.every(Boolean) ? segments.join("/") : undefined;
   };
 
   if (typeof modelRef === "string") {
     return normalizeId(modelRef.trim());
   }
   if (!modelRef) return undefined;
-  if (
-    typeof modelRef.providerID !== "string" ||
-    typeof modelRef.modelID !== "string"
-  ) {
+  if (typeof modelRef.providerID !== "string" || typeof modelRef.modelID !== "string") {
     return undefined;
   }
   return normalizeId(`${modelRef.providerID}/${modelRef.modelID}`);
@@ -51,10 +41,12 @@ export function normalizeOpenCodeModelReferences(input: unknown): string[] {
       typeof (candidate as { providerID?: unknown }).providerID === "string" &&
       typeof (candidate as { modelID?: unknown }).modelID === "string"
     ) {
-      modelId = openCodeModelRefToId(candidate as {
-        providerID: string;
-        modelID: string;
-      });
+      modelId = openCodeModelRefToId(
+        candidate as {
+          providerID: string;
+          modelID: string;
+        },
+      );
     }
 
     if (!modelId || seen.has(modelId)) continue;
@@ -72,9 +64,7 @@ export function normalizeOpenCodeModelReferences(input: unknown): string[] {
  * `{providerID, modelID}` objects across versions, and a malformed file must
  * degrade to "no preferences" rather than propagate junk into model selection.
  */
-export function normalizeOpenCodeModelPreferences(
-  input: unknown,
-): OpenCodeModelPreferences {
+export function normalizeOpenCodeModelPreferences(input: unknown): OpenCodeModelPreferences {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     return EMPTY_OPENCODE_MODEL_PREFERENCES;
   }

@@ -75,12 +75,14 @@ describe("part budget", () => {
   });
 
   test("preserves provider-supplied stats and counts before truncation", () => {
-    expect(applyDiffBudget({
-      before: "ignored",
-      after: "ignored",
-      additions: 7,
-      deletions: 3,
-    })).toMatchObject({ additions: 7, deletions: 3 });
+    expect(
+      applyDiffBudget({
+        before: "ignored",
+        after: "ignored",
+        additions: 7,
+        deletions: 3,
+      }),
+    ).toMatchObject({ additions: 7, deletions: 3 });
 
     const manyLines = `${"line\n".repeat(150_000)}tail`;
     const capped = applyDiffBudget({ before: "old\n", after: manyLines })!;
@@ -100,7 +102,13 @@ describe("part budget", () => {
     const locationOnly = { filePath: "/a.ts" };
     expect(applyDiffBudget(locationOnly)).toBe(locationOnly);
 
-    const alreadyCounted = { filePath: "/a.ts", before: "old", after: "new", additions: 1, deletions: 1 };
+    const alreadyCounted = {
+      filePath: "/a.ts",
+      before: "old",
+      after: "new",
+      additions: 1,
+      deletions: 1,
+    };
     expect(applyDiffBudget(alreadyCounted)).toBe(alreadyCounted);
   });
 
@@ -123,5 +131,4 @@ describe("part budget", () => {
     // Round-tripping proves no lone surrogate survived the cut.
     expect(Buffer.from(capped, "utf8").toString("utf8")).toBe(capped);
   });
-
 });

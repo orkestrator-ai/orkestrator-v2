@@ -3,10 +3,7 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, mock, test } from "bun:test";
 import type { BrowserWindowConstructorOptions, MenuItemConstructorOptions } from "electron";
 import { PRODUCT_NAME } from "../../../apps/backend/src/core/constants";
-import {
-  createMainWindow,
-  isTrustedRendererUrl,
-} from "../../../apps/desktop/electron/window";
+import { createMainWindow, isTrustedRendererUrl } from "../../../apps/desktop/electron/window";
 
 function createHarness() {
   const windows: FakeBrowserWindow[] = [];
@@ -41,28 +38,17 @@ describe("createMainWindow", () => {
   test("matches only the configured renderer location", () => {
     const trustedFileUrl = "file:///app/web/index.html";
 
-    expect(isTrustedRendererUrl(`${trustedFileUrl}#settings`, trustedFileUrl)).toBe(
+    expect(isTrustedRendererUrl(`${trustedFileUrl}#settings`, trustedFileUrl)).toBe(true);
+    expect(isTrustedRendererUrl("file://remote-host/app/web/index.html", trustedFileUrl)).toBe(
+      false,
+    );
+    expect(isTrustedRendererUrl("not a URL", trustedFileUrl)).toBe(false);
+    expect(isTrustedRendererUrl("http://127.0.0.1:5173/settings", "http://127.0.0.1:5173")).toBe(
       true,
     );
-    expect(
-      isTrustedRendererUrl(
-        "file://remote-host/app/web/index.html",
-        trustedFileUrl,
-      ),
-    ).toBe(false);
-    expect(isTrustedRendererUrl("not a URL", trustedFileUrl)).toBe(false);
-    expect(
-      isTrustedRendererUrl(
-        "http://127.0.0.1:5173/settings",
-        "http://127.0.0.1:5173",
-      ),
-    ).toBe(true);
-    expect(
-      isTrustedRendererUrl(
-        "http://127.0.0.1:5174/settings",
-        "http://127.0.0.1:5173",
-      ),
-    ).toBe(false);
+    expect(isTrustedRendererUrl("http://127.0.0.1:5174/settings", "http://127.0.0.1:5173")).toBe(
+      false,
+    );
   });
 
   test("creates the production BrowserWindow, installs context menu support, and loads the renderer file", async () => {
@@ -92,7 +78,9 @@ describe("createMainWindow", () => {
       },
     });
     expect(harness.windows[0].webContents.on.mock.calls[0]?.[0]).toBe("context-menu");
-    expect(harness.windows[0].loadFile).toHaveBeenCalledWith(path.join("/app", "dist", "index.html"));
+    expect(harness.windows[0].loadFile).toHaveBeenCalledWith(
+      path.join("/app", "dist", "index.html"),
+    );
     expect(harness.windows[0].loadURL).not.toHaveBeenCalled();
     expect(harness.windows[0].webContents.openDevTools).not.toHaveBeenCalled();
   });

@@ -67,22 +67,20 @@ const downloaders: Downloader[] = [
     scriptName: "download-codex.sh",
     expectedDownload: ({ architecture, os }) => {
       const arch = architecture === "x86_64" ? "x86_64" : "aarch64";
-      const target = os === "Darwin"
-        ? `${arch}-apple-darwin`
-        : `${arch}-unknown-linux-musl`;
+      const target = os === "Darwin" ? `${arch}-apple-darwin` : `${arch}-unknown-linux-musl`;
       return `rust-v0.147.0/codex-${target}.tar.gz`;
     },
     expectedExtractor: () => "tar",
-    companions: [{
-      binaryName: "codex-code-mode-host",
-      expectedDownload: ({ architecture, os }) => {
-        const arch = architecture === "x86_64" ? "x86_64" : "aarch64";
-        const target = os === "Darwin"
-          ? `${arch}-apple-darwin`
-          : `${arch}-unknown-linux-musl`;
-        return `rust-v0.147.0/codex-code-mode-host-${target}.tar.gz`;
+    companions: [
+      {
+        binaryName: "codex-code-mode-host",
+        expectedDownload: ({ architecture, os }) => {
+          const arch = architecture === "x86_64" ? "x86_64" : "aarch64";
+          const target = os === "Darwin" ? `${arch}-apple-darwin` : `${arch}-unknown-linux-musl`;
+          return `rust-v0.147.0/codex-code-mode-host-${target}.tar.gz`;
+        },
       },
-    }],
+    ],
   },
   {
     binaryName: "opencode",
@@ -93,7 +91,7 @@ const downloaders: Downloader[] = [
       const extension = os === "Darwin" ? ".zip" : ".tar.gz";
       return `v1.18.16/opencode-${platform}-${arch}${extension}`;
     },
-    expectedExtractor: ({ os }) => os === "Darwin" ? "unzip" : "tar",
+    expectedExtractor: ({ os }) => (os === "Darwin" ? "unzip" : "tar"),
   },
 ];
 
@@ -125,16 +123,21 @@ function createFixture(scriptName: string): ScriptFixture {
   chmodSync(scriptPath, 0o755);
 
   const fakeExecutable = path.join(projectRoot, "fake-executable");
-  writeExecutable(fakeExecutable, `#!/bin/bash
+  writeExecutable(
+    fakeExecutable,
+    `#!/bin/bash
 tool_name="$(basename "$0")"
 echo "probe $tool_name $*" >> "$HARNESS_LOG"
 if [[ "$HARNESS_FAIL_PROBE" == "$tool_name" ]]; then
   exit 33
 fi
 echo "$tool_name test-version"
-`);
+`,
+  );
 
-  writeExecutable(path.join(fakeBinDirectory, "uname"), `#!/bin/bash
+  writeExecutable(
+    path.join(fakeBinDirectory, "uname"),
+    `#!/bin/bash
 if [[ "$1" == "-m" ]]; then
   echo "$HARNESS_ARCH"
 elif [[ "$1" == "-s" ]]; then
@@ -142,15 +145,21 @@ elif [[ "$1" == "-s" ]]; then
 else
   exit 2
 fi
-`);
+`,
+  );
 
-  writeExecutable(path.join(fakeBinDirectory, "mktemp"), `#!/bin/bash
+  writeExecutable(
+    path.join(fakeBinDirectory, "mktemp"),
+    `#!/bin/bash
 /bin/mkdir -p "$HARNESS_TEMP_DIR"
 echo "mktemp $HARNESS_TEMP_DIR" >> "$HARNESS_LOG"
 echo "$HARNESS_TEMP_DIR"
-`);
+`,
+  );
 
-  writeExecutable(path.join(fakeBinDirectory, "curl"), `#!/bin/bash
+  writeExecutable(
+    path.join(fakeBinDirectory, "curl"),
+    `#!/bin/bash
 echo "curl $*" >> "$HARNESS_LOG"
 if [[ "$HARNESS_FAIL_STAGE" == "curl" ]]; then
   exit 30
@@ -164,9 +173,12 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 : > "$output"
-`);
+`,
+  );
 
-  writeExecutable(path.join(fakeBinDirectory, "tar"), `#!/bin/bash
+  writeExecutable(
+    path.join(fakeBinDirectory, "tar"),
+    `#!/bin/bash
 echo "tar $*" >> "$HARNESS_LOG"
 if [[ "$HARNESS_FAIL_STAGE" == "extract" ]]; then
   exit 31
@@ -188,9 +200,12 @@ for target in \
   /bin/cp "$HARNESS_FAKE_EXECUTABLE" "$destination/codex-$target"
   /bin/cp "$HARNESS_FAKE_EXECUTABLE" "$destination/codex-code-mode-host-$target"
 done
-`);
+`,
+  );
 
-  writeExecutable(path.join(fakeBinDirectory, "unzip"), `#!/bin/bash
+  writeExecutable(
+    path.join(fakeBinDirectory, "unzip"),
+    `#!/bin/bash
 echo "unzip $*" >> "$HARNESS_LOG"
 if [[ "$HARNESS_FAIL_STAGE" == "extract" ]]; then
   exit 31
@@ -204,9 +219,12 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 /bin/cp "$HARNESS_FAKE_EXECUTABLE" "$destination/opencode"
-`);
+`,
+  );
 
-  writeExecutable(path.join(fakeBinDirectory, "codesign"), `#!/bin/bash
+  writeExecutable(
+    path.join(fakeBinDirectory, "codesign"),
+    `#!/bin/bash
 echo "codesign $*" >> "$HARNESS_LOG"
 if [[ "$1" == "--remove-signature" && "$HARNESS_FAIL_REMOVE_SIGNATURE" == "1" ]]; then
   exit 34
@@ -214,12 +232,16 @@ fi
 if [[ "$1" == "--sign" && "$HARNESS_FAIL_STAGE" == "codesign" ]]; then
   exit 32
 fi
-`);
+`,
+  );
 
-  writeExecutable(path.join(fakeBinDirectory, "rm"), `#!/bin/bash
+  writeExecutable(
+    path.join(fakeBinDirectory, "rm"),
+    `#!/bin/bash
 echo "rm $*" >> "$HARNESS_LOG"
 exec /bin/rm "$@"
-`);
+`,
+  );
 
   return {
     binariesDirectory: path.join(projectRoot, "binaries"),
@@ -269,46 +291,56 @@ afterAll(() => {
 for (const downloader of downloaders) {
   describe(downloader.scriptName, () => {
     for (const platform of platformCases) {
-      test(`downloads, extracts, probes, and cleans up on ${platform.os}/${platform.architecture}`, () => {
-        const fixture = createFixture(downloader.scriptName);
-        const result = runFixture(fixture, platform);
-        const log = commandLog(fixture);
+      test(
+        `downloads, extracts, probes, and cleans up on ${platform.os}/${platform.architecture}`,
+        () => {
+          const fixture = createFixture(downloader.scriptName);
+          const result = runFixture(fixture, platform);
+          const log = commandLog(fixture);
 
-        expect(result.status).toBe(0);
-        expect(log).toContain(downloader.expectedDownload(platform));
-        expect(log).toContain(`${downloader.expectedExtractor(platform)} `);
-        expect(log).toContain(`probe ${downloader.binaryName} --version`);
-        expect(existsSync(path.join(fixture.binariesDirectory, downloader.binaryName))).toBe(true);
-        expect(existsSync(fixture.temporaryDirectory)).toBe(false);
+          expect(result.status).toBe(0);
+          expect(log).toContain(downloader.expectedDownload(platform));
+          expect(log).toContain(`${downloader.expectedExtractor(platform)} `);
+          expect(log).toContain(`probe ${downloader.binaryName} --version`);
+          expect(existsSync(path.join(fixture.binariesDirectory, downloader.binaryName))).toBe(
+            true,
+          );
+          expect(existsSync(fixture.temporaryDirectory)).toBe(false);
 
-        for (const companion of downloader.companions ?? []) {
-          expect(log).toContain(companion.expectedDownload(platform));
-          expect(
-            existsSync(path.join(fixture.binariesDirectory, companion.binaryName)),
-            `${companion.binaryName} was not placed beside ${downloader.binaryName}`,
-          ).toBe(true);
-        }
+          for (const companion of downloader.companions ?? []) {
+            expect(log).toContain(companion.expectedDownload(platform));
+            expect(
+              existsSync(path.join(fixture.binariesDirectory, companion.binaryName)),
+              `${companion.binaryName} was not placed beside ${downloader.binaryName}`,
+            ).toBe(true);
+          }
 
-        // Every bundled binary is ad-hoc signed: remove-signature then sign.
-        const signedBinaries = 1 + (downloader.companions?.length ?? 0);
-        const codesignCalls = log.match(/^codesign /gm) ?? [];
-        expect(codesignCalls).toHaveLength(platform.os === "Darwin" ? 2 * signedBinaries : 0);
-      }, DOWNLOADER_TEST_TIMEOUT_MS);
+          // Every bundled binary is ad-hoc signed: remove-signature then sign.
+          const signedBinaries = 1 + (downloader.companions?.length ?? 0);
+          const codesignCalls = log.match(/^codesign /gm) ?? [];
+          expect(codesignCalls).toHaveLength(platform.os === "Darwin" ? 2 * signedBinaries : 0);
+        },
+        DOWNLOADER_TEST_TIMEOUT_MS,
+      );
     }
 
     for (const [label, architecture, os, expectedMessage] of [
       ["architecture", "sparc64", "Linux", "Unsupported architecture: sparc64"],
       ["platform", "x86_64", "FreeBSD", "Unsupported platform: FreeBSD"],
     ] as const) {
-      test(`rejects an unsupported ${label} before downloading`, () => {
-        const fixture = createFixture(downloader.scriptName);
-        const result = runFixture(fixture, { architecture, os });
+      test(
+        `rejects an unsupported ${label} before downloading`,
+        () => {
+          const fixture = createFixture(downloader.scriptName);
+          const result = runFixture(fixture, { architecture, os });
 
-        expect(result.status).toBe(1);
-        expect(result.stdout).toContain(expectedMessage);
-        expect(commandLog(fixture)).not.toContain("curl ");
-        expect(existsSync(fixture.binariesDirectory)).toBe(false);
-      }, DOWNLOADER_TEST_TIMEOUT_MS);
+          expect(result.status).toBe(1);
+          expect(result.stdout).toContain(expectedMessage);
+          expect(commandLog(fixture)).not.toContain("curl ");
+          expect(existsSync(fixture.binariesDirectory)).toBe(false);
+        },
+        DOWNLOADER_TEST_TIMEOUT_MS,
+      );
     }
 
     for (const [stage, expectedStatus] of [
@@ -316,46 +348,55 @@ for (const downloader of downloaders) {
       ["extract", 31],
       ["probe", 33],
     ] as const) {
-      test(`propagates ${stage} failure and removes temporary files`, () => {
-        const fixture = createFixture(downloader.scriptName);
-        const environment = stage === "probe"
-          ? { HARNESS_FAIL_PROBE: downloader.binaryName }
-          : { HARNESS_FAIL_STAGE: stage };
-        const result = runFixture(
-          fixture,
-          { architecture: "x86_64", os: "Linux" },
-          environment,
-        );
+      test(
+        `propagates ${stage} failure and removes temporary files`,
+        () => {
+          const fixture = createFixture(downloader.scriptName);
+          const environment =
+            stage === "probe"
+              ? { HARNESS_FAIL_PROBE: downloader.binaryName }
+              : { HARNESS_FAIL_STAGE: stage };
+          const result = runFixture(fixture, { architecture: "x86_64", os: "Linux" }, environment);
 
-        expect(result.status).toBe(expectedStatus);
-        expect(existsSync(fixture.temporaryDirectory)).toBe(false);
-        expect(commandLog(fixture)).toContain(`rm -rf ${fixture.temporaryDirectory}`);
-      }, DOWNLOADER_TEST_TIMEOUT_MS);
+          expect(result.status).toBe(expectedStatus);
+          expect(existsSync(fixture.temporaryDirectory)).toBe(false);
+          expect(commandLog(fixture)).toContain(`rm -rf ${fixture.temporaryDirectory}`);
+        },
+        DOWNLOADER_TEST_TIMEOUT_MS,
+      );
     }
 
-    test("propagates macOS signing failure and removes temporary files", () => {
-      const fixture = createFixture(downloader.scriptName);
-      const result = runFixture(
-        fixture,
-        { architecture: "arm64", os: "Darwin" },
-        { HARNESS_FAIL_STAGE: "codesign" },
-      );
+    test(
+      "propagates macOS signing failure and removes temporary files",
+      () => {
+        const fixture = createFixture(downloader.scriptName);
+        const result = runFixture(
+          fixture,
+          { architecture: "arm64", os: "Darwin" },
+          { HARNESS_FAIL_STAGE: "codesign" },
+        );
 
-      expect(result.status).toBe(32);
-      expect(commandLog(fixture)).not.toContain(`probe ${downloader.binaryName}`);
-      expect(existsSync(fixture.temporaryDirectory)).toBe(false);
-    }, DOWNLOADER_TEST_TIMEOUT_MS);
+        expect(result.status).toBe(32);
+        expect(commandLog(fixture)).not.toContain(`probe ${downloader.binaryName}`);
+        expect(existsSync(fixture.temporaryDirectory)).toBe(false);
+      },
+      DOWNLOADER_TEST_TIMEOUT_MS,
+    );
 
-    test("continues when removing an existing macOS signature fails", () => {
-      const fixture = createFixture(downloader.scriptName);
-      const result = runFixture(
-        fixture,
-        { architecture: "arm64", os: "Darwin" },
-        { HARNESS_FAIL_REMOVE_SIGNATURE: "1" },
-      );
+    test(
+      "continues when removing an existing macOS signature fails",
+      () => {
+        const fixture = createFixture(downloader.scriptName);
+        const result = runFixture(
+          fixture,
+          { architecture: "arm64", os: "Darwin" },
+          { HARNESS_FAIL_REMOVE_SIGNATURE: "1" },
+        );
 
-      expect(result.status).toBe(0);
-      expect(commandLog(fixture)).toContain(`probe ${downloader.binaryName} --version`);
-    }, DOWNLOADER_TEST_TIMEOUT_MS);
+        expect(result.status).toBe(0);
+        expect(commandLog(fixture)).toContain(`probe ${downloader.binaryName} --version`);
+      },
+      DOWNLOADER_TEST_TIMEOUT_MS,
+    );
   });
 }

@@ -1,12 +1,53 @@
-import http, { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import http, {
+  createServer,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from "node:http";
 import type { Socket } from "node:net";
 import { randomBytes } from "node:crypto";
 import { GatewayEventReplay } from "./gateway-event-replay.js";
 import { TerminalWebSocketGateway } from "./terminal-websocket-server.js";
 import type { GatewayTokenSettings } from "@orkestrator/protocol/web-client";
-import { GatewayTokenValidationError, normalizeGatewayToken } from "@orkestrator/protocol/gateway-token";
-import { AUTH_COOKIE, DEFAULT_GATEWAY_PORT, GATEWAY_PORT_FALLBACK_ATTEMPTS, KEEPALIVE_MS, BUFFERED_PROXY_BODY_IDLE_TIMEOUT_MS, DEFAULT_GATEWAY_REPLAY_HANDSHAKE_FRAME_CAPACITY, DEFAULT_GATEWAY_REPLAY_HANDSHAKE_MAX_BYTES, resolveGatewayCompressionMode, GatewayMetricsStore, parsePort, isAddressInUseError, isTailscaleAddress, selectTailscaleBindAddress, formatHostForUrl, isLoopbackAddress, parseAllowedOrigins, jsonResponse, getCookie, getBearerToken, authFilePath, loadOrCreateGatewayToken, persistGatewayToken } from "./gateway-internals.js";
-import type { BackendInvoker, NetworkInterfaceMap, ListenerKind, GatewayCompressionMode, GatewayStartInfo, OrkestratorGatewayOptions, EventClientWriter, GatewayEventClient, GatewayRequestMetrics } from "./gateway-internals.js";
+import {
+  GatewayTokenValidationError,
+  normalizeGatewayToken,
+} from "@orkestrator/protocol/gateway-token";
+import {
+  AUTH_COOKIE,
+  DEFAULT_GATEWAY_PORT,
+  GATEWAY_PORT_FALLBACK_ATTEMPTS,
+  KEEPALIVE_MS,
+  BUFFERED_PROXY_BODY_IDLE_TIMEOUT_MS,
+  DEFAULT_GATEWAY_REPLAY_HANDSHAKE_FRAME_CAPACITY,
+  DEFAULT_GATEWAY_REPLAY_HANDSHAKE_MAX_BYTES,
+  resolveGatewayCompressionMode,
+  GatewayMetricsStore,
+  parsePort,
+  isAddressInUseError,
+  isTailscaleAddress,
+  selectTailscaleBindAddress,
+  formatHostForUrl,
+  isLoopbackAddress,
+  parseAllowedOrigins,
+  jsonResponse,
+  getCookie,
+  getBearerToken,
+  authFilePath,
+  loadOrCreateGatewayToken,
+  persistGatewayToken,
+} from "./gateway-internals.js";
+import type {
+  BackendInvoker,
+  NetworkInterfaceMap,
+  ListenerKind,
+  GatewayCompressionMode,
+  GatewayStartInfo,
+  OrkestratorGatewayOptions,
+  EventClientWriter,
+  GatewayEventClient,
+  GatewayRequestMetrics,
+} from "./gateway-internals.js";
 
 export abstract class GatewayBase {
   protected readonly backend: BackendInvoker;
@@ -63,10 +104,7 @@ export abstract class GatewayBase {
 
   protected abstract gatewayCredentialMatches(candidate: string | null): boolean;
   protected abstract gatewayCredentialExpiresAt(candidate: string | null): number | null;
-  protected abstract isOriginAllowed(
-    request: IncomingMessage,
-    originValue: string,
-  ): boolean;
+  protected abstract isOriginAllowed(request: IncomingMessage, originValue: string): boolean;
   protected abstract handle(
     request: IncomingMessage,
     response: ServerResponse,
@@ -82,10 +120,7 @@ export abstract class GatewayBase {
     response: ServerResponse,
     url: URL,
   ): void;
-  protected abstract handleMetrics(
-    request: IncomingMessage,
-    response: ServerResponse,
-  ): void;
+  protected abstract handleMetrics(request: IncomingMessage, response: ServerResponse): void;
   protected abstract handleClientMetrics(
     request: IncomingMessage,
     response: ServerResponse,
@@ -136,20 +171,17 @@ export abstract class GatewayBase {
     this.webClientControl = options.webClientControl;
     this.compression = resolveGatewayCompressionMode(options.compression, this.env);
     this.keepaliveMs = options.keepaliveMs ?? KEEPALIVE_MS;
-    this.proxyBodyIdleTimeoutMs = options.proxyBodyIdleTimeoutMs ?? BUFFERED_PROXY_BODY_IDLE_TIMEOUT_MS;
-    this.eventReplay = new GatewayEventReplay(
-      randomBytes(16).toString("hex"),
-      options.eventReplay,
-    );
+    this.proxyBodyIdleTimeoutMs =
+      options.proxyBodyIdleTimeoutMs ?? BUFFERED_PROXY_BODY_IDLE_TIMEOUT_MS;
+    this.eventReplay = new GatewayEventReplay(randomBytes(16).toString("hex"), options.eventReplay);
     this.replayHandshakeFrameCapacity = Math.max(
       1,
-      options.eventReplay?.handshakeFrameCapacity
-        ?? DEFAULT_GATEWAY_REPLAY_HANDSHAKE_FRAME_CAPACITY,
+      options.eventReplay?.handshakeFrameCapacity ??
+        DEFAULT_GATEWAY_REPLAY_HANDSHAKE_FRAME_CAPACITY,
     );
     this.replayHandshakeMaxBytes = Math.max(
       0,
-      options.eventReplay?.handshakeMaxBytes
-        ?? DEFAULT_GATEWAY_REPLAY_HANDSHAKE_MAX_BYTES,
+      options.eventReplay?.handshakeMaxBytes ?? DEFAULT_GATEWAY_REPLAY_HANDSHAKE_MAX_BYTES,
     );
     this.allowedOrigins = (
       options.allowedOrigins ?? parseAllowedOrigins(this.env.ORKESTRATOR_GATEWAY_ALLOWED_ORIGINS)
@@ -159,15 +191,20 @@ export abstract class GatewayBase {
     this.metrics = new GatewayMetricsStore(this.compression);
     this.terminalWebSocket = new TerminalWebSocketGateway({
       backend: this.backend,
-      tokenMatches: (request, suppliedToken) => this.gatewayCredentialMatches(
-        suppliedToken ?? getBearerToken(request.headers) ?? getCookie(request.headers, AUTH_COOKIE),
-      ),
-      credentialExpiresAt: (request, suppliedToken) => this.gatewayCredentialExpiresAt(
-        suppliedToken ?? getBearerToken(request.headers) ?? getCookie(request.headers, AUTH_COOKIE),
-      ),
-      originAllowed: (request) => Boolean(
-        request.headers.origin && this.isOriginAllowed(request, request.headers.origin),
-      ),
+      tokenMatches: (request, suppliedToken) =>
+        this.gatewayCredentialMatches(
+          suppliedToken ??
+            getBearerToken(request.headers) ??
+            getCookie(request.headers, AUTH_COOKIE),
+        ),
+      credentialExpiresAt: (request, suppliedToken) =>
+        this.gatewayCredentialExpiresAt(
+          suppliedToken ??
+            getBearerToken(request.headers) ??
+            getCookie(request.headers, AUTH_COOKIE),
+        ),
+      originAllowed: (request) =>
+        Boolean(request.headers.origin && this.isOriginAllowed(request, request.headers.origin)),
       logger: this.logger,
     });
   }
@@ -179,28 +216,40 @@ export abstract class GatewayBase {
     }
 
     const tailscaleBindAddress = selectTailscaleBindAddress(this.interfaces);
-    const bindAddress = this.bindAddress
-      ?? this.env.ORKESTRATOR_GATEWAY_HOST
-      ?? tailscaleBindAddress
-      ?? this.fallbackBindAddress;
+    const bindAddress =
+      this.bindAddress ??
+      this.env.ORKESTRATOR_GATEWAY_HOST ??
+      tailscaleBindAddress ??
+      this.fallbackBindAddress;
     if (!bindAddress && !this.controlBindAddress) {
       this.logger.warn("[RemoteGateway] No Tailscale address found; gateway not started");
       return null;
     }
-    const usingFallback = !this.bindAddress
-      && !this.env.ORKESTRATOR_GATEWAY_HOST
-      && !tailscaleBindAddress
-      && this.fallbackBindAddress === bindAddress;
+    const usingFallback =
+      !this.bindAddress &&
+      !this.env.ORKESTRATOR_GATEWAY_HOST &&
+      !tailscaleBindAddress &&
+      this.fallbackBindAddress === bindAddress;
     if (usingFallback) {
-      this.logger.warn(`[RemoteGateway] No Tailscale address found; falling back to ${this.fallbackBindAddress}`);
+      this.logger.warn(
+        `[RemoteGateway] No Tailscale address found; falling back to ${this.fallbackBindAddress}`,
+      );
     }
-    const safeLoopbackFallback = usingFallback && bindAddress !== undefined && isLoopbackAddress(bindAddress);
-    if (bindAddress && !this.allowNonTailscaleBind && !safeLoopbackFallback && !isTailscaleAddress(bindAddress)) {
+    const safeLoopbackFallback =
+      usingFallback && bindAddress !== undefined && isLoopbackAddress(bindAddress);
+    if (
+      bindAddress &&
+      !this.allowNonTailscaleBind &&
+      !safeLoopbackFallback &&
+      !isTailscaleAddress(bindAddress)
+    ) {
       throw new Error(`Refusing to bind gateway to non-Tailscale address: ${bindAddress}`);
     }
 
     const port = this.port ?? parsePort(this.env.ORKESTRATOR_GATEWAY_PORT, DEFAULT_GATEWAY_PORT);
-    const auth = await this.enqueueTokenOperation(() => loadOrCreateGatewayToken(this.dataDir, this.env));
+    const auth = await this.enqueueTokenOperation(() =>
+      loadOrCreateGatewayToken(this.dataDir, this.env),
+    );
     this.token = auth.token;
     this.authFile = auth.authFile;
 
@@ -209,7 +258,11 @@ export abstract class GatewayBase {
       if (!isLoopbackAddress(this.controlBindAddress)) {
         throw new Error(`Control listener must use a loopback address: ${this.controlBindAddress}`);
       }
-      controlListener = await this.listen(this.controlBindAddress, this.controlPort ?? 0, "control");
+      controlListener = await this.listen(
+        this.controlBindAddress,
+        this.controlPort ?? 0,
+        "control",
+      );
       this.logger.info(`[BackendControl] Listening on ${controlListener.url}`);
     }
 
@@ -226,7 +279,9 @@ export abstract class GatewayBase {
       }
     } else {
       browserError = "No Tailscale address was found";
-      this.logger.warn(`[RemoteGateway] ${browserError}; desktop control listener remains available`);
+      this.logger.warn(
+        `[RemoteGateway] ${browserError}; desktop control listener remains available`,
+      );
     }
 
     const primaryListener = controlListener ?? browserListener;
@@ -282,7 +337,9 @@ export abstract class GatewayBase {
       this.handle(request, response, listenerKind).catch((error: unknown) => {
         this.logger.error("[RemoteGateway] Request failed:", error);
         if (!response.headersSent) {
-          jsonResponse(response, 500, { error: error instanceof Error ? error.message : String(error) });
+          jsonResponse(response, 500, {
+            error: error instanceof Error ? error.message : String(error),
+          });
         } else {
           response.destroy(error instanceof Error ? error : new Error(String(error)));
         }
@@ -388,30 +445,34 @@ export abstract class GatewayBase {
     // Destroy active sockets before awaiting close callbacks. A streaming
     // response can otherwise keep a listener's close callback pending forever.
     for (const socket of this.sockets) socket.destroy();
-    await Promise.all(servers.map((server) => new Promise<void>((resolve, reject) => {
-      let settled = false;
-      const settle = (error?: Error) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(callbackFallback);
-        if (error) reject(error);
-        else resolve();
-      };
-      // Bun's Node-HTTP compatibility layer can omit the close callback after a
-      // WebSocket upgrade even once every tracked raw socket is destroyed. The
-      // listener has already stopped accepting and all connections below are
-      // force-closed, so bound that bookkeeping wait instead of hanging backend
-      // shutdown forever.
-      const callbackFallback = setTimeout(() => settle(), 250);
-      callbackFallback.unref?.();
-      server.close((error) => settle(error ?? undefined));
-      // Explicitly disabling remote access must also revoke active keep-alive,
-      // static-file, and streaming proxy connections. `server.close()` alone
-      // waits indefinitely for active responses to finish.
-      server.closeAllConnections();
-    })));
+    await Promise.all(
+      servers.map(
+        (server) =>
+          new Promise<void>((resolve, reject) => {
+            let settled = false;
+            const settle = (error?: Error) => {
+              if (settled) return;
+              settled = true;
+              clearTimeout(callbackFallback);
+              if (error) reject(error);
+              else resolve();
+            };
+            // Bun's Node-HTTP compatibility layer can omit the close callback after a
+            // WebSocket upgrade even once every tracked raw socket is destroyed. The
+            // listener has already stopped accepting and all connections below are
+            // force-closed, so bound that bookkeeping wait instead of hanging backend
+            // shutdown forever.
+            const callbackFallback = setTimeout(() => settle(), 250);
+            callbackFallback.unref?.();
+            server.close((error) => settle(error ?? undefined));
+            // Explicitly disabling remote access must also revoke active keep-alive,
+            // static-file, and streaming proxy connections. `server.close()` alone
+            // waits indefinitely for active responses to finish.
+            server.closeAllConnections();
+          }),
+      ),
+    );
     this.sockets.clear();
     this.servers.clear();
   }
-
 }

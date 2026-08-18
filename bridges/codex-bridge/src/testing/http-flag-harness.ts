@@ -60,9 +60,7 @@ async function main(): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   if (!ready) {
-    throw new Error(
-      `app-server did not become ready within 5 seconds (last state: ${lastState})`,
-    );
+    throw new Error(`app-server did not become ready within 5 seconds (last state: ${lastState})`);
   }
 
   await record("health", await app.request("/global/health"));

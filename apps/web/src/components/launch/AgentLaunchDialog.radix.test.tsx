@@ -63,7 +63,9 @@ function Harness({
   const triggerName = kind === "resolve-conflicts" ? "Open resolve dialog" : "Open PR dialog";
   return (
     <>
-      <button ref={triggerRef} type="button" onClick={() => setOpen(true)}>{triggerName}</button>
+      <button ref={triggerRef} type="button" onClick={() => setOpen(true)}>
+        {triggerName}
+      </button>
       <AgentLaunchDialog
         kind={kind}
         open={open}
@@ -86,7 +88,9 @@ function DisconnectedTriggerHarness() {
   const fallbackRef = useRef<HTMLButtonElement>(null);
   return (
     <>
-      <button ref={fallbackRef} type="button">Open tools</button>
+      <button ref={fallbackRef} type="button">
+        Open tools
+      </button>
       <AgentLaunchDialog
         open={open}
         onOpenChange={setOpen}
@@ -113,8 +117,12 @@ function CollapsedTriggerHarness() {
   const fallbackRef = useRef<HTMLButtonElement>(null);
   return (
     <>
-      <button ref={triggerRef} type="button">Create PR</button>
-      <button ref={fallbackRef} type="button">Open tools</button>
+      <button ref={triggerRef} type="button">
+        Create PR
+      </button>
+      <button ref={fallbackRef} type="button">
+        Open tools
+      </button>
       <AgentLaunchDialog
         open={open}
         onOpenChange={setOpen}

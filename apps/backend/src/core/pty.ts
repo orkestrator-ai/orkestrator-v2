@@ -64,7 +64,9 @@ export function spawnPty(command: string, args: string[], options: SpawnPtyOptio
     throw new Error("Orkestrator's Bun PTY does not support Windows. Use macOS or Linux.");
   }
   if (typeof Bun.Terminal !== "function") {
-    throw new Error("This Bun version does not support native terminal sessions. Upgrade Bun before starting Orkestrator.");
+    throw new Error(
+      "This Bun version does not support native terminal sessions. Upgrade Bun before starting Orkestrator.",
+    );
   }
 
   const dataListeners = new Set<(data: string) => void>();

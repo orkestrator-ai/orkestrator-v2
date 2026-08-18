@@ -76,9 +76,7 @@ describe("agent upgrade runbook contracts", () => {
     // `download:<claude|codex|opencode>` is a documented placeholder, not a
     // script name. Capture any trailing `<` so those are recognisable and drop
     // them — a lookahead would just backtrack into the shorter `download`.
-    const invocations = [
-      ...runbook.matchAll(/\bbun run (?:--cwd (\S+) )?([\w:-]+<?)/g),
-    ]
+    const invocations = [...runbook.matchAll(/\bbun run (?:--cwd (\S+) )?([\w:-]+<?)/g)]
       .map((match) => ({ workspace: match[1], script: match[2] }))
       .filter(({ script }) => !script.includes("<"));
 

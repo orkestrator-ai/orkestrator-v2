@@ -81,74 +81,72 @@ import { StorageSessions } from "./storage-sessions.ts";
 
 export type StorageLayerTypes = [
   AgentInteractionOrigin,
-    AgentInteractionPolicy,
-    AgentInteractionResolutionJournal,
-    StoredDesktopConnections,
-    FeaturePlanningRecord,
-    BuildPipelineAgent,
-    PaneLayoutMergeInput,
-    PaneLayoutSelectionIntent,
-    ConditionalResourceSnapshot<unknown>,
-    ResourceChange,
-    ResourceKind,
-    ResourceManifestKind,
-    ResourceRevisionManifest,
-    ResourceRevisionMap,
-    ResourceSnapshotRevision,
-    AgentModel,
-    AgentActivityState,
-    AgentActivitySource,
-    AgentModelCatalogCache,
-    AgentModelConfigKey,
-    AppConfig,
-    ClaudeModelCatalogSnapshot,
-    ClaudeModelCatalogEntry,
-    CodexModelCatalogEntry,
-    CodexReasoningEffort,
-    Environment,
-    EnvironmentStatus,
-    EnvironmentType,
-    OpenCodeModelCatalogEntry,
-    OpenCodeModelCatalogSnapshot,
-    PortMapping,
-    PrState,
-    Project,
-    PersistedPaneLayout,
-    PersistedLoopedReviewWorkflow,
-    PersistedMultiReviewWorkflow,
-    PersistedBuildPipeline,
-    PersistedNativeAgentSession,
-    PersistedNativeAgentPendingDispatch,
-    PersistedComposeDraft,
-    PersistedFileDraft,
-    PersistedPromptQueue,
-    PersistedAgentHandoff,
-    RepositoryConfig,
-    Session,
-    SessionType,
-    JsonRecord,
-    KanbanComment,
-    KanbanImage,
-    KanbanStatus,
-    MutablePaneLayoutLeaf,
-    KanbanTask,
-    ProjectNotes,
-    FeaturePlanStatus,
-    FeaturePlanMessage,
-    FeatureStoryCard,
-    FeaturePlan,
-    LinearAuth,
-    LinearCompletionComment,
-    GitHubCompletionComment,
-    LoadedNativeAgentSessions,
-    PersistedOpenCodeModelCatalogStore,
-    ResourceChangeListener
+  AgentInteractionPolicy,
+  AgentInteractionResolutionJournal,
+  StoredDesktopConnections,
+  FeaturePlanningRecord,
+  BuildPipelineAgent,
+  PaneLayoutMergeInput,
+  PaneLayoutSelectionIntent,
+  ConditionalResourceSnapshot<unknown>,
+  ResourceChange,
+  ResourceKind,
+  ResourceManifestKind,
+  ResourceRevisionManifest,
+  ResourceRevisionMap,
+  ResourceSnapshotRevision,
+  AgentModel,
+  AgentActivityState,
+  AgentActivitySource,
+  AgentModelCatalogCache,
+  AgentModelConfigKey,
+  AppConfig,
+  ClaudeModelCatalogSnapshot,
+  ClaudeModelCatalogEntry,
+  CodexModelCatalogEntry,
+  CodexReasoningEffort,
+  Environment,
+  EnvironmentStatus,
+  EnvironmentType,
+  OpenCodeModelCatalogEntry,
+  OpenCodeModelCatalogSnapshot,
+  PortMapping,
+  PrState,
+  Project,
+  PersistedPaneLayout,
+  PersistedLoopedReviewWorkflow,
+  PersistedMultiReviewWorkflow,
+  PersistedBuildPipeline,
+  PersistedNativeAgentSession,
+  PersistedNativeAgentPendingDispatch,
+  PersistedComposeDraft,
+  PersistedFileDraft,
+  PersistedPromptQueue,
+  PersistedAgentHandoff,
+  RepositoryConfig,
+  Session,
+  SessionType,
+  JsonRecord,
+  KanbanComment,
+  KanbanImage,
+  KanbanStatus,
+  MutablePaneLayoutLeaf,
+  KanbanTask,
+  ProjectNotes,
+  FeaturePlanStatus,
+  FeaturePlanMessage,
+  FeatureStoryCard,
+  FeaturePlan,
+  LinearAuth,
+  LinearCompletionComment,
+  GitHubCompletionComment,
+  LoadedNativeAgentSessions,
+  PersistedOpenCodeModelCatalogStore,
+  ResourceChangeListener,
 ];
 
 export abstract class StorageReviews extends StorageSessions {
-  async getLoopedReviewWorkflow(
-    workflowId: string,
-  ): Promise<PersistedLoopedReviewWorkflow | null> {
+  async getLoopedReviewWorkflow(workflowId: string): Promise<PersistedLoopedReviewWorkflow | null> {
     if (!isNonBlankString(workflowId)) {
       throw new Error("Looped review workflow ID must not be blank");
     }
@@ -157,14 +155,10 @@ export abstract class StorageReviews extends StorageSessions {
       () => ({}),
     );
     const workflow = workflows[workflowId];
-    return isPersistedLoopedReviewWorkflow(workflow, workflowId)
-      ? workflow
-      : null;
+    return isPersistedLoopedReviewWorkflow(workflow, workflowId) ? workflow : null;
   }
 
-  async listLoopedReviewWorkflows(
-    environmentId: string,
-  ): Promise<PersistedLoopedReviewWorkflow[]> {
+  async listLoopedReviewWorkflows(environmentId: string): Promise<PersistedLoopedReviewWorkflow[]> {
     if (!isNonBlankString(environmentId)) {
       throw new Error("Looped review environment ID must not be blank");
     }
@@ -173,9 +167,10 @@ export abstract class StorageReviews extends StorageSessions {
       () => ({}),
     );
     return Object.entries(workflows)
-      .filter(([workflowId, workflow]) =>
-        isPersistedLoopedReviewWorkflow(workflow, workflowId)
-        && workflow.environmentId === environmentId
+      .filter(
+        ([workflowId, workflow]) =>
+          isPersistedLoopedReviewWorkflow(workflow, workflowId) &&
+          workflow.environmentId === environmentId,
       )
       .map(([, workflow]) => workflow)
       .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
@@ -226,11 +221,8 @@ export abstract class StorageReviews extends StorageSessions {
       throw new Error("Looped review expected revision must be a non-negative integer");
     }
     if (
-      controllerFence !== undefined
-      && (
-        !isNonBlankString(controllerFence.ownerId)
-        || !isNonBlankString(controllerFence.token)
-      )
+      controllerFence !== undefined &&
+      (!isNonBlankString(controllerFence.ownerId) || !isNonBlankString(controllerFence.token))
     ) {
       throw new Error("Looped review controller fence is invalid");
     }
@@ -250,7 +242,7 @@ export abstract class StorageReviews extends StorageSessions {
     }
 
     return this.enqueueLoopedReviewMutation(async () => {
-      if (!await this.getEnvironment(environmentId)) {
+      if (!(await this.getEnvironment(environmentId))) {
         throw new Error(`Environment not found: ${environmentId}`);
       }
       const storedWorkflows = await this.loadJson<Record<string, PersistedLoopedReviewWorkflow>>(
@@ -259,31 +251,32 @@ export abstract class StorageReviews extends StorageSessions {
       );
       const workflows = Object.fromEntries(
         Object.entries(storedWorkflows).filter(([storedId, workflow]) =>
-          isPersistedLoopedReviewWorkflow(workflow, storedId)
+          isPersistedLoopedReviewWorkflow(workflow, storedId),
         ),
       ) as Record<string, PersistedLoopedReviewWorkflow>;
       const previous = workflows[workflowId];
       if (previous && previous.environmentId !== environmentId) {
         throw new Error("Looped review workflow belongs to another environment");
       }
-      if (options?.rejectStoredVersionAtLeast !== undefined
-        && (previous?.version ?? 0) >= options.rejectStoredVersionAtLeast) {
-        throw new Error("Backend-owned looped reviews can only be changed through workflow commands");
+      if (
+        options?.rejectStoredVersionAtLeast !== undefined &&
+        (previous?.version ?? 0) >= options.rejectStoredVersionAtLeast
+      ) {
+        throw new Error(
+          "Backend-owned looped reviews can only be changed through workflow commands",
+        );
       }
       if (controllerFence) {
         const lease = previous?.controllerLease;
         if (
-          lease?.ownerId !== controllerFence.ownerId
-          || lease.token !== controllerFence.token
-          || Date.parse(lease.expiresAt) <= Date.now()
+          lease?.ownerId !== controllerFence.ownerId ||
+          lease.token !== controllerFence.token ||
+          Date.parse(lease.expiresAt) <= Date.now()
         ) {
           throw new Error("Looped review controller lease conflict");
         }
       }
-      if (
-        expectedRevision !== undefined
-        && (previous?.revision ?? 0) !== expectedRevision
-      ) {
+      if (expectedRevision !== undefined && (previous?.revision ?? 0) !== expectedRevision) {
         throw new Error("Looped review workflow revision conflict");
       }
       const saved: PersistedLoopedReviewWorkflow = {
@@ -293,9 +286,7 @@ export abstract class StorageReviews extends StorageSessions {
         snapshot,
         updatedAt: nowIso(),
         revision: (previous?.revision ?? 0) + 1,
-        ...(previous?.controllerLease
-          ? { controllerLease: previous.controllerLease }
-          : {}),
+        ...(previous?.controllerLease ? { controllerLease: previous.controllerLease } : {}),
       };
       workflows[workflowId] = saved;
       await this.saveSensitiveJson(this.loopedReviewsFile(), workflows);
@@ -316,9 +307,10 @@ export abstract class StorageReviews extends StorageSessions {
       throw new Error("Looped review controller lease is invalid");
     }
     return this.enqueueLoopedReviewMutation(async () => {
-      const workflows = await this.loadJson<
-        Record<string, PersistedLoopedReviewWorkflow>
-      >(this.loopedReviewsFile(), () => ({}));
+      const workflows = await this.loadJson<Record<string, PersistedLoopedReviewWorkflow>>(
+        this.loopedReviewsFile(),
+        () => ({}),
+      );
       const workflow = workflows[workflowId];
       if (!isPersistedLoopedReviewWorkflow(workflow, workflowId)) {
         throw new Error(`Looped review workflow not found: ${workflowId}`);
@@ -328,9 +320,9 @@ export abstract class StorageReviews extends StorageSessions {
         ? Date.parse(workflow.controllerLease.expiresAt)
         : 0;
       if (
-        workflow.controllerLease
-        && workflow.controllerLease.ownerId !== ownerId
-        && currentExpiry > now
+        workflow.controllerLease &&
+        workflow.controllerLease.ownerId !== ownerId &&
+        currentExpiry > now
       ) {
         return {
           granted: false,
@@ -339,9 +331,9 @@ export abstract class StorageReviews extends StorageSessions {
         };
       }
       const heldLease =
-        workflow.controllerLease?.ownerId === ownerId
-        && currentExpiry > now
-        && isNonBlankString(workflow.controllerLease.token)
+        workflow.controllerLease?.ownerId === ownerId &&
+        currentExpiry > now &&
+        isNonBlankString(workflow.controllerLease.token)
           ? workflow.controllerLease
           : null;
       // Re-granting an unexpired lease to its own holder is the overwhelmingly
@@ -370,23 +362,22 @@ export abstract class StorageReviews extends StorageSessions {
     ownerId: string,
     token: string,
   ): Promise<boolean> {
-    if (
-      !isNonBlankString(workflowId)
-      || !isNonBlankString(ownerId)
-      || !isNonBlankString(token)
-    ) {
+    if (!isNonBlankString(workflowId) || !isNonBlankString(ownerId) || !isNonBlankString(token)) {
       return false;
     }
     return this.enqueueLoopedReviewMutation(async () => {
-      const workflows = await this.loadJson<
-        Record<string, PersistedLoopedReviewWorkflow>
-      >(this.loopedReviewsFile(), () => ({}));
+      const workflows = await this.loadJson<Record<string, PersistedLoopedReviewWorkflow>>(
+        this.loopedReviewsFile(),
+        () => ({}),
+      );
       const workflow = workflows[workflowId];
       if (!isPersistedLoopedReviewWorkflow(workflow, workflowId)) return false;
       const lease = workflow.controllerLease;
-      return lease?.ownerId === ownerId
-        && lease.token === token
-        && Date.parse(lease.expiresAt) > Date.now();
+      return (
+        lease?.ownerId === ownerId &&
+        lease.token === token &&
+        Date.parse(lease.expiresAt) > Date.now()
+      );
     });
   }
 
@@ -395,22 +386,19 @@ export abstract class StorageReviews extends StorageSessions {
     ownerId: string,
     token: string,
   ): Promise<void> {
-    if (
-      !isNonBlankString(workflowId)
-      || !isNonBlankString(ownerId)
-      || !isNonBlankString(token)
-    ) {
+    if (!isNonBlankString(workflowId) || !isNonBlankString(ownerId) || !isNonBlankString(token)) {
       return;
     }
     await this.enqueueLoopedReviewMutation(async () => {
-      const workflows = await this.loadJson<
-        Record<string, PersistedLoopedReviewWorkflow>
-      >(this.loopedReviewsFile(), () => ({}));
+      const workflows = await this.loadJson<Record<string, PersistedLoopedReviewWorkflow>>(
+        this.loopedReviewsFile(),
+        () => ({}),
+      );
       const workflow = workflows[workflowId];
       if (
-        !isPersistedLoopedReviewWorkflow(workflow, workflowId)
-        || workflow.controllerLease?.ownerId !== ownerId
-        || workflow.controllerLease.token !== token
+        !isPersistedLoopedReviewWorkflow(workflow, workflowId) ||
+        workflow.controllerLease?.ownerId !== ownerId ||
+        workflow.controllerLease.token !== token
       ) {
         return;
       }
@@ -431,7 +419,7 @@ export abstract class StorageReviews extends StorageSessions {
       );
       const workflows = Object.fromEntries(
         Object.entries(storedWorkflows).filter(([storedId, workflow]) =>
-          isPersistedLoopedReviewWorkflow(workflow, storedId)
+          isPersistedLoopedReviewWorkflow(workflow, storedId),
         ),
       ) as Record<string, PersistedLoopedReviewWorkflow>;
       if (!(workflowId in workflows)) return;
@@ -441,9 +429,7 @@ export abstract class StorageReviews extends StorageSessions {
     });
   }
 
-  async deleteLoopedReviewWorkflowsByEnvironment(
-    environmentId: string,
-  ): Promise<void> {
+  async deleteLoopedReviewWorkflowsByEnvironment(environmentId: string): Promise<void> {
     if (!isNonBlankString(environmentId)) {
       throw new Error("Looped review environment ID must not be blank");
     }
@@ -453,15 +439,17 @@ export abstract class StorageReviews extends StorageSessions {
         () => ({}),
       );
       const workflows = Object.fromEntries(
-        Object.entries(storedWorkflows).filter(([storedId, workflow]) =>
-          isPersistedLoopedReviewWorkflow(workflow, storedId)
-          && workflow.environmentId !== environmentId
+        Object.entries(storedWorkflows).filter(
+          ([storedId, workflow]) =>
+            isPersistedLoopedReviewWorkflow(workflow, storedId) &&
+            workflow.environmentId !== environmentId,
         ),
       ) as Record<string, PersistedLoopedReviewWorkflow>;
       const removedIds = Object.entries(storedWorkflows)
-        .filter(([storedId, workflow]) =>
-          isPersistedLoopedReviewWorkflow(workflow, storedId)
-          && workflow.environmentId === environmentId,
+        .filter(
+          ([storedId, workflow]) =>
+            isPersistedLoopedReviewWorkflow(workflow, storedId) &&
+            workflow.environmentId === environmentId,
         )
         .map(([storedId]) => storedId);
       if (removedIds.length === 0) return;
@@ -475,40 +463,43 @@ export abstract class StorageReviews extends StorageSessions {
       await this.scrubSensitiveJsonBackups(
         this.loopedReviewsFile(),
         (storedId, workflow) =>
-          isPersistedLoopedReviewWorkflow(workflow, storedId)
-          && workflow.environmentId !== environmentId,
+          isPersistedLoopedReviewWorkflow(workflow, storedId) &&
+          workflow.environmentId !== environmentId,
       );
     });
   }
 
-  async getMultiReviewWorkflow(
-    workflowId: string,
-  ): Promise<PersistedMultiReviewWorkflow | null> {
-    if (!isNonBlankString(workflowId)) throw new Error("Multi review workflow ID must not be blank");
+  async getMultiReviewWorkflow(workflowId: string): Promise<PersistedMultiReviewWorkflow | null> {
+    if (!isNonBlankString(workflowId))
+      throw new Error("Multi review workflow ID must not be blank");
     const workflows = await this.loadJson<Record<string, PersistedMultiReviewWorkflow>>(
-      this.multiReviewsFile(), () => ({}),
+      this.multiReviewsFile(),
+      () => ({}),
     );
     const workflow = workflows[workflowId];
     return isPersistedMultiReviewWorkflow(workflow, workflowId) ? workflow : null;
   }
 
-  async listMultiReviewWorkflows(
-    environmentId: string,
-  ): Promise<PersistedMultiReviewWorkflow[]> {
-    if (!isNonBlankString(environmentId)) throw new Error("Multi review environment ID must not be blank");
+  async listMultiReviewWorkflows(environmentId: string): Promise<PersistedMultiReviewWorkflow[]> {
+    if (!isNonBlankString(environmentId))
+      throw new Error("Multi review environment ID must not be blank");
     const workflows = await this.loadJson<Record<string, PersistedMultiReviewWorkflow>>(
-      this.multiReviewsFile(), () => ({}),
+      this.multiReviewsFile(),
+      () => ({}),
     );
     return Object.entries(workflows)
-      .filter(([id, workflow]) => isPersistedMultiReviewWorkflow(workflow, id)
-        && workflow.environmentId === environmentId)
+      .filter(
+        ([id, workflow]) =>
+          isPersistedMultiReviewWorkflow(workflow, id) && workflow.environmentId === environmentId,
+      )
       .map(([, workflow]) => workflow)
       .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
   }
 
   async listAllMultiReviewWorkflows(): Promise<PersistedMultiReviewWorkflow[]> {
     const workflows = await this.loadJson<Record<string, PersistedMultiReviewWorkflow>>(
-      this.multiReviewsFile(), () => ({}),
+      this.multiReviewsFile(),
+      () => ({}),
     );
     return Object.entries(workflows)
       .filter(([id, workflow]) => isPersistedMultiReviewWorkflow(workflow, id))
@@ -538,21 +529,26 @@ export abstract class StorageReviews extends StorageSessions {
       throw new Error("Multi review snapshot exceeds the 32 MB limit");
     }
     return this.enqueueMultiReviewMutation(async () => {
-      if (!await this.getEnvironment(environmentId)) throw new Error(`Environment not found: ${environmentId}`);
+      if (!(await this.getEnvironment(environmentId)))
+        throw new Error(`Environment not found: ${environmentId}`);
       const stored = await this.loadJson<Record<string, PersistedMultiReviewWorkflow>>(
-        this.multiReviewsFile(), () => ({}),
+        this.multiReviewsFile(),
+        () => ({}),
       );
-      const workflows = Object.fromEntries(Object.entries(stored).filter(([id, value]) =>
-        isPersistedMultiReviewWorkflow(value, id))) as Record<string, PersistedMultiReviewWorkflow>;
+      const workflows = Object.fromEntries(
+        Object.entries(stored).filter(([id, value]) => isPersistedMultiReviewWorkflow(value, id)),
+      ) as Record<string, PersistedMultiReviewWorkflow>;
       const previous = workflows[workflowId];
       if (previous && previous.environmentId !== environmentId) {
         throw new Error("Multi review workflow belongs to another environment");
       }
       if (controllerFence) {
         const lease = previous?.controllerLease;
-        if (lease?.ownerId !== controllerFence.ownerId
-          || lease.token !== controllerFence.token
-          || Date.parse(lease.expiresAt) <= Date.now()) {
+        if (
+          lease?.ownerId !== controllerFence.ownerId ||
+          lease.token !== controllerFence.token ||
+          Date.parse(lease.expiresAt) <= Date.now()
+        ) {
           throw new Error("Multi review controller lease conflict");
         }
       }
@@ -560,7 +556,11 @@ export abstract class StorageReviews extends StorageSessions {
         throw new Error("Multi review workflow revision conflict");
       }
       const saved: PersistedMultiReviewWorkflow = {
-        version, id: workflowId, environmentId, snapshot, updatedAt: nowIso(),
+        version,
+        id: workflowId,
+        environmentId,
+        snapshot,
+        updatedAt: nowIso(),
         revision: (previous?.revision ?? 0) + 1,
         ...(previous?.controllerLease ? { controllerLease: previous.controllerLease } : {}),
       };
@@ -594,22 +594,32 @@ export abstract class StorageReviews extends StorageSessions {
       throw new Error("Multi review snapshot exceeds the 32 MB limit");
     }
     return this.enqueueMultiReviewMutation(async () => {
-      if (!await this.getEnvironment(environmentId)) {
+      if (!(await this.getEnvironment(environmentId))) {
         throw new Error(`Environment not found: ${environmentId}`);
       }
       const stored = await this.loadJson<Record<string, PersistedMultiReviewWorkflow>>(
-        this.multiReviewsFile(), () => ({}),
+        this.multiReviewsFile(),
+        () => ({}),
       );
-      const workflows = Object.fromEntries(Object.entries(stored).filter(([id, value]) =>
-        isPersistedMultiReviewWorkflow(value, id))) as Record<string, PersistedMultiReviewWorkflow>;
-      if (workflows[workflowId]) throw new Error(`Multi review workflow already exists: ${workflowId}`);
-      const hasActive = Object.values(workflows).some((workflow) =>
-        workflow.environmentId === environmentId
-        && isMultiReviewWorkflow(workflow.snapshot)
-        && !isMultiReviewTerminalPhase(workflow.snapshot.phase));
+      const workflows = Object.fromEntries(
+        Object.entries(stored).filter(([id, value]) => isPersistedMultiReviewWorkflow(value, id)),
+      ) as Record<string, PersistedMultiReviewWorkflow>;
+      if (workflows[workflowId])
+        throw new Error(`Multi review workflow already exists: ${workflowId}`);
+      const hasActive = Object.values(workflows).some(
+        (workflow) =>
+          workflow.environmentId === environmentId &&
+          isMultiReviewWorkflow(workflow.snapshot) &&
+          !isMultiReviewTerminalPhase(workflow.snapshot.phase),
+      );
       if (hasActive) return null;
       const saved: PersistedMultiReviewWorkflow = {
-        version, id: workflowId, environmentId, snapshot, updatedAt: nowIso(), revision: 1,
+        version,
+        id: workflowId,
+        environmentId,
+        snapshot,
+        updatedAt: nowIso(),
+        revision: 1,
       };
       workflows[workflowId] = saved;
       await this.saveSensitiveJson(this.multiReviewsFile(), workflows);
@@ -623,13 +633,19 @@ export abstract class StorageReviews extends StorageSessions {
     ownerId: string,
     leaseMs: number,
   ): Promise<{ granted: boolean; token: string; expiresAt: string }> {
-    if (!isNonBlankString(workflowId) || !isNonBlankString(ownerId)
-      || !Number.isSafeInteger(leaseMs) || leaseMs < 2_000 || leaseMs > 60_000) {
+    if (
+      !isNonBlankString(workflowId) ||
+      !isNonBlankString(ownerId) ||
+      !Number.isSafeInteger(leaseMs) ||
+      leaseMs < 2_000 ||
+      leaseMs > 60_000
+    ) {
       throw new Error("Multi review controller lease is invalid");
     }
     return this.enqueueMultiReviewMutation(async () => {
       const workflows = await this.loadJson<Record<string, PersistedMultiReviewWorkflow>>(
-        this.multiReviewsFile(), () => ({}),
+        this.multiReviewsFile(),
+        () => ({}),
       );
       const workflow = workflows[workflowId];
       if (!isPersistedMultiReviewWorkflow(workflow, workflowId)) {
@@ -637,18 +653,25 @@ export abstract class StorageReviews extends StorageSessions {
       }
       const now = Date.now();
       const expiry = workflow.controllerLease ? Date.parse(workflow.controllerLease.expiresAt) : 0;
-      if (workflow.controllerLease && workflow.controllerLease.ownerId !== ownerId && expiry > now) {
+      if (
+        workflow.controllerLease &&
+        workflow.controllerLease.ownerId !== ownerId &&
+        expiry > now
+      ) {
         return { granted: false, token: "", expiresAt: workflow.controllerLease.expiresAt };
       }
-      const held = workflow.controllerLease?.ownerId === ownerId && expiry > now
-        ? workflow.controllerLease : undefined;
+      const held =
+        workflow.controllerLease?.ownerId === ownerId && expiry > now
+          ? workflow.controllerLease
+          : undefined;
       if (held && expiry - now >= leaseMs / 2) {
         return { granted: true, token: held.token, expiresAt: held.expiresAt };
       }
       const token = held?.token ?? randomUUID();
       const expiresAt = new Date(now + leaseMs).toISOString();
       workflows[workflowId] = {
-        ...workflow, controllerLease: { ownerId, token, expiresAt },
+        ...workflow,
+        controllerLease: { ownerId, token, expiresAt },
       };
       await this.saveSensitiveJson(this.multiReviewsFile(), workflows);
       return { granted: true, token, expiresAt };
@@ -660,18 +683,21 @@ export abstract class StorageReviews extends StorageSessions {
     ownerId: string,
     token: string,
   ): Promise<boolean> {
-    if (!isNonBlankString(workflowId) || !isNonBlankString(ownerId)
-      || !isNonBlankString(token)) return false;
+    if (!isNonBlankString(workflowId) || !isNonBlankString(ownerId) || !isNonBlankString(token))
+      return false;
     return this.enqueueMultiReviewMutation(async () => {
       const workflows = await this.loadJson<Record<string, PersistedMultiReviewWorkflow>>(
-        this.multiReviewsFile(), () => ({}),
+        this.multiReviewsFile(),
+        () => ({}),
       );
       const workflow = workflows[workflowId];
       if (!isPersistedMultiReviewWorkflow(workflow, workflowId)) return false;
       const lease = workflow.controllerLease;
-      return lease?.ownerId === ownerId
-        && lease.token === token
-        && Date.parse(lease.expiresAt) > Date.now();
+      return (
+        lease?.ownerId === ownerId &&
+        lease.token === token &&
+        Date.parse(lease.expiresAt) > Date.now()
+      );
     });
   }
 
@@ -682,12 +708,16 @@ export abstract class StorageReviews extends StorageSessions {
   ): Promise<void> {
     await this.enqueueMultiReviewMutation(async () => {
       const workflows = await this.loadJson<Record<string, PersistedMultiReviewWorkflow>>(
-        this.multiReviewsFile(), () => ({}),
+        this.multiReviewsFile(),
+        () => ({}),
       );
       const workflow = workflows[workflowId];
-      if (!isPersistedMultiReviewWorkflow(workflow, workflowId)
-        || workflow.controllerLease?.ownerId !== ownerId
-        || workflow.controllerLease.token !== token) return;
+      if (
+        !isPersistedMultiReviewWorkflow(workflow, workflowId) ||
+        workflow.controllerLease?.ownerId !== ownerId ||
+        workflow.controllerLease.token !== token
+      )
+        return;
       const { controllerLease: _lease, ...released } = workflow;
       workflows[workflowId] = released;
       await this.saveSensitiveJson(this.multiReviewsFile(), workflows);
@@ -697,7 +727,8 @@ export abstract class StorageReviews extends StorageSessions {
   async deleteMultiReviewWorkflow(workflowId: string): Promise<void> {
     await this.enqueueMultiReviewMutation(async () => {
       const workflows = await this.loadJson<Record<string, PersistedMultiReviewWorkflow>>(
-        this.multiReviewsFile(), () => ({}),
+        this.multiReviewsFile(),
+        () => ({}),
       );
       if (!(workflowId in workflows)) return;
       delete workflows[workflowId];
@@ -709,33 +740,39 @@ export abstract class StorageReviews extends StorageSessions {
   async deleteMultiReviewWorkflowsByEnvironment(environmentId: string): Promise<void> {
     await this.enqueueMultiReviewMutation(async () => {
       const stored = await this.loadJson<Record<string, PersistedMultiReviewWorkflow>>(
-        this.multiReviewsFile(), () => ({}),
+        this.multiReviewsFile(),
+        () => ({}),
       );
       const removed = Object.entries(stored)
-        .filter(([id, workflow]) => isPersistedMultiReviewWorkflow(workflow, id)
-          && workflow.environmentId === environmentId)
+        .filter(
+          ([id, workflow]) =>
+            isPersistedMultiReviewWorkflow(workflow, id) &&
+            workflow.environmentId === environmentId,
+        )
         .map(([id]) => id);
       if (removed.length === 0) return;
-      const workflows = Object.fromEntries(Object.entries(stored).filter(([id, workflow]) =>
-        isPersistedMultiReviewWorkflow(workflow, id)
-        && workflow.environmentId !== environmentId));
+      const workflows = Object.fromEntries(
+        Object.entries(stored).filter(
+          ([id, workflow]) =>
+            isPersistedMultiReviewWorkflow(workflow, id) &&
+            workflow.environmentId !== environmentId,
+        ),
+      );
       await this.saveSensitiveJson(this.multiReviewsFile(), workflows);
       for (const id of removed) this.announce("multi-review", id);
       await this.scrubSensitiveJsonBackups(
         this.multiReviewsFile(),
-        (id, workflow) => isPersistedMultiReviewWorkflow(workflow, id)
-          && workflow.environmentId !== environmentId,
+        (id, workflow) =>
+          isPersistedMultiReviewWorkflow(workflow, id) && workflow.environmentId !== environmentId,
       );
     });
   }
 
-  protected async loadAgentInteractionResolutionJournal(): Promise<
-    AgentInteractionResolutionJournal
-  > {
-    const stored = await this.loadJson<unknown>(
-      this.agentInteractionJournalFile(),
-      () => ({ version: AGENT_INTERACTION_JOURNAL_VERSION, entries: [] }),
-    );
+  protected async loadAgentInteractionResolutionJournal(): Promise<AgentInteractionResolutionJournal> {
+    const stored = await this.loadJson<unknown>(this.agentInteractionJournalFile(), () => ({
+      version: AGENT_INTERACTION_JOURNAL_VERSION,
+      entries: [],
+    }));
     if (!isAgentInteractionResolutionJournal(stored)) {
       throw new Error("Stored agent interaction resolution journal is invalid");
     }
@@ -748,5 +785,4 @@ export abstract class StorageReviews extends StorageSessions {
    * unsynchronized read could return a journal that disagrees with the one an
    * in-flight update is about to persist.
    */
-
 }

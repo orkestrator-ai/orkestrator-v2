@@ -19,9 +19,7 @@ import { clearJsonFileCache } from "./json-file-cache.js";
 
 const PLUGINS_DIR = "/home/node/.claude/plugins";
 
-function installed(
-  plugins: InstalledPluginsFile["plugins"]
-): InstalledPluginsFile {
+function installed(plugins: InstalledPluginsFile["plugins"]): InstalledPluginsFile {
   return { version: 1, plugins };
 }
 
@@ -42,7 +40,7 @@ describe("remapInstalledPlugins", () => {
       PLUGINS_DIR,
       installed({
         market: [entry("/Users/alice/.claude/plugins/marketplaces/foo")],
-      })
+      }),
     );
 
     expect(result).toEqual([
@@ -53,7 +51,7 @@ describe("remapInstalledPlugins", () => {
   test("passes through paths that lack the .claude/plugins marker unchanged", () => {
     const result = remapInstalledPlugins(
       PLUGINS_DIR,
-      installed({ custom: [entry("/opt/custom/my-plugin")] })
+      installed({ custom: [entry("/opt/custom/my-plugin")] }),
     );
 
     expect(result).toEqual([{ type: "local", path: "/opt/custom/my-plugin" }]);
@@ -67,7 +65,7 @@ describe("remapInstalledPlugins", () => {
           entry("/x/.claude/plugins/../../../../../../../etc/passwd"),
           entry("/Users/bob/.claude/plugins/marketplaces/safe"),
         ],
-      })
+      }),
     );
 
     // Only the safe, in-bounds entry survives; the traversal entry is skipped.
@@ -85,7 +83,7 @@ describe("remapInstalledPlugins", () => {
           entry("/Users/a/.claude/plugins/marketplaces/two"),
         ],
         groupB: [entry("/opt/external/three")],
-      })
+      }),
     );
 
     expect(result).toEqual([
@@ -114,10 +112,7 @@ describe("plugin config resolution", () => {
     writeFile(join(home, ".claude.json"), JSON.stringify(value));
 
   /** Create a plugin directory complete with the manifest that makes it real. */
-  const makePlugin = async (
-    path: string,
-    manifest?: { name?: string; description?: string },
-  ) => {
+  const makePlugin = async (path: string, manifest?: { name?: string; description?: string }) => {
     await mkdir(join(path, ".claude-plugin"), { recursive: true });
     if (manifest) {
       await writeFile(join(path, ".claude-plugin", "plugin.json"), JSON.stringify(manifest));
@@ -169,11 +164,15 @@ describe("plugin config resolution", () => {
     });
 
     // Both slices come from the same file; a shared cache key would cross them.
-    expect(await loadProjectOverridesFromGlobal(cwd)).toEqual([{ type: "local", path: "/opt/mine" }]);
+    expect(await loadProjectOverridesFromGlobal(cwd)).toEqual([
+      { type: "local", path: "/opt/mine" },
+    ]);
     expect(await loadProjectOverridesFromGlobal(otherCwd)).toEqual([
       { type: "local", path: "/opt/theirs" },
     ]);
-    expect(await loadProjectOverridesFromGlobal(cwd)).toEqual([{ type: "local", path: "/opt/mine" }]);
+    expect(await loadProjectOverridesFromGlobal(cwd)).toEqual([
+      { type: "local", path: "/opt/mine" },
+    ]);
   });
 
   test("loads project plugins from .claude/plugins.json", async () => {
@@ -191,7 +190,9 @@ describe("plugin config resolution", () => {
     await mkdir(pluginsDir, { recursive: true });
     await writeFile(
       join(pluginsDir, "installed_plugins.json"),
-      JSON.stringify(installed({ market: [entry("/Users/alice/.claude/plugins/marketplaces/foo")] })),
+      JSON.stringify(
+        installed({ market: [entry("/Users/alice/.claude/plugins/marketplaces/foo")] }),
+      ),
     );
 
     expect(await loadCliInstalledPlugins()).toEqual([

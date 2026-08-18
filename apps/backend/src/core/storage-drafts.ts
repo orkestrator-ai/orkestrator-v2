@@ -85,68 +85,68 @@ import { StoragePrompts } from "./storage-prompts.ts";
 
 export type StorageLayerTypes = [
   AgentInteractionOrigin,
-    AgentInteractionPolicy,
-    AgentInteractionResolutionJournal,
-    StoredDesktopConnections,
-    FeaturePlanningRecord,
-    BuildPipelineAgent,
-    PaneLayoutMergeInput,
-    PaneLayoutSelectionIntent,
-    ConditionalResourceSnapshot<unknown>,
-    ResourceChange,
-    ResourceKind,
-    ResourceManifestKind,
-    ResourceRevisionManifest,
-    ResourceRevisionMap,
-    ResourceSnapshotRevision,
-    AgentModel,
-    AgentActivityState,
-    AgentActivitySource,
-    AgentModelCatalogCache,
-    AgentModelConfigKey,
-    AppConfig,
-    ClaudeModelCatalogSnapshot,
-    ClaudeModelCatalogEntry,
-    CodexModelCatalogEntry,
-    CodexReasoningEffort,
-    Environment,
-    EnvironmentStatus,
-    EnvironmentType,
-    OpenCodeModelCatalogEntry,
-    OpenCodeModelCatalogSnapshot,
-    PortMapping,
-    PrState,
-    Project,
-    PersistedPaneLayout,
-    PersistedLoopedReviewWorkflow,
-    PersistedMultiReviewWorkflow,
-    PersistedBuildPipeline,
-    PersistedNativeAgentSession,
-    PersistedNativeAgentPendingDispatch,
-    PersistedComposeDraft,
-    PersistedFileDraft,
-    PersistedPromptQueue,
-    PersistedAgentHandoff,
-    RepositoryConfig,
-    Session,
-    SessionType,
-    JsonRecord,
-    KanbanComment,
-    KanbanImage,
-    KanbanStatus,
-    MutablePaneLayoutLeaf,
-    KanbanTask,
-    ProjectNotes,
-    FeaturePlanStatus,
-    FeaturePlanMessage,
-    FeatureStoryCard,
-    FeaturePlan,
-    LinearAuth,
-    LinearCompletionComment,
-    GitHubCompletionComment,
-    LoadedNativeAgentSessions,
-    PersistedOpenCodeModelCatalogStore,
-    ResourceChangeListener
+  AgentInteractionPolicy,
+  AgentInteractionResolutionJournal,
+  StoredDesktopConnections,
+  FeaturePlanningRecord,
+  BuildPipelineAgent,
+  PaneLayoutMergeInput,
+  PaneLayoutSelectionIntent,
+  ConditionalResourceSnapshot<unknown>,
+  ResourceChange,
+  ResourceKind,
+  ResourceManifestKind,
+  ResourceRevisionManifest,
+  ResourceRevisionMap,
+  ResourceSnapshotRevision,
+  AgentModel,
+  AgentActivityState,
+  AgentActivitySource,
+  AgentModelCatalogCache,
+  AgentModelConfigKey,
+  AppConfig,
+  ClaudeModelCatalogSnapshot,
+  ClaudeModelCatalogEntry,
+  CodexModelCatalogEntry,
+  CodexReasoningEffort,
+  Environment,
+  EnvironmentStatus,
+  EnvironmentType,
+  OpenCodeModelCatalogEntry,
+  OpenCodeModelCatalogSnapshot,
+  PortMapping,
+  PrState,
+  Project,
+  PersistedPaneLayout,
+  PersistedLoopedReviewWorkflow,
+  PersistedMultiReviewWorkflow,
+  PersistedBuildPipeline,
+  PersistedNativeAgentSession,
+  PersistedNativeAgentPendingDispatch,
+  PersistedComposeDraft,
+  PersistedFileDraft,
+  PersistedPromptQueue,
+  PersistedAgentHandoff,
+  RepositoryConfig,
+  Session,
+  SessionType,
+  JsonRecord,
+  KanbanComment,
+  KanbanImage,
+  KanbanStatus,
+  MutablePaneLayoutLeaf,
+  KanbanTask,
+  ProjectNotes,
+  FeaturePlanStatus,
+  FeaturePlanMessage,
+  FeatureStoryCard,
+  FeaturePlan,
+  LinearAuth,
+  LinearCompletionComment,
+  GitHubCompletionComment,
+  LoadedNativeAgentSessions,
+  PersistedOpenCodeModelCatalogStore,
+  ResourceChangeListener,
 ];
 
 export abstract class StorageDrafts extends StoragePrompts {
@@ -165,8 +165,9 @@ export abstract class StorageDrafts extends StoragePrompts {
     if (!isNonBlankString(ownerId)) {
       throw new Error("Compose draft owner ID must not be blank");
     }
-    return Object.values(await this.loadComposeDrafts())
-      .filter((draft) => draft.ownerType === ownerType && draft.ownerId === ownerId);
+    return Object.values(await this.loadComposeDrafts()).filter(
+      (draft) => draft.ownerType === ownerType && draft.ownerId === ownerId,
+    );
   }
 
   async saveComposeDraft(
@@ -192,31 +193,22 @@ export abstract class StorageDrafts extends StoragePrompts {
     } catch {
       throw new Error("Compose draft value must be JSON serializable");
     }
-    if (
-      serialized === undefined
-      || Buffer.byteLength(serialized, "utf8") > 32 * 1024 * 1024
-    ) {
+    if (serialized === undefined || Buffer.byteLength(serialized, "utf8") > 32 * 1024 * 1024) {
       throw new Error("Compose draft exceeds the 32 MB limit");
     }
 
     return this.enqueueComposeDraftMutation(async () => {
       if (ownerType === "environment") {
         await this.assertEnvironmentAcceptsBackgroundState(ownerId, "Compose draft");
-      } else if (!await this.getProject(ownerId)) {
+      } else if (!(await this.getProject(ownerId))) {
         throw new Error(`Compose draft project not found: ${ownerId}`);
       }
       const drafts = await this.loadComposeDrafts();
       const previous = drafts[draftKey];
-      if (
-        previous
-        && (previous.ownerType !== ownerType || previous.ownerId !== ownerId)
-      ) {
+      if (previous && (previous.ownerType !== ownerType || previous.ownerId !== ownerId)) {
         throw new Error("Compose draft belongs to another owner");
       }
-      if (
-        expectedRevision !== undefined
-        && (previous?.revision ?? 0) !== expectedRevision
-      ) {
+      if (expectedRevision !== undefined && (previous?.revision ?? 0) !== expectedRevision) {
         throw new Error("Compose draft revision conflict");
       }
       const saved: PersistedComposeDraft = {
@@ -224,9 +216,7 @@ export abstract class StorageDrafts extends StoragePrompts {
         ownerType,
         ownerId,
         value,
-        ...(previous?.sourcePromptQueue
-          ? { sourcePromptQueue: previous.sourcePromptQueue }
-          : {}),
+        ...(previous?.sourcePromptQueue ? { sourcePromptQueue: previous.sourcePromptQueue } : {}),
         updatedAt: nowIso(),
         revision: (previous?.revision ?? 0) + 1,
       };
@@ -237,10 +227,7 @@ export abstract class StorageDrafts extends StoragePrompts {
     });
   }
 
-  async deleteComposeDraft(
-    draftKey: string,
-    expectedRevision?: number,
-  ): Promise<void> {
+  async deleteComposeDraft(draftKey: string, expectedRevision?: number): Promise<void> {
     if (!isNonBlankString(draftKey)) throw new Error("Compose draft key must not be blank");
     if (expectedRevision !== undefined && !isNonNegativeInteger(expectedRevision)) {
       throw new Error("Compose draft expected revision must be a non-negative integer");
@@ -249,11 +236,7 @@ export abstract class StorageDrafts extends StoragePrompts {
       const stored = await this.loadJson<unknown>(this.composeDraftsFile(), () => ({}));
       const drafts = this.validComposeDrafts(stored);
       const previous = drafts[draftKey];
-      if (
-        previous
-        && expectedRevision !== undefined
-        && previous.revision !== expectedRevision
-      ) {
+      if (previous && expectedRevision !== undefined && previous.revision !== expectedRevision) {
         throw new Error("Compose draft revision conflict");
       }
       const hasStoredKey = isRecord(stored) && Object.hasOwn(stored, draftKey);
@@ -269,8 +252,7 @@ export abstract class StorageDrafts extends StoragePrompts {
       // write without sanitizing the retained copies.
       await this.scrubSensitiveJsonBackups(
         this.composeDraftsFile(),
-        (storedKey, draft) =>
-          storedKey !== draftKey && isPersistedComposeDraft(draft, storedKey),
+        (storedKey, draft) => storedKey !== draftKey && isPersistedComposeDraft(draft, storedKey),
       );
     });
   }
@@ -282,9 +264,7 @@ export abstract class StorageDrafts extends StoragePrompts {
     await this.enqueueComposeDraftMutation(async () => {
       const drafts = await this.loadComposeDrafts();
       const keys = Object.values(drafts)
-        .filter((draft) =>
-          draft.ownerType === "environment" && draft.ownerId === environmentId
-        )
+        .filter((draft) => draft.ownerType === "environment" && draft.ownerId === environmentId)
         .map((draft) => draft.draftKey);
       for (const key of keys) delete drafts[key];
       if (keys.length > 0) {
@@ -294,11 +274,8 @@ export abstract class StorageDrafts extends StoragePrompts {
       await this.scrubSensitiveJsonBackups(
         this.composeDraftsFile(),
         (storedKey, draft) =>
-          isPersistedComposeDraft(draft, storedKey)
-          && (
-            draft.ownerType !== "environment"
-            || draft.ownerId !== environmentId
-          ),
+          isPersistedComposeDraft(draft, storedKey) &&
+          (draft.ownerType !== "environment" || draft.ownerId !== environmentId),
       );
     });
   }
@@ -320,18 +297,15 @@ export abstract class StorageDrafts extends StoragePrompts {
       await this.scrubSensitiveJsonBackups(
         this.composeDraftsFile(),
         (storedKey, draft) =>
-          isPersistedComposeDraft(draft, storedKey)
-          && (draft.ownerType !== "project" || draft.ownerId !== projectId),
+          isPersistedComposeDraft(draft, storedKey) &&
+          (draft.ownerType !== "project" || draft.ownerId !== projectId),
       );
     });
   }
 
   protected enqueueFileDraftMutation<T>(operation: () => Promise<T>): Promise<T> {
     const run = async () => {
-      const release = await this.acquireMutationLock(
-        this.fileDraftsFile(),
-        "file draft storage",
-      );
+      const release = await this.acquireMutationLock(this.fileDraftsFile(), "file draft storage");
       try {
         return await operation();
       } finally {
@@ -339,16 +313,17 @@ export abstract class StorageDrafts extends StoragePrompts {
       }
     };
     const next = this.fileDraftMutation.then(run, run);
-    this.fileDraftMutation = next.then(() => undefined, () => undefined);
+    this.fileDraftMutation = next.then(
+      () => undefined,
+      () => undefined,
+    );
     return next;
   }
 
   protected validFileDrafts(stored: unknown): Record<string, PersistedFileDraft> {
     if (!isRecord(stored)) return {};
     return Object.fromEntries(
-      Object.entries(stored).filter(([storedKey, draft]) =>
-        isPersistedFileDraft(draft, storedKey)
-      ),
+      Object.entries(stored).filter(([storedKey, draft]) => isPersistedFileDraft(draft, storedKey)),
     ) as Record<string, PersistedFileDraft>;
   }
 
@@ -386,18 +361,12 @@ export abstract class StorageDrafts extends StoragePrompts {
       const drafts = await this.loadFileDrafts();
       const previous = drafts[draftKey];
       if (
-        previous
-        && (
-          previous.environmentId !== environmentId
-          || previous.filePath !== filePath
-        )
+        previous &&
+        (previous.environmentId !== environmentId || previous.filePath !== filePath)
       ) {
         throw new Error("File draft key belongs to another file");
       }
-      if (
-        expectedRevision !== undefined
-        && (previous?.revision ?? 0) !== expectedRevision
-      ) {
+      if (expectedRevision !== undefined && (previous?.revision ?? 0) !== expectedRevision) {
         throw new Error("File draft revision conflict");
       }
       const saved: PersistedFileDraft = {
@@ -416,10 +385,7 @@ export abstract class StorageDrafts extends StoragePrompts {
     });
   }
 
-  async deleteFileDraft(
-    draftKey: string,
-    expectedRevision?: number,
-  ): Promise<void> {
+  async deleteFileDraft(draftKey: string, expectedRevision?: number): Promise<void> {
     if (!isNonBlankString(draftKey)) throw new Error("File draft key must not be blank");
     if (expectedRevision !== undefined && !isNonNegativeInteger(expectedRevision)) {
       throw new Error("File draft expected revision must be a non-negative integer");
@@ -428,11 +394,7 @@ export abstract class StorageDrafts extends StoragePrompts {
       const stored = await this.loadJson<unknown>(this.fileDraftsFile(), () => ({}));
       const drafts = this.validFileDrafts(stored);
       const previous = drafts[draftKey];
-      if (
-        previous
-        && expectedRevision !== undefined
-        && previous.revision !== expectedRevision
-      ) {
+      if (previous && expectedRevision !== undefined && previous.revision !== expectedRevision) {
         throw new Error("File draft revision conflict");
       }
       const hasStoredKey = isRecord(stored) && Object.hasOwn(stored, draftKey);
@@ -445,8 +407,7 @@ export abstract class StorageDrafts extends StoragePrompts {
       }
       await this.scrubSensitiveJsonBackups(
         this.fileDraftsFile(),
-        (storedKey, draft) =>
-          storedKey !== draftKey && isPersistedFileDraft(draft, storedKey),
+        (storedKey, draft) => storedKey !== draftKey && isPersistedFileDraft(draft, storedKey),
       );
     });
   }
@@ -468,8 +429,7 @@ export abstract class StorageDrafts extends StoragePrompts {
       await this.scrubSensitiveJsonBackups(
         this.fileDraftsFile(),
         (storedKey, draft) =>
-          isPersistedFileDraft(draft, storedKey)
-          && draft.environmentId !== environmentId,
+          isPersistedFileDraft(draft, storedKey) && draft.environmentId !== environmentId,
       );
     });
   }
@@ -487,15 +447,15 @@ export abstract class StorageDrafts extends StoragePrompts {
       }
     };
     const next = this.agentHandoffMutation.then(run, run);
-    this.agentHandoffMutation = next.then(() => undefined, () => undefined);
+    this.agentHandoffMutation = next.then(
+      () => undefined,
+      () => undefined,
+    );
     return next;
   }
 
   protected async loadAgentHandoffEntries(): Promise<Record<string, unknown>> {
-    const stored = await this.loadJson<unknown>(
-      this.agentHandoffsFile(),
-      () => ({}),
-    );
+    const stored = await this.loadJson<unknown>(this.agentHandoffsFile(), () => ({}));
     return isRecord(stored) ? stored : {};
   }
 
@@ -503,7 +463,7 @@ export abstract class StorageDrafts extends StoragePrompts {
     const stored = await this.loadAgentHandoffEntries();
     return Object.fromEntries(
       Object.entries(stored).filter(([storedId, handoff]) =>
-        isPersistedAgentHandoff(handoff, storedId)
+        isPersistedAgentHandoff(handoff, storedId),
       ),
     ) as Record<string, PersistedAgentHandoff>;
   }
@@ -575,7 +535,7 @@ export abstract class StorageDrafts extends StoragePrompts {
   ): Promise<void> {
     for (let index = 1; index <= MAX_JSON_BACKUPS; index += 1) {
       const backup = this.backupPath(this.agentHandoffsFile(), index);
-      if (!await exists(backup)) continue;
+      if (!(await exists(backup))) continue;
       let parsed: unknown;
       try {
         parsed = JSON.parse(await fs.readFile(backup, "utf8"));
@@ -587,9 +547,9 @@ export abstract class StorageDrafts extends StoragePrompts {
       if (!isRecord(parsed)) continue;
       const candidate = parsed[handoffId];
       if (
-        isRecord(candidate)
-        && isNonBlankString(candidate.environmentId)
-        && candidate.environmentId !== environmentId
+        isRecord(candidate) &&
+        isNonBlankString(candidate.environmentId) &&
+        candidate.environmentId !== environmentId
       ) {
         throw new Error("Agent handoff belongs to another environment");
       }
@@ -605,10 +565,7 @@ export abstract class StorageDrafts extends StoragePrompts {
    * the record so retrying a partially completed cleanup finishes the privacy
    * boundary rather than reporting success with retained content.
    */
-  async deleteAgentHandoff(
-    handoffId: string,
-    environmentId: string,
-  ): Promise<boolean> {
+  async deleteAgentHandoff(handoffId: string, environmentId: string): Promise<boolean> {
     if (!isNonBlankString(handoffId)) {
       throw new Error("Agent handoff ID must not be blank");
     }
@@ -619,9 +576,9 @@ export abstract class StorageDrafts extends StoragePrompts {
       const handoffs = await this.loadAgentHandoffEntries();
       const stored = handoffs[handoffId];
       if (
-        isRecord(stored)
-        && isNonBlankString(stored.environmentId)
-        && stored.environmentId !== environmentId
+        isRecord(stored) &&
+        isNonBlankString(stored.environmentId) &&
+        stored.environmentId !== environmentId
       ) {
         throw new Error("Agent handoff belongs to another environment");
       }
@@ -665,9 +622,7 @@ export abstract class StorageDrafts extends StoragePrompts {
     return this.enqueueAgentHandoffMutation(async () => {
       const stored = await this.loadAgentHandoffEntries();
       const isOrphan = (storedId: string, handoff: unknown): boolean =>
-        isRecord(handoff)
-        && handoff.environmentId === environmentId
-        && !referenced.has(storedId);
+        isRecord(handoff) && handoff.environmentId === environmentId && !referenced.has(storedId);
       const removedIds = Object.entries(stored)
         .filter(([storedId, handoff]) => isOrphan(storedId, handoff))
         .map(([storedId]) => storedId);
@@ -691,14 +646,12 @@ export abstract class StorageDrafts extends StoragePrompts {
     return this.enqueueAgentHandoffMutation(async () => {
       const stored = await this.loadAgentHandoffEntries();
       const removedIds = Object.entries(stored)
-        .filter(([, handoff]) =>
-          isRecord(handoff) && handoff.environmentId === environmentId
-        )
+        .filter(([, handoff]) => isRecord(handoff) && handoff.environmentId === environmentId)
         .map(([storedId]) => storedId);
       const handoffs = Object.fromEntries(
-        Object.entries(stored).filter(([storedId, handoff]) =>
-          isPersistedAgentHandoff(handoff, storedId)
-          && handoff.environmentId !== environmentId
+        Object.entries(stored).filter(
+          ([storedId, handoff]) =>
+            isPersistedAgentHandoff(handoff, storedId) && handoff.environmentId !== environmentId,
         ),
       );
       // Rewrite even if no valid record matched. Invalid primary entries cannot
@@ -709,8 +662,7 @@ export abstract class StorageDrafts extends StoragePrompts {
       await this.scrubSensitiveJsonBackups(
         this.agentHandoffsFile(),
         (storedId, handoff) =>
-          isPersistedAgentHandoff(handoff, storedId)
-          && handoff.environmentId !== environmentId,
+          isPersistedAgentHandoff(handoff, storedId) && handoff.environmentId !== environmentId,
       );
       return removedIds;
     });
@@ -723,7 +675,7 @@ export abstract class StorageDrafts extends StoragePrompts {
     );
     return Object.fromEntries(
       Object.entries(stored).filter(([storedId, pipeline]) =>
-        isPersistedBuildPipeline(pipeline, storedId)
+        isPersistedBuildPipeline(pipeline, storedId),
       ),
     ) as Record<string, PersistedBuildPipeline>;
   }
@@ -746,8 +698,9 @@ export abstract class StorageDrafts extends StoragePrompts {
 
   /** Backend supervisors use this to re-arm every active pipeline on startup. */
   async listAllBuildPipelines(): Promise<PersistedBuildPipeline[]> {
-    return Object.values(await this.loadBuildPipelines())
-      .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
+    return Object.values(await this.loadBuildPipelines()).sort((left, right) =>
+      left.updatedAt.localeCompare(right.updatedAt),
+    );
   }
 
   async saveBuildPipeline(
@@ -801,26 +754,23 @@ export abstract class StorageDrafts extends StoragePrompts {
       if (previous && previous.projectId !== projectId) {
         throw new Error("Build pipeline belongs to another project");
       }
-      if (
-        expectedRevision !== undefined
-        && (previous?.revision ?? 0) !== expectedRevision
-      ) {
+      if (expectedRevision !== undefined && (previous?.revision ?? 0) !== expectedRevision) {
         throw new Error("Build pipeline revision conflict");
       }
       const admissionKey = activeBuildAdmissionKey(snapshot);
       if (!previous && expectedRevision === 0 && admissionKey) {
         const admitted = Object.values(pipelines).find(
-          (pipeline) =>
-            activeBuildAdmissionKey(pipeline.snapshot) === admissionKey,
+          (pipeline) => activeBuildAdmissionKey(pipeline.snapshot) === admissionKey,
         );
         if (admitted) return admitted;
       }
       const reservation = activeGitHubBuildReservation(snapshot);
       if (
-        reservation
-        && Object.values(pipelines).some((pipeline) =>
-          pipeline.id !== pipelineId
-          && activeGitHubBuildReservation(pipeline.snapshot) === reservation
+        reservation &&
+        Object.values(pipelines).some(
+          (pipeline) =>
+            pipeline.id !== pipelineId &&
+            activeGitHubBuildReservation(pipeline.snapshot) === reservation,
         )
       ) {
         throw new Error(`An active build already exists for ${reservation}`);
@@ -868,9 +818,9 @@ export abstract class StorageDrafts extends StoragePrompts {
       throw new Error("Build pipeline environment ID must not be blank");
     }
     if (
-      linkedPipelineId !== undefined
-      && linkedPipelineId !== ""
-      && !isNonBlankString(linkedPipelineId)
+      linkedPipelineId !== undefined &&
+      linkedPipelineId !== "" &&
+      !isNonBlankString(linkedPipelineId)
     ) {
       throw new Error("Linked build pipeline ID must not be blank");
     }
@@ -878,9 +828,7 @@ export abstract class StorageDrafts extends StoragePrompts {
       const pipelines = await this.loadBuildPipelines();
       const linkedId = isNonBlankString(linkedPipelineId) ? linkedPipelineId : null;
       const removedIds = Object.values(pipelines)
-        .filter((pipeline) =>
-          pipeline.environmentId === environmentId || pipeline.id === linkedId
-        )
+        .filter((pipeline) => pipeline.environmentId === environmentId || pipeline.id === linkedId)
         .map((pipeline) => pipeline.id);
       if (removedIds.length > 0) {
         for (const removedId of removedIds) delete pipelines[removedId];
@@ -897,22 +845,16 @@ export abstract class StorageDrafts extends StoragePrompts {
       await this.scrubSensitiveJsonBackups(
         this.buildPipelinesFile(),
         (storedId, pipeline) =>
-          isPersistedBuildPipeline(pipeline, storedId)
-          && pipeline.environmentId !== environmentId
-          && !removedIdSet.has(storedId),
+          isPersistedBuildPipeline(pipeline, storedId) &&
+          pipeline.environmentId !== environmentId &&
+          !removedIdSet.has(storedId),
       );
       return removedIds;
     });
   }
 
-  async deletePaneLayout(
-    environmentId: string,
-    expectedRevision?: number,
-  ): Promise<void> {
-    if (
-      expectedRevision !== undefined
-      && !isNonNegativeInteger(expectedRevision)
-    ) {
+  async deletePaneLayout(environmentId: string, expectedRevision?: number): Promise<void> {
+    if (expectedRevision !== undefined && !isNonNegativeInteger(expectedRevision)) {
       throw new Error("Pane layout expected revision must be a non-negative integer");
     }
     return this.enqueuePaneLayoutMutation(async () => {
@@ -921,13 +863,8 @@ export abstract class StorageDrafts extends StoragePrompts {
         () => ({}),
       );
       const currentRevision = layouts[environmentId]?.revision ?? 0;
-      if (
-        expectedRevision !== undefined
-        && currentRevision !== expectedRevision
-      ) {
-        throw new Error(
-          paneLayoutRevisionConflictMessage(expectedRevision, currentRevision),
-        );
+      if (expectedRevision !== undefined && currentRevision !== expectedRevision) {
+        throw new Error(paneLayoutRevisionConflictMessage(expectedRevision, currentRevision));
       }
       if (!(environmentId in layouts)) return;
       delete layouts[environmentId];
@@ -943,7 +880,9 @@ export abstract class StorageDrafts extends StoragePrompts {
 
   async getSessionsByEnvironment(environmentId: string): Promise<Session[]> {
     const sessions = await this.loadJson<Session[]>(this.sessionsFile(), () => []);
-    return sessions.filter((session) => session.environmentId === environmentId).sort((a, b) => a.order - b.order);
+    return sessions
+      .filter((session) => session.environmentId === environmentId)
+      .sort((a, b) => a.order - b.order);
   }
 
   async updateSession(sessionId: string, updates: Partial<Session>): Promise<Session> {
@@ -968,8 +907,13 @@ export abstract class StorageDrafts extends StoragePrompts {
 
   async removeSessionsByEnvironment(environmentId: string): Promise<string[]> {
     const sessions = await this.loadJson<Session[]>(this.sessionsFile(), () => []);
-    const removed = sessions.filter((session) => session.environmentId === environmentId).map((session) => session.id);
-    await this.saveJson(this.sessionsFile(), sessions.filter((session) => session.environmentId !== environmentId));
+    const removed = sessions
+      .filter((session) => session.environmentId === environmentId)
+      .map((session) => session.id);
+    await this.saveJson(
+      this.sessionsFile(),
+      sessions.filter((session) => session.environmentId !== environmentId),
+    );
     await Promise.all(removed.map((sessionId) => this.deleteSessionBuffer(sessionId)));
     if (removed.length > 0) this.announce("session", environmentId);
     return removed;
@@ -993,12 +937,15 @@ export abstract class StorageDrafts extends StoragePrompts {
     const sessions = await this.loadJson<Session[]>(this.sessionsFile(), () => []);
     const provided = new Set(sessionIds);
     for (const [index, id] of sessionIds.entries()) {
-      const session = sessions.find((candidate) => candidate.id === id && candidate.environmentId === environmentId);
+      const session = sessions.find(
+        (candidate) => candidate.id === id && candidate.environmentId === environmentId,
+      );
       if (session) session.order = index;
     }
     let order = sessionIds.length;
     for (const session of sessions) {
-      if (session.environmentId === environmentId && !provided.has(session.id)) session.order = order++;
+      if (session.environmentId === environmentId && !provided.has(session.id))
+        session.order = order++;
     }
     await this.saveJson(this.sessionsFile(), sessions);
     this.announce("session", environmentId);
@@ -1008,13 +955,14 @@ export abstract class StorageDrafts extends StoragePrompts {
   async saveSessionBuffer(sessionId: string, buffer: string): Promise<void> {
     await fs.mkdir(this.buffersDir(), { recursive: true });
     const maxBufferSize = 500 * 1024;
-    const contents = buffer.length > maxBufferSize ? buffer.slice(buffer.length - maxBufferSize) : buffer;
+    const contents =
+      buffer.length > maxBufferSize ? buffer.slice(buffer.length - maxBufferSize) : buffer;
     await fs.writeFile(this.bufferFile(sessionId), contents);
   }
 
   async loadSessionBuffer(sessionId: string): Promise<string | null> {
     const filePath = this.bufferFile(sessionId);
-    if (!await exists(filePath)) return null;
+    if (!(await exists(filePath))) return null;
     return fs.readFile(filePath, "utf8");
   }
 
@@ -1023,7 +971,7 @@ export abstract class StorageDrafts extends StoragePrompts {
   }
 
   async cleanupOrphanedBuffers(): Promise<string[]> {
-    if (!await exists(this.buffersDir())) return [];
+    if (!(await exists(this.buffersDir()))) return [];
     const sessions = await this.loadJson<Session[]>(this.sessionsFile(), () => []);
     const liveBufferFiles = new Set(sessions.map((session) => `${session.id}.txt`));
     const deleted: string[] = [];
@@ -1036,6 +984,4 @@ export abstract class StorageDrafts extends StoragePrompts {
     }
     return deleted;
   }
-
-
 }

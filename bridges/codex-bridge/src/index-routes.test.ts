@@ -10,12 +10,8 @@ process.env.CODEX_BRIDGE_AUTH_DISABLED_FOR_TESTING = "1";
 // evaluated. Hono captures this constructor while installing its middleware.
 const originalCompressionStream = globalThis.CompressionStream;
 globalThis.CompressionStream = NodeCompressionStream as typeof CompressionStream;
-const {
-  app,
-  __testing,
-  boundCodexTranscriptResponse,
-  MAX_CODEX_TRANSCRIPT_RESPONSE_BYTES,
-} = await import("./index.js");
+const { app, __testing, boundCodexTranscriptResponse, MAX_CODEX_TRANSCRIPT_RESPONSE_BYTES } =
+  await import("./index.js");
 afterAll(() => {
   globalThis.CompressionStream = originalCompressionStream;
 });
@@ -98,19 +94,31 @@ describe("bridge authentication and origin policy", () => {
     __testing.setBridgeAuthForTesting(AUTH_TOKEN);
     try {
       expect((await app.request("/global/auth-check")).status).toBe(401);
-      expect((await app.request("/global/auth-check", {
-        headers: { Authorization: "Bearer wrong" },
-      })).status).toBe(401);
-      expect((await app.request("/global/auth-check", {
-        headers: { Authorization: `Bearer ${AUTH_TOKEN}` },
-      })).status).toBe(200);
-      expect((await app.request("/global/auth-check", {
-        headers: { "X-Orkestrator-Codex-Token": AUTH_TOKEN },
-      })).status).toBe(200);
+      expect(
+        (
+          await app.request("/global/auth-check", {
+            headers: { Authorization: "Bearer wrong" },
+          })
+        ).status,
+      ).toBe(401);
+      expect(
+        (
+          await app.request("/global/auth-check", {
+            headers: { Authorization: `Bearer ${AUTH_TOKEN}` },
+          })
+        ).status,
+      ).toBe(200);
+      expect(
+        (
+          await app.request("/global/auth-check", {
+            headers: { "X-Orkestrator-Codex-Token": AUTH_TOKEN },
+          })
+        ).status,
+      ).toBe(200);
 
       const health = await app.request("/global/health");
       expect([200, 503]).toContain(health.status);
-      const payload = await health.json() as Record<string, unknown>;
+      const payload = (await health.json()) as Record<string, unknown>;
       const serialized = JSON.stringify(payload);
       expect(serialized).not.toContain('"pid"');
       expect(serialized).not.toContain("codexHome");
@@ -121,10 +129,8 @@ describe("bridge authentication and origin policy", () => {
   });
 
   test("allows only local, file, and explicitly configured origins", () => {
-    expect(__testing.isTrustedBridgeOriginForTesting("https://attacker.example"))
-      .toBe(false);
-    expect(__testing.isTrustedBridgeOriginForTesting("http://127.0.0.1:5173"))
-      .toBe(true);
+    expect(__testing.isTrustedBridgeOriginForTesting("https://attacker.example")).toBe(false);
+    expect(__testing.isTrustedBridgeOriginForTesting("http://127.0.0.1:5173")).toBe(true);
     expect(__testing.isTrustedBridgeOriginForTesting("file://")).toBe(true);
     expect(__testing.isTrustedBridgeOriginForTesting("null")).toBe(true);
   });
@@ -166,9 +172,7 @@ describe("bridge authentication and origin policy", () => {
     expect(response.status).toBe(204);
     expect(response.headers.get("Access-Control-Allow-Origin")).toBe("http://127.0.0.1:5173");
     expect(response.headers.get("Vary")).toBe("Origin");
-    expect(response.headers.get("Access-Control-Allow-Methods")).toBe(
-      "GET, POST, DELETE, OPTIONS",
-    );
+    expect(response.headers.get("Access-Control-Allow-Methods")).toBe("GET, POST, DELETE, OPTIONS");
     expect(response.headers.get("Access-Control-Allow-Headers")).toBe(
       "Content-Type, Authorization, X-Orkestrator-Codex-Token",
     );
@@ -191,11 +195,15 @@ describe("bridge authentication and origin policy", () => {
       { state: "failed", circuitOpen: false },
       { state: "restarting", circuitOpen: true },
     ]) {
-      await withRuntimeMethod("getHealth", () => terminal, async () => {
-        const response = await app.request("/global/auth-check");
-        expect(response.status).toBe(503);
-        expect(await response.json()).toEqual({ status: "error" });
-      });
+      await withRuntimeMethod(
+        "getHealth",
+        () => terminal,
+        async () => {
+          const response = await app.request("/global/auth-check");
+          expect(response.status).toBe(503);
+          expect(await response.json()).toEqual({ status: "error" });
+        },
+      );
     }
 
     // A restartable blip stays 200 so a transient state does not flap the UI.
@@ -235,18 +243,24 @@ describe("bridge authentication and origin policy", () => {
 describe("session collection route outcomes", () => {
   test("serves the session list", async () => {
     const payload = {
-      sessions: [{
-        id: "thread-1",
-        title: "Existing",
-        updatedAt: "2026-07-25T12:00:00.000Z",
-      }],
+      sessions: [
+        {
+          id: "thread-1",
+          title: "Existing",
+          updatedAt: "2026-07-25T12:00:00.000Z",
+        },
+      ],
       cwd: "/workspace",
     };
-    await withRuntimeMethod("listSessions", async () => payload, async () => {
-      const response = await app.request("/session/list");
-      expect(response.status).toBe(200);
-      expect(await response.json()).toEqual(payload);
-    });
+    await withRuntimeMethod(
+      "listSessions",
+      async () => payload,
+      async () => {
+        const response = await app.request("/session/list");
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual(payload);
+      },
+    );
   });
 
   test("creates a session from a valid or malformed JSON body", async () => {
@@ -274,59 +288,65 @@ describe("session collection route outcomes", () => {
         expect(await malformed.json()).toEqual({ sessionId: "session-2" });
       },
     );
-    expect(bodies).toEqual([{
-      title: "New session",
-      clientSessionKey: "env-1:tab-1",
-    }, {}]);
+    expect(bodies).toEqual([
+      {
+        title: "New session",
+        clientSessionKey: "env-1:tab-1",
+      },
+      {},
+    ]);
   });
 
   test("maps missing and successful resume outcomes", async () => {
     let outcome: unknown = null;
-    await withRuntimeMethod("resumeSession", async () => outcome, async () => {
-      const missing = await jsonRequest("/session/resume", "POST", {});
-      expect(missing.status).toBe(400);
-      expect(await missing.json()).toEqual({ error: "threadId is required" });
+    await withRuntimeMethod(
+      "resumeSession",
+      async () => outcome,
+      async () => {
+        const missing = await jsonRequest("/session/resume", "POST", {});
+        expect(missing.status).toBe(400);
+        expect(await missing.json()).toEqual({ error: "threadId is required" });
 
-      outcome = {
-        sessionId: "session-resumed",
-        threadId: "thread-1",
-        messages: [],
-      };
-      const resumed = await jsonRequest("/session/resume", "POST", {
-        threadId: "thread-1",
-      });
-      expect(resumed.status).toBe(201);
-      expect(await resumed.json()).toEqual(outcome);
-    });
+        outcome = {
+          sessionId: "session-resumed",
+          threadId: "thread-1",
+          messages: [],
+        };
+        const resumed = await jsonRequest("/session/resume", "POST", {
+          threadId: "thread-1",
+        });
+        expect(resumed.status).toBe(201);
+        expect(await resumed.json()).toEqual(outcome);
+      },
+    );
   });
 });
 
 describe("session detail route outcomes", () => {
   test("maps every configuration update outcome", async () => {
-    let outcome:
-      | "updated"
-      | "not-found"
-      | "running"
-      | "unavailable"
-      | "memory-only" = "updated";
-    await withRuntimeMethod("updateConfig", async () => outcome, async () => {
-      const cases = [
-        ["not-found", 404, { error: "Session not found" }],
-        ["running", 409, { error: "Cannot update settings while session is running" }],
-        ["unavailable", 503, { error: "Codex is temporarily unavailable" }],
-        ["memory-only", 200, { status: "updated", durable: false }],
-        ["updated", 200, { status: "updated", durable: true }],
-      ] as const;
+    let outcome: "updated" | "not-found" | "running" | "unavailable" | "memory-only" = "updated";
+    await withRuntimeMethod(
+      "updateConfig",
+      async () => outcome,
+      async () => {
+        const cases = [
+          ["not-found", 404, { error: "Session not found" }],
+          ["running", 409, { error: "Cannot update settings while session is running" }],
+          ["unavailable", 503, { error: "Codex is temporarily unavailable" }],
+          ["memory-only", 200, { status: "updated", durable: false }],
+          ["updated", 200, { status: "updated", durable: true }],
+        ] as const;
 
-      for (const [nextOutcome, status, body] of cases) {
-        outcome = nextOutcome;
-        const response = await jsonRequest("/session/session-1/config", "POST", {
-          mode: "plan",
-        });
-        expect(response.status).toBe(status);
-        expect(await response.json()).toEqual(body);
-      }
-    });
+        for (const [nextOutcome, status, body] of cases) {
+          outcome = nextOutcome;
+          const response = await jsonRequest("/session/session-1/config", "POST", {
+            mode: "plan",
+          });
+          expect(response.status).toBe(status);
+          expect(await response.json()).toEqual(body);
+        }
+      },
+    );
   });
 
   test("serves existing config, messages, and status snapshots", async () => {
@@ -348,21 +368,27 @@ describe("session detail route outcomes", () => {
       },
     );
 
-    const messages = [{
-      id: "message-1",
-      role: "assistant",
-      content: "done",
-      parts: [],
-      createdAt: "2026-07-25T12:00:00.000Z",
-    }];
-    await withRuntimeMethod("getMessages", async () => messages, async () => {
-      const response = await app.request("/session/session-1/messages");
-      expect(response.status).toBe(200);
-      expect(await response.json()).toEqual({
-        messages,
-        messageWindow: { truncated: false },
-      });
-    });
+    const messages = [
+      {
+        id: "message-1",
+        role: "assistant",
+        content: "done",
+        parts: [],
+        createdAt: "2026-07-25T12:00:00.000Z",
+      },
+    ];
+    await withRuntimeMethod(
+      "getMessages",
+      async () => messages,
+      async () => {
+        const response = await app.request("/session/session-1/messages");
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({
+          messages,
+          messageWindow: { truncated: false },
+        });
+      },
+    );
 
     await withRuntimeMethod(
       "getStatus",
@@ -393,8 +419,9 @@ describe("session detail route outcomes", () => {
     }));
 
     const bounded = boundCodexTranscriptResponse(messages);
-    expect(Buffer.byteLength(JSON.stringify(bounded)))
-      .toBeLessThanOrEqual(MAX_CODEX_TRANSCRIPT_RESPONSE_BYTES);
+    expect(Buffer.byteLength(JSON.stringify(bounded))).toBeLessThanOrEqual(
+      MAX_CODEX_TRANSCRIPT_RESPONSE_BYTES,
+    );
     expect(bounded.messageWindow).toMatchObject({ truncated: true });
     expect(bounded.messages.at(-1)?.id).toBe("message-19");
     expect(bounded.messages[0]?.id).not.toBe("message-0");
@@ -407,17 +434,20 @@ describe("session detail route outcomes", () => {
       type: "text" as const,
       content: `${index}:${"x".repeat(1024 * 1024)}`,
     }));
-    const bounded = boundCodexTranscriptResponse([{
-      id: "message-long-turn",
-      role: "assistant" as const,
-      content: "done",
-      parts,
-      createdAt: "2026-07-25T12:00:00.000Z",
-    }]);
+    const bounded = boundCodexTranscriptResponse([
+      {
+        id: "message-long-turn",
+        role: "assistant" as const,
+        content: "done",
+        parts,
+        createdAt: "2026-07-25T12:00:00.000Z",
+      },
+    ]);
 
     expect(bounded.messages).toHaveLength(1);
-    expect(Buffer.byteLength(JSON.stringify(bounded)))
-      .toBeLessThanOrEqual(MAX_CODEX_TRANSCRIPT_RESPONSE_BYTES);
+    expect(Buffer.byteLength(JSON.stringify(bounded))).toBeLessThanOrEqual(
+      MAX_CODEX_TRANSCRIPT_RESPONSE_BYTES,
+    );
     expect(bounded.messageWindow.truncated).toBe(true);
     expect(bounded.messageWindow.omittedParts).toBeGreaterThan(0);
     expect(bounded.messageWindow.omittedMessages).toBeUndefined();
@@ -425,39 +455,55 @@ describe("session detail route outcomes", () => {
   });
 
   test("gzip-compresses transcript responses when the client accepts gzip", async () => {
-    const messages = [{
-      id: "message-compress",
-      role: "assistant" as const,
-      content: "done",
-      parts: [{ type: "text" as const, content: "compressible ".repeat(8_192) }],
-      createdAt: "2026-07-25T12:00:00.000Z",
-    }];
-    await withRuntimeMethod("getMessages", async () => messages, async () => {
-      // happy-dom filters Accept-Encoding from RequestInit as a forbidden
-      // browser header, so install it on the already-built test request.
-      const request = new Request("http://localhost/session/session-1/messages");
-      request.headers.set("Accept-Encoding", "gzip");
-      const response = await app.request(request);
-      expect(response.status).toBe(200);
-      expect(response.headers.get("Content-Encoding")).toBe("gzip");
-      expect(response.headers.get("Vary")).toContain("Accept-Encoding");
-      const decoded = JSON.parse(gunzipSync(Buffer.from(await response.arrayBuffer())).toString());
-      expect(decoded.messages[0]?.id).toBe("message-compress");
-    });
+    const messages = [
+      {
+        id: "message-compress",
+        role: "assistant" as const,
+        content: "done",
+        parts: [{ type: "text" as const, content: "compressible ".repeat(8_192) }],
+        createdAt: "2026-07-25T12:00:00.000Z",
+      },
+    ];
+    await withRuntimeMethod(
+      "getMessages",
+      async () => messages,
+      async () => {
+        // happy-dom filters Accept-Encoding from RequestInit as a forbidden
+        // browser header, so install it on the already-built test request.
+        const request = new Request("http://localhost/session/session-1/messages");
+        request.headers.set("Accept-Encoding", "gzip");
+        const response = await app.request(request);
+        expect(response.status).toBe(200);
+        expect(response.headers.get("Content-Encoding")).toBe("gzip");
+        expect(response.headers.get("Vary")).toContain("Accept-Encoding");
+        const decoded = JSON.parse(
+          gunzipSync(Buffer.from(await response.arrayBuffer())).toString(),
+        );
+        expect(decoded.messages[0]?.id).toBe("message-compress");
+      },
+    );
   });
 
   test("reports missing message and status snapshots as missing sessions", async () => {
-    await withRuntimeMethod("getMessages", async () => null, async () => {
-      const response = await app.request("/session/missing/messages");
-      expect(response.status).toBe(404);
-      expect(await response.json()).toEqual({ error: "Session not found" });
-    });
+    await withRuntimeMethod(
+      "getMessages",
+      async () => null,
+      async () => {
+        const response = await app.request("/session/missing/messages");
+        expect(response.status).toBe(404);
+        expect(await response.json()).toEqual({ error: "Session not found" });
+      },
+    );
 
-    await withRuntimeMethod("getStatus", () => null, async () => {
-      const response = await app.request("/session/missing/status");
-      expect(response.status).toBe(404);
-      expect(await response.json()).toEqual({ error: "Session not found" });
-    });
+    await withRuntimeMethod(
+      "getStatus",
+      () => null,
+      async () => {
+        const response = await app.request("/session/missing/status");
+        expect(response.status).toBe(404);
+        expect(await response.json()).toEqual({ error: "Session not found" });
+      },
+    );
   });
 
   test("answers the activity poll with 200 even for a session it has never seen", async () => {
@@ -471,11 +517,15 @@ describe("session detail route outcomes", () => {
   });
 
   test("serves the activity state for a known session", async () => {
-    await withRuntimeMethod("getActivity", () => "waiting", async () => {
-      const response = await app.request("/session/session-1/activity");
-      expect(response.status).toBe(200);
-      expect(await response.json()).toEqual({ activity: "waiting" });
-    });
+    await withRuntimeMethod(
+      "getActivity",
+      () => "waiting",
+      async () => {
+        const response = await app.request("/session/session-1/activity");
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({ activity: "waiting" });
+      },
+    );
   });
 
   test("answers dispatch status only on an explicit journal positive", async () => {
@@ -490,29 +540,33 @@ describe("session detail route outcomes", () => {
       // A finished turn, but somebody else's.
       "other-session": { state: "terminal", bridgeSessionId: "session-2" },
     };
-    await withRuntimeMethod("getJournal", () => ({
-      get: (requestId: string) => {
-        lookups.push(requestId);
-        return records[requestId];
+    await withRuntimeMethod(
+      "getJournal",
+      () => ({
+        get: (requestId: string) => {
+          lookups.push(requestId);
+          return records[requestId];
+        },
+      }),
+      async () => {
+        const status = async (query: string) => {
+          const response = await app.request(`/session/session-1/dispatch${query}`);
+          expect(response.status).toBe(200);
+          return response.json();
+        };
+        expect(await status("?requestId=running")).toEqual({ dispatch: "dispatched" });
+        expect(await status("?requestId=finished")).toEqual({ dispatch: "dispatched" });
+        expect(await status("?requestId=unresolved")).toEqual({ dispatch: "unknown" });
+        expect(await status("?requestId=never-ran")).toEqual({ dispatch: "unknown" });
+        expect(await status("?requestId=absent")).toEqual({ dispatch: "unknown" });
+        // This journal is process-global, so a record belonging to another
+        // session must never settle this one's parked dispatch.
+        expect(await status("?requestId=other-session")).toEqual({ dispatch: "unknown" });
+        // A blank id never reaches the journal at all.
+        expect(await status("")).toEqual({ dispatch: "unknown" });
+        expect(await status("?requestId=%20%20")).toEqual({ dispatch: "unknown" });
       },
-    }), async () => {
-      const status = async (query: string) => {
-        const response = await app.request(`/session/session-1/dispatch${query}`);
-        expect(response.status).toBe(200);
-        return response.json();
-      };
-      expect(await status("?requestId=running")).toEqual({ dispatch: "dispatched" });
-      expect(await status("?requestId=finished")).toEqual({ dispatch: "dispatched" });
-      expect(await status("?requestId=unresolved")).toEqual({ dispatch: "unknown" });
-      expect(await status("?requestId=never-ran")).toEqual({ dispatch: "unknown" });
-      expect(await status("?requestId=absent")).toEqual({ dispatch: "unknown" });
-      // This journal is process-global, so a record belonging to another
-      // session must never settle this one's parked dispatch.
-      expect(await status("?requestId=other-session")).toEqual({ dispatch: "unknown" });
-      // A blank id never reaches the journal at all.
-      expect(await status("")).toEqual({ dispatch: "unknown" });
-      expect(await status("?requestId=%20%20")).toEqual({ dispatch: "unknown" });
-    });
+    );
     expect(lookups).toEqual([
       "running",
       "finished",
@@ -625,15 +679,17 @@ describe("session detail route outcomes", () => {
       },
     );
 
-    expect(calls).toEqual([{
-      sessionId: "session-1",
-      input: {
-        prompt: "return structured data",
-        requestId: "request-schema",
-        attachments: [],
-        outputSchema,
+    expect(calls).toEqual([
+      {
+        sessionId: "session-1",
+        input: {
+          prompt: "return structured data",
+          requestId: "request-schema",
+          attachments: [],
+          outputSchema,
+        },
       },
-    }]);
+    ]);
   });
 
   test("accepts images, rejects unsupported files, and maps runtime failures", async () => {
@@ -730,98 +786,118 @@ describe("session detail route outcomes", () => {
       input: {
         prompt: "hello",
         requestId: "request-1",
-        attachments: [{
-          type: "image",
-          path: "/tmp/image.png",
-          dataUrl: "data:image/png;base64,AA==",
-          filename: "image.png",
-        }],
+        attachments: [
+          {
+            type: "image",
+            path: "/tmp/image.png",
+            dataUrl: "data:image/png;base64,AA==",
+            filename: "image.png",
+          },
+        ],
       },
     });
   });
 
   test("maps all valid approval response outcomes", async () => {
-    let outcome:
-      | "applied"
-      | "unknown"
-      | "wrong-session"
-      | "not-actionable" = "applied";
-    await withRuntimeMethod("respondToApproval", () => outcome, async () => {
-      const cases = [
-        ["wrong-session", 403, { error: "Approval does not belong to this session" }],
-        ["not-actionable", 422, {
-          error: "Approval lacks the detail required to approve it",
-        }],
-        ["unknown", 409, {
-          error: "Approval is no longer pending",
-          status: "stale",
-        }],
-        ["applied", 200, { status: "applied", decision: "approve" }],
-      ] as const;
+    let outcome: "applied" | "unknown" | "wrong-session" | "not-actionable" = "applied";
+    await withRuntimeMethod(
+      "respondToApproval",
+      () => outcome,
+      async () => {
+        const cases = [
+          ["wrong-session", 403, { error: "Approval does not belong to this session" }],
+          [
+            "not-actionable",
+            422,
+            {
+              error: "Approval lacks the detail required to approve it",
+            },
+          ],
+          [
+            "unknown",
+            409,
+            {
+              error: "Approval is no longer pending",
+              status: "stale",
+            },
+          ],
+          ["applied", 200, { status: "applied", decision: "approve" }],
+        ] as const;
 
-      for (const [nextOutcome, status, body] of cases) {
-        outcome = nextOutcome;
-        const response = await jsonRequest(
-          "/session/session-1/approvals/approval-1",
-          "POST",
-          { decision: "approve" },
-        );
-        expect(response.status).toBe(status);
-        expect(await response.json()).toEqual(body);
-      }
-    });
+        for (const [nextOutcome, status, body] of cases) {
+          outcome = nextOutcome;
+          const response = await jsonRequest("/session/session-1/approvals/approval-1", "POST", {
+            decision: "approve",
+          });
+          expect(response.status).toBe(status);
+          expect(await response.json()).toEqual(body);
+        }
+      },
+    );
   });
 
   test("maps abort and delete success and missing-session outcomes", async () => {
     let abortOutcome: unknown = null;
-    await withRuntimeMethod("abort", async () => abortOutcome, async () => {
-      const missing = await jsonRequest("/session/session-1/abort", "POST");
-      expect(missing.status).toBe(404);
+    await withRuntimeMethod(
+      "abort",
+      async () => abortOutcome,
+      async () => {
+        const missing = await jsonRequest("/session/session-1/abort", "POST");
+        expect(missing.status).toBe(404);
 
-      abortOutcome = { status: "cancelling", phase: "cancelling" };
-      const accepted = await jsonRequest("/session/session-1/abort", "POST");
-      expect(accepted.status).toBe(202);
-      expect(await accepted.json()).toEqual(abortOutcome);
-    });
+        abortOutcome = { status: "cancelling", phase: "cancelling" };
+        const accepted = await jsonRequest("/session/session-1/abort", "POST");
+        expect(accepted.status).toBe(202);
+        expect(await accepted.json()).toEqual(abortOutcome);
+      },
+    );
 
     let deleted = false;
-    await withRuntimeMethod("deleteSession", async () => deleted, async () => {
-      const missing = await jsonRequest("/session/session-1", "DELETE");
-      expect(missing.status).toBe(404);
+    await withRuntimeMethod(
+      "deleteSession",
+      async () => deleted,
+      async () => {
+        const missing = await jsonRequest("/session/session-1", "DELETE");
+        expect(missing.status).toBe(404);
 
-      deleted = true;
-      const success = await jsonRequest("/session/session-1", "DELETE");
-      expect(success.status).toBe(200);
-      expect(await success.json()).toEqual({ status: "deleted" });
-    });
+        deleted = true;
+        const success = await jsonRequest("/session/session-1", "DELETE");
+        expect(success.status).toBe(200);
+        expect(await success.json()).toEqual({ status: "deleted" });
+      },
+    );
   });
 });
 
 describe("interaction route outcomes", () => {
   test("serves pending interactions for rehydration, and [] for an unknown session", async () => {
     const interactions = [{ interactionId: "ask-1", kind: "question", threadId: "thread-1" }];
-    await withRuntimeMethod("listInteractions", () => interactions, async () => {
-      const response = await app.request("/session/session-1/interactions");
-      expect(response.status).toBe(200);
-      expect(await response.json()).toEqual({ interactions });
-    });
+    await withRuntimeMethod(
+      "listInteractions",
+      () => interactions,
+      async () => {
+        const response = await app.request("/session/session-1/interactions");
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({ interactions });
+      },
+    );
 
-    await withRuntimeMethod("listInteractions", () => [], async () => {
-      // A stale tab polling a closed session should see "nothing pending", not a
-      // 404 it would report as an error.
-      const response = await app.request("/session/session-gone/interactions");
-      expect(response.status).toBe(200);
-      expect(await response.json()).toEqual({ interactions: [] });
-    });
+    await withRuntimeMethod(
+      "listInteractions",
+      () => [],
+      async () => {
+        // A stale tab polling a closed session should see "nothing pending", not a
+        // 404 it would report as an error.
+        const response = await app.request("/session/session-gone/interactions");
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({ interactions: [] });
+      },
+    );
   });
 
   test("rejects an action that is not accept, decline or cancel", async () => {
     for (const body of [{}, { action: "approve" }, { action: 1 }, { action: null }]) {
-      const response = await jsonRequest(
-        "/session/session-1/interactions/ask-1",
-        "POST",
-        body,
-      );
+      const response = await jsonRequest("/session/session-1/interactions/ask-1", "POST", body);
       expect(response.status).toBe(400);
       expect(await response.json()).toEqual({
         error: "action must be accept, decline, or cancel",
@@ -836,52 +912,58 @@ describe("interaction route outcomes", () => {
    */
   test("rejects a malformed answers map with 400, never a 500", async () => {
     let called = false;
-    await withRuntimeMethod("respondToInteraction", () => {
-      called = true;
-      return "applied";
-    }, async () => {
-      for (const answers of [
-        { q: "TypeScript" },
-        { q: [] },
-        { q: [""] },
-        { q: [1] },
-        ["TypeScript"],
-        "TypeScript",
-      ]) {
-        const response = await jsonRequest(
-          "/session/session-1/interactions/ask-1",
-          "POST",
-          { action: "accept", answers },
-        );
-        expect(response.status).toBe(400);
-        expect((await response.json()).error).toContain("non-empty array");
-      }
-    });
+    await withRuntimeMethod(
+      "respondToInteraction",
+      () => {
+        called = true;
+        return "applied";
+      },
+      async () => {
+        for (const answers of [
+          { q: "TypeScript" },
+          { q: [] },
+          { q: [""] },
+          { q: [1] },
+          ["TypeScript"],
+          "TypeScript",
+        ]) {
+          const response = await jsonRequest("/session/session-1/interactions/ask-1", "POST", {
+            action: "accept",
+            answers,
+          });
+          expect(response.status).toBe(400);
+          expect((await response.json()).error).toContain("non-empty array");
+        }
+      },
+    );
     // The runtime is never reached with an unchecked shape.
     expect(called).toBe(false);
   });
 
   test("maps every interaction response outcome", async () => {
     let outcome: "applied" | "unknown" | "wrong-session" | "invalid" = "applied";
-    await withRuntimeMethod("respondToInteraction", () => outcome, async () => {
-      const cases = [
-        ["wrong-session", 403, { error: "Interaction does not belong to this session" }],
-        ["invalid", 400, { error: "Interaction answer is malformed" }],
-        ["unknown", 409, { error: "Interaction is no longer pending", status: "stale" }],
-        ["applied", 200, { status: "applied", action: "accept" }],
-      ] as const;
+    await withRuntimeMethod(
+      "respondToInteraction",
+      () => outcome,
+      async () => {
+        const cases = [
+          ["wrong-session", 403, { error: "Interaction does not belong to this session" }],
+          ["invalid", 400, { error: "Interaction answer is malformed" }],
+          ["unknown", 409, { error: "Interaction is no longer pending", status: "stale" }],
+          ["applied", 200, { status: "applied", action: "accept" }],
+        ] as const;
 
-      for (const [nextOutcome, status, body] of cases) {
-        outcome = nextOutcome;
-        const response = await jsonRequest(
-          "/session/session-1/interactions/ask-1",
-          "POST",
-          { action: "accept", answers: { q: ["Yes"] } },
-        );
-        expect(response.status).toBe(status);
-        expect(await response.json()).toEqual(body);
-      }
-    });
+        for (const [nextOutcome, status, body] of cases) {
+          outcome = nextOutcome;
+          const response = await jsonRequest("/session/session-1/interactions/ask-1", "POST", {
+            action: "accept",
+            answers: { q: ["Yes"] },
+          });
+          expect(response.status).toBe(status);
+          expect(await response.json()).toEqual(body);
+        }
+      },
+    );
   });
 
   test("passes a well-formed answer through as a typed InteractionAnswer", async () => {
@@ -926,41 +1008,36 @@ describe("interaction route outcomes", () => {
 describe("fork route outcomes", () => {
   test("maps every fork outcome to its own status", async () => {
     let result: unknown = { outcome: "not-found" };
-    await withRuntimeMethod("forkSession", async () => result, async () => {
-      const cases = [
-        [{ outcome: "not-found" }, 404, { error: "Session not found" }],
-        [
-          { outcome: "running" },
-          409,
-          { error: "Session cannot be forked while it is running" },
-        ],
-        [
-          { outcome: "unknown-message" },
-          404,
-          { error: "lastMessageId is not a message in this session" },
-        ],
-        [
-          { outcome: "no-fork-point" },
-          422,
-          {
-            error:
-              "That message is not a usable fork point: it belongs to no Codex turn",
-          },
-        ],
-        [
-          { outcome: "unavailable" },
-          503,
-          { error: "Codex did not return a forked thread" },
-        ],
-      ] as const;
+    await withRuntimeMethod(
+      "forkSession",
+      async () => result,
+      async () => {
+        const cases = [
+          [{ outcome: "not-found" }, 404, { error: "Session not found" }],
+          [{ outcome: "running" }, 409, { error: "Session cannot be forked while it is running" }],
+          [
+            { outcome: "unknown-message" },
+            404,
+            { error: "lastMessageId is not a message in this session" },
+          ],
+          [
+            { outcome: "no-fork-point" },
+            422,
+            {
+              error: "That message is not a usable fork point: it belongs to no Codex turn",
+            },
+          ],
+          [{ outcome: "unavailable" }, 503, { error: "Codex did not return a forked thread" }],
+        ] as const;
 
-      for (const [nextResult, status, body] of cases) {
-        result = nextResult;
-        const response = await jsonRequest("/session/session-1/fork", "POST", {});
-        expect(response.status).toBe(status);
-        expect(await response.json()).toEqual(body);
-      }
-    });
+        for (const [nextResult, status, body] of cases) {
+          result = nextResult;
+          const response = await jsonRequest("/session/session-1/fork", "POST", {});
+          expect(response.status).toBe(status);
+          expect(await response.json()).toEqual(body);
+        }
+      },
+    );
   });
 
   /**
@@ -969,9 +1046,11 @@ describe("fork route outcomes", () => {
    * escaping as a raw Hono 500, and that nothing is left registered behind it.
    */
   test("an engine rejection is mapped to 503 and leaves no orphan session", async () => {
-    const engine = (runtime as unknown as {
-      options: { engine: { forkThread: unknown } };
-    }).options.engine;
+    const engine = (
+      runtime as unknown as {
+        options: { engine: { forkThread: unknown } };
+      }
+    ).options.engine;
     const originalForkThread = engine.forkThread;
     const registry = runtime.getRegistry();
     registry.createSession({
@@ -1045,75 +1124,87 @@ describe("fork route outcomes", () => {
 describe("compact route outcomes", () => {
   test("maps every compaction outcome", async () => {
     let outcome: "accepted" | "not-found" | "running" | "unavailable" = "accepted";
-    await withRuntimeMethod("compactSession", async () => outcome, async () => {
-      const cases = [
-        ["not-found", 404, { error: "Session not found" }],
-        ["running", 409, { error: "Session is running" }],
-        ["unavailable", 503, { error: "Compaction could not be started" }],
-        // 202: the rewrite has not happened yet, so this is not a completion.
-        ["accepted", 202, { status: "accepted" }],
-      ] as const;
+    await withRuntimeMethod(
+      "compactSession",
+      async () => outcome,
+      async () => {
+        const cases = [
+          ["not-found", 404, { error: "Session not found" }],
+          ["running", 409, { error: "Session is running" }],
+          ["unavailable", 503, { error: "Compaction could not be started" }],
+          // 202: the rewrite has not happened yet, so this is not a completion.
+          ["accepted", 202, { status: "accepted" }],
+        ] as const;
 
-      for (const [nextOutcome, status, body] of cases) {
-        outcome = nextOutcome;
-        const response = await jsonRequest("/session/session-1/compact", "POST");
-        expect(response.status).toBe(status);
-        expect(await response.json()).toEqual(body);
-      }
-    });
+        for (const [nextOutcome, status, body] of cases) {
+          outcome = nextOutcome;
+          const response = await jsonRequest("/session/session-1/compact", "POST");
+          expect(response.status).toBe(status);
+          expect(await response.json()).toEqual(body);
+        }
+      },
+    );
   });
 });
 
 describe("steer route outcomes", () => {
   test("rejects malformed JSON before reaching the runtime", async () => {
     let called = false;
-    await withRuntimeMethod("steerSession", async () => {
-      called = true;
-      return "accepted";
-    }, async () => {
-      const response = await app.request("/session/session-1/steer", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: "{not-json",
-      });
-      expect(response.status).toBe(400);
-      expect(await response.json()).toEqual({ error: "Request body must be valid JSON" });
-    });
+    await withRuntimeMethod(
+      "steerSession",
+      async () => {
+        called = true;
+        return "accepted";
+      },
+      async () => {
+        const response = await app.request("/session/session-1/steer", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{not-json",
+        });
+        expect(response.status).toBe(400);
+        expect(await response.json()).toEqual({ error: "Request body must be valid JSON" });
+      },
+    );
     expect(called).toBe(false);
   });
 
   test("validates every required steer field before reaching the runtime", async () => {
     let called = false;
-    await withRuntimeMethod("steerSession", async () => {
-      called = true;
-      return "accepted";
-    }, async () => {
-      for (const body of [{}, { input: "   " }, { input: 7 }, { input: null }]) {
-        const response = await jsonRequest("/session/session-1/steer", "POST", body);
-        expect(response.status).toBe(400);
-        expect(await response.json()).toEqual({ error: "input is required" });
-      }
+    await withRuntimeMethod(
+      "steerSession",
+      async () => {
+        called = true;
+        return "accepted";
+      },
+      async () => {
+        for (const body of [{}, { input: "   " }, { input: 7 }, { input: null }]) {
+          const response = await jsonRequest("/session/session-1/steer", "POST", body);
+          expect(response.status).toBe(400);
+          expect(await response.json()).toEqual({ error: "input is required" });
+        }
 
-      for (const requestId of [undefined, "", "   ", 7, null]) {
-        const response = await jsonRequest("/session/session-1/steer", "POST", {
-          input: "check",
-          requestId,
-          expectedTurnId: "turn-1",
-        });
-        expect(response.status).toBe(400);
-        expect(await response.json()).toEqual({ error: "requestId is required" });
-      }
+        for (const requestId of [undefined, "", "   ", 7, null]) {
+          const response = await jsonRequest("/session/session-1/steer", "POST", {
+            input: "check",
+            requestId,
+            expectedTurnId: "turn-1",
+          });
+          expect(response.status).toBe(400);
+          expect(await response.json()).toEqual({ error: "requestId is required" });
+        }
 
-      for (const expectedTurnId of [undefined, "", "   ", 7, null]) {
-        const response = await jsonRequest("/session/session-1/steer", "POST", {
-          input: "check",
-          requestId: "req-steer",
-          expectedTurnId,
-        });
-        expect(response.status).toBe(400);
-        expect(await response.json()).toEqual({ error: "expectedTurnId is required" });
-      }
-    });
+        for (const expectedTurnId of [undefined, "", "   ", 7, null]) {
+          const response = await jsonRequest("/session/session-1/steer", "POST", {
+            input: "check",
+            requestId: "req-steer",
+            expectedTurnId,
+          });
+          expect(response.status).toBe(400);
+          expect(await response.json()).toEqual({ error: "expectedTurnId is required" });
+        }
+      },
+    );
     expect(called).toBe(false);
   });
 
@@ -1180,35 +1271,36 @@ describe("review route outcomes", () => {
    */
   test("rejects a named target whose required field is missing or blank", async () => {
     let called = false;
-    await withRuntimeMethod("startNativeReview", async () => {
-      called = true;
-      return { outcome: "accepted", turnId: "turn-review" };
-    }, async () => {
-      const cases = [
-        [{ type: "baseBranch" }, "branch is required for a baseBranch review"],
-        [{ type: "baseBranch", branch: "   " }, "branch is required for a baseBranch review"],
-        [{ type: "baseBranch", branch: 7 }, "branch is required for a baseBranch review"],
-        [{ type: "commit" }, "sha is required for a commit review"],
-        [{ type: "commit", sha: "" }, "sha is required for a commit review"],
-        [{ type: "custom" }, "instructions are required for a custom review"],
-        [
-          { type: "custom", instructions: "  " },
-          "instructions are required for a custom review",
-        ],
-      ] as const;
+    await withRuntimeMethod(
+      "startNativeReview",
+      async () => {
+        called = true;
+        return { outcome: "accepted", turnId: "turn-review" };
+      },
+      async () => {
+        const cases = [
+          [{ type: "baseBranch" }, "branch is required for a baseBranch review"],
+          [{ type: "baseBranch", branch: "   " }, "branch is required for a baseBranch review"],
+          [{ type: "baseBranch", branch: 7 }, "branch is required for a baseBranch review"],
+          [{ type: "commit" }, "sha is required for a commit review"],
+          [{ type: "commit", sha: "" }, "sha is required for a commit review"],
+          [{ type: "custom" }, "instructions are required for a custom review"],
+          [{ type: "custom", instructions: "  " }, "instructions are required for a custom review"],
+        ] as const;
 
-      for (const [body, error] of cases) {
-        const response = await jsonRequest("/session/session-1/review", "POST", body);
-        expect(response.status).toBe(400);
-        expect(await response.json()).toEqual({ error });
-      }
+        for (const [body, error] of cases) {
+          const response = await jsonRequest("/session/session-1/review", "POST", body);
+          expect(response.status).toBe(400);
+          expect(await response.json()).toEqual({ error });
+        }
 
-      const unknownType = await jsonRequest("/session/session-1/review", "POST", {
-        type: "everything",
-      });
-      expect(unknownType.status).toBe(400);
-      expect((await unknownType.json()).error).toContain("type must be");
-    });
+        const unknownType = await jsonRequest("/session/session-1/review", "POST", {
+          type: "everything",
+        });
+        expect(unknownType.status).toBe(400);
+        expect((await unknownType.json()).error).toContain("type must be");
+      },
+    );
     expect(called).toBe(false);
   });
 
@@ -1255,25 +1347,29 @@ describe("review route outcomes", () => {
 
   test("maps every review outcome", async () => {
     let result: unknown = { outcome: "not-found" };
-    await withRuntimeMethod("startNativeReview", async () => result, async () => {
-      const cases = [
-        [{ outcome: "not-found" }, 404, { error: "Session not found" }],
-        [{ outcome: "running" }, 409, { error: "Session is running" }],
-        [{ outcome: "unavailable" }, 503, { error: "Native review failed" }],
-        [
-          { outcome: "accepted", turnId: "turn-review" },
-          202,
-          { status: "processing", turnId: "turn-review" },
-        ],
-      ] as const;
+    await withRuntimeMethod(
+      "startNativeReview",
+      async () => result,
+      async () => {
+        const cases = [
+          [{ outcome: "not-found" }, 404, { error: "Session not found" }],
+          [{ outcome: "running" }, 409, { error: "Session is running" }],
+          [{ outcome: "unavailable" }, 503, { error: "Native review failed" }],
+          [
+            { outcome: "accepted", turnId: "turn-review" },
+            202,
+            { status: "processing", turnId: "turn-review" },
+          ],
+        ] as const;
 
-      for (const [nextResult, status, body] of cases) {
-        result = nextResult;
-        const response = await jsonRequest("/session/session-1/review", "POST", {});
-        expect(response.status).toBe(status);
-        expect(await response.json()).toEqual(body);
-      }
-    });
+        for (const [nextResult, status, body] of cases) {
+          result = nextResult;
+          const response = await jsonRequest("/session/session-1/review", "POST", {});
+          expect(response.status).toBe(status);
+          expect(await response.json()).toEqual(body);
+        }
+      },
+    );
   });
 
   test("a malformed JSON body reviews uncommitted changes rather than 400-ing", async () => {
@@ -1315,11 +1411,15 @@ describe("runtime-health route", () => {
       notices: [],
       rateLimits: {},
     };
-    await withRuntimeMethod("getRuntimeHealth", async () => payload, async () => {
-      const response = await app.request("/session/session-1/runtime-health");
-      expect(response.status).toBe(200);
-      expect(await response.json()).toEqual(payload);
-    });
+    await withRuntimeMethod(
+      "getRuntimeHealth",
+      async () => payload,
+      async () => {
+        const response = await app.request("/session/session-1/runtime-health");
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual(payload);
+      },
+    );
   });
 
   test("passes the session id through so the MCP list can be thread-scoped", async () => {
@@ -1338,10 +1438,14 @@ describe("runtime-health route", () => {
   });
 
   test("returns 404 for an unknown session instead of environment-wide health", async () => {
-    await withRuntimeMethod("getRuntimeHealth", async () => null, async () => {
-      const response = await app.request("/session/missing/runtime-health");
-      expect(response.status).toBe(404);
-      expect(await response.json()).toEqual({ error: "Session not found" });
-    });
+    await withRuntimeMethod(
+      "getRuntimeHealth",
+      async () => null,
+      async () => {
+        const response = await app.request("/session/missing/runtime-health");
+        expect(response.status).toBe(404);
+        expect(await response.json()).toEqual({ error: "Session not found" });
+      },
+    );
   });
 });

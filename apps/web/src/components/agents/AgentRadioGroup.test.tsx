@@ -18,9 +18,7 @@ afterEach(() => {
   }));
 });
 
-function renderGroup(
-  overrides: Partial<Parameters<typeof AgentRadioGroup>[0]> = {},
-) {
+function renderGroup(overrides: Partial<Parameters<typeof AgentRadioGroup>[0]> = {}) {
   const onChange = mock((_agent: LaunchAgent) => undefined);
   const props = {
     value: "claude" as LaunchAgent,
@@ -66,8 +64,11 @@ describe("AgentRadioGroup", () => {
     const group = screen.getByRole("radiogroup", { name: "Build agent" });
     const options = within(group).getAllByRole("radio") as HTMLInputElement[];
     expect(options).toHaveLength(3);
-    expect(options.map((radio) => cardFor(radio).textContent))
-      .toEqual(["Claude", "Codex", "OpenCode"]);
+    expect(options.map((radio) => cardFor(radio).textContent)).toEqual([
+      "Claude",
+      "Codex",
+      "OpenCode",
+    ]);
   });
 
   test("exposes all five agents when every platform is enabled", () => {
@@ -204,10 +205,12 @@ describe("AgentRadioGroup isolation", () => {
       </div>,
     );
 
-    const build = within(screen.getByRole("radiogroup", { name: "Build agent" }))
-      .getAllByRole("radio") as HTMLInputElement[];
-    const review = within(screen.getByRole("radiogroup", { name: "Review agent" }))
-      .getAllByRole("radio") as HTMLInputElement[];
+    const build = within(screen.getByRole("radiogroup", { name: "Build agent" })).getAllByRole(
+      "radio",
+    ) as HTMLInputElement[];
+    const review = within(screen.getByRole("radiogroup", { name: "Review agent" })).getAllByRole(
+      "radio",
+    ) as HTMLInputElement[];
 
     // Native radios sharing a name are one browser-level group, so the second
     // group would silently clear the first one's selection.
@@ -236,8 +239,9 @@ describe("AgentRadioGroup isolation", () => {
     );
 
     fireEvent.click(
-      within(screen.getByRole("radiogroup", { name: "Review agent" }))
-        .getByRole("radio", { name: /^Codex/ }),
+      within(screen.getByRole("radiogroup", { name: "Review agent" })).getByRole("radio", {
+        name: /^Codex/,
+      }),
     );
 
     expect(onReviewChange).toHaveBeenCalledWith("codex");

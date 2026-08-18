@@ -57,10 +57,7 @@ async function decodeDataUrlImage(
   return readCanvasImageData(image, outputDimensions);
 }
 
-async function decodeBlobImage(
-  blob: Blob,
-  sourceDimensions: ImageDimensions,
-): Promise<ImageData> {
+async function decodeBlobImage(blob: Blob, sourceDimensions: ImageDimensions): Promise<ImageData> {
   const outputDimensions = getNormalizedClipboardImageDimensions(
     sourceDimensions.width,
     sourceDimensions.height,
@@ -109,10 +106,7 @@ function createClipboardImage(
   dimensions: ImageDimensions,
   decode: () => Promise<ImageData>,
 ): ClipboardImage {
-  const safeDimensions = validateClipboardImageDimensions(
-    dimensions.width,
-    dimensions.height,
-  );
+  const safeDimensions = validateClipboardImageDimensions(dimensions.width, dimensions.height);
   const outputDimensions = getNormalizedClipboardImageDimensions(
     safeDimensions.width,
     safeDimensions.height,
@@ -136,10 +130,7 @@ function createClipboardImage(
 export async function readImage(pastedBlob?: Blob | null): Promise<ClipboardImage> {
   if (pastedBlob) {
     const dimensions = await readClipboardImageDimensions(pastedBlob);
-    return createClipboardImage(
-      dimensions,
-      () => decodeBlobImage(pastedBlob, dimensions),
-    );
+    return createClipboardImage(dimensions, () => decodeBlobImage(pastedBlob, dimensions));
   }
 
   // A real browser paste event has already exposed all readable data through
@@ -166,17 +157,15 @@ export async function readImage(pastedBlob?: Blob | null): Promise<ClipboardImag
     ) {
       throw new Error("Clipboard image dimensions do not match its encoded metadata");
     }
-    return createClipboardImage(
-      encodedDimensions,
-      () => decodeBlobImage(image.blob!, encodedDimensions),
+    return createClipboardImage(encodedDimensions, () =>
+      decodeBlobImage(image.blob!, encodedDimensions),
     );
   }
   if (typeof image.dataUrl !== "string") {
     throw new Error("Clipboard image payload is invalid");
   }
-  return createClipboardImage(
-    reportedDimensions,
-    () => decodeDataUrlImage(image.dataUrl!, reportedDimensions),
+  return createClipboardImage(reportedDimensions, () =>
+    decodeDataUrlImage(image.dataUrl!, reportedDimensions),
   );
 }
 

@@ -1,17 +1,29 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  spyOn,
+  test,
+} from "bun:test";
 import { StrictMode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { BrowserPreviewState } from "@orkestrator/protocol/browser-preview";
 import { BrowserTab } from "./BrowserTab";
 
-const happyDOM = (window as unknown as Window & {
-  happyDOM: {
-    abort: () => Promise<void>;
-    setURL(url: string): void;
-    settings: { disableIframePageLoading: boolean };
-  };
-}).happyDOM;
+const happyDOM = (
+  window as unknown as Window & {
+    happyDOM: {
+      abort: () => Promise<void>;
+      setURL(url: string): void;
+      settings: { disableIframePageLoading: boolean };
+    };
+  }
+).happyDOM;
 const originalDisableIframePageLoading = happyDOM.settings.disableIframePageLoading;
 const originalHref = window.location.href;
 const originalOrkestrator = window.orkestrator;
@@ -26,16 +38,19 @@ function setBrowserTab(url = "") {
   usePaneLayoutStore.setState({
     activeEnvironmentId: "env-1",
     environments: new Map([
-      ["env-1", {
-        root: {
-          kind: "leaf",
-          id: "pane-1",
-          tabs: [{ id: "browser-1", type: "browser", browserData: { url } }],
-          activeTabId: "browser-1",
+      [
+        "env-1",
+        {
+          root: {
+            kind: "leaf",
+            id: "pane-1",
+            tabs: [{ id: "browser-1", type: "browser", browserData: { url } }],
+            activeTabId: "browser-1",
+          },
+          activePaneId: "pane-1",
+          containerId: "container-1",
         },
-        activePaneId: "pane-1",
-        containerId: "container-1",
-      }],
+      ],
     ]),
   });
 }
@@ -159,12 +174,7 @@ describe("BrowserTab", () => {
 
   test("starts with backend-specific guidance and no iframe", () => {
     const { container } = render(
-      <BrowserTab
-        tabId="browser-1"
-        environmentId="env-1"
-        data={{ url: "" }}
-        isActive
-      />,
+      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "" }} isActive />,
     );
 
     expect(screen.getByText("Preview a backend service")).toBeDefined();
@@ -174,12 +184,7 @@ describe("BrowserTab", () => {
 
   test("reflows its toolbar against the pane width and clamps horizontal overflow", () => {
     const { container } = render(
-      <BrowserTab
-        tabId="browser-1"
-        environmentId="env-1"
-        data={{ url: "" }}
-        isActive
-      />,
+      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "" }} isActive />,
     );
 
     const root = container.firstElementChild as HTMLElement;
@@ -270,31 +275,46 @@ describe("BrowserTab", () => {
     usePaneLayoutStore.setState({
       activeEnvironmentId: "env-1",
       environments: new Map([
-        ["env-1", {
-          root: {
-            kind: "split",
-            id: "split-1",
-            direction: "horizontal",
-            sizes: [50, 50],
-            depth: 1,
-            children: [
-              {
-                kind: "leaf",
-                id: "pane-left",
-                tabs: [{ id: "browser-left", type: "browser", browserData: { url: "http://localhost:3000/" } }],
-                activeTabId: "browser-left",
-              },
-              {
-                kind: "leaf",
-                id: "pane-right",
-                tabs: [{ id: "browser-right", type: "browser", browserData: { url: "http://localhost:4000/" } }],
-                activeTabId: "browser-right",
-              },
-            ],
+        [
+          "env-1",
+          {
+            root: {
+              kind: "split",
+              id: "split-1",
+              direction: "horizontal",
+              sizes: [50, 50],
+              depth: 1,
+              children: [
+                {
+                  kind: "leaf",
+                  id: "pane-left",
+                  tabs: [
+                    {
+                      id: "browser-left",
+                      type: "browser",
+                      browserData: { url: "http://localhost:3000/" },
+                    },
+                  ],
+                  activeTabId: "browser-left",
+                },
+                {
+                  kind: "leaf",
+                  id: "pane-right",
+                  tabs: [
+                    {
+                      id: "browser-right",
+                      type: "browser",
+                      browserData: { url: "http://localhost:4000/" },
+                    },
+                  ],
+                  activeTabId: "browser-right",
+                },
+              ],
+            },
+            activePaneId: "pane-right",
+            containerId: "container-1",
           },
-          activePaneId: "pane-right",
-          containerId: "container-1",
-        }],
+        ],
       ]),
     });
 
@@ -357,31 +377,46 @@ describe("BrowserTab", () => {
     usePaneLayoutStore.setState({
       activeEnvironmentId: "env-1",
       environments: new Map([
-        ["env-1", {
-          root: {
-            kind: "split",
-            id: "split-1",
-            direction: "horizontal",
-            sizes: [50, 50],
-            depth: 1,
-            children: [
-              {
-                kind: "leaf",
-                id: "pane-left",
-                tabs: [{ id: "browser-left", type: "browser", browserData: { url: "http://localhost:3000/" } }],
-                activeTabId: "browser-left",
-              },
-              {
-                kind: "leaf",
-                id: "pane-right",
-                tabs: [{ id: "browser-right", type: "browser", browserData: { url: "http://localhost:4000/" } }],
-                activeTabId: "browser-right",
-              },
-            ],
+        [
+          "env-1",
+          {
+            root: {
+              kind: "split",
+              id: "split-1",
+              direction: "horizontal",
+              sizes: [50, 50],
+              depth: 1,
+              children: [
+                {
+                  kind: "leaf",
+                  id: "pane-left",
+                  tabs: [
+                    {
+                      id: "browser-left",
+                      type: "browser",
+                      browserData: { url: "http://localhost:3000/" },
+                    },
+                  ],
+                  activeTabId: "browser-left",
+                },
+                {
+                  kind: "leaf",
+                  id: "pane-right",
+                  tabs: [
+                    {
+                      id: "browser-right",
+                      type: "browser",
+                      browserData: { url: "http://localhost:4000/" },
+                    },
+                  ],
+                  activeTabId: "browser-right",
+                },
+              ],
+            },
+            activePaneId: "pane-right",
+            containerId: "container-1",
           },
-          activePaneId: "pane-right",
-          containerId: "container-1",
-        }],
+        ],
       ]),
     });
     const native = installNativePreview();
@@ -401,19 +436,12 @@ describe("BrowserTab", () => {
     expect(document.activeElement).toBe(address);
     expect(address.selectionStart).toBe(0);
     expect(address.selectionEnd).toBe(address.value.length);
-    expect(
-      usePaneLayoutStore.getState().environments.get("env-1")?.activePaneId,
-    ).toBe("pane-left");
+    expect(usePaneLayoutStore.getState().environments.get("env-1")?.activePaneId).toBe("pane-left");
   });
 
   test("normalizes, loads, and persists a submitted backend-local address", async () => {
     const { container } = render(
-      <BrowserTab
-        tabId="browser-1"
-        environmentId="env-1"
-        data={{ url: "" }}
-        isActive
-      />,
+      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "" }} isActive />,
     );
 
     fireEvent.change(screen.getByLabelText("Browser address"), { target: { value: "3000" } });
@@ -434,20 +462,17 @@ describe("BrowserTab", () => {
   });
 
   test("keeps invalid addresses in the bar and explains the constraint", () => {
-    render(
-      <BrowserTab
-        tabId="browser-1"
-        environmentId="env-1"
-        data={{ url: "" }}
-        isActive
-      />,
-    );
+    render(<BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "" }} isActive />);
 
-    fireEvent.change(screen.getByLabelText("Browser address"), { target: { value: "example.com" } });
+    fireEvent.change(screen.getByLabelText("Browser address"), {
+      target: { value: "example.com" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Go" }));
 
     expect(screen.getByRole("alert").textContent).toContain("Use localhost or 127.0.0.1");
-    expect((screen.getByLabelText("Browser address") as HTMLInputElement).value).toBe("example.com");
+    expect((screen.getByLabelText("Browser address") as HTMLInputElement).value).toBe(
+      "example.com",
+    );
   });
 
   test("keeps remote preview documents in an opaque sandbox", () => {
@@ -478,33 +503,34 @@ describe("BrowserTab", () => {
     expect(iframe?.hasAttribute("referrerpolicy")).toBe(false);
   });
 
-  test.each([
-    ["ios-wkwebview"],
-    ["ipad-wkwebview"],
-    ["iphone-wkwebview"],
-  ] as const)("shows an unsupported notice instead of a loading preview on %s", (platform) => {
-    window.__orkestratorClientPlatform = platform;
-    window.orkestratorGateway = {
-      enabled: true,
-      baseUrl: "https://workstation.tailnet.ts.net/",
-    };
-    setBrowserTab("http://localhost:3000/");
+  test.each([["ios-wkwebview"], ["ipad-wkwebview"], ["iphone-wkwebview"]] as const)(
+    "shows an unsupported notice instead of a loading preview on %s",
+    (platform) => {
+      window.__orkestratorClientPlatform = platform;
+      window.orkestratorGateway = {
+        enabled: true,
+        baseUrl: "https://workstation.tailnet.ts.net/",
+      };
+      setBrowserTab("http://localhost:3000/");
 
-    const { container } = render(
-      <BrowserTab
-        tabId="browser-1"
-        environmentId="env-1"
-        data={{ url: "http://localhost:3000/" }}
-        isActive
-      />,
-    );
+      const { container } = render(
+        <BrowserTab
+          tabId="browser-1"
+          environmentId="env-1"
+          data={{ url: "http://localhost:3000/" }}
+          isActive
+        />,
+      );
 
-    expect(screen.getByText("Browser tabs aren’t supported on iOS")).toBeDefined();
-    expect(screen.getByText(/Open this browser tab in the Orkestrator desktop app/)).toBeDefined();
-    expect(container.querySelector("iframe") === null).toBe(true);
-    expect(screen.queryByRole("textbox", { name: "Browser address" }) === null).toBe(true);
-    expect(container.querySelector(".animate-spin") === null).toBe(true);
-  });
+      expect(screen.getByText("Browser tabs aren’t supported on iOS")).toBeDefined();
+      expect(
+        screen.getByText(/Open this browser tab in the Orkestrator desktop app/),
+      ).toBeDefined();
+      expect(container.querySelector("iframe") === null).toBe(true);
+      expect(screen.queryByRole("textbox", { name: "Browser address" }) === null).toBe(true);
+      expect(container.querySelector(".animate-spin") === null).toBe(true);
+    },
+  );
 
   test("uses an isolated native surface and opens DevTools for that preview in Electron", async () => {
     const state = {
@@ -585,7 +611,9 @@ describe("BrowserTab", () => {
     );
 
     expect(screen.getByText("Browser tabs aren’t supported here")).toBeDefined();
-    expect(view.container.querySelector('[data-native-browser-preview="browser-1"]') === null).toBe(true);
+    expect(view.container.querySelector('[data-native-browser-preview="browser-1"]') === null).toBe(
+      true,
+    );
     await waitFor(() => {
       expect(native.browserPreview.setVisible).toHaveBeenCalledWith("browser-1", false);
     });
@@ -594,15 +622,12 @@ describe("BrowserTab", () => {
   test("refuses to preview the app's own origin", () => {
     happyDOM.setURL("http://127.0.0.1:5173/");
     const { container } = render(
-      <BrowserTab
-        tabId="browser-1"
-        environmentId="env-1"
-        data={{ url: "" }}
-        isActive
-      />,
+      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "" }} isActive />,
     );
 
-    fireEvent.change(screen.getByLabelText("Browser address"), { target: { value: "localhost:5173" } });
+    fireEvent.change(screen.getByLabelText("Browser address"), {
+      target: { value: "localhost:5173" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Go" }));
 
     expect(screen.getByRole("alert").textContent).toContain("Orkestrator app itself");
@@ -625,14 +650,7 @@ describe("BrowserTab", () => {
   });
 
   test("renders non-Error resolution failures as text", () => {
-    render(
-      <BrowserTab
-        tabId="browser-1"
-        environmentId="env-1"
-        data={{ url: "" }}
-        isActive
-      />,
-    );
+    render(<BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "" }} isActive />);
     Object.defineProperty(window, "orkestratorGateway", {
       configurable: true,
       get() {
@@ -712,10 +730,7 @@ describe("BrowserTab", () => {
   });
 
   test("bounds the history it records and keeps navigating from the newest entry", () => {
-    const history = Array.from(
-      { length: 100 },
-      (_, index) => `http://localhost:${3000 + index}/`,
-    );
+    const history = Array.from({ length: 100 }, (_, index) => `http://localhost:${3000 + index}/`);
     setBrowserTab(history[99]!);
     const { container } = render(
       <BrowserTab
@@ -737,15 +752,13 @@ describe("BrowserTab", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
     expect(container.querySelector("iframe")?.getAttribute("src")).toBe(history[99]);
-    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData?.historyIndex).toBe(98);
+    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData?.historyIndex).toBe(
+      98,
+    );
   });
 
   test("records a navigation from a cursor left behind the newest entry", () => {
-    const history = [
-      "http://localhost:3000/",
-      "http://localhost:4000/",
-      "http://localhost:5000/",
-    ];
+    const history = ["http://localhost:3000/", "http://localhost:4000/", "http://localhost:5000/"];
     setBrowserTab(history[0]!);
     render(
       <BrowserTab
@@ -790,7 +803,9 @@ describe("BrowserTab", () => {
     expect(view.container.querySelector(".animate-spin")).not.toBeNull();
     expect(screen.getByRole("button", { name: "Back" }).hasAttribute("disabled")).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
-    expect(view.container.querySelector("iframe")?.getAttribute("src")).toBe("http://localhost:3000/");
+    expect(view.container.querySelector("iframe")?.getAttribute("src")).toBe(
+      "http://localhost:3000/",
+    );
   });
 
   test("clears an invalid-address error after a valid navigation", () => {
@@ -815,7 +830,9 @@ describe("BrowserTab", () => {
     const view = render(
       <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "" }} isActive />,
     );
-    fireEvent.change(screen.getByLabelText("Browser address"), { target: { value: "example.com" } });
+    fireEvent.change(screen.getByLabelText("Browser address"), {
+      target: { value: "example.com" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Go" }));
     expect(screen.getByRole("alert")).toBeDefined();
 
@@ -888,7 +905,9 @@ describe("BrowserTab", () => {
     fireEvent.change(screen.getByLabelText("Browser address"), { target: { value: "4000" } });
     fireEvent.click(screen.getByRole("button", { name: "Go" }));
     await waitFor(() => {
-      expect(view.container.querySelector("iframe")?.getAttribute("src")).toBe("http://localhost:4000/");
+      expect(view.container.querySelector("iframe")?.getAttribute("src")).toBe(
+        "http://localhost:4000/",
+      );
     });
     expect(view.container.querySelector("iframe")?.dataset.loadRevision).toBe("2");
   });
@@ -1010,8 +1029,12 @@ describe("BrowserTab", () => {
     );
 
     expect(screen.getByRole("alert").textContent).toContain("Enter an address such as");
-    expect(screen.getByRole("textbox", { name: "Browser address" }).getAttribute("aria-invalid")).toBe("true");
-    expect(screen.getByRole("button", { name: "Reload preview" }).hasAttribute("disabled")).toBe(true);
+    expect(
+      screen.getByRole("textbox", { name: "Browser address" }).getAttribute("aria-invalid"),
+    ).toBe("true");
+    expect(screen.getByRole("button", { name: "Reload preview" }).hasAttribute("disabled")).toBe(
+      true,
+    );
     expect(container.querySelector("iframe") === null).toBe(true);
     expect(container.querySelector(".animate-spin") === null).toBe(true);
   });
@@ -1042,62 +1065,86 @@ describe("BrowserTab", () => {
         previewState({
           url: input.url,
           loading: input.url.includes("/docs"),
-        })),
+        }),
+      ),
     });
     setBrowserTab("http://localhost:3000/");
     const view = render(
-      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "http://localhost:3000/" }} isActive />,
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/" }}
+        isActive
+      />,
     );
     await waitFor(() => expect(native.browserPreview.attach).toHaveBeenCalled());
     await waitFor(() => expect(view.container.querySelector(".animate-spin") === null).toBe(true));
 
-    native.emitState(previewState({
-      tabId: "browser-other",
-      url: "https://workstation.tailnet.ts.net/__orkestrator/browser/loopback/3000/ignored",
-      error: "ignored error",
-    }));
-    native.emitState(previewState({
-      url: "https://workstation.tailnet.ts.net/__orkestrator/browser/loopback/4000/wrong-scope",
-    }));
-    expect((screen.getByLabelText("Browser address") as HTMLInputElement).value).toBe("http://localhost:3000/");
+    native.emitState(
+      previewState({
+        tabId: "browser-other",
+        url: "https://workstation.tailnet.ts.net/__orkestrator/browser/loopback/3000/ignored",
+        error: "ignored error",
+      }),
+    );
+    native.emitState(
+      previewState({
+        url: "https://workstation.tailnet.ts.net/__orkestrator/browser/loopback/4000/wrong-scope",
+      }),
+    );
+    expect((screen.getByLabelText("Browser address") as HTMLInputElement).value).toBe(
+      "http://localhost:3000/",
+    );
     expect(screen.queryByRole("alert") === null).toBe(true);
 
     native.emitState(previewState({ url: "", loading: true, error: "empty URL state" }));
     await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("empty URL state"));
-    expect((screen.getByLabelText("Browser address") as HTMLInputElement).value).toBe("http://localhost:3000/");
+    expect((screen.getByLabelText("Browser address") as HTMLInputElement).value).toBe(
+      "http://localhost:3000/",
+    );
     expect(view.container.querySelector(".animate-spin")).not.toBeNull();
     native.emitState(previewState({ url: "not a URL" }));
     await waitFor(() => expect(screen.queryByRole("alert") === null).toBe(true));
-    expect((screen.getByLabelText("Browser address") as HTMLInputElement).value).toBe("http://localhost:3000/");
+    expect((screen.getByLabelText("Browser address") as HTMLInputElement).value).toBe(
+      "http://localhost:3000/",
+    );
 
-    native.emitState(previewState({
-      url: "https://workstation.tailnet.ts.net/__orkestrator/browser/loopback/3000/docs?q=1#intro",
-      loading: true,
-      canGoBack: true,
-      canGoForward: true,
-    }));
+    native.emitState(
+      previewState({
+        url: "https://workstation.tailnet.ts.net/__orkestrator/browser/loopback/3000/docs?q=1#intro",
+        loading: true,
+        canGoBack: true,
+        canGoForward: true,
+      }),
+    );
     await waitFor(() => {
       expect((screen.getByLabelText("Browser address") as HTMLInputElement).value).toBe(
         "http://localhost:3000/docs?q=1#intro",
       );
       expect(view.container.querySelector(".animate-spin")).not.toBeNull();
     });
-    native.emitState(previewState({
-      url: "https://workstation.tailnet.ts.net/__orkestrator/browser/loopback/3000/docs?q=1#intro",
-      canGoBack: true,
-      canGoForward: true,
-    }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Back" }).hasAttribute("disabled")).toBe(false));
+    native.emitState(
+      previewState({
+        url: "https://workstation.tailnet.ts.net/__orkestrator/browser/loopback/3000/docs?q=1#intro",
+        canGoBack: true,
+        canGoForward: true,
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Back" }).hasAttribute("disabled")).toBe(false),
+    );
     expect(screen.getByRole("button", { name: "Back" }).hasAttribute("disabled")).toBe(false);
     expect(screen.getByRole("button", { name: "Forward" }).hasAttribute("disabled")).toBe(false);
     const environment = usePaneLayoutStore.getState().environments.get("env-1");
     if (!environment || environment.root.kind !== "leaf") throw new Error("expected leaf");
     expect(environment.root.tabs[0]?.browserData?.url).toBe("http://localhost:3000/docs?q=1#intro");
 
-    native.emitState(previewState({
-      url: "https://workstation.tailnet.ts.net/__orkestrator/browser/loopback/3000/docs?q=1#intro",
-      error: "native load failed",
-    }));
+    native.emitState(
+      previewState({
+        url: "https://workstation.tailnet.ts.net/__orkestrator/browser/loopback/3000/docs?q=1#intro",
+        error: "native load failed",
+      }),
+    );
     await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("native load failed"));
     expect(view.container.querySelector(".animate-spin") === null).toBe(true);
   });
@@ -1106,25 +1153,36 @@ describe("BrowserTab", () => {
     const native = installNativePreview();
     setBrowserTab("http://localhost:3000/");
     render(
-      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "http://localhost:3000/" }} isActive />,
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/" }}
+        isActive
+      />,
     );
     await waitFor(() => expect(native.browserPreview.attach).toHaveBeenCalled());
 
-    native.emitState(previewState({
-      url: "http://localhost:3000/direct?q=1#result",
-    }));
-    await waitFor(() => expect(
-      (screen.getByLabelText("Browser address") as HTMLInputElement).value,
-    ).toBe("http://localhost:3000/direct?q=1#result"));
+    native.emitState(
+      previewState({
+        url: "http://localhost:3000/direct?q=1#result",
+      }),
+    );
+    await waitFor(() =>
+      expect((screen.getByLabelText("Browser address") as HTMLInputElement).value).toBe(
+        "http://localhost:3000/direct?q=1#result",
+      ),
+    );
     const environment = usePaneLayoutStore.getState().environments.get("env-1");
     if (!environment || environment.root.kind !== "leaf") throw new Error("expected leaf");
     expect(environment.root.tabs[0]?.browserData?.url).toBe(
       "http://localhost:3000/direct?q=1#result",
     );
 
-    native.emitState(previewState({
-      url: "https://localhost:3000/ignored",
-    }));
+    native.emitState(
+      previewState({
+        url: "https://localhost:3000/ignored",
+      }),
+    );
     await Promise.resolve();
     expect((screen.getByLabelText("Browser address") as HTMLInputElement).value).toBe(
       "http://localhost:3000/direct?q=1#result",
@@ -1140,13 +1198,20 @@ describe("BrowserTab", () => {
     const native = installNativePreview();
     setBrowserTab("http://localhost/start");
     const view = render(
-      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "http://localhost/start" }} isActive />,
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost/start" }}
+        isActive
+      />,
     );
     await waitFor(() => expect(native.browserPreview.attach).toHaveBeenCalled());
 
-    native.emitState(previewState({
-      url: "https://workstation.tailnet.ts.net/__orkestrator/browser/loopback/80",
-    }));
+    native.emitState(
+      previewState({
+        url: "https://workstation.tailnet.ts.net/__orkestrator/browser/loopback/80",
+      }),
+    );
     await waitFor(() => {
       expect((screen.getByLabelText("Browser address") as HTMLInputElement).value).toBe(
         "http://localhost/",
@@ -1156,12 +1221,19 @@ describe("BrowserTab", () => {
     view.unmount();
     setBrowserTab("not a preview address");
     render(
-      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "not a preview address" }} isActive />,
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "not a preview address" }}
+        isActive
+      />,
     );
     expect(screen.getByRole("alert")).toBeDefined();
-    native.emitState(previewState({
-      url: "https://workstation.tailnet.ts.net/__orkestrator/browser/loopback/80/ignored",
-    }));
+    native.emitState(
+      previewState({
+        url: "https://workstation.tailnet.ts.net/__orkestrator/browser/loopback/80/ignored",
+      }),
+    );
     await Promise.resolve();
 
     expect((screen.getByLabelText("Browser address") as HTMLInputElement).value).toBe(
@@ -1171,7 +1243,9 @@ describe("BrowserTab", () => {
 
   test("routes native navigation, history, reload, and refresh actions and reports rejections", async () => {
     const navigate = mock(async (_tabId: string, url: string) => previewState({ url }));
-    const rejectedBack = mock(async () => { throw new Error("history failed"); });
+    const rejectedBack = mock(async () => {
+      throw new Error("history failed");
+    });
     const native = installNativePreview({ navigate, goBack: rejectedBack });
     setBrowserTab("http://localhost:3000/");
     const view = render(
@@ -1188,10 +1262,16 @@ describe("BrowserTab", () => {
 
     fireEvent.change(screen.getByLabelText("Browser address"), { target: { value: "4000" } });
     fireEvent.click(screen.getByRole("button", { name: "Go" }));
-    await waitFor(() => expect(navigate).toHaveBeenCalledWith("browser-1", "http://localhost:4000/"));
+    await waitFor(() =>
+      expect(navigate).toHaveBeenCalledWith("browser-1", "http://localhost:4000/"),
+    );
 
-    native.emitState(previewState({ url: "http://localhost:4000/", canGoBack: true, canGoForward: true }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Back" }).hasAttribute("disabled")).toBe(false));
+    native.emitState(
+      previewState({ url: "http://localhost:4000/", canGoBack: true, canGoForward: true }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Back" }).hasAttribute("disabled")).toBe(false),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
     await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("history failed"));
     fireEvent.click(screen.getByRole("button", { name: "Forward" }));
@@ -1211,35 +1291,39 @@ describe("BrowserTab", () => {
         refreshRequestId={1}
       />,
     );
-    await waitFor(() => expect(native.browserPreview.reload.mock.calls.length).toBeGreaterThanOrEqual(2));
+    await waitFor(() =>
+      expect(native.browserPreview.reload.mock.calls.length).toBeGreaterThanOrEqual(2),
+    );
   });
 
   test("does not speculatively persist native history when Back fails", async () => {
-    const goBack = mock(async () => { throw new Error("history failed"); });
+    const goBack = mock(async () => {
+      throw new Error("history failed");
+    });
     const native = installNativePreview({
       attach: mock(async () => previewState({ url: "http://localhost:4000/" })),
       goBack,
     });
     const history = ["http://localhost:3000/", "http://localhost:4000/"];
     setBrowserTab("http://localhost:4000/");
-    usePaneLayoutStore.getState().updateTabBrowserUrl(
-      "browser-1",
-      history[1]!,
-      "env-1",
-      history,
-      1,
+    usePaneLayoutStore
+      .getState()
+      .updateTabBrowserUrl("browser-1", history[1]!, "env-1", history, 1);
+    render(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: history[1]!, history, historyIndex: 1 }}
+        isActive
+      />,
     );
-    render(<BrowserTab
-      tabId="browser-1"
-      environmentId="env-1"
-      data={{ url: history[1]!, history, historyIndex: 1 }}
-      isActive
-    />);
     await waitFor(() => expect(native.browserPreview.attach).toHaveBeenCalled());
-    native.emitState(previewState({
-      url: history[1],
-      canGoBack: true,
-    }));
+    native.emitState(
+      previewState({
+        url: history[1],
+        canGoBack: true,
+      }),
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
     await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("history failed"));
@@ -1258,31 +1342,32 @@ describe("BrowserTab", () => {
     const goBack = mock(() => pendingBack.promise);
     const native = installNativePreview({
       attach: mock(async (input: { url: string }) =>
-        previewState({ url: input.url, canGoBack: true })),
+        previewState({ url: input.url, canGoBack: true }),
+      ),
       goBack,
     });
     setBrowserTab(history[1]!);
-    usePaneLayoutStore.getState().updateTabBrowserUrl(
-      "browser-1",
-      history[1]!,
-      "env-1",
-      history,
-      1,
+    usePaneLayoutStore
+      .getState()
+      .updateTabBrowserUrl("browser-1", history[1]!, "env-1", history, 1);
+    const view = render(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: history[1]!, history, historyIndex: 1 }}
+        isActive
+      />,
     );
-    const view = render(<BrowserTab
-      tabId="browser-1"
-      environmentId="env-1"
-      data={{ url: history[1]!, history, historyIndex: 1 }}
-      isActive
-    />);
     await waitFor(() => expect(native.browserPreview.attach).toHaveBeenCalled());
 
     // A link click inside the preview: Chromium records it, the tracked array
     // cannot see it.
     native.emitState(previewState({ url: "http://localhost:9000/", canGoBack: true }));
-    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenCalledWith(
-      expect.objectContaining({ url: "http://localhost:9000/" }),
-    ));
+    await waitFor(() =>
+      expect(native.browserPreview.attach).toHaveBeenCalledWith(
+        expect.objectContaining({ url: "http://localhost:9000/" }),
+      ),
+    );
     native.browserPreview.attach.mockClear();
     const persistedBeforeBack = usePaneLayoutStore.getState().environments;
 
@@ -1290,15 +1375,17 @@ describe("BrowserTab", () => {
     // The RPC resolves before Chromium commits the navigation, so its snapshot
     // still carries the pre-navigation URL. Nothing from it may be persisted or
     // pushed back onto the surface.
-    pendingBack.resolve(previewState({
-      url: "http://localhost:9000/",
-      loading: true,
-      canGoBack: true,
-      canGoForward: true,
-    }));
-    await waitFor(() => expect(
-      screen.getByRole("button", { name: "Forward" }).hasAttribute("disabled"),
-    ).toBe(false));
+    pendingBack.resolve(
+      previewState({
+        url: "http://localhost:9000/",
+        loading: true,
+        canGoBack: true,
+        canGoForward: true,
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Forward" }).hasAttribute("disabled")).toBe(false),
+    );
     expect(goBack).toHaveBeenCalledWith("browser-1");
     // Only the surface fields of that snapshot are applied.
     expect(view.container.querySelector(".animate-spin")).not.toBeNull();
@@ -1309,11 +1396,14 @@ describe("BrowserTab", () => {
     );
 
     native.emitState(previewState({ url: history[1], canGoBack: true, canGoForward: true }));
-    await waitFor(() => expect(
-      (screen.getByLabelText("Browser address") as HTMLInputElement).value,
-    ).toBe(history[1]!));
-    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData?.url)
-      .toBe(history[1]!);
+    await waitFor(() =>
+      expect((screen.getByLabelText("Browser address") as HTMLInputElement).value).toBe(
+        history[1]!,
+      ),
+    );
+    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData?.url).toBe(
+      history[1]!,
+    );
     // Every attach the move caused carries Chromium's own URL. The tracked
     // entry for index 0 is never reattached, which is what truncated the real
     // forward history.
@@ -1323,11 +1413,7 @@ describe("BrowserTab", () => {
   });
 
   test("advances the native cursor once per Back click even while an RPC is in flight", async () => {
-    const history = [
-      "http://localhost:3000/",
-      "http://localhost:4000/",
-      "http://localhost:5000/",
-    ];
+    const history = ["http://localhost:3000/", "http://localhost:4000/", "http://localhost:5000/"];
     const pending: Array<ReturnType<typeof deferred<BrowserPreviewState>>> = [];
     const goBack = mock(() => {
       const next = deferred<BrowserPreviewState>();
@@ -1336,23 +1422,22 @@ describe("BrowserTab", () => {
     });
     const native = installNativePreview({
       attach: mock(async (input: { url: string }) =>
-        previewState({ url: input.url, canGoBack: true })),
+        previewState({ url: input.url, canGoBack: true }),
+      ),
       goBack,
     });
     setBrowserTab(history[2]!);
-    usePaneLayoutStore.getState().updateTabBrowserUrl(
-      "browser-1",
-      history[2]!,
-      "env-1",
-      history,
-      2,
+    usePaneLayoutStore
+      .getState()
+      .updateTabBrowserUrl("browser-1", history[2]!, "env-1", history, 2);
+    render(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: history[2]!, history, historyIndex: 2 }}
+        isActive
+      />,
     );
-    render(<BrowserTab
-      tabId="browser-1"
-      environmentId="env-1"
-      data={{ url: history[2]!, history, historyIndex: 2 }}
-      isActive
-    />);
     await waitFor(() => expect(native.browserPreview.attach).toHaveBeenCalled());
     native.emitState(previewState({ url: history[2], canGoBack: true }));
 
@@ -1362,8 +1447,11 @@ describe("BrowserTab", () => {
     // Two clicks are two real steps in Chromium, and neither may write a cursor
     // the second click would then recompute from a stale value.
     expect(goBack).toHaveBeenCalledTimes(2);
-    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData)
-      .toMatchObject({ url: history[2], historyIndex: 2, history });
+    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData).toMatchObject({
+      url: history[2],
+      historyIndex: 2,
+      history,
+    });
 
     await act(async () => {
       pending[0]?.resolve(previewState({ url: history[2], canGoBack: true }));
@@ -1372,14 +1460,19 @@ describe("BrowserTab", () => {
     });
     native.emitState(previewState({ url: history[0], canGoForward: true }));
 
-    await waitFor(() => expect(
-      (screen.getByLabelText("Browser address") as HTMLInputElement).value,
-    ).toBe(history[0]!));
+    await waitFor(() =>
+      expect((screen.getByLabelText("Browser address") as HTMLInputElement).value).toBe(
+        history[0]!,
+      ),
+    );
     // The address the user sees and the durable address agree with the preview,
     // and no cursor was advanced behind them: two clicks that each computed the
     // same next index used to persist one that contradicted the address.
-    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData)
-      .toMatchObject({ url: history[0], historyIndex: 2, history });
+    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData).toMatchObject({
+      url: history[0],
+      historyIndex: 2,
+      history,
+    });
   });
 
   test("keeps native Forward durable state on failure and follows the preview on success", async () => {
@@ -1391,49 +1484,54 @@ describe("BrowserTab", () => {
     });
     const native = installNativePreview({
       attach: mock(async (input: { url: string }) =>
-        previewState({ url: input.url, canGoForward: true })),
+        previewState({ url: input.url, canGoForward: true }),
+      ),
       goForward,
     });
     setBrowserTab(history[0]!);
-    usePaneLayoutStore.getState().updateTabBrowserUrl(
-      "browser-1",
-      history[0]!,
-      "env-1",
-      history,
-      0,
+    usePaneLayoutStore
+      .getState()
+      .updateTabBrowserUrl("browser-1", history[0]!, "env-1", history, 0);
+    render(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: history[0]!, history, historyIndex: 0 }}
+        isActive
+      />,
     );
-    render(<BrowserTab
-      tabId="browser-1"
-      environmentId="env-1"
-      data={{ url: history[0]!, history, historyIndex: 0 }}
-      isActive
-    />);
     await waitFor(() => expect(native.browserPreview.attach).toHaveBeenCalled());
     native.emitState(previewState({ url: history[0], canGoForward: true }));
 
     fireEvent.click(screen.getByRole("button", { name: "Forward" }));
     await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("forward failed"));
-    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData)
-      .toMatchObject({ url: history[0], historyIndex: 0, history });
+    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData).toMatchObject({
+      url: history[0],
+      historyIndex: 0,
+      history,
+    });
 
     fireEvent.click(screen.getByRole("button", { name: "Forward" }));
     await waitFor(() => expect(goForward).toHaveBeenCalledTimes(2));
-    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData?.url)
-      .toBe(history[0]);
+    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData?.url).toBe(history[0]);
 
     native.emitState(previewState({ url: history[1], canGoBack: true }));
-    await waitFor(() => expect(
-      usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData?.url,
-    ).toBe(history[1]!));
-    expect((screen.getByLabelText("Browser address") as HTMLInputElement).value)
-      .toBe(history[1]!);
+    await waitFor(() =>
+      expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.browserData?.url).toBe(
+        history[1]!,
+      ),
+    );
+    expect((screen.getByLabelText("Browser address") as HTMLInputElement).value).toBe(history[1]!);
   });
 
   test("converges on the latest URL when navigation and refresh race the initial native attach", async () => {
     const pendingAttaches = new Map<string, (state: BrowserPreviewState) => void>();
-    const attach = mock((input: { url: string }) => new Promise<BrowserPreviewState>((resolve) => {
-      pendingAttaches.set(input.url, resolve);
-    }));
+    const attach = mock(
+      (input: { url: string }) =>
+        new Promise<BrowserPreviewState>((resolve) => {
+          pendingAttaches.set(input.url, resolve);
+        }),
+    );
     const native = installNativePreview({ attach });
     setBrowserTab("http://localhost:3000/");
     const view = render(
@@ -1496,8 +1594,12 @@ describe("BrowserTab", () => {
       if (attachCount === 1) return Promise.resolve(previewState({ url: input.url }));
       return new Promise<BrowserPreviewState>(() => {});
     });
-    const navigate = mock(async () => { throw "navigation failed"; });
-    const goForward = mock(async () => { throw new Error("forward failed"); });
+    const navigate = mock(async () => {
+      throw "navigation failed";
+    });
+    const goForward = mock(async () => {
+      throw new Error("forward failed");
+    });
     const reload = mock()
       .mockRejectedValueOnce(new Error("toolbar reload failed"))
       .mockRejectedValueOnce("refresh reload failed");
@@ -1520,13 +1622,17 @@ describe("BrowserTab", () => {
     expect(navigate).toHaveBeenCalledWith("browser-1", "http://localhost:4000/");
 
     native.emitState(previewState({ url: "http://localhost:4000/", canGoForward: true }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Forward" }).hasAttribute("disabled")).toBe(false));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Forward" }).hasAttribute("disabled")).toBe(false),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Forward" }));
     await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("forward failed"));
     expect(goForward).toHaveBeenCalledWith("browser-1");
 
     fireEvent.click(screen.getByRole("button", { name: "Reload preview" }));
-    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("toolbar reload failed"));
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toBe("toolbar reload failed"),
+    );
     expect(reload).toHaveBeenCalledTimes(1);
 
     view.rerender(
@@ -1538,7 +1644,9 @@ describe("BrowserTab", () => {
         refreshRequestId={1}
       />,
     );
-    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("refresh reload failed"));
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toBe("refresh reload failed"),
+    );
     expect(reload).toHaveBeenCalledTimes(2);
   });
 
@@ -1547,14 +1655,27 @@ describe("BrowserTab", () => {
     const view = render(
       <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "" }} isActive />,
     );
-    await waitFor(() => expect(native.browserPreview.setVisible).toHaveBeenCalledWith("browser-1", false));
-    expect(view.container.querySelector('[data-native-browser-preview="browser-1"]') === null).toBe(true);
+    await waitFor(() =>
+      expect(native.browserPreview.setVisible).toHaveBeenCalledWith("browser-1", false),
+    );
+    expect(view.container.querySelector('[data-native-browser-preview="browser-1"]') === null).toBe(
+      true,
+    );
 
     view.rerender(
-      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "not a preview address" }} isActive />,
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "not a preview address" }}
+        isActive
+      />,
     );
-    await waitFor(() => expect(native.browserPreview.setVisible.mock.calls.length).toBeGreaterThanOrEqual(2));
-    expect(view.container.querySelector('[data-native-browser-preview="browser-1"]') === null).toBe(true);
+    await waitFor(() =>
+      expect(native.browserPreview.setVisible.mock.calls.length).toBeGreaterThanOrEqual(2),
+    );
+    expect(view.container.querySelector('[data-native-browser-preview="browser-1"]') === null).toBe(
+      true,
+    );
     expect(native.browserPreview.attach).not.toHaveBeenCalled();
   });
 
@@ -1580,7 +1701,12 @@ describe("BrowserTab", () => {
     const native = installNativePreview({ setVisible });
     setBrowserTab("http://localhost:3000/");
     const view = render(
-      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "http://localhost:3000/" }} isActive />,
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/" }}
+        isActive
+      />,
     );
     await waitFor(() => expect(native.browserPreview.attach).toHaveBeenCalled());
     consoleErrorSpy?.mockClear();
@@ -1597,20 +1723,38 @@ describe("BrowserTab", () => {
     const native = installNativePreview();
     setBrowserTab("http://localhost:3000/");
     let view = render(
-      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "http://localhost:3000/" }} isActive />,
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/" }}
+        isActive
+      />,
     );
-    const host = view.container.querySelector('[data-native-browser-preview="browser-1"]') as HTMLDivElement;
+    const host = view.container.querySelector(
+      '[data-native-browser-preview="browser-1"]',
+    ) as HTMLDivElement;
     host.getBoundingClientRect = () => ({
-      x: 11, y: 22, left: 11, top: 22, right: 344, bottom: 266, width: 333, height: 244,
+      x: 11,
+      y: 22,
+      left: 11,
+      top: 22,
+      right: 344,
+      bottom: 266,
+      width: 333,
+      height: 244,
       toJSON: () => ({}),
     });
     fireEvent(window, new Event("resize"));
     fireEvent.scroll(window);
-    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenCalledWith(expect.objectContaining({
-      tabId: "browser-1",
-      bounds: { x: 11, y: 22, width: 333, height: 244 },
-      visible: true,
-    })));
+    await waitFor(() =>
+      expect(native.browserPreview.attach).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tabId: "browser-1",
+          bounds: { x: 11, y: 22, width: 333, height: 244 },
+          visible: true,
+        }),
+      ),
+    );
 
     view.unmount();
     native.browserPreview.attach.mockClear();
@@ -1619,9 +1763,18 @@ describe("BrowserTab", () => {
     dialog.setAttribute("role", "dialog");
     document.body.append(dialog);
     view = render(
-      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "http://localhost:3000/" }} isActive />,
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/" }}
+        isActive
+      />,
     );
-    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenCalledWith(expect.objectContaining({ visible: false })));
+    await waitFor(() =>
+      expect(native.browserPreview.attach).toHaveBeenCalledWith(
+        expect.objectContaining({ visible: false }),
+      ),
+    );
 
     native.browserPreview.attach.mockClear();
     dialog.setAttribute("aria-hidden", "true");
@@ -1631,17 +1784,21 @@ describe("BrowserTab", () => {
 
     dialog.style.visibility = "hidden";
     fireEvent.transitionEnd(dialog);
-    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
-      expect.objectContaining({ visible: true }),
-    ));
+    await waitFor(() =>
+      expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
+        expect.objectContaining({ visible: true }),
+      ),
+    );
 
     dialog.style.visibility = "visible";
     dialog.style.opacity = "0";
     dialog.setAttribute("aria-hidden", "false");
     fireEvent(dialog, new Event("transitionrun", { bubbles: true }));
-    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
-      expect.objectContaining({ visible: false }),
-    ));
+    await waitFor(() =>
+      expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
+        expect.objectContaining({ visible: false }),
+      ),
+    );
 
     dialog.style.opacity = "1";
     fireEvent.transitionEnd(dialog);
@@ -1653,21 +1810,41 @@ describe("BrowserTab", () => {
 
     dialog.style.opacity = "0";
     fireEvent.transitionEnd(dialog);
-    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
-      expect.objectContaining({ visible: true }),
-    ));
+    await waitFor(() =>
+      expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
+        expect.objectContaining({ visible: true }),
+      ),
+    );
 
     view.unmount();
     dialog.remove();
 
     view = render(
-      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "http://localhost:3000/" }} isActive={false} />,
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/" }}
+        isActive={false}
+      />,
     );
-    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenCalledWith(expect.objectContaining({ visible: false })));
+    await waitFor(() =>
+      expect(native.browserPreview.attach).toHaveBeenCalledWith(
+        expect.objectContaining({ visible: false }),
+      ),
+    );
     view.rerender(
-      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "http://localhost:3000/" }} isActive />,
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/" }}
+        isActive
+      />,
     );
-    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenLastCalledWith(expect.objectContaining({ visible: true })));
+    await waitFor(() =>
+      expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
+        expect.objectContaining({ visible: true }),
+      ),
+    );
     view.unmount();
     expect(native.unsubscribe).toHaveBeenCalled();
     expect(native.browserPreview.setVisible).toHaveBeenCalledWith("browser-1", false);
@@ -1677,11 +1854,18 @@ describe("BrowserTab", () => {
     const native = installNativePreview();
     setBrowserTab("http://localhost:3000/");
     const view = render(
-      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "http://localhost:3000/" }} isActive />,
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/" }}
+        isActive
+      />,
     );
-    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
-      expect.objectContaining({ visible: true }),
-    ));
+    await waitFor(() =>
+      expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
+        expect.objectContaining({ visible: true }),
+      ),
+    );
 
     const roots: HTMLElement[] = [];
     const cases: Array<{
@@ -1724,16 +1908,20 @@ describe("BrowserTab", () => {
         document.body.append(ancestor);
         roots.push(ancestor);
         fireEvent.transitionRun(overlay);
-        await waitFor(() => expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
-          expect.objectContaining({ visible: false }),
-        ));
+        await waitFor(() =>
+          expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
+            expect.objectContaining({ visible: false }),
+          ),
+        );
 
         overlay.setAttribute("aria-hidden", "true");
         testCase.hide(overlay, ancestor);
         fireEvent.transitionEnd(overlay);
-        await waitFor(() => expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
-          expect.objectContaining({ visible: true }),
-        ));
+        await waitFor(() =>
+          expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
+            expect.objectContaining({ visible: true }),
+          ),
+        );
 
         ancestor.remove();
       }
@@ -1747,11 +1935,18 @@ describe("BrowserTab", () => {
     const native = installNativePreview();
     setBrowserTab("http://localhost:3000/");
     const view = render(
-      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "http://localhost:3000/" }} isActive />,
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/" }}
+        isActive
+      />,
     );
-    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
-      expect.objectContaining({ visible: true }),
-    ));
+    await waitFor(() =>
+      expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
+        expect.objectContaining({ visible: true }),
+      ),
+    );
 
     const alertDialog = document.createElement("div");
     alertDialog.setAttribute("role", "alertdialog");
@@ -1761,15 +1956,19 @@ describe("BrowserTab", () => {
     alertDialog.style.opacity = "1";
     document.body.append(alertDialog);
     fireEvent.animationStart(alertDialog);
-    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
-      expect.objectContaining({ visible: false }),
-    ));
+    await waitFor(() =>
+      expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
+        expect.objectContaining({ visible: false }),
+      ),
+    );
 
     alertDialog.style.visibility = "hidden";
     fireEvent.transitionEnd(alertDialog);
-    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
-      expect.objectContaining({ visible: true }),
-    ));
+    await waitFor(() =>
+      expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
+        expect.objectContaining({ visible: true }),
+      ),
+    );
 
     native.browserPreview.attach.mockClear();
     const menu = document.createElement("div");
@@ -1784,9 +1983,11 @@ describe("BrowserTab", () => {
     menu.style.opacity = "0";
     menu.setAttribute("data-state", "open");
     fireEvent.transitionRun(menu);
-    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
-      expect.objectContaining({ visible: false }),
-    ));
+    await waitFor(() =>
+      expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
+        expect.objectContaining({ visible: false }),
+      ),
+    );
 
     const listbox = document.createElement("div");
     listbox.setAttribute("role", "listbox");
@@ -1806,9 +2007,11 @@ describe("BrowserTab", () => {
     // Happy DOM does not deliver child-removal MutationObserver records here,
     // so use the same browser lifecycle signal to force a fresh document scan.
     fireEvent.transitionEnd(alertDialog);
-    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
-      expect.objectContaining({ visible: true }),
-    ));
+    await waitFor(() =>
+      expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
+        expect.objectContaining({ visible: true }),
+      ),
+    );
 
     view.unmount();
     alertDialog.remove();
@@ -1849,31 +2052,45 @@ describe("BrowserTab", () => {
 
     try {
       const view = render(
-        <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "http://localhost:3000/" }} isActive />,
+        <BrowserTab
+          tabId="browser-1"
+          environmentId="env-1"
+          data={{ url: "http://localhost:3000/" }}
+          isActive
+        />,
       );
-      await waitFor(() => expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
-        expect.objectContaining({ visible: true }),
-      ));
-      expect(observe).toHaveBeenCalledWith(document.body, expect.objectContaining({
-        childList: true,
-        subtree: true,
-      }));
+      await waitFor(() =>
+        expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
+          expect.objectContaining({ visible: true }),
+        ),
+      );
+      expect(observe).toHaveBeenCalledWith(
+        document.body,
+        expect.objectContaining({
+          childList: true,
+          subtree: true,
+        }),
+      );
 
       document.body.append(menu);
       await act(async () => {
         notifyMutations?.([], controlledObserver as MutationObserver);
       });
-      await waitFor(() => expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
-        expect.objectContaining({ visible: false }),
-      ));
+      await waitFor(() =>
+        expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
+          expect.objectContaining({ visible: false }),
+        ),
+      );
 
       menu.remove();
       await act(async () => {
         notifyMutations?.([], controlledObserver as MutationObserver);
       });
-      await waitFor(() => expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
-        expect.objectContaining({ visible: true }),
-      ));
+      await waitFor(() =>
+        expect(native.browserPreview.attach).toHaveBeenLastCalledWith(
+          expect.objectContaining({ visible: true }),
+        ),
+      );
 
       view.unmount();
       expect(disconnect).toHaveBeenCalled();
@@ -1885,28 +2102,56 @@ describe("BrowserTab", () => {
 
   test("handles attach and DevTools failures and ignores a disposed attach completion", async () => {
     let resolveAttach: ((state: BrowserPreviewState) => void) | undefined;
-    const attach = mock(() => new Promise<BrowserPreviewState>((resolve) => { resolveAttach = resolve; }));
+    const attach = mock(
+      () =>
+        new Promise<BrowserPreviewState>((resolve) => {
+          resolveAttach = resolve;
+        }),
+    );
     const openDevTools = mock()
       .mockRejectedValueOnce("DevTools failed")
       .mockRejectedValueOnce(new Error("DevTools failed again"));
     const native = installNativePreview({ attach, openDevTools });
     setBrowserTab("http://localhost:3000/");
     const view = render(
-      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "http://localhost:3000/" }} isActive />,
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/" }}
+        isActive
+      />,
     );
-    expect(screen.getByRole("button", { name: "Open preview DevTools" }).hasAttribute("disabled")).toBe(true);
+    expect(
+      screen.getByRole("button", { name: "Open preview DevTools" }).hasAttribute("disabled"),
+    ).toBe(true);
     await waitFor(() => expect(attach).toHaveBeenCalled());
     resolveAttach?.(previewState());
-    await waitFor(() => expect(screen.getByRole("button", { name: "Open preview DevTools" }).hasAttribute("disabled")).toBe(false));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Open preview DevTools" }).hasAttribute("disabled"),
+      ).toBe(false),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Open preview DevTools" }));
     await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("DevTools failed"));
     fireEvent.click(screen.getByRole("button", { name: "Open preview DevTools" }));
-    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("DevTools failed again"));
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toBe("DevTools failed again"),
+    );
 
     let resolveDisposed: ((state: BrowserPreviewState) => void) | undefined;
-    native.browserPreview.attach = mock(() => new Promise<BrowserPreviewState>((resolve) => { resolveDisposed = resolve; }));
+    native.browserPreview.attach = mock(
+      () =>
+        new Promise<BrowserPreviewState>((resolve) => {
+          resolveDisposed = resolve;
+        }),
+    );
     view.rerender(
-      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "http://localhost:4000/" }} isActive />,
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:4000/" }}
+        isActive
+      />,
     );
     await waitFor(() => expect(native.browserPreview.attach).toHaveBeenCalled());
     view.unmount();
@@ -1917,13 +2162,21 @@ describe("BrowserTab", () => {
 
   test("ignores a disposed native attach rejection", async () => {
     let rejectAttach: ((reason?: unknown) => void) | undefined;
-    const attach = mock(() => new Promise<BrowserPreviewState>((_resolve, reject) => {
-      rejectAttach = reject;
-    }));
+    const attach = mock(
+      () =>
+        new Promise<BrowserPreviewState>((_resolve, reject) => {
+          rejectAttach = reject;
+        }),
+    );
     installNativePreview({ attach });
     setBrowserTab("http://localhost:3000/");
     const view = render(
-      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "http://localhost:3000/" }} isActive />,
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/" }}
+        isActive
+      />,
     );
     await waitFor(() => expect(attach).toHaveBeenCalled());
     view.unmount();
@@ -1938,16 +2191,40 @@ describe("BrowserTab", () => {
   });
 
   test("reports a native attach rejection", async () => {
-    installNativePreview({ attach: mock(async () => { throw new Error("attach failed"); }) });
+    installNativePreview({
+      attach: mock(async () => {
+        throw new Error("attach failed");
+      }),
+    });
     setBrowserTab("http://localhost:3000/");
-    render(<BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "http://localhost:3000/" }} isActive />);
+    render(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/" }}
+        isActive
+      />,
+    );
     await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("attach failed"));
   });
 
   test("reports a non-Error native attach rejection", async () => {
-    installNativePreview({ attach: mock(async () => { throw "attach failed as text"; }) });
+    installNativePreview({
+      attach: mock(async () => {
+        throw "attach failed as text";
+      }),
+    });
     setBrowserTab("http://localhost:3000/");
-    render(<BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "http://localhost:3000/" }} isActive />);
-    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("attach failed as text"));
+    render(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/" }}
+        isActive
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toBe("attach failed as text"),
+    );
   });
 });

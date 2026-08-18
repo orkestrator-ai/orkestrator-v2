@@ -37,7 +37,9 @@ export function extractTailscaleServeUrl(output: string): string | null {
 export function getTailscaleServeTargetPort(browserUrl: string): number {
   const target = new URL(browserUrl);
   if (target.protocol !== "http:" || target.hostname !== "127.0.0.1") {
-    throw new Error("Tailscale Serve requires the backend browser listener to use http://127.0.0.1");
+    throw new Error(
+      "Tailscale Serve requires the backend browser listener to use http://127.0.0.1",
+    );
   }
 
   const port = target.port ? Number.parseInt(target.port, 10) : 80;
@@ -48,14 +50,20 @@ export function getTailscaleServeTargetPort(browserUrl: string): number {
 }
 
 type ServeStatus = {
-  TCP?: Record<string, {
-    HTTPS?: boolean;
-    TCPForward?: unknown;
-    TerminateTLS?: unknown;
-  }>;
-  Web?: Record<string, {
-    Handlers?: Record<string, { Proxy?: unknown }>;
-  }>;
+  TCP?: Record<
+    string,
+    {
+      HTTPS?: boolean;
+      TCPForward?: unknown;
+      TerminateTLS?: unknown;
+    }
+  >;
+  Web?: Record<
+    string,
+    {
+      Handlers?: Record<string, { Proxy?: unknown }>;
+    }
+  >;
 };
 
 export class TailscaleServeConflictError extends Error {
@@ -63,9 +71,11 @@ export class TailscaleServeConflictError extends Error {
     httpsPort: number,
     readonly resetAvailable: boolean,
   ) {
-    super(resetAvailable
-      ? `Refusing to replace the existing Tailscale Serve configuration on HTTPS port ${httpsPort}`
-      : `Refusing to replace a non-HTTPS Tailscale Serve configuration on port ${httpsPort}`);
+    super(
+      resetAvailable
+        ? `Refusing to replace the existing Tailscale Serve configuration on HTTPS port ${httpsPort}`
+        : `Refusing to replace a non-HTTPS Tailscale Serve configuration on port ${httpsPort}`,
+    );
     this.name = "TailscaleServeConflictError";
   }
 }
@@ -192,9 +202,10 @@ export class TailscaleServeManager {
       // with no handlers at all is still someone else's. Only the shape this
       // manager's own teardown leaves behind — an HTTPS listener held open by
       // handlers that are not `/` — is claimable.
-      const claimableRemainder = hasHttpsListener(status, httpsPort)
-        && !hasRootHandler(status, httpsPort)
-        && httpsHandlerPaths(status, httpsPort).length > 0;
+      const claimableRemainder =
+        hasHttpsListener(status, httpsPort) &&
+        !hasRootHandler(status, httpsPort) &&
+        httpsHandlerPaths(status, httpsPort).length > 0;
       if (!claimableRemainder) {
         throw new TailscaleServeConflictError(httpsPort, hasHttpsListener(status, httpsPort));
       }
@@ -222,7 +233,9 @@ export class TailscaleServeManager {
         const status = await this.run(this.executable, ["serve", "status"]);
         url = extractTailscaleServeUrl(`${status.stdout}\n${status.stderr}`);
       } catch (error) {
-        throw new Error(`Tailscale Serve started, but its HTTPS URL could not be read: ${commandError(error)}`);
+        throw new Error(
+          `Tailscale Serve started, but its HTTPS URL could not be read: ${commandError(error)}`,
+        );
       }
     }
     if (!url) {
@@ -248,7 +261,9 @@ export class TailscaleServeManager {
       const existingStatus = await this.run(this.executable, ["serve", "status", "--json"]);
       status = parseServeStatus(existingStatus.stdout);
     } catch (error) {
-      throw new Error(`Unable to inspect Tailscale Serve configuration for reset: ${commandError(error)}`);
+      throw new Error(
+        `Unable to inspect Tailscale Serve configuration for reset: ${commandError(error)}`,
+      );
     }
 
     if (!configuredPort(status, httpsPort)) {
@@ -256,7 +271,9 @@ export class TailscaleServeManager {
       return;
     }
     if (!hasHttpsListener(status, httpsPort)) {
-      throw new Error(`Refusing to reset a non-HTTPS Tailscale Serve configuration on port ${httpsPort}`);
+      throw new Error(
+        `Refusing to reset a non-HTTPS Tailscale Serve configuration on port ${httpsPort}`,
+      );
     }
 
     const handlerPaths = httpsHandlerPaths(status, httpsPort);
@@ -272,7 +289,9 @@ export class TailscaleServeManager {
       try {
         await this.run(this.executable, args);
       } catch (error) {
-        throw new Error(`Unable to reset Tailscale Serve handler ${handlerPath}: ${commandError(error)}`);
+        throw new Error(
+          `Unable to reset Tailscale Serve handler ${handlerPath}: ${commandError(error)}`,
+        );
       }
     }
     if (this.activeServe?.httpsPort === httpsPort) this.activeServe = null;
@@ -315,8 +334,7 @@ export class TailscaleServeManager {
 
   /** True when this process configured exactly this listener and still holds it. */
   private ownsActiveServe(targetPort: number, httpsPort: number): boolean {
-    return this.activeServe?.targetPort === targetPort
-      && this.activeServe.httpsPort === httpsPort;
+    return this.activeServe?.targetPort === targetPort && this.activeServe.httpsPort === httpsPort;
   }
 
   private clearActiveServe(targetPort: number, httpsPort: number): void {

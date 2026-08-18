@@ -77,7 +77,10 @@ export class GitFetchScheduler {
 
     const record: FetchRecord = { completedAt: existing?.completedAt ?? 0 };
     const attempt = this.run(["-C", worktreePath, "fetch", "origin", ref], this.fetchTimeoutMs)
-      .then(() => undefined, () => undefined)
+      .then(
+        () => undefined,
+        () => undefined,
+      )
       .finally(() => {
         record.inFlight = undefined;
         if (record.invalidatedWhileInFlight) {
@@ -104,16 +107,19 @@ export class GitFetchScheduler {
   invalidate(worktreePath: string, ref?: string): void {
     const pending = this.commonDirs.get(worktreePath);
     if (!pending) return;
-    void pending.then((commonDir) => {
-      const prefix = `${commonDir}\0`;
-      for (const key of [...this.fetches.keys()]) {
-        if (!key.startsWith(prefix)) continue;
-        if (ref !== undefined && key !== `${prefix}${ref}`) continue;
-        const record = this.fetches.get(key);
-        if (record?.inFlight) record.invalidatedWhileInFlight = true;
-        else this.fetches.delete(key);
-      }
-    }, () => undefined);
+    void pending.then(
+      (commonDir) => {
+        const prefix = `${commonDir}\0`;
+        for (const key of Array.from(this.fetches.keys())) {
+          if (!key.startsWith(prefix)) continue;
+          if (ref !== undefined && key !== `${prefix}${ref}`) continue;
+          const record = this.fetches.get(key);
+          if (record?.inFlight) record.invalidatedWhileInFlight = true;
+          else this.fetches.delete(key);
+        }
+      },
+      () => undefined,
+    );
   }
 
   /** Drops the cached repository identity for a worktree path. */
@@ -125,14 +131,16 @@ export class GitFetchScheduler {
     const cached = this.commonDirs.get(worktreePath);
     if (cached) return cached;
 
-    const pending = this.run(["-C", worktreePath, "rev-parse", "--path-format=absolute", "--git-common-dir"], this.resolveTimeoutMs)
-      .then(
-        ({ stdout }) => stdout.trim() || worktreePath,
-        // Not a git repository, or a git too old for --path-format. Falling back
-        // to the worktree path only loses sharing; it never fetches the wrong
-        // repository, because the fetch itself still runs with -C worktreePath.
-        () => worktreePath,
-      );
+    const pending = this.run(
+      ["-C", worktreePath, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+      this.resolveTimeoutMs,
+    ).then(
+      ({ stdout }) => stdout.trim() || worktreePath,
+      // Not a git repository, or a git too old for --path-format. Falling back
+      // to the worktree path only loses sharing; it never fetches the wrong
+      // repository, because the fetch itself still runs with -C worktreePath.
+      () => worktreePath,
+    );
     this.commonDirs.set(worktreePath, pending);
     return pending;
   }

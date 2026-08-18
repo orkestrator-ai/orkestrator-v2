@@ -7,11 +7,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { PANE_LAYOUT_VERSION } from "./pane-layout";
-import {
-  isPaneNode,
-  mergePersistedPaneLayouts,
-  type PaneLayoutTab,
-} from "./pane-layout-merge";
+import { isPaneNode, mergePersistedPaneLayouts, type PaneLayoutTab } from "./pane-layout-merge";
 
 /**
  * Tabs carry arbitrary renderer-owned metadata; the merge only knows `id` and
@@ -91,11 +87,7 @@ describe("mergePersistedPaneLayouts", () => {
 
     const merged = mergePersistedPaneLayouts(base, local, remote);
 
-    expect(tabs(merged.root).map(({ id }) => id)).toEqual([
-      "base",
-      "remote",
-      "local",
-    ]);
+    expect(tabs(merged.root).map(({ id }) => id)).toEqual(["base", "remote", "local"]);
   });
 
   test("converges concurrent additions with the same logical tab id", () => {
@@ -105,10 +97,7 @@ describe("mergePersistedPaneLayouts", () => {
 
     const merged = mergePersistedPaneLayouts(base, local, remote);
 
-    expect(tabs(merged.root).map(({ id }) => id)).toEqual([
-      "setup",
-      "startup-agent",
-    ]);
+    expect(tabs(merged.root).map(({ id }) => id)).toEqual(["setup", "startup-agent"]);
   });
 
   test("a deletion wins over a concurrent metadata update", () => {
@@ -135,12 +124,13 @@ describe("mergePersistedPaneLayouts", () => {
         sessionId: "session-old",
       },
     };
-    const makeInput = (tab: TabInfo) => input({
-      kind: "leaf",
-      id: "default",
-      tabs: [tab],
-      activeTabId: tab.id,
-    });
+    const makeInput = (tab: TabInfo) =>
+      input({
+        kind: "leaf",
+        id: "default",
+        tabs: [tab],
+        activeTabId: tab.id,
+      });
     const { initialAgentModel: _consumed, ...localTab } = baseTab;
     const remoteTab: TabInfo = {
       ...baseTab,
@@ -157,26 +147,29 @@ describe("mergePersistedPaneLayouts", () => {
       makeInput(remoteTab),
     );
 
-    expect(tabs(merged.root)).toEqual([{
-      id: "native",
-      type: "agent-native",
-      displayTitle: "Remote title",
-      nativeAgentData: {
-        platform: "codex",
-        environmentId: "env-1",
-        containerId: "container-1",
-        sessionId: "session-new",
+    expect(tabs(merged.root)).toEqual([
+      {
+        id: "native",
+        type: "agent-native",
+        displayTitle: "Remote title",
+        nativeAgentData: {
+          platform: "codex",
+          environmentId: "env-1",
+          containerId: "container-1",
+          sessionId: "session-new",
+        },
       },
-    }]);
+    ]);
   });
 
   test("merges canonical native session identity with unrelated metadata", () => {
-    const makeInput = (tab: TabInfo) => input({
-      kind: "leaf",
-      id: "default",
-      tabs: [tab],
-      activeTabId: tab.id,
-    });
+    const makeInput = (tab: TabInfo) =>
+      input({
+        kind: "leaf",
+        id: "default",
+        tabs: [tab],
+        activeTabId: tab.id,
+      });
     const nativeTab = (sessionId: string): TabInfo => ({
       id: "native",
       type: "agent-native",
@@ -195,25 +188,28 @@ describe("mergePersistedPaneLayouts", () => {
 
     const merged = mergePersistedPaneLayouts(base, local, remote);
 
-    expect(tabs(merged.root)).toEqual([{
-      id: "native",
-      type: "agent-native",
-      displayTitle: "Remote title",
-      nativeAgentData: {
-        platform: "codex",
-        environmentId: "env-1",
-        sessionId: "session-new",
+    expect(tabs(merged.root)).toEqual([
+      {
+        id: "native",
+        type: "agent-native",
+        displayTitle: "Remote title",
+        nativeAgentData: {
+          platform: "codex",
+          environmentId: "env-1",
+          sessionId: "session-new",
+        },
       },
-    }]);
+    ]);
   });
 
   test("locks an assigned platform against a conflicting later write", () => {
-    const makeInput = (tab: TabInfo) => input({
-      kind: "leaf",
-      id: "default",
-      tabs: [tab],
-      activeTabId: tab.id,
-    });
+    const makeInput = (tab: TabInfo) =>
+      input({
+        kind: "leaf",
+        id: "default",
+        tabs: [tab],
+        activeTabId: tab.id,
+      });
     const nativeTab = (platform: string): TabInfo => ({
       id: "native",
       type: "agent-native",
@@ -228,23 +224,26 @@ describe("mergePersistedPaneLayouts", () => {
 
     const merged = mergePersistedPaneLayouts(base, local, remote);
 
-    expect(tabs(merged.root)).toEqual([{
-      id: "native",
-      type: "agent-native",
-      nativeAgentData: {
-        platform: "cursor",
-        environmentId: "env-1",
+    expect(tabs(merged.root)).toEqual([
+      {
+        id: "native",
+        type: "agent-native",
+        nativeAgentData: {
+          platform: "cursor",
+          environmentId: "env-1",
+        },
       },
-    }]);
+    ]);
   });
 
   test("converges two concurrent first platform locks", () => {
-    const makeInput = (tab: TabInfo) => input({
-      kind: "leaf",
-      id: "default",
-      tabs: [tab],
-      activeTabId: tab.id,
-    });
+    const makeInput = (tab: TabInfo) =>
+      input({
+        kind: "leaf",
+        id: "default",
+        tabs: [tab],
+        activeTabId: tab.id,
+      });
     const nativeTab = (platform?: string): TabInfo => ({
       id: "native",
       type: "agent-native",
@@ -260,17 +259,22 @@ describe("mergePersistedPaneLayouts", () => {
     const merged = mergePersistedPaneLayouts(base, local, remote);
     const reversed = mergePersistedPaneLayouts(base, remote, local);
 
-    expect((tabs(merged.root)[0]?.nativeAgentData as { platform?: string })?.platform).toBe("cursor");
-    expect((tabs(reversed.root)[0]?.nativeAgentData as { platform?: string })?.platform).toBe("cursor");
+    expect((tabs(merged.root)[0]?.nativeAgentData as { platform?: string })?.platform).toBe(
+      "cursor",
+    );
+    expect((tabs(reversed.root)[0]?.nativeAgentData as { platform?: string })?.platform).toBe(
+      "cursor",
+    );
   });
 
   test("does not resurrect a native identity both writers dropped", () => {
-    const makeInput = (tab: TabInfo) => input({
-      kind: "leaf",
-      id: "default",
-      tabs: [tab],
-      activeTabId: tab.id,
-    });
+    const makeInput = (tab: TabInfo) =>
+      input({
+        kind: "leaf",
+        id: "default",
+        tabs: [tab],
+        activeTabId: tab.id,
+      });
     const base = makeInput({
       id: "native",
       type: "codex-native",
@@ -297,20 +301,23 @@ describe("mergePersistedPaneLayouts", () => {
 
     const merged = mergePersistedPaneLayouts(base, local, remote);
 
-    expect(tabs(merged.root)).toEqual([{
-      id: "native",
-      type: "codex-native",
-      displayTitle: "Remote title",
-    }]);
+    expect(tabs(merged.root)).toEqual([
+      {
+        id: "native",
+        type: "codex-native",
+        displayTitle: "Remote title",
+      },
+    ]);
   });
 
   test("leaves a non-native tab's data untouched", () => {
-    const makeInput = (tab: TabInfo) => input({
-      kind: "leaf",
-      id: "default",
-      tabs: [tab],
-      activeTabId: tab.id,
-    });
+    const makeInput = (tab: TabInfo) =>
+      input({
+        kind: "leaf",
+        id: "default",
+        tabs: [tab],
+        activeTabId: tab.id,
+      });
     const base = makeInput({
       id: "shell",
       type: "plain",
@@ -330,21 +337,24 @@ describe("mergePersistedPaneLayouts", () => {
 
     const merged = mergePersistedPaneLayouts(base, local, remote);
 
-    expect(tabs(merged.root)).toEqual([{
-      id: "shell",
-      type: "plain",
-      displayTitle: "Remote title",
-      terminalData: { cwd: "/repo/apps" },
-    }]);
+    expect(tabs(merged.root)).toEqual([
+      {
+        id: "shell",
+        type: "plain",
+        displayTitle: "Remote title",
+        terminalData: { cwd: "/repo/apps" },
+      },
+    ]);
   });
 
   test("does not treat a prototype-named tab type as a native tab", () => {
-    const makeInput = (tab: TabInfo) => input({
-      kind: "leaf",
-      id: "default",
-      tabs: [tab],
-      activeTabId: tab.id,
-    });
+    const makeInput = (tab: TabInfo) =>
+      input({
+        kind: "leaf",
+        id: "default",
+        tabs: [tab],
+        activeTabId: tab.id,
+      });
     const tab = (sessionId: string): TabInfo => ({
       id: "odd",
       type: "toString",
@@ -356,12 +366,14 @@ describe("mergePersistedPaneLayouts", () => {
 
     const merged = mergePersistedPaneLayouts(base, local, remote);
 
-    expect(tabs(merged.root)).toEqual([{
-      id: "odd",
-      type: "toString",
-      displayTitle: "Remote",
-      nativeAgentData: { environmentId: "env-1", sessionId: "session-new" },
-    }]);
+    expect(tabs(merged.root)).toEqual([
+      {
+        id: "odd",
+        type: "toString",
+        displayTitle: "Remote",
+        nativeAgentData: { environmentId: "env-1", sessionId: "session-new" },
+      },
+    ]);
   });
 
   test("a remote deletion wins over a local move", () => {
@@ -377,10 +389,9 @@ describe("mergePersistedPaneLayouts", () => {
   test("replays a local move while retaining a remote-only addition", () => {
     const base = input(split(leaf("left", ["base", "moving"]), leaf("right", ["stay"])));
     const local = input(split(leaf("left", ["base"]), leaf("right", ["moving", "stay"])));
-    const remote = input(split(
-      leaf("left", ["base", "moving", "remote"]),
-      leaf("right", ["stay"]),
-    ));
+    const remote = input(
+      split(leaf("left", ["base", "moving", "remote"]), leaf("right", ["stay"])),
+    );
 
     const merged = mergePersistedPaneLayouts(base, local, remote);
     expect(merged.root).toMatchObject({
@@ -392,18 +403,9 @@ describe("mergePersistedPaneLayouts", () => {
   });
 
   test("preserves a remote reorder when a local cross-pane move shifts indexes", () => {
-    const base = input(split(
-      leaf("left", ["x", "y"]),
-      leaf("right", ["a", "b", "c"]),
-    ));
-    const local = input(split(
-      leaf("left", ["y"]),
-      leaf("right", ["x", "a", "b", "c"]),
-    ));
-    const remote = input(split(
-      leaf("left", ["x", "y"]),
-      leaf("right", ["c", "a", "b"]),
-    ));
+    const base = input(split(leaf("left", ["x", "y"]), leaf("right", ["a", "b", "c"])));
+    const local = input(split(leaf("left", ["y"]), leaf("right", ["x", "a", "b", "c"])));
+    const remote = input(split(leaf("left", ["x", "y"]), leaf("right", ["c", "a", "b"])));
 
     const merged = mergePersistedPaneLayouts(base, local, remote);
 
@@ -412,12 +414,7 @@ describe("mergePersistedPaneLayouts", () => {
         { id: "left", tabs: [{ id: "y" }] },
         {
           id: "right",
-          tabs: [
-            { id: "c" },
-            { id: "x" },
-            { id: "a" },
-            { id: "b" },
-          ],
+          tabs: [{ id: "c" }, { id: "x" }, { id: "a" }, { id: "b" }],
         },
       ],
     });
@@ -442,10 +439,7 @@ describe("mergePersistedPaneLayouts", () => {
 
     expect(merged.root).toMatchObject({
       kind: "split",
-      children: [
-        { tabs: [{ id: "base" }, { id: "local" }] },
-        { tabs: [{ id: "remote" }] },
-      ],
+      children: [{ tabs: [{ id: "base" }, { id: "local" }] }, { tabs: [{ id: "remote" }] }],
     });
   });
 
@@ -456,15 +450,15 @@ describe("mergePersistedPaneLayouts", () => {
 
     // Every side is a trust boundary: base and local come from a renderer's own
     // mirror, remote straight off disk.
-    expect(() =>
-      mergePersistedPaneLayouts(valid, valid, malformed({ kind: "leaf" }))
-    ).toThrow("malformed");
-    expect(() =>
-      mergePersistedPaneLayouts(malformed({ kind: "leaf" }), valid, valid)
-    ).toThrow("malformed");
-    expect(() =>
-      mergePersistedPaneLayouts(valid, malformed({ kind: "leaf" }), valid)
-    ).toThrow("malformed");
+    expect(() => mergePersistedPaneLayouts(valid, valid, malformed({ kind: "leaf" }))).toThrow(
+      "malformed",
+    );
+    expect(() => mergePersistedPaneLayouts(malformed({ kind: "leaf" }), valid, valid)).toThrow(
+      "malformed",
+    );
+    expect(() => mergePersistedPaneLayouts(valid, malformed({ kind: "leaf" }), valid)).toThrow(
+      "malformed",
+    );
   });
 
   test("returns the other side untouched when only one side moved", () => {
@@ -489,12 +483,13 @@ describe("mergePersistedPaneLayouts", () => {
         sessionId: "session-base",
       },
     };
-    const makeInput = (tab: TabInfo) => input({
-      kind: "leaf",
-      id: "default",
-      tabs: [tab],
-      activeTabId: tab.id,
-    });
+    const makeInput = (tab: TabInfo) =>
+      input({
+        kind: "leaf",
+        id: "default",
+        tabs: [tab],
+        activeTabId: tab.id,
+      });
 
     const merged = mergePersistedPaneLayouts(
       makeInput(baseTab),
@@ -513,12 +508,13 @@ describe("mergePersistedPaneLayouts", () => {
       type: "plain",
       initialCommands: ["one", "two"],
     };
-    const makeInput = (tab: TabInfo) => input({
-      kind: "leaf",
-      id: "default",
-      tabs: [tab],
-      activeTabId: tab.id,
-    });
+    const makeInput = (tab: TabInfo) =>
+      input({
+        kind: "leaf",
+        id: "default",
+        tabs: [tab],
+        activeTabId: tab.id,
+      });
 
     // Local re-created an equal array, so it did not change relative to base
     // and the remote edit must survive.
@@ -548,13 +544,7 @@ describe("mergePersistedPaneLayouts", () => {
 
     const merged = mergePersistedPaneLayouts(base, local, remote);
 
-    expect(tabs(merged.root).map(({ id }) => id)).toEqual([
-      "d",
-      "a",
-      "b",
-      "c",
-      "remote",
-    ]);
+    expect(tabs(merged.root).map(({ id }) => id)).toEqual(["d", "a", "b", "c", "remote"]);
   });
 
   test("replays a local reorder that moves several tabs at once", () => {
@@ -564,22 +554,13 @@ describe("mergePersistedPaneLayouts", () => {
 
     const merged = mergePersistedPaneLayouts(base, local, remote);
 
-    expect(tabs(merged.root).map(({ id }) => id)).toEqual([
-      "c",
-      "a",
-      "e",
-      "b",
-      "d",
-    ]);
+    expect(tabs(merged.root).map(({ id }) => id)).toEqual(["c", "a", "e", "b", "d"]);
   });
 
   test("keeps local topology and grafts surviving remote tabs when both split", () => {
     const base = input(leaf("default", ["base"]));
     const local = input(split(leaf("left", ["base"]), leaf("local-pane", ["local"])));
-    const remote = input(split(
-      leaf("remote-a", ["base"]),
-      leaf("remote-b", ["remote"]),
-    ));
+    const remote = input(split(leaf("remote-a", ["base"]), leaf("remote-b", ["remote"])));
 
     const merged = mergePersistedPaneLayouts(base, local, remote);
 
@@ -592,11 +573,11 @@ describe("mergePersistedPaneLayouts", () => {
         { id: "local-pane", tabs: [{ id: "local" }] },
       ],
     });
-    expect(tabs(merged.root).map(({ id }) => id).sort()).toEqual([
-      "base",
-      "local",
-      "remote",
-    ]);
+    expect(
+      tabs(merged.root)
+        .map(({ id }) => id)
+        .sort(),
+    ).toEqual(["base", "local", "remote"]);
   });
 
   test("merges selection and takes identity from the local side", () => {
@@ -636,11 +617,7 @@ describe("mergePersistedPaneLayouts", () => {
     asLeaf(localRoot).activeTabId = "b";
     asLeaf(remoteRoot).activeTabId = "c";
 
-    const merged = mergePersistedPaneLayouts(
-      input(baseRoot),
-      input(localRoot),
-      input(remoteRoot),
-    );
+    const merged = mergePersistedPaneLayouts(input(baseRoot), input(localRoot), input(remoteRoot));
 
     expect(merged.root).toMatchObject({
       tabs: [{ id: "a" }, { id: "b" }, { id: "c" }],
@@ -654,11 +631,7 @@ describe("mergePersistedPaneLayouts", () => {
     asLeaf(localRoot).activeTabId = "b";
     const remote = input(split(leaf("left", ["a"]), leaf("right", ["b"])));
 
-    const merged = mergePersistedPaneLayouts(
-      input(baseRoot),
-      input(localRoot),
-      remote,
-    );
+    const merged = mergePersistedPaneLayouts(input(baseRoot), input(localRoot), remote);
 
     expect(merged.activePaneId).toBe("right");
     expect(merged.root).toMatchObject({
@@ -791,11 +764,7 @@ describe("mergePersistedPaneLayouts", () => {
     const remoteRoot = split(leaf("left", ["y"]), leaf("right", ["c", "d", "x"]));
     asLeaf(asSplit(remoteRoot).children[1]).activeTabId = "d";
 
-    const merged = mergePersistedPaneLayouts(
-      input(baseRoot),
-      input(localRoot),
-      input(remoteRoot),
-    );
+    const merged = mergePersistedPaneLayouts(input(baseRoot), input(localRoot), input(remoteRoot));
 
     expect(merged.root).toMatchObject({
       children: [
@@ -822,12 +791,14 @@ describe("mergePersistedPaneLayouts selection-intent edge cases", () => {
 
     // Unchanged local: the fast path would clone remote, and the full merge has
     // to agree with it.
-    expect(mergePersistedPaneLayouts(base, base, remoteOnly, { selectionIntent: {} }))
-      .toEqual(mergePersistedPaneLayouts(base, base, remoteOnly));
+    expect(mergePersistedPaneLayouts(base, base, remoteOnly, { selectionIntent: {} })).toEqual(
+      mergePersistedPaneLayouts(base, base, remoteOnly),
+    );
 
     // Unchanged remote: same, in the other direction.
-    expect(mergePersistedPaneLayouts(base, localOnly, base, { selectionIntent: {} }))
-      .toEqual(mergePersistedPaneLayouts(base, localOnly, base));
+    expect(mergePersistedPaneLayouts(base, localOnly, base, { selectionIntent: {} })).toEqual(
+      mergePersistedPaneLayouts(base, localOnly, base),
+    );
   });
 
   test("an intent naming a concurrently deleted tab is discarded", () => {
@@ -905,15 +876,19 @@ describe("isPaneNode", () => {
     expect(isPaneNode({ ...validSplit, direction: "diagonal" })).toBe(false);
     expect(isPaneNode({ ...validSplit, direction: undefined })).toBe(false);
     expect(isPaneNode({ ...validSplit, children: [validLeaf] })).toBe(false);
-    expect(isPaneNode({
-      ...validSplit,
-      children: [validLeaf, validLeaf, validLeaf],
-    })).toBe(false);
+    expect(
+      isPaneNode({
+        ...validSplit,
+        children: [validLeaf, validLeaf, validLeaf],
+      }),
+    ).toBe(false);
     expect(isPaneNode({ ...validSplit, children: {} })).toBe(false);
-    expect(isPaneNode({
-      ...validSplit,
-      children: [validLeaf, { kind: "leaf" }],
-    })).toBe(false);
+    expect(
+      isPaneNode({
+        ...validSplit,
+        children: [validLeaf, { kind: "leaf" }],
+      }),
+    ).toBe(false);
   });
 
   test("rejects sizes that are missing, mis-shaped, or not finite", () => {

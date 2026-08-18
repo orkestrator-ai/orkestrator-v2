@@ -49,11 +49,7 @@ interface SpawnedSubagent {
 
 type SubagentOutcome = ToolState;
 
-const COLLABORATION_MESSAGE_TOOLS = new Set([
-  "followup_task",
-  "send_message",
-  "spawn_agent",
-]);
+const COLLABORATION_MESSAGE_TOOLS = new Set(["followup_task", "send_message", "spawn_agent"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object";
@@ -84,10 +80,12 @@ function isOpaqueMessageEnvelope(text: string): boolean {
   // The alphabet and padding checks above guarantee a canonical base64url
   // string, so Buffer.from cannot hit a recoverable decode-error branch here.
   const decoded = Buffer.from(unpadded, "base64url");
-  return decoded.toString("base64url") === unpadded
-    && decoded[0] === 0x80
-    && decoded.length >= 73
-    && (decoded.length - 57) % 16 === 0;
+  return (
+    decoded.toString("base64url") === unpadded &&
+    decoded[0] === 0x80 &&
+    decoded.length >= 73 &&
+    (decoded.length - 57) % 16 === 0
+  );
 }
 
 function asDisplayablePrompt(value: unknown): string | undefined {
@@ -169,7 +167,7 @@ function decodeJavascriptStringBody(body: string): string {
       // A backslash before a line terminator continues the line; it contributes
       // nothing to the string value.
       if (lineContinuation) return "";
-      return simple === undefined ? _match : SIMPLE_ESCAPES.get(simple) ?? simple;
+      return simple === undefined ? _match : (SIMPLE_ESCAPES.get(simple) ?? simple);
     },
   );
 }
@@ -204,7 +202,7 @@ function readJavascriptStringLiteral(
   limit: number,
 ): { value?: string; end: number } | null {
   const quote = source[start];
-  if (quote !== "\"" && quote !== "'" && quote !== "`") return null;
+  if (quote !== '"' && quote !== "'" && quote !== "`") return null;
 
   let escaped = false;
   for (let index = start + 1; index < limit; index += 1) {
@@ -226,7 +224,7 @@ function readJavascriptStringLiteral(
     const end = index + 1;
     const body = source.slice(start + 1, index);
     if (quote === "`" && body.includes("${")) return { end };
-    if (body.length <= MAX_DECODED_LITERAL_CHARS && quote === "\"") {
+    if (body.length <= MAX_DECODED_LITERAL_CHARS && quote === '"') {
       try {
         const value = JSON.parse(source.slice(start, end));
         if (typeof value === "string") return { value, end };
@@ -330,7 +328,7 @@ function scanExecCommands(source: string): ExecCommandScan {
     if (index >= limit) break;
     const character = source[index]!;
 
-    if (character === "\"" || character === "'" || character === "`") {
+    if (character === '"' || character === "'" || character === "`") {
       const literal = readJavascriptStringLiteral(source, index, limit);
       if (!literal) {
         index += 1;
@@ -342,9 +340,9 @@ function scanExecCommands(source: string): ExecCommandScan {
     }
 
     if (
-      source.startsWith("cmd", index)
-      && !isIdentifierPart(source[index - 1])
-      && !isIdentifierPart(source[index + 3])
+      source.startsWith("cmd", index) &&
+      !isIdentifierPart(source[index - 1]) &&
+      !isIdentifierPart(source[index + 3])
     ) {
       index = readValueAfterKey(index + 3);
       continue;
@@ -376,15 +374,14 @@ export function normalizeTranscriptToolArgs(
   toolName: string,
   rawArgs: unknown,
 ): Record<string, unknown> | undefined {
-  const parsed = typeof rawArgs === "string" ? parseJson<Record<string, unknown>>(rawArgs) : rawArgs;
+  const parsed =
+    typeof rawArgs === "string" ? parseJson<Record<string, unknown>>(rawArgs) : rawArgs;
 
   if (!isRecord(parsed)) {
     if (typeof rawArgs !== "string" || rawArgs.trim().length === 0) {
       return undefined;
     }
-    const command = toolName === "exec"
-      ? extractExecCommandPreview(rawArgs)
-      : undefined;
+    const command = toolName === "exec" ? extractExecCommandPreview(rawArgs) : undefined;
     return {
       input: rawArgs,
       ...(command ? { command } : {}),
@@ -399,9 +396,9 @@ export function normalizeTranscriptToolArgs(
   // of tool input. The readable final_answer event is added as a text action by
   // parseChildTranscript below.
   if (
-    COLLABORATION_MESSAGE_TOOLS.has(toolName)
-    && typeof parsed.message === "string"
-    && isOpaqueMessageEnvelope(parsed.message.trim())
+    COLLABORATION_MESSAGE_TOOLS.has(toolName) &&
+    typeof parsed.message === "string" &&
+    isOpaqueMessageEnvelope(parsed.message.trim())
   ) {
     normalized = { ...parsed };
     delete normalized.message;
@@ -418,23 +415,21 @@ export function normalizeTranscriptToolArgs(
     // Only `input` carries exec source. Falling back to the serialized args
     // would scan the whole JSON and promote an unrelated nested `cmd` key —
     // say `{"meta":{"cmd":"…"}}` — into the command label.
-    const command = typeof normalized.input === "string"
-      ? extractExecCommandPreview(normalized.input)
-      // app-server types `arguments` as JsonValue, so a pre-parsed object with
-      // a plain `cmd` reaches here without ever having been a source snippet.
-      : typeof normalized.cmd === "string"
-        ? capCommandPreview(normalized.cmd.trim()) || undefined
-        : undefined;
+    const command =
+      typeof normalized.input === "string"
+        ? extractExecCommandPreview(normalized.input)
+        : // app-server types `arguments` as JsonValue, so a pre-parsed object with
+          // a plain `cmd` reaches here without ever having been a source snippet.
+          typeof normalized.cmd === "string"
+          ? capCommandPreview(normalized.cmd.trim()) || undefined
+          : undefined;
     if (command) return { ...normalized, command };
   }
 
   return normalized;
 }
 
-function appendTextAction(
-  actions: TranscriptActionPart[],
-  value: unknown,
-): void {
+function appendTextAction(actions: TranscriptActionPart[], value: unknown): void {
   const content = asString(value);
   if (!content) return;
   if (actions.some((action) => action.type === "text" && action.content === content)) {
@@ -466,9 +461,7 @@ export const SUBAGENT_OUTPUT_TRUNCATION_NOTICE = "\n… output truncated";
 
 export function capActionOutput(text: string): string {
   if (text.length <= MAX_SUBAGENT_ACTION_OUTPUT_CHARS) return text;
-  return (
-    text.slice(0, MAX_SUBAGENT_ACTION_OUTPUT_CHARS) + SUBAGENT_OUTPUT_TRUNCATION_NOTICE
-  );
+  return text.slice(0, MAX_SUBAGENT_ACTION_OUTPUT_CHARS) + SUBAGENT_OUTPUT_TRUNCATION_NOTICE;
 }
 
 export function stringifyTranscriptToolOutput(value: unknown): string | undefined {
@@ -493,7 +486,7 @@ function transcriptToolOutputText(value: unknown): string {
   return value
     .filter(isRecord)
     .filter((item) => item.type === "input_text")
-    .map((item) => typeof item.text === "string" ? item.text : "")
+    .map((item) => (typeof item.text === "string" ? item.text : ""))
     .join("\n");
 }
 
@@ -513,18 +506,18 @@ export function resolveTranscriptToolOutputState(
 
   const text = transcriptToolOutputText(output) || (typeof output === "string" ? output : "");
   if (
-    /^apply_patch verification failed\b/im.test(text)
-    || /^failed to find (?:expected )?(?:lines|context)\b/im.test(text)
-    || /^invalid (?:patch|context)(?:\b| \d)/im.test(text)
-    || /^patch (?:application )?(?:failed|did not apply)\b/im.test(text)
-    || /^(?:unable|failed) to apply (?:the )?patch\b/im.test(text)
-    || /^error applying (?:the )?patch\b/im.test(text)
-    || /^failed to read file to (?:update|delete)\b/im.test(text)
-    || /^failed to (?:write|delete|move) file\b/im.test(text)
-    || /^failed to create parent directories for\b/im.test(text)
-    || /^invalid (?:add|delete|update) file line\b/im.test(text)
-    || /^invalid (?:eof )?context line\b/im.test(text)
-    || /^(?:missing end of file|duplicate path|move target already exists)\b/im.test(text)
+    /^apply_patch verification failed\b/im.test(text) ||
+    /^failed to find (?:expected )?(?:lines|context)\b/im.test(text) ||
+    /^invalid (?:patch|context)(?:\b| \d)/im.test(text) ||
+    /^patch (?:application )?(?:failed|did not apply)\b/im.test(text) ||
+    /^(?:unable|failed) to apply (?:the )?patch\b/im.test(text) ||
+    /^error applying (?:the )?patch\b/im.test(text) ||
+    /^failed to read file to (?:update|delete)\b/im.test(text) ||
+    /^failed to (?:write|delete|move) file\b/im.test(text) ||
+    /^failed to create parent directories for\b/im.test(text) ||
+    /^invalid (?:add|delete|update) file line\b/im.test(text) ||
+    /^invalid (?:eof )?context line\b/im.test(text) ||
+    /^(?:missing end of file|duplicate path|move target already exists)\b/im.test(text)
   ) {
     return "failure";
   }
@@ -570,11 +563,7 @@ export function applyTranscriptToolOutput<
     toolOutput?: string;
     toolError?: string;
   },
->(
-  part: Part,
-  output: unknown,
-  state: ToolState | null = null,
-): Part {
+>(part: Part, output: unknown, state: ToolState | null = null): Part {
   const serializedOutput = stringifyTranscriptToolOutput(output);
   const nextState = state === null ? undefined : state;
 
@@ -582,7 +571,7 @@ export function applyTranscriptToolOutput<
     ...part,
     toolState: nextState,
     toolOutput: nextState === "failure" ? undefined : serializedOutput,
-    toolError: nextState === "failure" ? serializedOutput ?? "Tool failed" : undefined,
+    toolError: nextState === "failure" ? (serializedOutput ?? "Tool failed") : undefined,
   };
 }
 
@@ -592,16 +581,16 @@ function isExplicitSubagentFailureEvent(eventType: string | undefined): boolean 
   }
 
   return (
-    eventType === "task_failed"
-    || eventType === "task_error"
-    || eventType === "task_aborted"
-    || eventType === "task_cancelled"
+    eventType === "task_failed" ||
+    eventType === "task_error" ||
+    eventType === "task_aborted" ||
+    eventType === "task_cancelled" ||
     // An interrupted child writes `turn_aborted`, *not* `task_aborted`, and that
     // record is the only terminal marker its rollout ever gets. Omitting it left
     // the row pending forever, because the parent-side snapshot cannot be relied
     // on to name an interrupted child either (see `applyCodexCollabStateToSubagentParts`).
     // A follow-up on the same thread still reopens the row through `markPending`.
-    || eventType === "turn_aborted"
+    eventType === "turn_aborted"
   );
 }
 
@@ -666,11 +655,9 @@ function parseChildTranscript(
     // follow-up. Starting a new turn must reopen the row; otherwise the old
     // terminal marker remains sticky while new actions stream underneath it.
     if (
-      record.type === "turn_context"
-      || (
-        record.type === "event_msg"
-        && (payload.type === "task_started" || payload.type === "user_message")
-      )
+      record.type === "turn_context" ||
+      (record.type === "event_msg" &&
+        (payload.type === "task_started" || payload.type === "user_message"))
     ) {
       markPending();
       continue;
@@ -732,20 +719,21 @@ function parseChildTranscript(
       const input = payloadType === "custom_tool_call" ? payload.input : payload.arguments;
       const status = asString(payload.status);
       const initialState: ToolState =
-        status === "failed"
-          ? "failure"
-          : status === "completed"
-            ? "success"
-            : "pending";
+        status === "failed" ? "failure" : status === "completed" ? "success" : "pending";
       const part = createActionPart(toolName, input, initialState);
 
-      if (payloadType === "custom_tool_call" && (initialState === "success" || initialState === "failure")) {
+      if (
+        payloadType === "custom_tool_call" &&
+        (initialState === "success" || initialState === "failure")
+      ) {
         const output = payload.output;
-        actions.push(applyTranscriptToolOutput(
-          part,
-          output,
-          resolveTranscriptToolOutputState(toolName, output, initialState),
-        ));
+        actions.push(
+          applyTranscriptToolOutput(
+            part,
+            output,
+            resolveTranscriptToolOutputState(toolName, output, initialState),
+          ),
+        );
       } else {
         actions.push(part);
       }
@@ -817,8 +805,10 @@ export function deriveSubagentPartFromChildRecords(
   agentId: string,
   records: TranscriptRecord[],
 ): TranscriptSubagentPart {
-  const { reopenedAfterTerminal: _reopenedAfterTerminal, ...part } =
-    parseChildTranscript(records, { callId: `native:${agentId}`, agentId });
+  const { reopenedAfterTerminal: _reopenedAfterTerminal, ...part } = parseChildTranscript(records, {
+    callId: `native:${agentId}`,
+    agentId,
+  });
   // The child's session metadata may not be reachable yet, in which case the
   // parse has no nickname or role and `content` falls through to the thread id.
   // A raw UUID is not a title: leave the generic label so collab reconciliation
@@ -905,11 +895,11 @@ function outcomeFromAgentStatus(status: unknown): SubagentOutcome | undefined {
   }
 
   if (
-    typeof status.failed === "string"
-    || typeof status.error === "string"
-    || typeof status.errored === "string"
-    || status.cancelled === true
-    || status.aborted === true
+    typeof status.failed === "string" ||
+    typeof status.error === "string" ||
+    typeof status.errored === "string" ||
+    status.cancelled === true ||
+    status.aborted === true
   ) {
     return "failure";
   }
@@ -1046,8 +1036,7 @@ export function deriveSubagentPartsFromTranscriptRecords(
       const args = parseJson<Record<string, unknown>>(payload.arguments);
       const spawned: SpawnedSubagent = {
         callId,
-        agentId: resolvedAgentIdBySpawnCallId.get(callId)
-          ?? activityAgentIdByCallId.get(callId),
+        agentId: resolvedAgentIdBySpawnCallId.get(callId) ?? activityAgentIdByCallId.get(callId),
         role: asString(args?.agent_type) ?? asString(args?.task_name),
         prompt: asDisplayablePrompt(args?.message),
       };
@@ -1068,29 +1057,24 @@ export function deriveSubagentPartsFromTranscriptRecords(
       }
 
       const output = parseJson<Record<string, unknown>>(payload.output);
-      spawned.agentId = asString(output?.agent_id)
-        ?? resolvedAgentIdBySpawnCallId.get(callId)
-        ?? activityAgentIdByCallId.get(callId)
-        ?? spawned.agentId;
+      spawned.agentId =
+        asString(output?.agent_id) ??
+        resolvedAgentIdBySpawnCallId.get(callId) ??
+        activityAgentIdByCallId.get(callId) ??
+        spawned.agentId;
       spawned.nickname = asString(output?.nickname) ?? spawned.nickname;
     }
   }
 
   return spawnedSubagents.map((spawned) => {
-    const childRecords = spawned.agentId ? childRecordsByAgentId.get(spawned.agentId) ?? [] : [];
+    const childRecords = spawned.agentId ? (childRecordsByAgentId.get(spawned.agentId) ?? []) : [];
     const part = parseChildTranscript(childRecords, spawned);
-    const parentOutcome = spawned.agentId
-      ? collabOutcomeByAgentId.get(spawned.agentId)
-      : undefined;
+    const parentOutcome = spawned.agentId ? collabOutcomeByAgentId.get(spawned.agentId) : undefined;
 
     const { reopenedAfterTerminal, ...transcriptPart } = part;
     return {
       ...transcriptPart,
-      toolState: resolveSubagentOutcome(
-        part.toolState,
-        parentOutcome,
-        reopenedAfterTerminal,
-      ),
+      toolState: resolveSubagentOutcome(part.toolState, parentOutcome, reopenedAfterTerminal),
     };
   });
 }
@@ -1111,9 +1095,5 @@ export function mergeSubagentPartsIntoMessageParts<T extends MergeablePart>(
     }
   }
 
-  return [
-    ...parts.slice(0, insertIndex),
-    ...subagentParts,
-    ...parts.slice(insertIndex),
-  ];
+  return [...parts.slice(0, insertIndex), ...subagentParts, ...parts.slice(insertIndex)];
 }

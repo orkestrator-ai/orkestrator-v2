@@ -28,11 +28,7 @@ describe("BlockingPromptCard", () => {
   });
 
   test("merges caller classes with the shared blocking treatment", () => {
-    render(
-      <BlockingPromptCard className="custom-card">
-        Approve command?
-      </BlockingPromptCard>,
-    );
+    render(<BlockingPromptCard className="custom-card">Approve command?</BlockingPromptCard>);
 
     const card = screen.getByText("Approve command?");
     expect(card.className).toContain("custom-card");
@@ -62,8 +58,9 @@ describe("BlockingPromptCard", () => {
         Approve command?
       </BlockingPromptCard>,
     );
-    expect(screen.getByRole("group", { name: "Approval required" }).getAttribute("aria-busy"))
-      .toBe("true");
+    expect(screen.getByRole("group", { name: "Approval required" }).getAttribute("aria-busy")).toBe(
+      "true",
+    );
   });
 
   test.each([
@@ -82,7 +79,9 @@ describe("BlockingPromptCard", () => {
       </BlockingPromptCard>,
     );
 
-    const outcome = screen.getAllByRole("status").find((node) => message.test(node.textContent ?? ""));
+    const outcome = screen
+      .getAllByRole("status")
+      .find((node) => message.test(node.textContent ?? ""));
     expect(outcome).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Dismiss" }) === null).toBe(true);
   });
@@ -107,8 +106,9 @@ describe("BlockingPromptCard", () => {
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     expect(retry).toHaveBeenCalledTimes(1);
     expect(dismiss).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole("button", { name: "Dismiss" }).parentElement?.className)
-      .toContain("flex-wrap");
+    expect(screen.getByRole("button", { name: "Dismiss" }).parentElement?.className).toContain(
+      "flex-wrap",
+    );
   });
 
   test("fails closed automatically for a non-finite deadline", () => {
@@ -140,12 +140,15 @@ describe("BlockingPromptCard", () => {
       </BlockingPromptCard>,
     );
 
-    expect(screen.getByRole("group", { name: "Approval required" }).getAttribute("aria-busy"))
-      .toBe("true");
-    expect((screen.getByRole("button", { name: "Retry" }) as HTMLButtonElement).disabled)
-      .toBe(true);
-    expect((screen.getByRole("button", { name: "Dismiss" }) as HTMLButtonElement).disabled)
-      .toBe(false);
+    expect(screen.getByRole("group", { name: "Approval required" }).getAttribute("aria-busy")).toBe(
+      "true",
+    );
+    expect((screen.getByRole("button", { name: "Retry" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    expect((screen.getByRole("button", { name: "Dismiss" }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
   });
 
   test("keeps terminal controls hidden when an error overrides the status copy", () => {
@@ -172,9 +175,7 @@ describe("BlockingPromptCard", () => {
   });
 
   test("derives its label and arrival announcement from a string title", () => {
-    render(
-      <BlockingPromptCard title="Approval required">Approve command?</BlockingPromptCard>,
-    );
+    render(<BlockingPromptCard title="Approval required">Approve command?</BlockingPromptCard>);
 
     expect(screen.getByRole("group", { name: "Approval required" })).toBeTruthy();
     expect(screen.getByRole("status").textContent).toBe("Approval required");

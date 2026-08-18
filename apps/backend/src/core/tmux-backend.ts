@@ -93,7 +93,9 @@ export class TmuxBackend {
       return execWithRawOutput(args[0]!, args.slice(1), { cwd: this.cwd, timeoutMs });
     }
     if (!this.containerId) throw new Error("container backend has no container id");
-    return execWithRawOutput("docker", containerExecArgs(this.containerId, args, false), { timeoutMs });
+    return execWithRawOutput("docker", containerExecArgs(this.containerId, args, false), {
+      timeoutMs,
+    });
   }
 
   async readFile(filePath: string): Promise<string | undefined> {
@@ -211,7 +213,7 @@ export class TmuxBackend {
       "set -eu",
       "umask 077",
       `tmp=${shellArg(tempPath)}`,
-      'trap \'rm -f "$tmp"\' EXIT',
+      "trap 'rm -f \"$tmp\"' EXIT",
       'cat > "$tmp"',
       'chmod 600 "$tmp"',
       '[ "$(stat -c %a "$tmp")" = "600" ]',
@@ -261,7 +263,10 @@ export class TmuxBackend {
     }
 
     const out = await this.exec(["sh", "-c", `ls -1 ${shellArg(dirPath)} 2>/dev/null || true`]);
-    return out.stdout.split("\n").map((line) => line.trim()).filter(Boolean);
+    return out.stdout
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
   }
 
   async fileSize(filePath: string): Promise<number> {
@@ -274,7 +279,11 @@ export class TmuxBackend {
       }
     }
 
-    const out = await this.exec(["sh", "-c", `stat -c %s ${shellArg(filePath)} 2>/dev/null || echo 0`]);
+    const out = await this.exec([
+      "sh",
+      "-c",
+      `stat -c %s ${shellArg(filePath)} 2>/dev/null || echo 0`,
+    ]);
     return Number.parseInt(out.stdout.trim(), 10) || 0;
   }
 
@@ -316,7 +325,10 @@ export class TmuxBackend {
    * Local reads are three cheap syscalls issued together; container reads
    * collapse into a single `docker exec`.
    */
-  async pollSnapshot(paths: SessionHookPaths, transcriptPath: string | undefined): Promise<TmuxPollSnapshot> {
+  async pollSnapshot(
+    paths: SessionHookPaths,
+    transcriptPath: string | undefined,
+  ): Promise<TmuxPollSnapshot> {
     if (this.kind === "local") {
       const [pending, timeouts, transcriptSize] = await Promise.all([
         this.listDir(paths.pendingDir),
@@ -343,10 +355,8 @@ export class TmuxBackend {
         .slice(0, MAX_PREVIOUS_SESSIONS);
     }
 
-    return listLocalJsonlByMtime(
-      dirPath,
-      await this.listDir(dirPath),
-      (filePath) => this.fileMtimeUnix(filePath),
+    return listLocalJsonlByMtime(dirPath, await this.listDir(dirPath), (filePath) =>
+      this.fileMtimeUnix(filePath),
     );
   }
 
@@ -354,7 +364,10 @@ export class TmuxBackend {
    * The first `maxBytes` of a transcript plus its line count, without ever
    * materialising the whole file.
    */
-  async transcriptHead(filePath: string, maxBytes: number): Promise<{ head: string; lineCount: number }> {
+  async transcriptHead(
+    filePath: string,
+    maxBytes: number,
+  ): Promise<{ head: string; lineCount: number }> {
     if (this.kind === "container") {
       const out = await this.exec(["sh", "-c", transcriptHeadCommand(filePath, maxBytes)]);
       return parseTranscriptHeadOutput(out.stdout);
@@ -395,10 +408,11 @@ export class TmuxBackend {
       }
     }
 
-    const out = await this.exec(["sh", "-c", `stat -c %Y ${shellArg(filePath)} 2>/dev/null || echo 0`]);
+    const out = await this.exec([
+      "sh",
+      "-c",
+      `stat -c %Y ${shellArg(filePath)} 2>/dev/null || echo 0`,
+    ]);
     return Number.parseInt(out.stdout.trim(), 10) || 0;
   }
 }
-
-
-

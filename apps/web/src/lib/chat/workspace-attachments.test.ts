@@ -56,25 +56,30 @@ describe("resolveWorkspaceAttachment", () => {
   });
 
   test("refuses an image for an agent with no image capability", () => {
-    expect(resolveWorkspaceAttachment(imageFile, { ...local, allowImages: false }))
-      .toMatchObject({ error: "Cannot attach image" });
+    expect(resolveWorkspaceAttachment(imageFile, { ...local, allowImages: false })).toMatchObject({
+      error: "Cannot attach image",
+    });
   });
 
   test("refuses a file for an agent with no file capability", () => {
-    expect(resolveWorkspaceAttachment(textFile, { ...local, allowFiles: false }))
-      .toMatchObject({ error: "Cannot attach file" });
+    expect(resolveWorkspaceAttachment(textFile, { ...local, allowFiles: false })).toMatchObject({
+      error: "Cannot attach file",
+    });
   });
 
   test("refuses when the environment cannot resolve a root path", () => {
-    expect(resolveWorkspaceAttachment(textFile, { allowFiles: true, allowImages: true }))
-      .toMatchObject({ error: "Cannot attach file" });
+    expect(
+      resolveWorkspaceAttachment(textFile, { allowFiles: true, allowImages: true }),
+    ).toMatchObject({ error: "Cannot attach file" });
   });
 
   test("enforces the shared per-prompt attachment ceiling", () => {
-    expect(resolveWorkspaceAttachment(textFile, {
-      ...local,
-      attachedCount: MAX_PROMPT_ATTACHMENTS,
-    })).toMatchObject({ error: "Cannot attach file" });
+    expect(
+      resolveWorkspaceAttachment(textFile, {
+        ...local,
+        attachedCount: MAX_PROMPT_ATTACHMENTS,
+      }),
+    ).toMatchObject({ error: "Cannot attach file" });
   });
 });
 
@@ -83,23 +88,26 @@ describe("retainSupportedAttachments", () => {
   const image = { id: "b", type: "image" as const, path: "/work/tree/shot.png", name: "shot.png" };
 
   test("keeps images and drops files for an image-only agent", () => {
-    expect(retainSupportedAttachments([file, image], { files: false, images: true }))
-      .toEqual([image]);
+    expect(retainSupportedAttachments([file, image], { files: false, images: true })).toEqual([
+      image,
+    ]);
   });
 
   test("keeps files and drops images for a file-only agent", () => {
-    expect(retainSupportedAttachments([file, image], { files: true, images: false }))
-      .toEqual([file]);
+    expect(retainSupportedAttachments([file, image], { files: true, images: false })).toEqual([
+      file,
+    ]);
   });
 
   test("keeps both when the agent accepts both", () => {
-    expect(retainSupportedAttachments([file, image], { files: true, images: true }))
-      .toEqual([file, image]);
+    expect(retainSupportedAttachments([file, image], { files: true, images: true })).toEqual([
+      file,
+      image,
+    ]);
   });
 
   test("drops everything for an agent that accepts no attachments", () => {
-    expect(retainSupportedAttachments([file, image], { files: false, images: false }))
-      .toEqual([]);
+    expect(retainSupportedAttachments([file, image], { files: false, images: false })).toEqual([]);
   });
 
   test("drops everything when no capability is known rather than guessing", () => {

@@ -186,7 +186,13 @@ const handlers = {
           threadId,
           turnId,
           completedAtMs: 1_700_000_300_000,
-          item: { id: "item-1", type: "agentMessage", text: "done", phase: null, memoryCitation: null },
+          item: {
+            id: "item-1",
+            type: "agentMessage",
+            text: "done",
+            phase: null,
+            memoryCitation: null,
+          },
         },
       });
       send({

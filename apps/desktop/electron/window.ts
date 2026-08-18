@@ -47,7 +47,7 @@ export async function createMainWindow(options: CreateMainWindowOptions): Promis
     ? path.join(options.rendererRoot, "index.html")
     : resolveRendererIndexPath(options.appPath);
   const trustedRendererUrl = options.isDev
-    ? options.devServerUrl ?? "http://127.0.0.1:1420"
+    ? (options.devServerUrl ?? "http://127.0.0.1:1420")
     : pathToFileURL(rendererIndexPath).href;
   const mainWindow = new options.BrowserWindowCtor({
     title: options.title ?? PRODUCT_NAME,

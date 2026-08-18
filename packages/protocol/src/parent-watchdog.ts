@@ -82,9 +82,7 @@ export interface ReparentWatchdogOptions {
  * the ppid is stable for the process's whole life and a change can never mean
  * what it means under a supervisor that spawned us directly.
  */
-export function startReparentWatchdog(
-  options: ReparentWatchdogOptions,
-): (() => void) | null {
+export function startReparentWatchdog(options: ReparentWatchdogOptions): (() => void) | null {
   const readParentPid = options.readParentPid ?? (() => process.ppid);
   const initialParentPid = readParentPid();
   if (initialParentPid <= 1) return null;

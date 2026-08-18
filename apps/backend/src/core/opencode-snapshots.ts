@@ -10,8 +10,7 @@ import { ProviderUnavailableError } from "./agent-provider-contract.js";
 
 // One more than the sessions we can track, so a full tracking set still leaves
 // room to observe that the provider returned an extra entry.
-export const MAX_OPENCODE_EXISTENCE_SNAPSHOT_SESSIONS =
-  MAX_TRACKED_INTERACTION_SESSIONS + 1;
+export const MAX_OPENCODE_EXISTENCE_SNAPSHOT_SESSIONS = MAX_TRACKED_INTERACTION_SESSIONS + 1;
 export const MAX_OPENCODE_EXISTENCE_SNAPSHOT_BYTES = 4 * 1024 * 1024;
 
 export function boundedOwnedOpenCodeCollection(
@@ -26,15 +25,14 @@ export function boundedOwnedOpenCodeCollection(
   const owned: unknown[] = [];
   for (const entry of value) {
     const request = asRecord(entry);
-    const sessionId = nonEmptyString(request?.sessionID)
-      ?? nonEmptyString(request?.sessionId);
+    const sessionId = nonEmptyString(request?.sessionID) ?? nonEmptyString(request?.sessionId);
     if (!sessionId || !ownedSessionIds.has(sessionId)) continue;
     const id = nonEmptyString(request?.id);
     if (
-      !request
-      || !id
-      || id.length > AGENT_INTERACTION_LIMITS.maxIdLength
-      || sessionId.length > AGENT_INTERACTION_LIMITS.maxIdLength
+      !request ||
+      !id ||
+      id.length > AGENT_INTERACTION_LIMITS.maxIdLength ||
+      sessionId.length > AGENT_INTERACTION_LIMITS.maxIdLength
     ) {
       throw new ProviderUnavailableError(`${operation} contains a malformed identity`);
     }
@@ -46,15 +44,9 @@ export function boundedOwnedOpenCodeCollection(
   return owned;
 }
 
-export type OpenCodeSessionLifecycleState =
-  | "running"
-  | "idle"
-  | "unknown"
-  | "missing";
+export type OpenCodeSessionLifecycleState = "running" | "idle" | "unknown" | "missing";
 
-export type OpenCodeExistenceSnapshot = ReturnType<
-  typeof boundedOpenCodeExistenceSnapshot
->;
+export type OpenCodeExistenceSnapshot = ReturnType<typeof boundedOpenCodeExistenceSnapshot>;
 
 export type OpenCodeExistenceProbe = {
   state: "exists" | "missing" | "unknown";
@@ -71,8 +63,8 @@ export function boundedOpenCodeStatusSnapshot(
   }
   const entries = Object.entries(snapshot);
   if (
-    entries.length > MAX_TRACKED_PROVIDER_INTERACTIONS
-    || serializedByteLength(value) > AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes
+    entries.length > MAX_TRACKED_PROVIDER_INTERACTIONS ||
+    serializedByteLength(value) > AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes
   ) {
     throw new ProviderUnavailableError("OpenCode status read is oversized");
   }
@@ -82,14 +74,12 @@ export function boundedOpenCodeStatusSnapshot(
     const rawStatus = snapshot[sessionId];
     const status = asRecord(rawStatus);
     if (
-      sessionId.length === 0
-      || sessionId.length > AGENT_INTERACTION_LIMITS.maxIdLength
-      || !status
-      || typeof status.type !== "string"
+      sessionId.length === 0 ||
+      sessionId.length > AGENT_INTERACTION_LIMITS.maxIdLength ||
+      !status ||
+      typeof status.type !== "string"
     ) {
-      throw new ProviderUnavailableError(
-        "OpenCode status read contains a malformed entry",
-      );
+      throw new ProviderUnavailableError("OpenCode status read contains a malformed entry");
     }
     validated[sessionId] = status;
   }
@@ -103,8 +93,8 @@ export function boundedOpenCodeExistenceSnapshot(value: unknown): {
     throw new ProviderUnavailableError("OpenCode session list is malformed");
   }
   if (
-    value.length > MAX_OPENCODE_EXISTENCE_SNAPSHOT_SESSIONS
-    || serializedByteLength(value) > MAX_OPENCODE_EXISTENCE_SNAPSHOT_BYTES
+    value.length > MAX_OPENCODE_EXISTENCE_SNAPSHOT_SESSIONS ||
+    serializedByteLength(value) > MAX_OPENCODE_EXISTENCE_SNAPSHOT_BYTES
   ) {
     throw new ProviderUnavailableError("OpenCode session list is oversized");
   }
@@ -115,10 +105,7 @@ export function boundedOpenCodeExistenceSnapshot(value: unknown): {
     // never owned. A malformed foreign entry cannot prove that a valid target
     // exists or is absent, so ignore it instead of stalling every tracked
     // session in the environment.
-    if (
-      !sessionId
-      || sessionId.length > AGENT_INTERACTION_LIMITS.maxIdLength
-    ) continue;
+    if (!sessionId || sessionId.length > AGENT_INTERACTION_LIMITS.maxIdLength) continue;
     sessionIds.add(sessionId);
   }
   return { sessionIds };

@@ -3,10 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  Client as McpClient,
-  StreamableHTTPClientTransport,
-} from "@modelcontextprotocol/client";
+import { Client as McpClient, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { AgentToolsServer } from "./agent-tools.js";
 import { StorageService } from "./storage.js";
 
@@ -68,9 +65,7 @@ describe("agent Kanban tools", () => {
       }),
     });
     const text = await response.text();
-    const payload = response.headers.get("content-type")?.startsWith(
-      "text/event-stream",
-    )
+    const payload = response.headers.get("content-type")?.startsWith("text/event-stream")
       ? text
           .split("\n")
           .find((line) => line.startsWith("data: "))
@@ -78,7 +73,7 @@ describe("agent Kanban tools", () => {
       : text;
     return {
       response,
-      body: payload ? JSON.parse(payload) as RpcResponse : {},
+      body: payload ? (JSON.parse(payload) as RpcResponse) : {},
       rawText: text,
     };
   }
@@ -95,23 +90,28 @@ describe("agent Kanban tools", () => {
   ): Promise<{ status: number; headers: Record<string, string | string[] | undefined> }> {
     const target = new URL(url);
     return await new Promise((resolve, reject) => {
-      const request = httpRequest({
-        hostname: target.hostname,
-        port: target.port,
-        path: options.path ?? target.pathname,
-        method: options.method ?? "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "content-type": "application/json",
-          ...options.headers,
+      const request = httpRequest(
+        {
+          hostname: target.hostname,
+          port: target.port,
+          path: options.path ?? target.pathname,
+          method: options.method ?? "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "content-type": "application/json",
+            ...options.headers,
+          },
         },
-      }, (response) => {
-        response.resume();
-        response.once("end", () => resolve({
-          status: response.statusCode ?? 0,
-          headers: response.headers,
-        }));
-      });
+        (response) => {
+          response.resume();
+          response.once("end", () =>
+            resolve({
+              status: response.statusCode ?? 0,
+              headers: response.headers,
+            }),
+          );
+        },
+      );
       request.once("error", reject);
       for (const chunk of options.chunks ?? []) request.write(chunk);
       request.end();
@@ -130,10 +130,12 @@ describe("agent Kanban tools", () => {
       "update_ticket",
       "add_ticket_comment",
     ]);
-    expect(listed.body.result?.tools?.find((tool) => tool.name === "get_ticket")?.annotations)
-      .toMatchObject({ readOnlyHint: true, destructiveHint: false });
-    expect(listed.body.result?.tools?.find((tool) => tool.name === "update_ticket")?.annotations)
-      .toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: true });
+    expect(
+      listed.body.result?.tools?.find((tool) => tool.name === "get_ticket")?.annotations,
+    ).toMatchObject({ readOnlyHint: true, destructiveHint: false });
+    expect(
+      listed.body.result?.tools?.find((tool) => tool.name === "update_ticket")?.annotations,
+    ).toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: true });
   });
 
   test("negotiates MCP 2026-07-28 while retaining the legacy endpoint", async () => {
@@ -142,14 +144,11 @@ describe("agent Kanban tools", () => {
       { name: "orkestrator-modern-contract", version: "1.0.0" },
       { versionNegotiation: { mode: "auto" } },
     );
-    const transport = new StreamableHTTPClientTransport(
-      new URL(connection.url),
-      {
-        requestInit: {
-          headers: { Authorization: `Bearer ${connection.token}` },
-        },
+    const transport = new StreamableHTTPClientTransport(new URL(connection.url), {
+      requestInit: {
+        headers: { Authorization: `Bearer ${connection.token}` },
       },
-    );
+    });
 
     try {
       await client.connect(transport);
@@ -194,18 +193,20 @@ describe("agent Kanban tools", () => {
       name: "update_ticket",
       arguments: { ticketId: ticket.id, status: "review" },
     });
-    expect(
-      (updated.body.result?.structuredContent?.ticket as { status: string }).status,
-    ).toBe("review");
+    expect((updated.body.result!.structuredContent!.ticket as { status: string }).status).toBe(
+      "review",
+    );
 
     const commented = await rpc(connection.url, connection.token, "tools/call", {
       name: "add_ticket_comment",
       arguments: { ticketId: ticket.id, text: "Implementation complete." },
     });
     expect(
-      (commented.body.result?.structuredContent?.ticket as {
-        comments: Array<{ text: string }>;
-      }).comments,
+      (
+        commented.body.result!.structuredContent!.ticket as {
+          comments: Array<{ text: string }>;
+        }
+      ).comments,
     ).toEqual([expect.objectContaining({ text: "Implementation complete." })]);
 
     const read = await rpc(connection.url, connection.token, "tools/call", {
@@ -228,9 +229,9 @@ describe("agent Kanban tools", () => {
       tickets: [expect.objectContaining({ id: ticket.id, commentCount: 1 })],
     });
     expect(changes).toHaveLength(3);
-    expect(changes.every((change) =>
-      change.resource === "kanban" && change.id === "project-1"
-    )).toBe(true);
+    expect(
+      changes.every((change) => change.resource === "kanban" && change.id === "project-1"),
+    ).toBe(true);
   });
 
   test("paginates ticket lists and comments across later pages", async () => {
@@ -316,11 +317,7 @@ describe("agent Kanban tools", () => {
   test("keeps credentials project scoped and revokes them with the environment", async () => {
     const projectOne = server.connection("env-1", "project-1", "host");
     const projectTwo = server.connection("env-2", "project-2", "host");
-    const projectTwoFromContainer = server.connection(
-      "env-2",
-      "project-2",
-      "container",
-    );
+    const projectTwoFromContainer = server.connection("env-2", "project-2", "container");
     const hidden = await storage.addKanbanTask("project-2", "Other project", "secret");
 
     expect(projectTwoFromContainer.url).toStartWith("http://host.docker.internal:");
@@ -331,9 +328,7 @@ describe("agent Kanban tools", () => {
       arguments: { ticketId: hidden.id },
     });
     expect(crossProjectRead.body.result?.isError).toBe(true);
-    expect(crossProjectRead.body.result?.content?.[0]?.text).toContain(
-      "not found in this project",
-    );
+    expect(crossProjectRead.body.result?.content?.[0]?.text).toContain("not found in this project");
 
     const ownProjectRead = await rpc(projectTwo.url, projectTwo.token, "tools/call", {
       name: "get_ticket",
@@ -364,8 +359,7 @@ describe("agent Kanban tools", () => {
     expect(reScoped.token).not.toBe(projectTwo.token);
     const staleScope = await rpc(projectTwo.url, projectTwo.token, "tools/list");
     expect(staleScope.response.status).toBe(401);
-    expect((await rpc(reScoped.url, reScoped.token, "tools/list")).response.status)
-      .toBe(200);
+    expect((await rpc(reScoped.url, reScoped.token, "tools/list")).response.status).toBe(200);
   });
 
   test("rejects invalid credentials, malformed JSON, and oversized bodies", async () => {
@@ -399,7 +393,6 @@ describe("agent Kanban tools", () => {
       body: JSON.stringify({ padding: "x".repeat(512 * 1024) }),
     });
     expect(declaredOversized.status).toBe(413);
-
   });
 
   test("returns 404 and 405 at the HTTP boundary", async () => {
@@ -444,13 +437,10 @@ describe("agent Kanban tools", () => {
     expect((await rpc(first.url, first.token, "tools/list")).response.status).toBe(200);
 
     await Promise.all([server.stop(), server.stop()]);
-    expect(() => server.connection("env-1", "project-1", "host")).toThrow(
-      "not running",
-    );
+    expect(() => server.connection("env-1", "project-1", "host")).toThrow("not running");
     await server.start();
     const restarted = server.connection("env-1", "project-1", "host");
-    expect((await rpc(restarted.url, restarted.token, "tools/list")).response.status)
-      .toBe(200);
+    expect((await rpc(restarted.url, restarted.token, "tools/list")).response.status).toBe(200);
 
     const invalid = new AgentToolsServer(storage, "not-a-bind-address.invalid");
     await expect(invalid.start()).rejects.toThrow();
@@ -482,20 +472,21 @@ describe("agent Kanban tools", () => {
     server.revokeEnvironment("env-1");
     releaseRead();
     expect((await inFlight).response.status).toBe(200);
-    expect((await rpc(connection.url, connection.token, "tools/list")).response.status)
-      .toBe(401);
+    expect((await rpc(connection.url, connection.token, "tools/list")).response.status).toBe(401);
     storage.getKanbanTasks = original;
   });
 
   test("preserves concurrent comment writes", async () => {
     const connection = server.connection("env-1", "project-1", "host");
     const ticket = await storage.addKanbanTask("project-1", "Concurrent", "");
-    await Promise.all(Array.from({ length: 12 }, (_, index) =>
-      rpc(connection.url, connection.token, "tools/call", {
-        name: "add_ticket_comment",
-        arguments: { ticketId: ticket.id, text: `Comment ${index}` },
-      })
-    ));
+    await Promise.all(
+      Array.from({ length: 12 }, (_, index) =>
+        rpc(connection.url, connection.token, "tools/call", {
+          name: "add_ticket_comment",
+          arguments: { ticketId: ticket.id, text: `Comment ${index}` },
+        }),
+      ),
+    );
 
     const saved = (await storage.getKanbanTasks("project-1"))[0]!;
     expect(saved.comments).toHaveLength(12);
@@ -528,7 +519,7 @@ describe("agent Kanban tools", () => {
       acceptanceCriteriaTruncated: true,
     });
     const returnedComments = (
-      result.body.result?.structuredContent?.ticket as {
+      result.body.result!.structuredContent!.ticket as {
         comments: Array<{ textTruncated?: boolean }>;
       }
     ).comments;

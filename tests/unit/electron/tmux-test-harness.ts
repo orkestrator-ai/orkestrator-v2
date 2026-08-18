@@ -17,21 +17,15 @@
  */
 import { afterEach, describe, expect, jest, mock, spyOn, test } from "bun:test";
 
-
 import { spawnSync } from "node:child_process";
-
 
 import { existsSync, promises as fs } from "node:fs";
 
-
 import os from "node:os";
-
 
 import path from "node:path";
 
-
 import { setTimeout as delay } from "node:timers/promises";
-
 
 import {
   agentMcpConfigJson,
@@ -80,44 +74,32 @@ import {
   type ExecOutput,
 } from "../../../apps/backend/src/core/tmux";
 
-
 import type { Environment } from "../../../apps/backend/src/core/models";
 
-
 import type { CommandContext } from "../../../apps/backend/src/core/commands";
-
 
 import {
   tmuxSelectionPromptFingerprint,
   type TmuxSelectionPrompt,
 } from "../../../packages/protocol/src/tmux-observation";
 
-
-
 export const tempDirs: string[] = [];
-
 
 // These integration fixtures launch several real shim processes. A failed
 // outer five-second budget used to interrupt fixture cleanup and cascade into
 // missing-runtime failures in later tests from the same file.
 export const TMUX_TEST_TIMEOUT_MS = 30_000;
 
-
 jest.setTimeout(TMUX_TEST_TIMEOUT_MS);
-
 
 /** mkdtemp prefix for the fake tmux runtime; also the guard for its cleanup path. */
 export const RUNTIME_TEMP_PREFIX = "ork-tmux-runtime-";
-
-
 
 export async function createTempDir(prefix: string): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   tempDirs.push(dir);
   return dir;
 }
-
-
 
 export function createEnvironment(worktreePath: string, environmentId: string): Environment {
   return {
@@ -138,23 +120,21 @@ export function createEnvironment(worktreePath: string, environmentId: string): 
   };
 }
 
-
-
 export function encodeCwd(cwd: string): string {
   return cwd.replace(/\/+$/, "").replaceAll("/", "-");
 }
 
-
-
-export async function withFakeTmuxRuntime(run: (runtime: {
-  worktree: string;
-  home: string;
-  log: string;
-  alive: string;
-  environment: Environment;
-  /** `${RUNTIME_ROOT_PREFIX}/<environment id>` — where the backend keeps hook state. */
-  runtimeRoot: string;
-}) => Promise<void>): Promise<void> {
+export async function withFakeTmuxRuntime(
+  run: (runtime: {
+    worktree: string;
+    home: string;
+    log: string;
+    alive: string;
+    environment: Environment;
+    /** `${RUNTIME_ROOT_PREFIX}/<environment id>` — where the backend keeps hook state. */
+    runtimeRoot: string;
+  }) => Promise<void>,
+): Promise<void> {
   const root = await createTempDir(RUNTIME_TEMP_PREFIX);
   const binDir = path.join(root, "bin");
   const worktree = path.join(root, "worktree");
@@ -164,7 +144,9 @@ export async function withFakeTmuxRuntime(run: (runtime: {
   await fs.mkdir(binDir, { recursive: true });
   await fs.mkdir(worktree, { recursive: true });
   await fs.mkdir(home, { recursive: true });
-  await fs.writeFile(path.join(binDir, "tmux"), `#!/bin/sh
+  await fs.writeFile(
+    path.join(binDir, "tmux"),
+    `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_TMUX_LOG"
 command="$1"
 all_args="$*"
@@ -346,13 +328,16 @@ case "$command" in
     exit 0
     ;;
 esac
-`);
+`,
+  );
   // Mirrors the real CLI closely enough for the launch-time capability probes:
   // `--effort` is advertised by `--help`, while the thinking flags are hidden
   // and only discoverable by having an argument rejected. Options are validated
   // in argv order, the way commander does, so a probe carrying a valid
   // `--thinking` and an invalid `--thinking-display` fails on the latter.
-  await fs.writeFile(path.join(binDir, "claude"), `#!/bin/sh
+  await fs.writeFile(
+    path.join(binDir, "claude"),
+    `#!/bin/sh
 if [ "$1" = "--help" ]; then
   if [ "\${FAKE_CLAUDE_NO_MCP_CONFIG:-}" = "1" ]; then
     printf '%s\\n' '--session-id --resume --effort --settings'
@@ -386,7 +371,8 @@ while [ "$#" -gt 0 ]; do
 done
 printf '%s\\n' 'Claude Code test'
 exit 0
-`);
+`,
+  );
   await fs.chmod(path.join(binDir, "tmux"), 0o755);
   await fs.chmod(path.join(binDir, "claude"), 0o755);
 
@@ -451,15 +437,15 @@ exit 0
   }
 }
 
-
-
-export async function withFakeContainerTmuxRuntime(run: (runtime: {
-  worktree: string;
-  log: string;
-  alive: string;
-  environment: Environment;
-  runtimeRoot: string;
-}) => Promise<void>): Promise<void> {
+export async function withFakeContainerTmuxRuntime(
+  run: (runtime: {
+    worktree: string;
+    log: string;
+    alive: string;
+    environment: Environment;
+    runtimeRoot: string;
+  }) => Promise<void>,
+): Promise<void> {
   const root = await createTempDir(`${RUNTIME_TEMP_PREFIX}container-`);
   const binDir = path.join(root, "bin");
   const worktree = path.join(root, "workspace");
@@ -467,7 +453,9 @@ export async function withFakeContainerTmuxRuntime(run: (runtime: {
   const alive = path.join(root, "tmux-alive");
   await fs.mkdir(binDir, { recursive: true });
   await fs.mkdir(worktree, { recursive: true });
-  await fs.writeFile(path.join(binDir, "docker"), `#!/usr/bin/env node
+  await fs.writeFile(
+    path.join(binDir, "docker"),
+    `#!/usr/bin/env node
 const fs = require("node:fs");
 const path = require("node:path");
 
@@ -671,7 +659,8 @@ main().catch((error) => {
   process.stderr.write(String(error.stack || error));
   process.exitCode = 1;
 });
-`);
+`,
+  );
   await fs.chmod(path.join(binDir, "docker"), 0o755);
 
   const originalPath = process.env.PATH;
@@ -722,13 +711,9 @@ main().catch((error) => {
   }
 }
 
-
-
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
-
-
 
 export function createHandlers() {
   const handlers = new Map<string, (args: Record<string, unknown>, context: unknown) => unknown>();
@@ -737,8 +722,6 @@ export function createHandlers() {
   });
   return handlers;
 }
-
-
 
 export async function invoke(
   handlers: Map<string, (args: Record<string, unknown>, context: unknown) => unknown>,
@@ -757,8 +740,6 @@ export async function invoke(
   });
 }
 
-
-
 export async function waitFor(
   predicate: () => boolean | Promise<boolean>,
   timeoutMs = 10_000,
@@ -770,8 +751,6 @@ export async function waitFor(
   }
   throw new Error("timed out waiting for condition");
 }
-
-
 
 export function deferred<T>(): {
   promise: Promise<T>;

@@ -30,19 +30,14 @@ export interface AgentActivitySourceSnapshot {
  * One renderer's independently leased observation. The backend stores only a
  * hash of the renderer's opaque token, so another renderer cannot overwrite it.
  */
-export interface FrontendAgentActivityObserverSnapshot
-  extends AgentActivitySourceSnapshot {
+export interface FrontendAgentActivityObserverSnapshot extends AgentActivitySourceSnapshot {
   leaseExpiresAt: string;
 }
 
 /** Renderers renew at one third of this interval while their monitor is alive. */
 export const FRONTEND_AGENT_ACTIVITY_LEASE_MS = 30_000;
 
-export const AGENT_ACTIVITY_STATES: readonly AgentActivityState[] = [
-  "idle",
-  "working",
-  "waiting",
-];
+export const AGENT_ACTIVITY_STATES: readonly AgentActivityState[] = ["idle", "working", "waiting"];
 
 export const AGENT_ACTIVITY_SOURCES: readonly AgentActivitySource[] = [
   "frontend",
@@ -70,9 +65,9 @@ const ISO_TIMESTAMP =
 
 /** True when `value` is an ISO-8601 timestamp this codebase will round-trip. */
 export function isAgentActivityTimestamp(value: unknown): value is string {
-  return typeof value === "string"
-    && ISO_TIMESTAMP.test(value)
-    && Number.isFinite(Date.parse(value));
+  return (
+    typeof value === "string" && ISO_TIMESTAMP.test(value) && Number.isFinite(Date.parse(value))
+  );
 }
 
 /**

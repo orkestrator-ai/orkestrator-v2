@@ -63,28 +63,28 @@ function escapeXmlAttribute(value: string): string {
 }
 
 function decodeXmlAttribute(value: string): string {
-  return value.replace(
-    /&(?:quot|apos|amp|lt|gt|#\d+|#x[\da-f]+);/gi,
-    (entity) => {
-      switch (entity.toLowerCase()) {
-        case "&quot;": return '"';
-        case "&apos;": return "'";
-        case "&amp;": return "&";
-        case "&lt;": return "<";
-        case "&gt;": return ">";
-        default: {
-          const isHex = entity.toLowerCase().startsWith("&#x");
-          const digits = entity.slice(isHex ? 3 : 2, -1);
-          const codePoint = Number.parseInt(digits, isHex ? 16 : 10);
-          return Number.isSafeInteger(codePoint)
-            && codePoint >= 0
-            && codePoint <= 0x10ffff
-            ? String.fromCodePoint(codePoint)
-            : entity;
-        }
+  return value.replace(/&(?:quot|apos|amp|lt|gt|#\d+|#x[\da-f]+);/gi, (entity) => {
+    switch (entity.toLowerCase()) {
+      case "&quot;":
+        return '"';
+      case "&apos;":
+        return "'";
+      case "&amp;":
+        return "&";
+      case "&lt;":
+        return "<";
+      case "&gt;":
+        return ">";
+      default: {
+        const isHex = entity.toLowerCase().startsWith("&#x");
+        const digits = entity.slice(isHex ? 3 : 2, -1);
+        const codePoint = Number.parseInt(digits, isHex ? 16 : 10);
+        return Number.isSafeInteger(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff
+          ? String.fromCodePoint(codePoint)
+          : entity;
       }
-    },
-  );
+    }
+  });
 }
 
 function readAttribute(tagBody: string, name: string): string | undefined {
@@ -102,15 +102,18 @@ export function buildAttachmentTagBlock(
   attachments: readonly AttachmentTagInput[],
 ): string | undefined {
   const tagged = attachments
-    .filter((attachment) => attachment.path.length > 0
-      && attachment.path.length <= MAX_TAG_VALUE_LENGTH)
+    .filter(
+      (attachment) => attachment.path.length > 0 && attachment.path.length <= MAX_TAG_VALUE_LENGTH,
+    )
     .slice(0, MAX_TAGGED_ATTACHMENTS);
   if (tagged.length === 0) return undefined;
 
   const tags = tagged
-    .map((attachment) =>
-      `<attachment type="image" path="${escapeXmlAttribute(attachment.path)}"`
-      + ` filename="${escapeXmlAttribute(attachment.filename ?? "")}" />`)
+    .map(
+      (attachment) =>
+        `<attachment type="image" path="${escapeXmlAttribute(attachment.path)}"` +
+        ` filename="${escapeXmlAttribute(attachment.filename ?? "")}" />`,
+    )
     .join("\n");
   return `<attached-files source="${ATTACHMENT_BLOCK_SOURCE}">\n${tags}\n</attached-files>`;
 }
@@ -136,9 +139,7 @@ export function appendAttachmentTags(
  * Only a block this bridge marked as its own is touched. Text the user wrote
  * comes back exactly as they wrote it, even when it contains the same markup.
  */
-export function extractAttachmentTags(
-  text: string,
-): { text: string; parts: NormalizedPart[] } {
+export function extractAttachmentTags(text: string): { text: string; parts: NormalizedPart[] } {
   if (!text.includes(`<attached-files source="${ATTACHMENT_BLOCK_SOURCE}"`)) {
     return { text, parts: [] };
   }

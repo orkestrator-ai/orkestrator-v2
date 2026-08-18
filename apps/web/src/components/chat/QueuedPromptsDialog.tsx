@@ -34,9 +34,7 @@ interface QueuedPromptsDialogProps<TQueued extends { id: string; text: string }>
 /**
  * Queue manager shared by the native and tmux compose bars.
  */
-export function QueuedPromptsDialog<
-  TQueued extends { id: string; text: string },
->({
+export function QueuedPromptsDialog<TQueued extends { id: string; text: string }>({
   open,
   onOpenChange,
   messages,
@@ -97,8 +95,7 @@ export function QueuedPromptsDialog<
         <DialogHeader>
           <DialogTitle>Queued Prompts</DialogTitle>
           <DialogDescription>
-            Review pending prompts. Click a message to edit it, or reorder and
-            remove items.
+            Review pending prompts. Click a message to edit it, or reorder and remove items.
           </DialogDescription>
         </DialogHeader>
 
@@ -114,9 +111,7 @@ export function QueuedPromptsDialog<
                 <p className="mt-1 text-muted-foreground">
                   {dispatchError.message} Edit or remove the prompt, or retry it.
                 </p>
-                {retryFailure ? (
-                  <p className="mt-1 text-destructive">{retryFailure}</p>
-                ) : null}
+                {retryFailure ? <p className="mt-1 text-destructive">{retryFailure}</p> : null}
               </div>
               {onRetryDispatch ? (
                 <button
@@ -142,17 +137,12 @@ export function QueuedPromptsDialog<
         )}
 
         {messages.length === 0 ? (
-          <div className="py-8 text-center text-sm text-muted-foreground">
-            Queue is empty.
-          </div>
+          <div className="py-8 text-center text-sm text-muted-foreground">Queue is empty.</div>
         ) : (
           <ScrollArea className="max-h-[380px] pr-3">
             <div className="space-y-2">
               {messages.map((message, index) => (
-                <div
-                  key={message.id}
-                  className="rounded-md border border-border bg-muted/20 p-3"
-                >
+                <div key={message.id} className="rounded-md border border-border bg-muted/20 p-3">
                   <div className="flex items-start gap-3">
                     <div className="mt-0.5 shrink-0 text-xs font-medium text-muted-foreground">
                       #{index + 1}
@@ -182,9 +172,7 @@ export function QueuedPromptsDialog<
                       <button
                         type="button"
                         onClick={() => {
-                          void runAction(`move-up:${message.id}`, () =>
-                            onMove(index, index - 1),
-                          );
+                          void runAction(`move-up:${message.id}`, () => onMove(index, index - 1));
                         }}
                         disabled={index === 0 || pendingAction !== null}
                         aria-busy={pendingAction === `move-up:${message.id}`}
@@ -196,13 +184,9 @@ export function QueuedPromptsDialog<
                       <button
                         type="button"
                         onClick={() => {
-                          void runAction(`move-down:${message.id}`, () =>
-                            onMove(index, index + 1),
-                          );
+                          void runAction(`move-down:${message.id}`, () => onMove(index, index + 1));
                         }}
-                        disabled={
-                          index === messages.length - 1 || pendingAction !== null
-                        }
+                        disabled={index === messages.length - 1 || pendingAction !== null}
                         aria-busy={pendingAction === `move-down:${message.id}`}
                         className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
                         title="Move down"
@@ -212,9 +196,7 @@ export function QueuedPromptsDialog<
                       <button
                         type="button"
                         onClick={() => {
-                          void runAction(`remove:${message.id}`, () =>
-                            onRemove(message.id),
-                          );
+                          void runAction(`remove:${message.id}`, () => onRemove(message.id));
                         }}
                         disabled={pendingAction !== null}
                         aria-busy={pendingAction === `remove:${message.id}`}

@@ -22,26 +22,32 @@ describe("docker git branch helpers", () => {
     expect(existsSync(suiteScript)).toBe(true);
   });
 
-  test.skipIf(!gitAvailable())("the shell suite passes against real repositories", () => {
-    const result = spawnSync("bash", [suiteScript], {
-      encoding: "utf8",
-      // The suite asserts on push and upstream configuration, so a developer's own
-      // global git settings must not be able to change its outcome.
-      env: {
-        ...process.env,
-        GIT_CONFIG_GLOBAL: "/dev/null",
-        GIT_CONFIG_SYSTEM: "/dev/null",
-        GIT_TERMINAL_PROMPT: "0",
-      },
-    });
+  test.skipIf(!gitAvailable())(
+    "the shell suite passes against real repositories",
+    () => {
+      const result = spawnSync("bash", [suiteScript], {
+        encoding: "utf8",
+        // The suite asserts on push and upstream configuration, so a developer's own
+        // global git settings must not be able to change its outcome.
+        env: {
+          ...process.env,
+          GIT_CONFIG_GLOBAL: "/dev/null",
+          GIT_CONFIG_SYSTEM: "/dev/null",
+          GIT_TERMINAL_PROMPT: "0",
+        },
+      });
 
-    const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
-    // Surface the suite's own FAIL line, which names the assertion that broke.
-    if (result.status !== 0) {
-      throw new Error(`git branch helper suite failed (status ${result.status}):\n${output.trim()}`);
-    }
-    expect(output).toContain("PASS: git branch helper tests");
-  }, 120_000);
+      const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+      // Surface the suite's own FAIL line, which names the assertion that broke.
+      if (result.status !== 0) {
+        throw new Error(
+          `git branch helper suite failed (status ${result.status}):\n${output.trim()}`,
+        );
+      }
+      expect(output).toContain("PASS: git branch helper tests");
+    },
+    120_000,
+  );
 
   // The branch logic used to be copied into workspace-setup.sh as a fallback, where
   // the suite above could not reach it and the two copies could drift apart. These
@@ -69,6 +75,8 @@ describe("docker git branch helpers", () => {
     // checkout, and an unsafe branch state must stop setup instead of leaving the
     // workspace on someone else's branch.
     expect(setup).toContain("if ! declare -F checkout_environment_branch >/dev/null; then");
-    expect(setup).toContain('checkout_environment_branch "$BRANCH" "$BASE_BRANCH" "$CURRENT" || exit 1');
+    expect(setup).toContain(
+      'checkout_environment_branch "$BRANCH" "$BASE_BRANCH" "$CURRENT" || exit 1',
+    );
   });
 });

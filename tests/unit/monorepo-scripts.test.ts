@@ -38,7 +38,9 @@ describe("monorepo orchestration scripts", () => {
 
   test("desktop packaging and PTY dependencies match the macOS/Linux Bun-only support policy", () => {
     const rootPackage = JSON.parse(read("package.json")) as { build?: Record<string, unknown> };
-    const backendPackage = JSON.parse(read("apps/backend/package.json")) as { dependencies?: Record<string, string> };
+    const backendPackage = JSON.parse(read("apps/backend/package.json")) as {
+      dependencies?: Record<string, string>;
+    };
     const pty = read("apps/backend/src/core/pty.ts");
     expect(rootPackage.build).not.toHaveProperty("win");
     expect(backendPackage.dependencies).not.toHaveProperty("node-pty");
@@ -59,23 +61,26 @@ describe("monorepo orchestration scripts", () => {
     const installIndex = source.indexOf(install);
 
     expect(installIndex).toBeGreaterThan(-1);
-    expect(source.indexOf("COPY --chown=node:node package.json bun.lock /opt/bridge-build/"))
-      .toBeLessThan(installIndex);
-    expect(source.indexOf(
-      "COPY --chown=node:node packages/protocol /opt/bridge-build/packages/protocol",
-    )).toBeLessThan(installIndex);
-    expect(source.indexOf(
-      "COPY --chown=node:node bridges/claude-bridge /opt/bridge-build/bridges/claude-bridge",
-    )).toBeLessThan(installIndex);
-    expect(source.indexOf(
-      "COPY --chown=node:node bridges/codex-bridge /opt/bridge-build/bridges/codex-bridge",
-    )).toBeLessThan(installIndex);
-    expect(source).toContain(
-      "mv /opt/bridge-build/bridges/claude-bridge /opt/claude-bridge",
-    );
-    expect(source).toContain(
-      "mv /opt/bridge-build/bridges/codex-bridge /opt/codex-bridge",
-    );
+    expect(
+      source.indexOf("COPY --chown=node:node package.json bun.lock /opt/bridge-build/"),
+    ).toBeLessThan(installIndex);
+    expect(
+      source.indexOf(
+        "COPY --chown=node:node packages/protocol /opt/bridge-build/packages/protocol",
+      ),
+    ).toBeLessThan(installIndex);
+    expect(
+      source.indexOf(
+        "COPY --chown=node:node bridges/claude-bridge /opt/bridge-build/bridges/claude-bridge",
+      ),
+    ).toBeLessThan(installIndex);
+    expect(
+      source.indexOf(
+        "COPY --chown=node:node bridges/codex-bridge /opt/bridge-build/bridges/codex-bridge",
+      ),
+    ).toBeLessThan(installIndex);
+    expect(source).toContain("mv /opt/bridge-build/bridges/claude-bridge /opt/claude-bridge");
+    expect(source).toContain("mv /opt/bridge-build/bridges/codex-bridge /opt/codex-bridge");
   });
 
   test("CLI build cache includes every source tree bundled from outside its workspace", () => {
@@ -108,16 +113,21 @@ describe("monorepo orchestration scripts", () => {
     // The smoke test installs the real tarball from a registry-style layout, so
     // it needs the network and stays out of the default suite. Chaining it into
     // publish is what stops a broken package reaching users unverified.
-    const scripts = (JSON.parse(read("package.json")) as {
-      scripts?: Record<string, string>;
-    }).scripts ?? {};
+    const scripts =
+      (
+        JSON.parse(read("package.json")) as {
+          scripts?: Record<string, string>;
+        }
+      ).scripts ?? {};
 
     expect(scripts["smoke:cli"]).toBe("bun run --cwd packages/cli smoke:pack");
     expect(scripts["publish:cli"]).toContain("bun run smoke:cli &&");
     expect(scripts["publish:cli"]).toContain("bun publish --cwd packages/cli");
     // The smoke script must verify the runtime dependencies actually resolve
     // from the installed layout, not just that the backend boots.
-    expect(read("packages/cli/scripts/smoke-packed.ts")).toContain("Bun.resolveSync(specifier, directory)");
+    expect(read("packages/cli/scripts/smoke-packed.ts")).toContain(
+      "Bun.resolveSync(specifier, directory)",
+    );
   });
 
   test("full tests run workspace, root, bridge, and protocol checks concurrently", () => {
@@ -154,8 +164,12 @@ describe("monorepo orchestration scripts", () => {
     expect(source).toContain('name: "bridges"');
     expect(source).toContain('"test", "bridges"');
 
-    for (const bridge of ["bridges/claude-bridge/package.json", "bridges/codex-bridge/package.json"]) {
-      const scripts = (JSON.parse(read(bridge)) as { scripts?: Record<string, string> }).scripts ?? {};
+    for (const bridge of [
+      "bridges/claude-bridge/package.json",
+      "bridges/codex-bridge/package.json",
+    ]) {
+      const scripts =
+        (JSON.parse(read(bridge)) as { scripts?: Record<string, string> }).scripts ?? {};
       expect(scripts.test).toBeUndefined();
     }
   });
@@ -213,10 +227,9 @@ describe("monorepo orchestration scripts", () => {
     const workspaceTask = turbo.tasks?.["test:workspace"] ?? {};
     // passThroughEnv, not env: the worker count must reach the task without
     // becoming part of its hash.
-    expect([
-      ...(workspaceTask.passThroughEnv ?? []),
-      ...(workspaceTask.env ?? []),
-    ]).toContain("ORKESTRATOR_TEST_WORKERS");
+    expect([...(workspaceTask.passThroughEnv ?? []), ...(workspaceTask.env ?? [])]).toContain(
+      "ORKESTRATOR_TEST_WORKERS",
+    );
     expect(workspaceTask.env ?? []).not.toContain("ORKESTRATOR_TEST_WORKERS");
   });
 

@@ -26,8 +26,8 @@ export function installBoundedTestDiagnostics(): void {
     getElementError(message, container) {
       const rendered = prettyDOM(container, TEST_DIAGNOSTIC_DOM_BYTES, { highlight: false }) ?? "";
       const error = new Error(
-        `${truncateUtf8(message ?? "Testing Library query failed", TEST_DIAGNOSTIC_STRING_BYTES)}`
-        + (rendered ? `\n\nDOM snapshot (bounded):\n${rendered}` : ""),
+        `${truncateUtf8(message ?? "Testing Library query failed", TEST_DIAGNOSTIC_STRING_BYTES)}` +
+          (rendered ? `\n\nDOM snapshot (bounded):\n${rendered}` : ""),
       );
       error.name = "TestingLibraryElementError";
       return error;

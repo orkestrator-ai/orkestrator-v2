@@ -146,7 +146,7 @@ export function VirtualizedMessageList<TMessage>({
   const currentHighlightName = `agent-chat-find-current-${findInstanceId}`;
   const context = useMemo<VirtuosoListContext>(
     () => ({ footer, header, emptyState }),
-    [footer, header, emptyState]
+    [footer, header, emptyState],
   );
 
   // Only recreate the components object when component presence changes (not content).
@@ -160,7 +160,7 @@ export function VirtualizedMessageList<TMessage>({
       Header: hasHeader ? StableHeader : undefined,
       EmptyPlaceholder: hasEmptyState ? StableEmptyPlaceholder : undefined,
     }),
-    [hasFooter, hasHeader, hasEmptyState]
+    [hasFooter, hasHeader, hasEmptyState],
   );
 
   const handleFindNavigate = useCallback(
@@ -183,9 +183,7 @@ export function VirtualizedMessageList<TMessage>({
 
   useEffect(() => {
     const cssHighlights =
-      typeof CSS !== "undefined"
-      && "highlights" in CSS
-      && typeof Highlight !== "undefined"
+      typeof CSS !== "undefined" && "highlights" in CSS && typeof Highlight !== "undefined"
         ? CSS.highlights
         : null;
 
@@ -195,11 +193,11 @@ export function VirtualizedMessageList<TMessage>({
     };
 
     if (
-      !cssHighlights
-      || !find?.isActive
-      || !chatFind.isOpen
-      || !chatFind.query.trim()
-      || chatFind.matches.length === 0
+      !cssHighlights ||
+      !find?.isActive ||
+      !chatFind.isOpen ||
+      !chatFind.query.trim() ||
+      chatFind.matches.length === 0
     ) {
       clearHighlights();
       return clearHighlights;
@@ -216,8 +214,7 @@ export function VirtualizedMessageList<TMessage>({
       const ranges: Range[] = [];
       let activeRange: Range | null = null;
       let rowOccurrenceIndex = 0;
-      const taggedRoots =
-        Array.from(row.querySelectorAll<HTMLElement>(SEARCH_CONTENT_SELECTOR));
+      const taggedRoots = Array.from(row.querySelectorAll<HTMLElement>(SEARCH_CONTENT_SELECTOR));
       const searchableRoots = taggedRoots.length > 0 ? taggedRoots : [row];
 
       for (const searchableRoot of searchableRoots) {
@@ -243,10 +240,7 @@ export function VirtualizedMessageList<TMessage>({
       const rows = root.querySelectorAll<HTMLElement>("[data-chat-message-index]");
       const matchCountsByItem = new Map<number, number>();
       for (const match of chatFind.matches) {
-        matchCountsByItem.set(
-          match.itemIndex,
-          (matchCountsByItem.get(match.itemIndex) ?? 0) + 1,
-        );
+        matchCountsByItem.set(match.itemIndex, (matchCountsByItem.get(match.itemIndex) ?? 0) + 1);
       }
 
       rows.forEach((row) => {
@@ -265,10 +259,7 @@ export function VirtualizedMessageList<TMessage>({
       });
 
       cssHighlights.set(matchHighlightName, new Highlight(...allRanges));
-      cssHighlights.set(
-        currentHighlightName,
-        new Highlight(...(activeRange ? [activeRange] : [])),
-      );
+      cssHighlights.set(currentHighlightName, new Highlight(...(activeRange ? [activeRange] : [])));
 
       // Virtuoso may need more than one paint to materialize a distant row.
       if (!activeRange && attempts < 5) {
@@ -285,7 +276,7 @@ export function VirtualizedMessageList<TMessage>({
   }, [
     chatFind.currentMatch,
     chatFind.isOpen,
-    chatFind.matches.length,
+    chatFind.matches,
     chatFind.query,
     find?.isActive,
     currentHighlightName,
@@ -316,15 +307,14 @@ export function VirtualizedMessageList<TMessage>({
         computeItemKey={computeItemKey}
         itemContent={(index, data) => {
           const isCurrentFindMessage =
-            chatFind.isOpen
-            && chatFind.currentMatch?.itemIndex === index;
+            chatFind.isOpen && chatFind.currentMatch?.itemIndex === index;
           return (
             <div
               data-chat-message-index={index}
               className={cn(
                 "rounded-sm",
-                isCurrentFindMessage
-                  && "outline outline-1 outline-offset-[-1px] outline-amber-400/35",
+                isCurrentFindMessage &&
+                  "outline outline-1 outline-offset-[-1px] outline-amber-400/35",
               )}
             >
               {renderMessage(
@@ -332,7 +322,9 @@ export function VirtualizedMessageList<TMessage>({
                 data,
                 resolvePreviousMessage
                   ? resolvePreviousMessage(messages, index)
-                  : index > 0 ? messages[index - 1] ?? null : null,
+                  : index > 0
+                    ? (messages[index - 1] ?? null)
+                    : null,
               )}
             </div>
           );

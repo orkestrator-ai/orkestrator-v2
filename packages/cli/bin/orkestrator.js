@@ -12,8 +12,7 @@ const manifest = await Bun.file(path.join(packageRoot, "package.json")).json();
 process.env.NODE_ENV ??= "production";
 process.env.ORKESTRATOR_APP_ROOT ??= packageRoot;
 process.env.ORKESTRATOR_RESOURCE_ROOT ??= path.join(packageRoot, "resources");
-process.env.ORKESTRATOR_VERSION ??= typeof manifest.version === "string"
-  ? manifest.version
-  : "0.0.0";
+process.env.ORKESTRATOR_VERSION ??=
+  typeof manifest.version === "string" ? manifest.version : "0.0.0";
 
 await import("../dist/main.js");

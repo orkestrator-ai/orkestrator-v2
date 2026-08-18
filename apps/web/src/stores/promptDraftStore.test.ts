@@ -81,11 +81,9 @@ describe("promptDraftStore", () => {
   });
 
   test("renderer restart reset drops every in-memory draft", () => {
-    usePromptDraftStore.getState().setDraftValue(
-      claudeQuestionDraftKey("session-a", "request-1"),
-      "answers",
-      [["unfinished"]],
-    );
+    usePromptDraftStore
+      .getState()
+      .setDraftValue(claudeQuestionDraftKey("session-a", "request-1"), "answers", [["unfinished"]]);
 
     usePromptDraftStore.getState().reset();
     expect(usePromptDraftStore.getState().drafts.size).toBe(0);

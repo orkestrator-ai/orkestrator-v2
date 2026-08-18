@@ -21,7 +21,7 @@ const TEXT_RULES: Array<{ pattern: RegExp; replacement: string }> = [
   // scheme://user:password@host — the password is the point, but the username is
   // identity, so both go.
   {
-    pattern: /([a-z][a-z0-9+.\-]*:\/\/)[^/\s:@]+(?::[^/\s@]*)?@/gi,
+    pattern: /([a-z][a-z0-9+.-]*:\/\/)[^/\s:@]+(?::[^/\s@]*)?@/gi,
     replacement: "$1[redacted]@",
   },
   // ?token=… / &api_key=… in a URL or a log line that contains one.
@@ -30,7 +30,7 @@ const TEXT_RULES: Array<{ pattern: RegExp; replacement: string }> = [
       /([?&](?:access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|apikey|auth|authorization|token|secret|password|passwd|signature|sig|key)=)[^&\s"'`]+/gi,
     replacement: "$1[redacted]",
   },
-  { pattern: /\bBearer\s+[A-Za-z0-9._~+/=\-]{8,}/gi, replacement: "Bearer [redacted]" },
+  { pattern: /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, replacement: "Bearer [redacted]" },
   { pattern: /\bBasic\s+[A-Za-z0-9+/=]{8,}/gi, replacement: "Basic [redacted]" },
   // JWTs: three base64url segments. Matched before the generic key rules so a
   // token in an `Authorization:` header line is not partially replaced.

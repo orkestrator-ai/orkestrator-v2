@@ -1,20 +1,5 @@
-import {
-  afterAll,
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  mock,
-  test,
-} from "bun:test";
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useFileDirtyStore } from "@/stores/fileDirtyStore";
 import * as realBackend from "@/lib/backend";
 import * as realMarkdownEditorTab from "@/components/markdown/MarkdownEditorTab";
@@ -27,26 +12,20 @@ const realMarkdownEditorTabSnapshot = { ...realMarkdownEditorTab };
 const realDiffViewerTabSnapshot = { ...realDiffViewerTab };
 const realMonacoFileEditorSnapshot = { ...realMonacoFileEditor };
 
-const readLocalFileMock = mock(
-  async (_worktreePath: string, _filePath: string) => ({
-    content: "# Loaded Markdown",
-    language: "markdown",
-  }),
-);
-const readContainerFileMock = mock(
-  async (_containerId: string, _filePath: string) => ({
-    content: "container text",
-    language: "plaintext",
-  }),
-);
+const readLocalFileMock = mock(async (_worktreePath: string, _filePath: string) => ({
+  content: "# Loaded Markdown",
+  language: "markdown",
+}));
+const readContainerFileMock = mock(async (_containerId: string, _filePath: string) => ({
+  content: "container text",
+  language: "plaintext",
+}));
 const readFileBase64Mock = mock(async (_filePath: string) => "aW1hZ2U=");
 const readContainerFileBase64Mock = mock(
   async (_containerId: string, _filePath: string) => "Y29udGFpbmVyLWltYWdl",
 );
 const getFileDraftMock = mock(
-  async (
-    _draftKey: string,
-  ): Promise<Awaited<ReturnType<typeof realBackend.getFileDraft>>> => null,
+  async (_draftKey: string): Promise<Awaited<ReturnType<typeof realBackend.getFileDraft>>> => null,
 );
 const saveFileDraftMock = mock(async () => undefined);
 const deleteFileDraftMock = mock(async () => undefined);
@@ -120,11 +99,7 @@ mock.module("./DiffViewerTab", () => ({
   ),
 }));
 
-const {
-  FileViewerTab,
-  getFileViewerKind,
-  isMarkdownFile,
-} = await import("./FileViewerTab");
+const { FileViewerTab, getFileViewerKind, isMarkdownFile } = await import("./FileViewerTab");
 
 beforeEach(() => {
   useFileDirtyStore.setState({ dirtyFiles: new Map() });
@@ -156,10 +131,7 @@ afterEach(() => {
 
 afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
-  mock.module(
-    "@/components/markdown/MarkdownEditorTab",
-    () => realMarkdownEditorTabSnapshot,
-  );
+  mock.module("@/components/markdown/MarkdownEditorTab", () => realMarkdownEditorTabSnapshot);
   mock.module("./DiffViewerTab", () => realDiffViewerTabSnapshot);
   mock.module("./MonacoFileEditor", () => realMonacoFileEditorSnapshot);
 });
@@ -168,34 +140,44 @@ describe("FileViewerTab routing", () => {
   test("routes Markdown extensions to the rich editor", () => {
     expect(isMarkdownFile("README.md")).toBe(true);
     expect(isMarkdownFile("docs/guide.MARKDOWN")).toBe(true);
-    expect(getFileViewerKind("README.md", {
-      showDiff: false,
-      hasDiffData: false,
-    })).toBe("markdown");
+    expect(
+      getFileViewerKind("README.md", {
+        showDiff: false,
+        hasDiffData: false,
+      }),
+    ).toBe("markdown");
   });
 
   test("keeps non-Markdown text files in Monaco", () => {
     expect(isMarkdownFile("src/index.ts")).toBe(false);
     expect(isMarkdownFile("component.mdx")).toBe(false);
-    expect(getFileViewerKind("src/index.ts", {
-      showDiff: false,
-      hasDiffData: false,
-    })).toBe("text");
+    expect(
+      getFileViewerKind("src/index.ts", {
+        showDiff: false,
+        hasDiffData: false,
+      }),
+    ).toBe("text");
   });
 
   test("prioritizes valid diffs except for images", () => {
-    expect(getFileViewerKind("README.md", {
-      showDiff: true,
-      hasDiffData: true,
-    })).toBe("diff");
-    expect(getFileViewerKind("diagram.png", {
-      showDiff: true,
-      hasDiffData: true,
-    })).toBe("image");
-    expect(getFileViewerKind("README.md", {
-      showDiff: true,
-      hasDiffData: false,
-    })).toBe("markdown");
+    expect(
+      getFileViewerKind("README.md", {
+        showDiff: true,
+        hasDiffData: true,
+      }),
+    ).toBe("diff");
+    expect(
+      getFileViewerKind("diagram.png", {
+        showDiff: true,
+        hasDiffData: true,
+      }),
+    ).toBe("image");
+    expect(
+      getFileViewerKind("README.md", {
+        showDiff: true,
+        hasDiffData: false,
+      }),
+    ).toBe("markdown");
   });
 });
 
@@ -215,19 +197,12 @@ describe("FileViewerTab component", () => {
     expect(await screen.findByTestId("markdown-file-editor")).toBeTruthy();
     expect(screen.getByText("# Loaded Markdown")).toBeTruthy();
     expect(readLocalFileMock).toHaveBeenCalledWith("/repo", "README.md");
-    expect(useFileDirtyStore.getState().getContent("markdown-tab")).toBe(
-      "# Loaded Markdown",
-    );
+    expect(useFileDirtyStore.getState().getContent("markdown-tab")).toBe("# Loaded Markdown");
   });
 
   test("loads container text into Monaco and tracks changes", async () => {
     render(
-      <FileViewerTab
-        tabId="text-tab"
-        filePath="notes.txt"
-        containerId="container-1"
-        isActive
-      />,
+      <FileViewerTab tabId="text-tab" filePath="notes.txt" containerId="container-1" isActive />,
     );
 
     const editor = await screen.findByRole("textbox", { name: "Monaco plaintext" });
@@ -279,22 +254,13 @@ describe("FileViewerTab component", () => {
     );
 
     const image = await screen.findByRole("img", { name: "assets/logo.webp" });
-    expect(image.getAttribute("src")).toBe(
-      "data:image/webp;base64,Y29udGFpbmVyLWltYWdl",
-    );
-    expect(readContainerFileBase64Mock).toHaveBeenCalledWith(
-      "container-1",
-      "assets/logo.webp",
-    );
+    expect(image.getAttribute("src")).toBe("data:image/webp;base64,Y29udGFpbmVyLWltYWdl");
+    expect(readContainerFileBase64Mock).toHaveBeenCalledWith("container-1", "assets/logo.webp");
   });
 
   test("reports an image load error when no environment path is available", async () => {
     render(
-      <FileViewerTab
-        tabId="missing-image-environment-tab"
-        filePath="assets/logo.png"
-        isActive
-      />,
+      <FileViewerTab tabId="missing-image-environment-tab" filePath="assets/logo.png" isActive />,
     );
 
     expect(await screen.findByText("Failed to load file")).toBeTruthy();
@@ -345,11 +311,7 @@ describe("FileViewerTab component", () => {
   });
 
   test("prefers a newer in-memory buffer over an older backend draft on remount", async () => {
-    useFileDirtyStore.getState().hydrateDraft(
-      "remount-tab",
-      "newer unsaved buffer",
-      "older disk",
-    );
+    useFileDirtyStore.getState().hydrateDraft("remount-tab", "newer unsaved buffer", "older disk");
     getFileDraftMock.mockResolvedValueOnce({
       draftKey: "file:env-1:notes.txt",
       environmentId: "env-1",
@@ -402,9 +364,7 @@ describe("FileViewerTab component", () => {
 
     const editor = await screen.findByRole("textbox", { name: "Monaco plaintext" });
     expect((editor as HTMLTextAreaElement).value).toBe("restored buffer");
-    expect(getFileDraftMock).toHaveBeenCalledWith(
-      "file:env-restore:notes.txt",
-    );
+    expect(getFileDraftMock).toHaveBeenCalledWith("file:env-restore:notes.txt");
     expect(useFileDirtyStore.getState().dirtyFiles.get("restore-tab")).toEqual({
       content: "restored buffer",
       originalContent: "container text",
@@ -424,14 +384,18 @@ describe("FileViewerTab component", () => {
     const editor = await screen.findByRole("textbox", { name: "Monaco plaintext" });
     fireEvent.change(editor, { target: { value: "unsaved text" } });
 
-    await waitFor(() => expect(saveFileDraftMock).toHaveBeenCalledWith(
-      "file:env-persist:notes.txt",
-      "env-persist",
-      "notes.txt",
-      "unsaved text",
-      "container text",
-      0,
-    ), { timeout: 1_500 });
+    await waitFor(
+      () =>
+        expect(saveFileDraftMock).toHaveBeenCalledWith(
+          "file:env-persist:notes.txt",
+          "env-persist",
+          "notes.txt",
+          "unsaved text",
+          "container text",
+          0,
+        ),
+      { timeout: 1_500 },
+    );
   });
 
   test("flushes an edit when the tab unmounts before the debounce expires", async () => {
@@ -449,14 +413,16 @@ describe("FileViewerTab component", () => {
 
     view.unmount();
 
-    await waitFor(() => expect(saveFileDraftMock).toHaveBeenCalledWith(
-      "file:env-unmount:notes.txt",
-      "env-unmount",
-      "notes.txt",
-      "latest unsaved text",
-      "container text",
-      0,
-    ));
+    await waitFor(() =>
+      expect(saveFileDraftMock).toHaveBeenCalledWith(
+        "file:env-unmount:notes.txt",
+        "env-unmount",
+        "notes.txt",
+        "latest unsaved text",
+        "container text",
+        0,
+      ),
+    );
   });
 
   test("flushes the current edit on pagehide", async () => {
@@ -474,14 +440,16 @@ describe("FileViewerTab component", () => {
 
     window.dispatchEvent(new Event("pagehide"));
 
-    await waitFor(() => expect(saveFileDraftMock).toHaveBeenCalledWith(
-      "file:env-pagehide:notes.txt",
-      "env-pagehide",
-      "notes.txt",
-      "leaving page",
-      "container text",
-      0,
-    ));
+    await waitFor(() =>
+      expect(saveFileDraftMock).toHaveBeenCalledWith(
+        "file:env-pagehide:notes.txt",
+        "env-pagehide",
+        "notes.txt",
+        "leaving page",
+        "container text",
+        0,
+      ),
+    );
   });
 
   test("flushes draft deletion after a successful save and immediate unmount", async () => {
@@ -503,10 +471,9 @@ describe("FileViewerTab component", () => {
 
     view.unmount();
 
-    await waitFor(() => expect(deleteFileDraftMock).toHaveBeenCalledWith(
-      "file:env-save:notes.txt",
-      0,
-    ));
+    await waitFor(() =>
+      expect(deleteFileDraftMock).toHaveBeenCalledWith("file:env-save:notes.txt", 0),
+    );
   });
 
   test("continues with the disk buffer when backend draft restore fails", async () => {
@@ -528,17 +495,15 @@ describe("FileViewerTab component", () => {
   });
 
   test("offers to save the local buffer after a draft revision conflict", async () => {
-    getFileDraftMock
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce({
-        draftKey: "file:env-conflict:notes.txt",
-        environmentId: "env-conflict",
-        filePath: "notes.txt",
-        content: "other window",
-        originalContent: "container text",
-        updatedAt: "2026-07-29T00:00:00.000Z",
-        revision: 4,
-      });
+    getFileDraftMock.mockResolvedValueOnce(null).mockResolvedValueOnce({
+      draftKey: "file:env-conflict:notes.txt",
+      environmentId: "env-conflict",
+      filePath: "notes.txt",
+      content: "other window",
+      originalContent: "container text",
+      updatedAt: "2026-07-29T00:00:00.000Z",
+      revision: 4,
+    });
     saveFileDraftMock
       .mockRejectedValueOnce(new Error("revision conflict"))
       .mockResolvedValueOnce(undefined);
@@ -561,31 +526,29 @@ describe("FileViewerTab component", () => {
     expect(toastOptions.action?.label).toBe("Save mine");
     toastOptions.action?.onClick();
 
-    await waitFor(() => expect(saveFileDraftMock).toHaveBeenLastCalledWith(
-      "file:env-conflict:notes.txt",
-      "env-conflict",
-      "notes.txt",
-      "my unsaved text",
-      "container text",
-      4,
-    ));
-    expect(useFileDirtyStore.getState().getContent("save-conflict-tab")).toBe(
-      "my unsaved text",
+    await waitFor(() =>
+      expect(saveFileDraftMock).toHaveBeenLastCalledWith(
+        "file:env-conflict:notes.txt",
+        "env-conflict",
+        "notes.txt",
+        "my unsaved text",
+        "container text",
+        4,
+      ),
     );
+    expect(useFileDirtyStore.getState().getContent("save-conflict-tab")).toBe("my unsaved text");
   });
 
   test("offers to finish discarding after a draft deletion conflict", async () => {
-    getFileDraftMock
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce({
-        draftKey: "file:env-discard:notes.txt",
-        environmentId: "env-discard",
-        filePath: "notes.txt",
-        content: "other window",
-        originalContent: "container text",
-        updatedAt: "2026-07-29T00:00:00.000Z",
-        revision: 7,
-      });
+    getFileDraftMock.mockResolvedValueOnce(null).mockResolvedValueOnce({
+      draftKey: "file:env-discard:notes.txt",
+      environmentId: "env-discard",
+      filePath: "notes.txt",
+      content: "other window",
+      originalContent: "container text",
+      updatedAt: "2026-07-29T00:00:00.000Z",
+      revision: 7,
+    });
     deleteFileDraftMock
       .mockRejectedValueOnce(new Error("revision conflict"))
       .mockResolvedValueOnce(undefined);
@@ -609,17 +572,19 @@ describe("FileViewerTab component", () => {
     expect(toastOptions.action?.label).toBe("Discard saved draft");
     toastOptions.action?.onClick();
 
-    await waitFor(() => expect(deleteFileDraftMock).toHaveBeenLastCalledWith(
-      "file:env-discard:notes.txt",
-      7,
-    ));
+    await waitFor(() =>
+      expect(deleteFileDraftMock).toHaveBeenLastCalledWith("file:env-discard:notes.txt", 7),
+    );
   });
 
   test("ignores an older file read after its props change", async () => {
     let resolveOldRead!: (content: realBackend.FileContent) => void;
-    readContainerFileMock.mockImplementationOnce(() => new Promise((resolve) => {
-      resolveOldRead = resolve;
-    }));
+    readContainerFileMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveOldRead = resolve;
+        }),
+    );
     const view = render(
       <FileViewerTab
         tabId="stale-read-tab"
@@ -628,10 +593,9 @@ describe("FileViewerTab component", () => {
         isActive
       />,
     );
-    await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledWith(
-      "container-1",
-      "old.txt",
-    ));
+    await waitFor(() =>
+      expect(readContainerFileMock).toHaveBeenCalledWith("container-1", "old.txt"),
+    );
 
     view.rerender(
       <FileViewerTab
@@ -653,9 +617,7 @@ describe("FileViewerTab component", () => {
       await Promise.resolve();
     });
     expect((editor as HTMLTextAreaElement).value).toBe("container text");
-    expect(useFileDirtyStore.getState().getContent("stale-read-tab")).toBe(
-      "container text",
-    );
+    expect(useFileDirtyStore.getState().getContent("stale-read-tab")).toBe("container text");
   });
 
   test("ignores an older file-read rejection after its props change", async () => {
@@ -672,10 +634,9 @@ describe("FileViewerTab component", () => {
         isActive
       />,
     );
-    await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledWith(
-      "container-1",
-      "old.txt",
-    ));
+    await waitFor(() =>
+      expect(readContainerFileMock).toHaveBeenCalledWith("container-1", "old.txt"),
+    );
 
     view.rerender(
       <FileViewerTab
@@ -701,12 +662,13 @@ describe("FileViewerTab component", () => {
   });
 
   test("does not hydrate a draft that resolves after the file changes", async () => {
-    let resolveOldDraft!: (
-      draft: Awaited<ReturnType<typeof realBackend.getFileDraft>>,
-    ) => void;
-    getFileDraftMock.mockImplementationOnce(() => new Promise((resolve) => {
-      resolveOldDraft = resolve;
-    }));
+    let resolveOldDraft!: (draft: Awaited<ReturnType<typeof realBackend.getFileDraft>>) => void;
+    getFileDraftMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveOldDraft = resolve;
+        }),
+    );
     const view = render(
       <FileViewerTab
         tabId="stale-draft-tab"
@@ -716,9 +678,7 @@ describe("FileViewerTab component", () => {
         isActive
       />,
     );
-    await waitFor(() => expect(getFileDraftMock).toHaveBeenCalledWith(
-      "file:env-stale:old.txt",
-    ));
+    await waitFor(() => expect(getFileDraftMock).toHaveBeenCalledWith("file:env-stale:old.txt"));
 
     view.rerender(
       <FileViewerTab
@@ -745,16 +705,17 @@ describe("FileViewerTab component", () => {
       await Promise.resolve();
     });
     expect((editor as HTMLTextAreaElement).value).toBe("container text");
-    expect(useFileDirtyStore.getState().getContent("stale-draft-tab")).toBe(
-      "container text",
-    );
+    expect(useFileDirtyStore.getState().getContent("stale-draft-tab")).toBe("container text");
   });
 
   test("ignores a file read that finishes after unmount", async () => {
     let resolveRead!: (content: realBackend.FileContent) => void;
-    readContainerFileMock.mockImplementationOnce(() => new Promise((resolve) => {
-      resolveRead = resolve;
-    }));
+    readContainerFileMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveRead = resolve;
+        }),
+    );
     const view = render(
       <FileViewerTab
         tabId="unmounted-read-tab"

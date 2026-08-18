@@ -19,6 +19,5 @@ export interface TabTeardownInput {
 }
 
 export function isTabTeardownKind(value: unknown): value is TabTeardownKind {
-  return typeof value === "string"
-    && (TAB_TEARDOWN_KINDS as readonly string[]).includes(value);
+  return typeof value === "string" && (TAB_TEARDOWN_KINDS as readonly string[]).includes(value);
 }

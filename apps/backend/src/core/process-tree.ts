@@ -29,10 +29,7 @@ function processHasExited(child: ProcessTreeChild): boolean {
   return child.exitCode !== null || child.signalCode !== null;
 }
 
-export function parseProcessTable(
-  output: string,
-  rootPid: number,
-): number[] {
+export function parseProcessTable(output: string, rootPid: number): number[] {
   const childrenByParent = new Map<number, number[]>();
   for (const line of output.split(/\r?\n/)) {
     const match = line.trim().match(/^(\d+)\s+(\d+)$/);
@@ -60,11 +57,7 @@ export function parseProcessTable(
 
 export async function listDescendantProcessIds(rootPid: number): Promise<number[]> {
   if (process.platform === "win32") return [];
-  const { stdout } = await runCommand(
-    "ps",
-    ["-A", "-o", "pid=,ppid="],
-    { timeoutMs: 2_000 },
-  );
+  const { stdout } = await runCommand("ps", ["-A", "-o", "pid=,ppid="], { timeoutMs: 2_000 });
   return parseProcessTable(stdout, rootPid);
 }
 
@@ -165,11 +158,5 @@ export async function terminateProcessTree(
 
   for (const pid of await snapshotDescendants(child.pid, runtime)) descendants.add(pid);
   signalTree(child, descendants, "SIGKILL", runtime);
-  return waitForTreeExit(
-    child,
-    descendants,
-    options.killWaitMs,
-    pollIntervalMs,
-    runtime,
-  );
+  return waitForTreeExit(child, descendants, options.killWaitMs, pollIntervalMs, runtime);
 }

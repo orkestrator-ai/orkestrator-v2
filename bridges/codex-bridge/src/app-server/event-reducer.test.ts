@@ -30,30 +30,38 @@ describe("thread and turn lifecycle", () => {
   });
 
   test("publishes app-server-confirmed models and turn reroutes", () => {
-    expect(reduce("thread/settings/updated", {
-      threadId: "t1",
-      threadSettings: { model: "gpt-5.6-sol" },
-    })).toEqual([{
-      kind: "thread.model.updated",
-      threadId: "t1",
-      model: "gpt-5.6-sol",
-      engineGeneration: 1,
-      handle: "handle-1",
-    }]);
+    expect(
+      reduce("thread/settings/updated", {
+        threadId: "t1",
+        threadSettings: { model: "gpt-5.6-sol" },
+      }),
+    ).toEqual([
+      {
+        kind: "thread.model.updated",
+        threadId: "t1",
+        model: "gpt-5.6-sol",
+        engineGeneration: 1,
+        handle: "handle-1",
+      },
+    ]);
 
-    expect(reduce("model/rerouted", {
-      threadId: "t1",
-      turnId: "turn-1",
-      fromModel: "gpt-5.6-sol",
-      toModel: "gpt-5.6-sol-mini",
-    })).toEqual([{
-      kind: "turn.model.updated",
-      threadId: "t1",
-      turnId: "turn-1",
-      model: "gpt-5.6-sol-mini",
-      engineGeneration: 1,
-      handle: "handle-1",
-    }]);
+    expect(
+      reduce("model/rerouted", {
+        threadId: "t1",
+        turnId: "turn-1",
+        fromModel: "gpt-5.6-sol",
+        toModel: "gpt-5.6-sol-mini",
+      }),
+    ).toEqual([
+      {
+        kind: "turn.model.updated",
+        threadId: "t1",
+        turnId: "turn-1",
+        model: "gpt-5.6-sol-mini",
+        engineGeneration: 1,
+        handle: "handle-1",
+      },
+    ]);
   });
 
   test("drops malformed model notifications", () => {
@@ -77,27 +85,35 @@ describe("thread and turn lifecycle", () => {
   });
 
   test("thread/name/updated publishes a name and preserves an explicit clear", () => {
-    expect(reduce("thread/name/updated", {
-      threadId: "t1",
-      threadName: "Investigate patch failures",
-    })).toEqual([{
-      kind: "thread.name.updated",
-      threadId: "t1",
-      name: "Investigate patch failures",
-      engineGeneration: 1,
-      handle: "handle-1",
-    }]);
+    expect(
+      reduce("thread/name/updated", {
+        threadId: "t1",
+        threadName: "Investigate patch failures",
+      }),
+    ).toEqual([
+      {
+        kind: "thread.name.updated",
+        threadId: "t1",
+        name: "Investigate patch failures",
+        engineGeneration: 1,
+        handle: "handle-1",
+      },
+    ]);
 
-    expect(reduce("thread/name/updated", {
-      threadId: "t1",
-      threadName: null,
-    })).toEqual([{
-      kind: "thread.name.updated",
-      threadId: "t1",
-      name: undefined,
-      engineGeneration: 1,
-      handle: "handle-1",
-    }]);
+    expect(
+      reduce("thread/name/updated", {
+        threadId: "t1",
+        threadName: null,
+      }),
+    ).toEqual([
+      {
+        kind: "thread.name.updated",
+        threadId: "t1",
+        name: undefined,
+        engineGeneration: 1,
+        handle: "handle-1",
+      },
+    ]);
   });
 
   test("thread/name/updated without a thread id is dropped", () => {
@@ -299,8 +315,8 @@ describe("usage and limits", () => {
     });
     // A null resetsAt is omitted, not rendered as the epoch.
     expect(
-      (events[0] as Extract<EngineEvent, { kind: "account.rateLimits.updated" }>)
-        .rateLimits[1]?.resetsAt,
+      (events[0] as Extract<EngineEvent, { kind: "account.rateLimits.updated" }>).rateLimits[1]
+        ?.resetsAt,
     ).toBeUndefined();
   });
 
@@ -315,8 +331,8 @@ describe("usage and limits", () => {
         rateLimits: [{ slot: "primary", usedPercent: 10 }],
       });
       expect(
-        (events[0] as Extract<EngineEvent, { kind: "account.rateLimits.updated" }>)
-          .rateLimits[0]?.resetsAt,
+        (events[0] as Extract<EngineEvent, { kind: "account.rateLimits.updated" }>).rateLimits[0]
+          ?.resetsAt,
       ).toBeUndefined();
     }
   });
@@ -326,8 +342,8 @@ describe("usage and limits", () => {
       rateLimits: { primary: { usedPercent: 10, resetsAt: "soon" } },
     });
     expect(
-      (events[0] as Extract<EngineEvent, { kind: "account.rateLimits.updated" }>)
-        .rateLimits[0]?.resetsAt,
+      (events[0] as Extract<EngineEvent, { kind: "account.rateLimits.updated" }>).rateLimits[0]
+        ?.resetsAt,
     ).toBeUndefined();
   });
 
@@ -343,8 +359,8 @@ describe("usage and limits", () => {
         rateLimits: { secondary: { usedPercent: 10, windowDurationMins } },
       });
       expect(
-        (events[0] as Extract<EngineEvent, { kind: "account.rateLimits.updated" }>)
-          .rateLimits[0]?.windowMinutes,
+        (events[0] as Extract<EngineEvent, { kind: "account.rateLimits.updated" }>).rateLimits[0]
+          ?.windowMinutes,
       ).toBeUndefined();
     }
   });
@@ -354,8 +370,8 @@ describe("usage and limits", () => {
       rateLimits: { secondary: { usedPercent: 10, windowDurationMins: 0 } },
     });
     expect(
-      (events[0] as Extract<EngineEvent, { kind: "account.rateLimits.updated" }>)
-        .rateLimits[0]?.windowMinutes,
+      (events[0] as Extract<EngineEvent, { kind: "account.rateLimits.updated" }>).rateLimits[0]
+        ?.windowMinutes,
     ).toBe(0);
   });
 
@@ -363,9 +379,8 @@ describe("usage and limits", () => {
     const events = reduce("account/rateLimits/updated", {
       rateLimits: { secondary: { windowDurationMins: 10_080 } },
     });
-    const window = (
-      events[0] as Extract<EngineEvent, { kind: "account.rateLimits.updated" }>
-    ).rateLimits[0];
+    const window = (events[0] as Extract<EngineEvent, { kind: "account.rateLimits.updated" }>)
+      .rateLimits[0];
 
     expect(window).toMatchObject({ slot: "secondary", windowMinutes: 10_080 });
     expect(window?.usedPercent).toBeUndefined();
@@ -393,9 +408,8 @@ describe("usage and limits", () => {
       const events = reduce("account/rateLimits/updated", {
         rateLimits: { limitName, primary: { usedPercent: 5 } },
       });
-      const window = (
-        events[0] as Extract<EngineEvent, { kind: "account.rateLimits.updated" }>
-      ).rateLimits[0];
+      const window = (events[0] as Extract<EngineEvent, { kind: "account.rateLimits.updated" }>)
+        .rateLimits[0];
       expect(window).toEqual({ slot: "primary", usedPercent: 5 });
       expect(window && "label" in window).toBe(false);
     }
@@ -406,8 +420,7 @@ describe("usage and limits", () => {
       rateLimits: { limitName: "Weekly", secondary: { usedPercent: 5 } },
     });
     expect(
-      (events[0] as Extract<EngineEvent, { kind: "account.rateLimits.updated" }>)
-        .rateLimits,
+      (events[0] as Extract<EngineEvent, { kind: "account.rateLimits.updated" }>).rateLimits,
     ).toEqual([
       { slot: "primary", label: "Weekly" },
       { slot: "secondary", label: "Secondary", usedPercent: 5 },
@@ -507,12 +520,14 @@ describe("deltas", () => {
   });
 
   test("reasoning summary part additions are boundary markers, not transcript events", () => {
-    expect(reduce("item/reasoning/summaryPartAdded", {
-      threadId: "t1",
-      turnId: "turn-1",
-      itemId: "r1",
-      summaryIndex: 2,
-    })).toEqual([]);
+    expect(
+      reduce("item/reasoning/summaryPartAdded", {
+        threadId: "t1",
+        turnId: "turn-1",
+        itemId: "r1",
+        summaryIndex: 2,
+      }),
+    ).toEqual([]);
   });
 
   test("an empty delta is preserved, but a missing one is dropped", () => {
@@ -540,63 +555,73 @@ describe("deltas", () => {
   });
 
   test("raw apply_patch calls provide a fallback when no fileChange item exists", () => {
-    expect(reduce("rawResponseItem/completed", {
-      threadId: "t1",
-      turnId: "turn-1",
-      item: {
-        type: "custom_tool_call",
-        call_id: "call-patch",
-        name: "apply_patch",
-        input: "*** Begin Patch",
-        status: "completed",
+    expect(
+      reduce("rawResponseItem/completed", {
+        threadId: "t1",
+        turnId: "turn-1",
+        item: {
+          type: "custom_tool_call",
+          call_id: "call-patch",
+          name: "apply_patch",
+          input: "*** Begin Patch",
+          status: "completed",
+        },
+      }),
+    ).toEqual([
+      {
+        kind: "item.dynamic.started",
+        threadId: "t1",
+        turnId: "turn-1",
+        item: {
+          id: "call-patch",
+          type: "dynamic_tool_call",
+          tool: "apply_patch",
+          arguments: "*** Begin Patch",
+          content_items: [],
+          status: "in_progress",
+        },
+        engineGeneration: 1,
+        handle: "handle-1",
       },
-    })).toEqual([{
-      kind: "item.dynamic.started",
-      threadId: "t1",
-      turnId: "turn-1",
-      item: {
-        id: "call-patch",
-        type: "dynamic_tool_call",
-        tool: "apply_patch",
-        arguments: "*** Begin Patch",
-        content_items: [],
-        status: "in_progress",
-      },
-      engineGeneration: 1,
-      handle: "handle-1",
-    }]);
+    ]);
 
-    expect(reduce("rawResponseItem/completed", {
-      threadId: "t1",
-      turnId: "turn-1",
-      item: {
-        type: "custom_tool_call_output",
-        call_id: "call-patch",
+    expect(
+      reduce("rawResponseItem/completed", {
+        threadId: "t1",
+        turnId: "turn-1",
+        item: {
+          type: "custom_tool_call_output",
+          call_id: "call-patch",
+          output: "apply_patch verification failed: missing context",
+        },
+      }),
+    ).toEqual([
+      {
+        kind: "item.dynamic.output",
+        threadId: "t1",
+        turnId: "turn-1",
+        itemId: "call-patch",
         output: "apply_patch verification failed: missing context",
+        engineGeneration: 1,
+        handle: "handle-1",
       },
-    })).toEqual([{
-      kind: "item.dynamic.output",
-      threadId: "t1",
-      turnId: "turn-1",
-      itemId: "call-patch",
-      output: "apply_patch verification failed: missing context",
-      engineGeneration: 1,
-      handle: "handle-1",
-    }]);
+    ]);
   });
 
   test("raw non-patch calls are not introduced as duplicate transcript items", () => {
-    expect(reduce("rawResponseItem/completed", {
-      threadId: "t1",
-      turnId: "turn-1",
-      item: {
-        type: "custom_tool_call",
-        call_id: "call-exec",
-        name: "exec",
-        input: "tools.exec_command({ cmd: 'git status' })",
-        status: "completed",
-      },
-    })).toEqual([]);
+    expect(
+      reduce("rawResponseItem/completed", {
+        threadId: "t1",
+        turnId: "turn-1",
+        item: {
+          type: "custom_tool_call",
+          call_id: "call-exec",
+          name: "exec",
+          input: "tools.exec_command({ cmd: 'git status' })",
+          status: "completed",
+        },
+      }),
+    ).toEqual([]);
   });
 
   test("malformed raw response items are dropped", () => {
@@ -632,28 +657,35 @@ describe("deltas", () => {
 
   test("raw tool outputs preserve array and unknown payload shapes", () => {
     for (const output of [
-      [{ type: "input_text", text: "first" }, { type: "input_text", text: "second" }],
+      [
+        { type: "input_text", text: "first" },
+        { type: "input_text", text: "second" },
+      ],
       { nested: { diagnostic: "failed" } },
       null,
       undefined,
     ]) {
-      expect(reduce("rawResponseItem/completed", {
-        threadId: "t1",
-        turnId: "turn-1",
-        item: {
-          type: "custom_tool_call_output",
-          call_id: "call-patch",
+      expect(
+        reduce("rawResponseItem/completed", {
+          threadId: "t1",
+          turnId: "turn-1",
+          item: {
+            type: "custom_tool_call_output",
+            call_id: "call-patch",
+            output,
+          },
+        }),
+      ).toEqual([
+        {
+          kind: "item.dynamic.output",
+          threadId: "t1",
+          turnId: "turn-1",
+          itemId: "call-patch",
           output,
+          engineGeneration: 1,
+          handle: "handle-1",
         },
-      })).toEqual([{
-        kind: "item.dynamic.output",
-        threadId: "t1",
-        turnId: "turn-1",
-        itemId: "call-patch",
-        output,
-        engineGeneration: 1,
-        handle: "handle-1",
-      }]);
+      ]);
     }
   });
 
@@ -671,27 +703,31 @@ describe("deltas", () => {
     const beforeCall = reduce("rawResponseItem/completed", outputParams);
     const duplicate = reduce("rawResponseItem/completed", outputParams);
 
-    expect(beforeCall).toEqual([{
-      kind: "item.dynamic.output",
-      threadId: "t1",
-      turnId: "turn-1",
-      itemId: "call-patch",
-      output: "Done!",
-      engineGeneration: 1,
-      handle: "handle-1",
-    }]);
+    expect(beforeCall).toEqual([
+      {
+        kind: "item.dynamic.output",
+        threadId: "t1",
+        turnId: "turn-1",
+        itemId: "call-patch",
+        output: "Done!",
+        engineGeneration: 1,
+        handle: "handle-1",
+      },
+    ]);
     expect(duplicate).toEqual(beforeCall);
 
-    expect(reduce("rawResponseItem/completed", {
-      threadId: "t1",
-      turnId: "turn-1",
-      item: {
-        type: "custom_tool_call",
-        call_id: "call-patch",
-        name: "apply_patch",
-        input: "*** Begin Patch",
-      },
-    })[0]).toMatchObject({
+    expect(
+      reduce("rawResponseItem/completed", {
+        threadId: "t1",
+        turnId: "turn-1",
+        item: {
+          type: "custom_tool_call",
+          call_id: "call-patch",
+          name: "apply_patch",
+          input: "*** Begin Patch",
+        },
+      })[0],
+    ).toMatchObject({
       kind: "item.dynamic.started",
       item: { id: "call-patch", tool: "apply_patch" },
     });
@@ -707,9 +743,9 @@ describe("deltas", () => {
   });
 
   test("a delta without a turn id is dropped rather than misattributed", () => {
-    expect(
-      reduce("item/agentMessage/delta", { threadId: "t1", itemId: "i1", delta: "x" }),
-    ).toEqual([]);
+    expect(reduce("item/agentMessage/delta", { threadId: "t1", itemId: "i1", delta: "x" })).toEqual(
+      [],
+    );
   });
 });
 
@@ -856,35 +892,39 @@ describe("item adaptation", () => {
   });
 
   test("dynamicToolCall becomes a renderable live item", () => {
-    expect(reduce("item/started", {
-      threadId: "thread-1",
-      turnId: "turn-1",
-      item: {
-        id: "dynamic-1",
-        type: "dynamicToolCall",
-        namespace: "functions",
-        tool: "exec",
-        arguments: "const r = await tools.exec_command({ cmd: \"git status\" });",
-        status: "inProgress",
-        contentItems: null,
-        success: null,
+    expect(
+      reduce("item/started", {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "dynamic-1",
+          type: "dynamicToolCall",
+          namespace: "functions",
+          tool: "exec",
+          arguments: 'const r = await tools.exec_command({ cmd: "git status" });',
+          status: "inProgress",
+          contentItems: null,
+          success: null,
+        },
+      }),
+    ).toEqual([
+      {
+        kind: "item.started",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "dynamic-1",
+          type: "dynamic_tool_call",
+          namespace: "functions",
+          tool: "exec",
+          arguments: 'const r = await tools.exec_command({ cmd: "git status" });',
+          content_items: [],
+          status: "in_progress",
+        },
+        engineGeneration: 1,
+        handle: "handle-1",
       },
-    })).toEqual([{
-      kind: "item.started",
-      threadId: "thread-1",
-      turnId: "turn-1",
-      item: {
-        id: "dynamic-1",
-        type: "dynamic_tool_call",
-        namespace: "functions",
-        tool: "exec",
-        arguments: "const r = await tools.exec_command({ cmd: \"git status\" });",
-        content_items: [],
-        status: "in_progress",
-      },
-      engineGeneration: 1,
-      handle: "handle-1",
-    }]);
+    ]);
   });
 
   test("preserves the backend item start clock", () => {
@@ -918,8 +958,9 @@ describe("item adaptation", () => {
     });
 
     expect(events[0]).toMatchObject({ kind: "item.started" });
-    expect((events[0] as Extract<EngineEvent, { kind: "item.started" }>).startedAtMs)
-      .toBeUndefined();
+    expect(
+      (events[0] as Extract<EngineEvent, { kind: "item.started" }>).startedAtMs,
+    ).toBeUndefined();
   });
 
   test("collabAgentToolCall converts to the existing snake_case collab shape", () => {
@@ -1080,7 +1121,13 @@ describe("historical turn rehydration", () => {
 
   test("historical items are marked completed, so deltas cannot overwrite them", () => {
     const { events } = reduceHistoricalTurns(
-      [{ id: "turn-1", status: "completed", items: [{ id: "a1", type: "agentMessage", text: "x" }] }],
+      [
+        {
+          id: "turn-1",
+          status: "completed",
+          items: [{ id: "a1", type: "agentMessage", text: "x" }],
+        },
+      ],
       1,
       "thread-1",
     );
@@ -1106,7 +1153,10 @@ describe("historical turn rehydration", () => {
         {
           id: "turn-1",
           status: "completed",
-          items: [{ id: "x", type: "contextCompaction" }, { id: "y", type: "somethingNew" }],
+          items: [
+            { id: "x", type: "contextCompaction" },
+            { id: "y", type: "somethingNew" },
+          ],
         },
       ],
       1,
@@ -1149,16 +1199,18 @@ describe("historical turn rehydration", () => {
 
   test("failed historical turns retain their structured error", () => {
     const { events } = reduceHistoricalTurns(
-      [{
-        id: "turn-failed",
-        status: "failed",
-        items: [],
-        error: {
-          message: "provider failed",
-          codexErrorInfo: "usageLimitExceeded",
-          additionalDetails: "retry later",
+      [
+        {
+          id: "turn-failed",
+          status: "failed",
+          items: [],
+          error: {
+            message: "provider failed",
+            codexErrorInfo: "usageLimitExceeded",
+            additionalDetails: "retry later",
+          },
         },
-      }],
+      ],
       3,
       "thread-1",
     );
@@ -1178,17 +1230,14 @@ describe("historical turn rehydration", () => {
   });
 
   test("propagates an optional handle to every historical event", () => {
-    const turns = [{
-      id: "turn-1",
-      status: "completed",
-      items: [{ id: "a1", type: "agentMessage", text: "answer" }],
-    }];
-    const withHandle = reduceHistoricalTurns(
-      turns,
-      1,
-      "thread-1",
-      "handle-1",
-    ).events;
+    const turns = [
+      {
+        id: "turn-1",
+        status: "completed",
+        items: [{ id: "a1", type: "agentMessage", text: "answer" }],
+      },
+    ];
+    const withHandle = reduceHistoricalTurns(turns, 1, "thread-1", "handle-1").events;
     const withoutHandle = reduceHistoricalTurns(turns, 1, "thread-1").events;
 
     expect(withHandle).toHaveLength(3);
@@ -1211,14 +1260,17 @@ describe("toTurnError", () => {
 
   test("extracts the discriminant from an object-form error info", () => {
     expect(
-      toTurnError({ message: "http failed", codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 503 } } }),
+      toTurnError({
+        message: "http failed",
+        codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 503 } },
+      }),
     ).toMatchObject({ code: "httpConnectionFailed" });
   });
 
   test("carries additional details", () => {
-    expect(
-      toTurnError({ message: "m", additionalDetails: "stack trace" }).details,
-    ).toBe("stack trace");
+    expect(toTurnError({ message: "m", additionalDetails: "stack trace" }).details).toBe(
+      "stack trace",
+    );
   });
 
   test("falls back for malformed input", () => {

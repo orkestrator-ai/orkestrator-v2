@@ -42,11 +42,7 @@ function testArtifact(overrides: Partial<ToolchainArtifact> = {}): ToolchainArti
 describe("verify-toolchain-artifacts", () => {
   test("parses supported filters independently and together", () => {
     expect(parseFilters([])).toEqual({});
-    expect(parseFilters([
-      "--tool=codex",
-      "--platform=linux",
-      "--arch=arm64",
-    ])).toEqual({
+    expect(parseFilters(["--tool=codex", "--platform=linux", "--arch=arm64"])).toEqual({
       tool: "codex",
       platform: "linux",
       architecture: "arm64",
@@ -84,36 +80,35 @@ describe("verify-toolchain-artifacts", () => {
   }
 
   test("accepts HTTPS downloads from an explicitly allowed host", () => {
-    expect(() => validateDownloadUrl(
-      new URL("https://downloads.example.test/tool.tar.gz"),
-      ["downloads.example.test"],
-    )).not.toThrow();
+    expect(() =>
+      validateDownloadUrl(new URL("https://downloads.example.test/tool.tar.gz"), [
+        "downloads.example.test",
+      ]),
+    ).not.toThrow();
   });
 
   test("rejects non-HTTPS and non-allowlisted artifact URLs", () => {
-    expect(() => validateDownloadUrl(
-      new URL("http://downloads.example.test/tool.tar.gz"),
-      ["downloads.example.test"],
-    )).toThrow("Refusing non-HTTPS");
-    expect(() => validateDownloadUrl(
-      new URL("https://redirect.example.test/tool.tar.gz"),
-      ["downloads.example.test"],
-    )).toThrow("outside allowlist");
+    expect(() =>
+      validateDownloadUrl(new URL("http://downloads.example.test/tool.tar.gz"), [
+        "downloads.example.test",
+      ]),
+    ).toThrow("Refusing non-HTTPS");
+    expect(() =>
+      validateDownloadUrl(new URL("https://redirect.example.test/tool.tar.gz"), [
+        "downloads.example.test",
+      ]),
+    ).toThrow("outside allowlist");
   });
 
   test("accepts exact digests and describes size or checksum mismatches", () => {
     const expected = { size: 4, sha256: "a".repeat(64) };
     expect(() => expectDigest("artifact", expected, expected)).not.toThrow();
-    expect(() => expectDigest(
-      "artifact",
-      { ...expected, size: 3 },
-      expected,
-    )).toThrow("size mismatch");
-    expect(() => expectDigest(
-      "artifact",
-      { ...expected, sha256: "b".repeat(64) },
-      expected,
-    )).toThrow("SHA-256 mismatch");
+    expect(() => expectDigest("artifact", { ...expected, size: 3 }, expected)).toThrow(
+      "size mismatch",
+    );
+    expect(() =>
+      expectDigest("artifact", { ...expected, sha256: "b".repeat(64) }, expected),
+    ).toThrow("SHA-256 mismatch");
   });
 
   test("follows allowlisted redirects and validates every hop", async () => {
@@ -136,36 +131,48 @@ describe("verify-toolchain-artifacts", () => {
       "https://downloads.example.test/release/codex.tar.gz",
     ]);
 
-    await expect(fetchArtifact(testArtifact(), async () =>
-      new Response(null, {
-        status: 302,
-        headers: { location: "https://untrusted.example/codex.tar.gz" },
-      }))).rejects.toThrow("outside allowlist");
+    await expect(
+      fetchArtifact(
+        testArtifact(),
+        async () =>
+          new Response(null, {
+            status: 302,
+            headers: { location: "https://untrusted.example/codex.tar.gz" },
+          }),
+      ),
+    ).rejects.toThrow("outside allowlist");
   });
 
   test("surfaces redirect, HTTP, and fetch failures", async () => {
-    await expect(fetchArtifact(testArtifact(), async () =>
-      new Response(null, { status: 302 }))).rejects.toThrow("omitted Location");
-    await expect(fetchArtifact(testArtifact(), async () =>
-      new Response("unavailable", { status: 503 }))).rejects.toThrow("HTTP 503");
-    await expect(fetchArtifact(testArtifact(), async (_input, init) => {
-      expect(init?.signal).toBeInstanceOf(AbortSignal);
-      throw new Error("request timed out");
-    })).rejects.toThrow("request timed out");
+    await expect(
+      fetchArtifact(testArtifact(), async () => new Response(null, { status: 302 })),
+    ).rejects.toThrow("omitted Location");
+    await expect(
+      fetchArtifact(testArtifact(), async () => new Response("unavailable", { status: 503 })),
+    ).rejects.toThrow("HTTP 503");
+    await expect(
+      fetchArtifact(testArtifact(), async (_input, init) => {
+        expect(init?.signal).toBeInstanceOf(AbortSignal);
+        throw new Error("request timed out");
+      }),
+    ).rejects.toThrow("request timed out");
     // A 2xx with no body would otherwise reach `pipeline()` as null.
-    await expect(fetchArtifact(testArtifact(), async () =>
-      new Response(null, { status: 204 }))).rejects.toThrow("HTTP 204");
+    await expect(
+      fetchArtifact(testArtifact(), async () => new Response(null, { status: 204 })),
+    ).rejects.toThrow("HTTP 204");
   });
 
   test("gives up on an endless redirect chain instead of looping forever", async () => {
     let requests = 0;
-    await expect(fetchArtifact(testArtifact(), async () => {
-      requests += 1;
-      return new Response(null, {
-        status: 302,
-        headers: { location: `/hop-${requests}` },
-      });
-    })).rejects.toThrow("exceeded 10 redirects");
+    await expect(
+      fetchArtifact(testArtifact(), async () => {
+        requests += 1;
+        return new Response(null, {
+          status: 302,
+          headers: { location: `/hop-${requests}` },
+        });
+      }),
+    ).rejects.toThrow("exceeded 10 redirects");
     // The bound is inclusive of the first request: 1 + MAX_REDIRECTS attempts.
     expect(requests).toBe(11);
   });
@@ -201,9 +208,10 @@ describe("verify-toolchain-artifacts", () => {
       });
 
       await verifyArtifact(artifact, root, {
-        fetchImpl: async () => new Response(
-          archive.buffer.slice(archive.byteOffset, archive.byteOffset + archive.byteLength),
-        ),
+        fetchImpl: async () =>
+          new Response(
+            archive.buffer.slice(archive.byteOffset, archive.byteOffset + archive.byteLength),
+          ),
       });
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -230,30 +238,35 @@ describe("verify-toolchain-artifacts", () => {
         size: contents.byteLength,
         sha256: createHash("sha256").update(contents).digest("hex"),
       });
-      const fetchImpl = async () => new Response(
-        archive.buffer.slice(archive.byteOffset, archive.byteOffset + archive.byteLength),
-      );
+      const fetchImpl = async () =>
+        new Response(
+          archive.buffer.slice(archive.byteOffset, archive.byteOffset + archive.byteLength),
+        );
       const base = testArtifact();
 
       // Wrong archive digest, correct executable digest.
-      await expect(verifyArtifact(
-        testArtifact({
-          archive: { ...base.archive, size: archive.byteLength, sha256: "f".repeat(64) },
-          executable: { ...base.executable, ...digest(executable) },
-        }),
-        root,
-        { fetchImpl },
-      )).rejects.toThrow("codex:linux:x64 archive SHA-256 mismatch");
+      await expect(
+        verifyArtifact(
+          testArtifact({
+            archive: { ...base.archive, size: archive.byteLength, sha256: "f".repeat(64) },
+            executable: { ...base.executable, ...digest(executable) },
+          }),
+          root,
+          { fetchImpl },
+        ),
+      ).rejects.toThrow("codex:linux:x64 archive SHA-256 mismatch");
 
       // Correct archive digest, wrong executable size.
-      await expect(verifyArtifact(
-        testArtifact({
-          archive: { ...base.archive, ...digest(archive) },
-          executable: { ...base.executable, ...digest(executable), size: 1 },
-        }),
-        root,
-        { fetchImpl },
-      )).rejects.toThrow("codex:linux:x64 executable size mismatch");
+      await expect(
+        verifyArtifact(
+          testArtifact({
+            archive: { ...base.archive, ...digest(archive) },
+            executable: { ...base.executable, ...digest(executable), size: 1 },
+          }),
+          root,
+          { fetchImpl },
+        ),
+      ).rejects.toThrow("codex:linux:x64 executable size mismatch");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -280,9 +293,10 @@ describe("verify-toolchain-artifacts", () => {
       // Digests are deliberately wrong: emit must not assert them.
       await verifyArtifact(testArtifact(), root, {
         emit: true,
-        fetchImpl: async () => new Response(
-          archive.buffer.slice(archive.byteOffset, archive.byteOffset + archive.byteLength),
-        ),
+        fetchImpl: async () =>
+          new Response(
+            archive.buffer.slice(archive.byteOffset, archive.byteOffset + archive.byteLength),
+          ),
       });
 
       const printed = log.mock.calls.map((call) => String(call[0])).join("\n");
@@ -338,9 +352,10 @@ describe("verify-toolchain-artifacts", () => {
       // `unzip -p` rather than `tar -xOzf`: the archive is not a tarball.
       expect(await hashExecutable(artifact, archivePath)).toEqual(digest(executable));
       await verifyArtifact(artifact, root, {
-        fetchImpl: async () => new Response(
-          archive.buffer.slice(archive.byteOffset, archive.byteOffset + archive.byteLength),
-        ),
+        fetchImpl: async () =>
+          new Response(
+            archive.buffer.slice(archive.byteOffset, archive.byteOffset + archive.byteLength),
+          ),
       });
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -375,30 +390,33 @@ describe("verify-toolchain-artifacts", () => {
         sha256: createHash("sha256").update(contents).digest("hex"),
       });
       const companionUrl = "https://downloads.example.test/codex-code-mode-host.tar.gz";
-      const body = (contents: Buffer) => contents.buffer.slice(
-        contents.byteOffset,
-        contents.byteOffset + contents.byteLength,
-      );
-      const fetchImpl = async (input: URL | string) => new Response(
-        String(input) === companionUrl ? body(companionArchive) : body(primaryArchive),
-      );
-      const withCompanion = (
-        companionDigests: { archive: ReturnType<typeof digest>; executable: ReturnType<typeof digest> },
-      ) => testArtifact({
-        archive: { ...testArtifact().archive, ...digest(primaryArchive) },
-        executable: { ...testArtifact().executable, ...digest(primaryBody) },
-        companions: [{
-          fileName: "codex-code-mode-host",
-          archive: {
-            format: "tar.gz",
-            url: companionUrl,
-            entryPath: "codex-code-mode-host",
-            allowedHosts: ["downloads.example.test"],
-            ...companionDigests.archive,
-          },
-          executable: companionDigests.executable,
-        }],
-      });
+      const body = (contents: Buffer) =>
+        contents.buffer.slice(contents.byteOffset, contents.byteOffset + contents.byteLength);
+      const fetchImpl = async (input: URL | string) =>
+        new Response(
+          String(input) === companionUrl ? body(companionArchive) : body(primaryArchive),
+        );
+      const withCompanion = (companionDigests: {
+        archive: ReturnType<typeof digest>;
+        executable: ReturnType<typeof digest>;
+      }) =>
+        testArtifact({
+          archive: { ...testArtifact().archive, ...digest(primaryArchive) },
+          executable: { ...testArtifact().executable, ...digest(primaryBody) },
+          companions: [
+            {
+              fileName: "codex-code-mode-host",
+              archive: {
+                format: "tar.gz",
+                url: companionUrl,
+                entryPath: "codex-code-mode-host",
+                allowedHosts: ["downloads.example.test"],
+                ...companionDigests.archive,
+              },
+              executable: companionDigests.executable,
+            },
+          ],
+        });
       const correct = withCompanion({
         archive: digest(companionArchive),
         executable: digest(companionBody),
@@ -407,26 +425,34 @@ describe("verify-toolchain-artifacts", () => {
       await verifyArtifact(correct, root, { fetchImpl });
 
       // Both scratch archives are removed even though two were written.
-      expect(await readFile(join(root, "codex-code-mode-host-linux-x64.tar.gz"))
-        .then(() => true, () => false)).toBe(false);
+      expect(
+        await readFile(join(root, "codex-code-mode-host-linux-x64.tar.gz")).then(
+          () => true,
+          () => false,
+        ),
+      ).toBe(false);
 
-      await expect(verifyArtifact(
-        withCompanion({
-          archive: { ...digest(companionArchive), sha256: "f".repeat(64) },
-          executable: digest(companionBody),
-        }),
-        root,
-        { fetchImpl },
-      )).rejects.toThrow("codex:linux:x64 codex-code-mode-host archive SHA-256 mismatch");
+      await expect(
+        verifyArtifact(
+          withCompanion({
+            archive: { ...digest(companionArchive), sha256: "f".repeat(64) },
+            executable: digest(companionBody),
+          }),
+          root,
+          { fetchImpl },
+        ),
+      ).rejects.toThrow("codex:linux:x64 codex-code-mode-host archive SHA-256 mismatch");
 
-      await expect(verifyArtifact(
-        withCompanion({
-          archive: digest(companionArchive),
-          executable: { ...digest(companionBody), size: 1 },
-        }),
-        root,
-        { fetchImpl },
-      )).rejects.toThrow("codex:linux:x64 codex-code-mode-host executable size mismatch");
+      await expect(
+        verifyArtifact(
+          withCompanion({
+            archive: digest(companionArchive),
+            executable: { ...digest(companionBody), size: 1 },
+          }),
+          root,
+          { fetchImpl },
+        ),
+      ).rejects.toThrow("codex:linux:x64 codex-code-mode-host executable size mismatch");
 
       // Emit prints the companion as its own paste-ready block, so a version
       // bump does not silently reuse the previous release's helper digests.
@@ -465,8 +491,9 @@ describe("verify-toolchain-artifacts", () => {
         headers: source.headers,
       } as unknown as Response;
 
-      await expect(verifyArtifact(testArtifact(), root, { fetchImpl: async () => vanishing }))
-        .rejects.toThrow("Artifact response omitted a body");
+      await expect(
+        verifyArtifact(testArtifact(), root, { fetchImpl: async () => vanishing }),
+      ).rejects.toThrow("Artifact response omitted a body");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -486,7 +513,13 @@ describe("verify-toolchain-artifacts", () => {
   });
 
   test("CLI refuses downloads unless the live verification guard is explicit", async () => {
-    const scriptPath = join(import.meta.dir, "..", "..", "scripts", "verify-toolchain-artifacts.ts");
+    const scriptPath = join(
+      import.meta.dir,
+      "..",
+      "..",
+      "scripts",
+      "verify-toolchain-artifacts.ts",
+    );
     const child = Bun.spawn([process.execPath, scriptPath], {
       env: {
         ...process.env,
@@ -525,14 +558,9 @@ describe("verify-toolchain-artifacts", () => {
       expect(selectArtifacts({ platform: "darwin" }, artifacts)).toHaveLength(2);
       expect(selectArtifacts({ architecture: "x64" }, artifacts)).toHaveLength(1);
       expect(
-        selectArtifacts(
-          { tool: "codex", platform: "darwin", architecture: "arm64" },
-          artifacts,
-        ),
+        selectArtifacts({ tool: "codex", platform: "darwin", architecture: "arm64" }, artifacts),
       ).toHaveLength(1);
-      expect(
-        selectArtifacts({ tool: "opencode", architecture: "x64" }, artifacts),
-      ).toHaveLength(0);
+      expect(selectArtifacts({ tool: "opencode", architecture: "x64" }, artifacts)).toHaveLength(0);
     });
 
     test("verifies every selected artifact into one scratch root and cleans it up", async () => {
@@ -575,9 +603,7 @@ describe("verify-toolchain-artifacts", () => {
       });
 
       expect(emitFlags).toEqual([true, true]);
-      expect(logged).toEqual([
-        "Hashed 2 artifact(s); paste the values into toolchain-manifest.ts",
-      ]);
+      expect(logged).toEqual(["Hashed 2 artifact(s); paste the values into toolchain-manifest.ts"]);
     });
 
     test("removes the scratch root even when an artifact fails mid-run", async () => {

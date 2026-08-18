@@ -128,10 +128,9 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
   reconcileAgentActivity(): Promise<void> {
     if (this.stopped) return Promise.resolve();
     if (this.activityScan) return this.activityScan;
-    const scan = this.trackScan(this.reconcileAgentActivityOnce())
-      .finally(() => {
-        if (this.activityScan === scan) this.activityScan = null;
-      });
+    const scan = this.trackScan(this.reconcileAgentActivityOnce()).finally(() => {
+      if (this.activityScan === scan) this.activityScan = null;
+    });
     this.activityScan = scan;
     return scan;
   }
@@ -146,10 +145,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     const environmentsById = new Map(
       environments.map((environment) => [environment.id, environment]),
     );
-    const sessionsByEnvironment = new Map<
-      string,
-      PersistedNativeAgentSession[]
-    >();
+    const sessionsByEnvironment = new Map<string, PersistedNativeAgentSession[]>();
     for (const session of sessions) {
       if (!environmentsById.has(session.environmentId)) continue;
       const grouped = sessionsByEnvironment.get(session.environmentId) ?? [];
@@ -202,12 +198,15 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
         // every two seconds to re-learn an answer that cannot have changed.
         if ((this.absentBridgeUntil.get(groupKey) ?? 0) > this.now()) {
           for (const session of group) {
-            if (await this.recordActivity(
-              activityByEnvironment,
-              session,
-              "idle",
-              Boolean(environment.prRecheckAfterAgentCompletionArmedAt),
-            )) completionCandidates.add(session.environmentId);
+            if (
+              await this.recordActivity(
+                activityByEnvironment,
+                session,
+                "idle",
+                Boolean(environment.prRecheckAfterAgentCompletionArmedAt),
+              )
+            )
+              completionCandidates.add(session.environmentId);
           }
           continue;
         }
@@ -219,19 +218,19 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
             // executing. That is an answer, not a failure — recording it is
             // what retires a `working` indicator left behind by a crash.
             for (const session of group) {
-              if (await this.recordActivity(
-                activityByEnvironment,
-                session,
-                "idle",
-                Boolean(environment.prRecheckAfterAgentCompletionArmedAt),
-              )) completionCandidates.add(session.environmentId);
+              if (
+                await this.recordActivity(
+                  activityByEnvironment,
+                  session,
+                  "idle",
+                  Boolean(environment.prRecheckAfterAgentCompletionArmedAt),
+                )
+              )
+                completionCandidates.add(session.environmentId);
             }
             this.activityAttempts.delete(groupKey);
             this.activityRetryAt.delete(groupKey);
-            this.absentBridgeUntil.set(
-              groupKey,
-              this.now() + ABSENT_BRIDGE_RECHECK_MS,
-            );
+            this.absentBridgeUntil.set(groupKey, this.now() + ABSENT_BRIDGE_RECHECK_MS);
             continue;
           }
           this.absentBridgeUntil.delete(groupKey);
@@ -242,23 +241,23 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
             });
           }
           const batchedActivity = provider.activityBatch
-            ? await provider.activityBatch(
-                group.map((session) => session.providerSessionId),
-              )
+            ? await provider.activityBatch(group.map((session) => session.providerSessionId))
             : undefined;
           for (const session of group) {
             const activity = batchedActivity
               ? batchedActivity.get(session.providerSessionId)
               : provider.activity
                 ? await provider.activity(session.providerSessionId)
-                : await readProviderStatus(provider, session.providerSessionId)
-                    .then(({ status }) =>
+                : await readProviderStatus(provider, session.providerSessionId).then(
+                    ({ status }) =>
                       status === "missing"
                         ? "missing"
                         : status === "running"
                           ? "working"
-                          : status === "blocked" ? "waiting" : "idle"
-                    );
+                          : status === "blocked"
+                            ? "waiting"
+                            : "idle",
+                  );
             if (!activity) {
               throw new ProviderUnavailableError(
                 `Provider activity snapshot omitted ${session.providerSessionId}`,
@@ -274,12 +273,15 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
               );
               continue;
             }
-            if (await this.recordActivity(
-              activityByEnvironment,
-              session,
-              activity,
-              Boolean(environment.prRecheckAfterAgentCompletionArmedAt),
-            )) completionCandidates.add(session.environmentId);
+            if (
+              await this.recordActivity(
+                activityByEnvironment,
+                session,
+                activity,
+                Boolean(environment.prRecheckAfterAgentCompletionArmedAt),
+              )
+            )
+              completionCandidates.add(session.environmentId);
           }
           this.activityAttempts.delete(groupKey);
           this.activityRetryAt.delete(groupKey);
@@ -297,9 +299,8 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
       }
     };
     await Promise.all(
-      Array.from(
-        { length: Math.min(ACTIVITY_STATUS_CONCURRENCY, pendingGroups.length) },
-        () => worker(),
+      Array.from({ length: Math.min(ACTIVITY_STATUS_CONCURRENCY, pendingGroups.length) }, () =>
+        worker(),
       ),
     );
     if (this.stopped) return;
@@ -313,9 +314,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     }
     const armedEnvironmentIds = new Set(
       environments
-        .filter((environment) =>
-          Boolean(environment.prRecheckAfterAgentCompletionArmedAt)
-        )
+        .filter((environment) => Boolean(environment.prRecheckAfterAgentCompletionArmedAt))
         .map((environment) => environment.id),
     );
     for (const environmentId of this.pendingPrRefreshEnvironmentIds) {
@@ -342,22 +341,22 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
       const previous = environment.agentActivitySources?.["native-agent"];
       if (!hasRegisteredSessions && !previous) continue;
       const desiredState = isEnvironmentReadyForAgents(environment)
-        ? aggregateAgentActivityState(
-            activityByEnvironment.get(environment.id) ?? {},
-          )
+        ? aggregateAgentActivityState(activityByEnvironment.get(environment.id) ?? {})
         : "idle";
       if (previous?.state === desiredState) continue;
-      await this.storage.setEnvironmentAgentActivity(
-        environment.id,
-        desiredState,
-        new Date().toISOString(),
-        "native-agent",
-      ).catch((error) => {
-        console.warn(
-          `[native-agent] Failed to persist activity for ${environment.id}:`,
-          error instanceof Error ? error.name : "unknown error",
-        );
-      });
+      await this.storage
+        .setEnvironmentAgentActivity(
+          environment.id,
+          desiredState,
+          new Date().toISOString(),
+          "native-agent",
+        )
+        .catch((error) => {
+          console.warn(
+            `[native-agent] Failed to persist activity for ${environment.id}:`,
+            error instanceof Error ? error.name : "unknown error",
+          );
+        });
     }
   }
 
@@ -372,21 +371,17 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     countUnknownIdleAsCompletion: boolean,
   ): Promise<boolean> {
     const observed = this.observedSessionActivity.get(session.key);
-    const previous = observed?.providerSessionId === session.providerSessionId
-      ? observed.state
-      : undefined;
-    const durableAttentionEdge = (state === "idle" || state === "waiting")
-      && (
-        previous === "working"
-        || (state === "idle" && observed === undefined && countUnknownIdleAsCompletion)
-      );
+    const previous =
+      observed?.providerSessionId === session.providerSessionId ? observed.state : undefined;
+    const durableAttentionEdge =
+      (state === "idle" || state === "waiting") &&
+      (previous === "working" ||
+        (state === "idle" && observed === undefined && countUnknownIdleAsCompletion));
     // PR reconciliation retains its narrower historical completion contract:
     // a parked waiting turn needs the user's attention, but it has not ended.
-    const completed = state === "idle"
-      && (
-        previous === "working"
-        || (observed === undefined && countUnknownIdleAsCompletion)
-      );
+    const completed =
+      state === "idle" &&
+      (previous === "working" || (observed === undefined && countUnknownIdleAsCompletion));
     // Persist the exact session edge before advancing the in-memory observation.
     // If storage fails, the provider group backs off and the next scan still
     // sees `previous === "working"`, so the durable completion is retried.
@@ -415,16 +410,14 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
      * candidate is retried after transient provider or storage failures.
      * Unattended workflows own their own turn lifecycle and remain excluded.
      */
-    const openCodeInteractive = session.agent === "opencode"
-      && session.origin !== "build-pipeline"
-      && session.origin !== "looped-review";
+    const openCodeInteractive =
+      session.agent === "opencode" &&
+      session.origin !== "build-pipeline" &&
+      session.origin !== "looped-review";
     if (!openCodeInteractive || state !== "idle") {
       this.openCodeRecoveryCandidates.delete(session.key);
     } else {
-      if (
-        previous === undefined
-        || isAgentTurnEndTransition({ previousState: previous, state })
-      ) {
+      if (previous === undefined || isAgentTurnEndTransition({ previousState: previous, state })) {
         this.markOpenCodeRecoveryCandidate(session);
       }
       this.scheduleOpenCodeIncompleteTurnRecovery(session);
@@ -462,25 +455,17 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     await Promise.all(
       Array.from(
         {
-          length: Math.min(
-            ACTIVITY_STATUS_CONCURRENCY,
-            environmentIds.length,
-          ),
+          length: Math.min(ACTIVITY_STATUS_CONCURRENCY, environmentIds.length),
         },
         () => worker(),
       ),
     );
   }
 
-  protected markOpenCodeRecoveryCandidate(
-    session: PersistedNativeAgentSession,
-  ): void {
+  protected markOpenCodeRecoveryCandidate(session: PersistedNativeAgentSession): void {
     const current = this.openCodeRecoveryCandidates.get(session.key);
     if (current?.providerSessionId === session.providerSessionId) return;
-    if (
-      !current
-      && this.openCodeRecoveryCandidates.size >= OPENCODE_RECOVERY_MAX_CANDIDATES
-    ) {
+    if (!current && this.openCodeRecoveryCandidates.size >= OPENCODE_RECOVERY_MAX_CANDIDATES) {
       const oldest = this.openCodeRecoveryCandidates.keys().next().value;
       if (oldest) this.openCodeRecoveryCandidates.delete(oldest);
     }
@@ -491,40 +476,31 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     });
   }
 
-  protected hasOpenCodeManualPromptClaim(
-    session: PersistedNativeAgentSession,
-  ): boolean {
+  protected hasOpenCodeManualPromptClaim(session: PersistedNativeAgentSession): boolean {
     const claim = this.openCodeManualPromptClaims.get(session.key);
     if (!claim) return false;
-    if (
-      claim.providerSessionId !== session.providerSessionId
-      || claim.expiresAt <= this.now()
-    ) {
+    if (claim.providerSessionId !== session.providerSessionId || claim.expiresAt <= this.now()) {
       this.openCodeManualPromptClaims.delete(session.key);
       return false;
     }
     return true;
   }
 
-  protected hasNewerOpenCodeActivity(
-    session: PersistedNativeAgentSession,
-  ): boolean {
+  protected hasNewerOpenCodeActivity(session: PersistedNativeAgentSession): boolean {
     const observed = this.observedSessionActivity.get(session.key);
-    return observed?.providerSessionId === session.providerSessionId
-      && observed.state !== "idle";
+    return observed?.providerSessionId === session.providerSessionId && observed.state !== "idle";
   }
 
   /** Coalesce concurrent idle observations onto one recovery pass per session. */
-  protected scheduleOpenCodeIncompleteTurnRecovery(
-    session: PersistedNativeAgentSession,
-  ): void {
+  protected scheduleOpenCodeIncompleteTurnRecovery(session: PersistedNativeAgentSession): void {
     const candidate = this.openCodeRecoveryCandidates.get(session.key);
     if (
-      this.stopped
-      || this.openCodeRecoveryTasks.has(session.key)
-      || candidate?.providerSessionId !== session.providerSessionId
-      || candidate.retryAt > this.now()
-    ) return;
+      this.stopped ||
+      this.openCodeRecoveryTasks.has(session.key) ||
+      candidate?.providerSessionId !== session.providerSessionId ||
+      candidate.retryAt > this.now()
+    )
+      return;
     const task = this.recoverOpenCodeIncompleteTurnOnce(session)
       .then((result) => {
         const latest = this.openCodeRecoveryCandidates.get(session.key);
@@ -539,11 +515,12 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
         const latest = this.openCodeRecoveryCandidates.get(session.key);
         if (latest?.providerSessionId === session.providerSessionId) {
           latest.attempts += 1;
-          latest.retryAt = this.now() + Math.min(
-            OPENCODE_RECOVERY_RETRY_CEILING_MS,
-            OPENCODE_RECOVERY_RETRY_BASE_MS
-              * 2 ** Math.min(latest.attempts - 1, 8),
-          );
+          latest.retryAt =
+            this.now() +
+            Math.min(
+              OPENCODE_RECOVERY_RETRY_CEILING_MS,
+              OPENCODE_RECOVERY_RETRY_BASE_MS * 2 ** Math.min(latest.attempts - 1, 8),
+            );
         }
         console.warn(
           `[native-agent] OpenCode incomplete-turn recovery for ${session.environmentId} failed:`,
@@ -574,9 +551,9 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     if (this.stopped) return "complete";
     const environment = await this.storage.getEnvironment(session.environmentId);
     if (
-      !environment
-      || environment.deletionRequestedAt
-      || !isEnvironmentReadyForAgents(environment)
+      !environment ||
+      environment.deletionRequestedAt ||
+      !isEnvironmentReadyForAgents(environment)
     ) {
       return "complete";
     }
@@ -592,119 +569,116 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     });
     if (!provider) return "retry";
     if (this.hasOpenCodeManualPromptClaim(session)) return "retry";
-    const initialMessages = await provider.messages(
-      session.providerSessionId,
-      { limit: OPENCODE_INCOMPLETE_TURN_HISTORY_LIMIT },
-    );
+    const initialMessages = await provider.messages(session.providerSessionId, {
+      limit: OPENCODE_INCOMPLETE_TURN_HISTORY_LIMIT,
+    });
     if (this.stopped) return "complete";
     const initialRecovery = inspectOpenCodeIncompleteTurn(initialMessages);
     if (!initialRecovery) return "complete";
     let disposition: "complete" | "retry" = "complete";
     let confirmedAssistantMessageId: string | undefined;
     try {
-      await this.dispatchPromptInternal({
-        environmentId: session.environmentId,
-        agent: session.agent,
-        logicalSessionKey: session.logicalSessionKey,
-        origin: session.origin,
-        interactionPolicy: session.interactionPolicy,
-        prompt: OPENCODE_INCOMPLETE_TURN_CONTINUATION,
-        requestId: openCodeIncompleteTurnRequestId(
-          initialRecovery.assistantMessageId,
-        ),
-      }, async (lockedSession, lockedProvider) => {
-        if (this.stopped) return { dispatch: false };
-        if (
-          this.hasOpenCodeManualPromptClaim(lockedSession)
-          || this.hasNewerOpenCodeActivity(lockedSession)
-        ) {
-          disposition = "retry";
-          return { dispatch: false };
-        }
-        const queue = await this.storage.getPromptQueue(
-          `${lockedSession.agent}\0${lockedSession.logicalSessionKey}`,
-        );
-        if (queue && (queue.messages.length > 0 || queue.inFlight !== undefined)) {
-          disposition = "retry";
-          return { dispatch: false };
-        }
-        const messages = await lockedProvider.messages(
-          lockedSession.providerSessionId,
-          { limit: OPENCODE_INCOMPLETE_TURN_HISTORY_LIMIT },
-        );
-        if (this.stopped) return { dispatch: false };
-        // Claims and queues may have appeared while the authoritative read was
-        // in flight. This final check is inside the durable dispatch lock.
-        if (
-          this.hasOpenCodeManualPromptClaim(lockedSession)
-          || this.hasNewerOpenCodeActivity(lockedSession)
-        ) {
-          disposition = "retry";
-          return { dispatch: false };
-        }
-        const latestQueue = await this.storage.getPromptQueue(
-          `${lockedSession.agent}\0${lockedSession.logicalSessionKey}`,
-        );
-        if (
-          this.hasOpenCodeManualPromptClaim(lockedSession)
-          || this.hasNewerOpenCodeActivity(lockedSession)
-        ) {
-          disposition = "retry";
-          return { dispatch: false };
-        }
-        if (
-          latestQueue
-          && (latestQueue.messages.length > 0 || latestQueue.inFlight !== undefined)
-        ) {
-          disposition = "retry";
-          return { dispatch: false };
-        }
-        const recovery = inspectOpenCodeIncompleteTurn(messages);
-        if (!recovery) return { dispatch: false };
-        if (recovery.assistantMessageId !== initialRecovery.assistantMessageId) {
-          disposition = "retry";
-          return { dispatch: false };
-        }
-        confirmedAssistantMessageId = recovery.assistantMessageId;
-        if (recovery.action === "exhausted") {
-          console.warn(
-            `[native-agent] OpenCode turn for ${session.environmentId} ended incomplete again after an automatic continuation; leaving it for the user`,
+      await this.dispatchPromptInternal(
+        {
+          environmentId: session.environmentId,
+          agent: session.agent,
+          logicalSessionKey: session.logicalSessionKey,
+          origin: session.origin,
+          interactionPolicy: session.interactionPolicy,
+          prompt: OPENCODE_INCOMPLETE_TURN_CONTINUATION,
+          requestId: openCodeIncompleteTurnRequestId(initialRecovery.assistantMessageId),
+        },
+        async (lockedSession, lockedProvider) => {
+          if (this.stopped) return { dispatch: false };
+          if (
+            this.hasOpenCodeManualPromptClaim(lockedSession) ||
+            this.hasNewerOpenCodeActivity(lockedSession)
+          ) {
+            disposition = "retry";
+            return { dispatch: false };
+          }
+          const queue = await this.storage.getPromptQueue(
+            `${lockedSession.agent}\0${lockedSession.logicalSessionKey}`,
           );
+          if (queue && (queue.messages.length > 0 || queue.inFlight !== undefined)) {
+            disposition = "retry";
+            return { dispatch: false };
+          }
+          const messages = await lockedProvider.messages(lockedSession.providerSessionId, {
+            limit: OPENCODE_INCOMPLETE_TURN_HISTORY_LIMIT,
+          });
+          if (this.stopped) return { dispatch: false };
+          // Claims and queues may have appeared while the authoritative read was
+          // in flight. This final check is inside the durable dispatch lock.
+          if (
+            this.hasOpenCodeManualPromptClaim(lockedSession) ||
+            this.hasNewerOpenCodeActivity(lockedSession)
+          ) {
+            disposition = "retry";
+            return { dispatch: false };
+          }
+          const latestQueue = await this.storage.getPromptQueue(
+            `${lockedSession.agent}\0${lockedSession.logicalSessionKey}`,
+          );
+          if (
+            this.hasOpenCodeManualPromptClaim(lockedSession) ||
+            this.hasNewerOpenCodeActivity(lockedSession)
+          ) {
+            disposition = "retry";
+            return { dispatch: false };
+          }
+          if (
+            latestQueue &&
+            (latestQueue.messages.length > 0 || latestQueue.inFlight !== undefined)
+          ) {
+            disposition = "retry";
+            return { dispatch: false };
+          }
+          const recovery = inspectOpenCodeIncompleteTurn(messages);
+          if (!recovery) return { dispatch: false };
+          if (recovery.assistantMessageId !== initialRecovery.assistantMessageId) {
+            disposition = "retry";
+            return { dispatch: false };
+          }
+          confirmedAssistantMessageId = recovery.assistantMessageId;
+          if (recovery.action === "exhausted") {
+            console.warn(
+              `[native-agent] OpenCode turn for ${session.environmentId} ended incomplete again after an automatic continuation; leaving it for the user`,
+            );
+            return {
+              dispatch: false,
+              notice: {
+                kind: "exhausted",
+                assistantMessageId: recovery.assistantMessageId,
+                updatedAt: new Date(this.now()).toISOString(),
+              },
+            };
+          }
+          console.warn(
+            `[native-agent] Continuing an incomplete OpenCode turn for ${session.environmentId}`,
+          );
+          // Publish synchronously after the last awaited guard. A direct/manual
+          // claim now fails until provider acceptance finishes, closing the
+          // otherwise unavoidable check-to-send gap.
+          this.openCodeRecoveryDispatches.add(lockedSession.key);
           return {
-            dispatch: false,
-            notice: {
-              kind: "exhausted",
-              assistantMessageId: recovery.assistantMessageId,
-              updatedAt: new Date(this.now()).toISOString(),
-            },
+            dispatch: true,
+            model: recovery.modelId,
+            effort: recovery.variant,
+            executionAgent: recovery.agent,
           };
-        }
-        console.warn(
-          `[native-agent] Continuing an incomplete OpenCode turn for ${session.environmentId}`,
-        );
-        // Publish synchronously after the last awaited guard. A direct/manual
-        // claim now fails until provider acceptance finishes, closing the
-        // otherwise unavoidable check-to-send gap.
-        this.openCodeRecoveryDispatches.add(lockedSession.key);
-        return {
-          dispatch: true,
-          model: recovery.modelId,
-          effort: recovery.variant,
-          executionAgent: recovery.agent,
-        };
-      });
+        },
+      );
       return disposition;
     } catch (error) {
       if (confirmedAssistantMessageId) {
-        await this.storage.setOpenCodeIncompleteTurnNotice(
-          session.key,
-          session.providerSessionId,
-          {
+        await this.storage
+          .setOpenCodeIncompleteTurnNotice(session.key, session.providerSessionId, {
             kind: "failed",
             assistantMessageId: confirmedAssistantMessageId,
             updatedAt: new Date(this.now()).toISOString(),
-          },
-        ).catch(() => false);
+          })
+          .catch(() => false);
       }
       throw error;
     } finally {
@@ -734,12 +708,11 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     if (this.stopped) return;
     const existing = this.launchTasks.get(environmentId);
     if (existing) return existing;
-    const task = this.reconcileInitialLaunchOnce(environmentId)
-      .finally(() => {
-        if (this.launchTasks.get(environmentId) === task) {
-          this.launchTasks.delete(environmentId);
-        }
-      });
+    const task = this.reconcileInitialLaunchOnce(environmentId).finally(() => {
+      if (this.launchTasks.get(environmentId) === task) {
+        this.launchTasks.delete(environmentId);
+      }
+    });
     this.launchTasks.set(environmentId, task);
     return task;
   }
@@ -759,10 +732,11 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     if (this.stopped) return;
     await Promise.allSettled(
       environments
-        .filter((environment) =>
-          environment.pendingAgentLaunch
-          && (environment.status === "creating" || environment.status === "running")
-          && (this.launchRetryAt.get(environment.id) ?? 0) <= now
+        .filter(
+          (environment) =>
+            environment.pendingAgentLaunch &&
+            (environment.status === "creating" || environment.status === "running") &&
+            (this.launchRetryAt.get(environment.id) ?? 0) <= now,
         )
         .map((environment) => this.reconcileInitialLaunch(environment.id)),
     );
@@ -778,10 +752,10 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
         .filter((queue) => {
           const agent = queue.queueKey.split("\0", 1)[0];
           return (
-            BUILD_PIPELINE_AGENTS.includes(agent as BuildPipelineAgent)
-            && (queue.messages.length > 0 || queue.inFlight !== undefined)
-            && queue.dispatchError === undefined
-            && (this.queueRetryAt.get(queue.queueKey) ?? 0) <= now
+            BUILD_PIPELINE_AGENTS.includes(agent as BuildPipelineAgent) &&
+            (queue.messages.length > 0 || queue.inFlight !== undefined) &&
+            queue.dispatchError === undefined &&
+            (this.queueRetryAt.get(queue.queueKey) ?? 0) <= now
           );
         })
         .map((queue) => this.drainPromptQueue(queue.queueKey)),
@@ -822,10 +796,10 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
       // failed dispatch uses could not run: the prompt was neither sent nor
       // failed and the queue stalled at the backoff ceiling with nothing shown
       // to the user. Reserving it here gives that path its identity.
-      const parkedRequestId = requestId
-        ?? (park?.reserveHead
-          ? (await this.storage.reservePromptQueueHeadForDispatch(queueKey))
-            ?.requestId
+      const parkedRequestId =
+        requestId ??
+        (park?.reserveHead
+          ? (await this.storage.reservePromptQueueHeadForDispatch(queueKey))?.requestId
           : undefined);
       if (parkedRequestId !== undefined) {
         this.queueAttempts.delete(queueKey);
@@ -856,12 +830,11 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     if (this.stopped) return;
     const existing = this.queueTasks.get(queueKey);
     if (!existing) {
-      const task = this.drainPromptQueueOnce(queueKey)
-        .finally(() => {
-          if (this.queueTasks.get(queueKey) === task) {
-            this.queueTasks.delete(queueKey);
-          }
-        });
+      const task = this.drainPromptQueueOnce(queueKey).finally(() => {
+        if (this.queueTasks.get(queueKey) === task) {
+          this.queueTasks.delete(queueKey);
+        }
+      });
       this.queueTasks.set(queueKey, task);
       return task;
     }
@@ -901,10 +874,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     if (separator <= 0) return;
     const agent = queueKey.slice(0, separator) as BuildPipelineAgent;
     const logicalSessionKey = queueKey.slice(separator + 1);
-    if (
-      !BUILD_PIPELINE_AGENTS.includes(agent)
-      || !nonBlank(logicalSessionKey)
-    ) {
+    if (!BUILD_PIPELINE_AGENTS.includes(agent) || !nonBlank(logicalSessionKey)) {
       return;
     }
     const queue = await this.storage.getPromptQueue(queueKey);
@@ -918,8 +888,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
       await this.deferQueue(queueKey, "environment is not ready for agents");
       return;
     }
-    const draftKey =
-      `${agent}:${queue.environmentId}:${encodeURIComponent(logicalSessionKey)}`;
+    const draftKey = `${agent}:${queue.environmentId}:${encodeURIComponent(logicalSessionKey)}`;
     const draft = await this.storage.getComposeDraft(draftKey);
     if (this.composeDraftHoldsQueue(draft?.value)) return;
 
@@ -951,44 +920,32 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     await this.assertEnvironmentLive(queue.environmentId);
     if (status === "running" || status === "blocked") return;
     if (status !== "idle") {
-      await this.deferQueue(
-        queueKey,
-        `provider session is ${status}`,
-        queue.inFlight?.requestId,
-        {
-          /*
-           * A terminal turn error is sticky until the next turn runs, and the
-           * drain is the only thing that would have run it — so retrying can
-           * never clear this on its own. Deferring alone left the prompt
-           * neither sent nor failed and told the user nothing. Park it instead:
-           * the composer shows the provider's own explanation and the existing
-           * retry control resends it once the model is changed. Auto-sending
-           * here would be worse than silence, because an at-capacity model
-           * fails every queued prompt in turn and burns the whole queue.
-           */
-          reserveHead: true,
-          message: statusDetail
-            ? `The ${agent} session failed before this prompt was sent: ${
-              statusDetail.slice(0, 500)
-            }`
-            : `The ${agent} session is ${status}; the queued prompt was not sent.`,
-        },
-      );
+      await this.deferQueue(queueKey, `provider session is ${status}`, queue.inFlight?.requestId, {
+        /*
+         * A terminal turn error is sticky until the next turn runs, and the
+         * drain is the only thing that would have run it — so retrying can
+         * never clear this on its own. Deferring alone left the prompt
+         * neither sent nor failed and told the user nothing. Park it instead:
+         * the composer shows the provider's own explanation and the existing
+         * retry control resends it once the model is changed. Auto-sending
+         * here would be worse than silence, because an at-capacity model
+         * fails every queued prompt in turn and burns the whole queue.
+         */
+        reserveHead: true,
+        message: statusDetail
+          ? `The ${agent} session failed before this prompt was sent: ${statusDetail.slice(0, 500)}`
+          : `The ${agent} session is ${status}; the queued prompt was not sent.`,
+      });
       return;
     }
     if (this.stopped) return;
     const latestDraft = await this.storage.getComposeDraft(draftKey);
     if (this.composeDraftHoldsQueue(latestDraft?.value)) return;
-    const reservation = await this.storage.reservePromptQueueHeadForDispatch(
-      queueKey,
-    );
+    const reservation = await this.storage.reservePromptQueueHeadForDispatch(queueKey);
     if (!reservation || typeof reservation.message !== "object") return;
     const message = reservation.message as Record<string, unknown>;
     if (!nonBlank(message.text)) {
-      await this.storage.acknowledgePromptQueueDispatch(
-        queueKey,
-        reservation.requestId,
-      );
+      await this.storage.acknowledgePromptQueueDispatch(queueKey, reservation.requestId);
       return;
     }
 
@@ -1001,14 +958,8 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
         ? assertValidPromptAttachments(message.attachments)
         : [];
     } catch (error) {
-      const reason = error instanceof Error
-        ? error.message
-        : "Queued attachment is invalid";
-      await this.storage.failPromptQueueDispatch(
-        queueKey,
-        reservation.requestId,
-        reason,
-      );
+      const reason = error instanceof Error ? error.message : "Queued attachment is invalid";
+      await this.storage.failPromptQueueDispatch(queueKey, reservation.requestId, reason);
       this.clearQueueBackoff(queueKey);
       return;
     }
@@ -1017,10 +968,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
       // it still carries a generated name — the same guard the renderer applied
       // before draining moved to the backend.
       if ((session.dispatchedRequestIds?.length ?? 0) === 0) {
-        await this.renameEnvironmentFromFirstPrompt(
-          queue.environmentId,
-          message.text,
-        );
+        await this.renameEnvironmentFromFirstPrompt(queue.environmentId, message.text);
       }
       await this.dispatchPrompt({
         environmentId: queue.environmentId,
@@ -1028,33 +976,23 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
         logicalSessionKey,
         model: this.queueString(message, "model"),
         reasoningEffort: this.queueReasoningEffort(message),
-        phase: this.queueExecutionMode(agent, message) === "plan"
-          ? "review"
-          : "build",
+        phase: this.queueExecutionMode(agent, message) === "plan" ? "review" : "build",
         mode: this.queueExecutionMode(agent, message),
         fastMode: this.queueFastMode(agent, message),
         subAgent: this.queueString(message, "agent"),
         executionAgent:
-          this.queueString(message, "executionAgent")
-          ?? this.queueString(message, "agent"),
+          this.queueString(message, "executionAgent") ?? this.queueString(message, "agent"),
         includeLocalSettings: this.queueBoolean(message, "includeLocalSettings"),
         promptSuggestions: this.queueBoolean(message, "promptSuggestions"),
         attachments,
         prompt: message.text,
         requestId: reservation.requestId,
       });
-      await this.storage.acknowledgePromptQueueDispatch(
-        queueKey,
-        reservation.requestId,
-      );
+      await this.storage.acknowledgePromptQueueDispatch(queueKey, reservation.requestId);
       this.clearQueueBackoff(queueKey);
     } catch (error) {
       if (error instanceof PromptRejectedError) {
-        await this.storage.failPromptQueueDispatch(
-          queueKey,
-          reservation.requestId,
-          error.message,
-        );
+        await this.storage.failPromptQueueDispatch(queueKey, reservation.requestId, error.message);
         this.clearQueueBackoff(queueKey);
         return;
       }
@@ -1070,22 +1008,18 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     }
   }
 
-  protected async reconcileInitialLaunchOnce(
-    environmentId: string,
-  ): Promise<void> {
+  protected async reconcileInitialLaunchOnce(environmentId: string): Promise<void> {
     if (this.stopped) return;
     const environment = await this.storage.getEnvironment(environmentId);
     if (
-      !environment
-      || !environment.pendingAgentLaunch
-      || (environment.status !== "creating" && environment.status !== "running")
+      !environment ||
+      !environment.pendingAgentLaunch ||
+      (environment.status !== "creating" && environment.status !== "running")
     ) {
       return;
     }
     const config = await this.storage.loadConfig();
-    const repository = await this.storage.getRepositoryConfig(
-      environment.projectId,
-    );
+    const repository = await this.storage.getRepositoryConfig(environment.projectId);
     // Shared with the renderer rather than reimplemented here: the renderer has
     // to predict this exact decision to know whether it may still stage the
     // initial prompt's images itself, and any divergence silently costs the
@@ -1105,19 +1039,17 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
 
     const logicalSessionKey = `env-${environment.id}:startup-agent`;
     const model =
-      environment.initialAgentModel
-      ?? repository.defaultModel
-      ?? (
-        agent === "claude"
-          ? config.global.claudeModel
-          : agent === "codex"
-            ? config.global.codexModel
-            : config.global.opencodeModel
-      );
+      environment.initialAgentModel ??
+      repository.defaultModel ??
+      (agent === "claude"
+        ? config.global.claudeModel
+        : agent === "codex"
+          ? config.global.codexModel
+          : config.global.opencodeModel);
     const reasoningEffort =
-      environment.initialReasoningEffort
-      ?? repository.defaultEffort
-      ?? (agent === "codex" ? config.global.codexReasoningEffort : undefined);
+      environment.initialReasoningEffort ??
+      repository.defaultEffort ??
+      (agent === "codex" ? config.global.codexReasoningEffort : undefined);
 
     // Publishing runs inside the same failure handling as the launch itself. A
     // throw here (an unwritable layout file, a root over the size bound) would
@@ -1135,10 +1067,10 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
       });
       const startupSession = environment.startupAgentSession;
       if (
-        !startupSession
-        || startupSession.agent !== agent
-        || startupSession.style !== "native"
-        || startupSession.status !== "starting"
+        !startupSession ||
+        startupSession.agent !== agent ||
+        startupSession.style !== "native" ||
+        startupSession.status !== "starting"
       ) {
         await this.storage.updateEnvironment(environment.id, {
           startupAgentSession: {
@@ -1163,24 +1095,25 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
         filename: attachment.name,
         data: attachment.base64Data,
       }));
-      const session = prompt || (images?.length ?? 0) > 0
-        ? await this.dispatchPrompt({
-            environmentId: environment.id,
-            agent,
-            logicalSessionKey,
-            model,
-            reasoningEffort,
-            prompt: prompt ?? "",
-            requestId: `initial-prompt:${environment.id}:startup-agent`,
-            images,
-          })
-        : await this.ensureSession({
-            environmentId: environment.id,
-            agent,
-            logicalSessionKey,
-            model,
-            reasoningEffort,
-          });
+      const session =
+        prompt || (images?.length ?? 0) > 0
+          ? await this.dispatchPrompt({
+              environmentId: environment.id,
+              agent,
+              logicalSessionKey,
+              model,
+              reasoningEffort,
+              prompt: prompt ?? "",
+              requestId: `initial-prompt:${environment.id}:startup-agent`,
+              images,
+            })
+          : await this.ensureSession({
+              environmentId: environment.id,
+              agent,
+              logicalSessionKey,
+              model,
+              reasoningEffort,
+            });
 
       // The provider mapping is not enough to satisfy the launch: the user
       // needs a durable pane projection even if every renderer was inactive
@@ -1223,9 +1156,9 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
       // app. Stop retrying and let the surfaced error stand.
       const terminal = error instanceof PromptRejectedError;
       console.warn(
-        `[native-agent] Startup launch for ${environment.id} failed`
-        + `${terminal ? " permanently" : ""}: `
-        + (error instanceof Error ? error.name : "unknown error"),
+        `[native-agent] Startup launch for ${environment.id} failed` +
+          `${terminal ? " permanently" : ""}: ` +
+          (error instanceof Error ? error.name : "unknown error"),
       );
       if (!terminal) this.launchRetryAt.set(environment.id, Date.now() + LAUNCH_RETRY_MS);
       await this.storage.updateEnvironment(environment.id, {
@@ -1286,5 +1219,4 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
    * instead: keying on them accumulated an undisposed provider — and for
    * OpenCode a permanent event stream — for every variant a user ever queued.
    */
-
 }

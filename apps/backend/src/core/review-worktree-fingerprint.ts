@@ -211,8 +211,7 @@ export const REVIEW_WORKTREE_PROBE_REASON_CODES = [
   "unknown",
 ] as const;
 
-export type ReviewWorktreeProbeReasonCode =
-  (typeof REVIEW_WORKTREE_PROBE_REASON_CODES)[number];
+export type ReviewWorktreeProbeReasonCode = (typeof REVIEW_WORKTREE_PROBE_REASON_CODES)[number];
 
 const REASON_CODE_PATTERN = /review-worktree-probe:([a-z-]{1,24})/;
 
@@ -224,9 +223,8 @@ export function reviewWorktreeProbeReasonCode(
   message: string,
 ): ReviewWorktreeProbeReasonCode | null {
   const matched = REASON_CODE_PATTERN.exec(message)?.[1];
-  return matched
-    && (REVIEW_WORKTREE_PROBE_REASON_CODES as readonly string[]).includes(matched)
-    ? matched as ReviewWorktreeProbeReasonCode
+  return matched && (REVIEW_WORKTREE_PROBE_REASON_CODES as readonly string[]).includes(matched)
+    ? (matched as ReviewWorktreeProbeReasonCode)
     : null;
 }
 
@@ -243,9 +241,7 @@ const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/
 const MAX_ENCODED_STATUS_BYTES = Math.ceil((16 * 1024 * 1024) / 3) * 4 + 4;
 
 /** Validates the small JSON envelope emitted by the environment-side script. */
-export function parseReviewWorktreeFingerprint(
-  raw: string,
-): ReviewWorktreeFingerprintResult {
+export function parseReviewWorktreeFingerprint(raw: string): ReviewWorktreeFingerprintResult {
   let value: unknown;
   try {
     value = JSON.parse(raw);
@@ -257,23 +253,20 @@ export function parseReviewWorktreeFingerprint(
   }
   const record = value as Record<string, unknown>;
   if (
-    Object.keys(record).some((key) => !["head", "status", "fingerprint"].includes(key))
-    || typeof record.head !== "string"
-    || !SHA_PATTERN.test(record.head)
-    || typeof record.status !== "string"
-    || record.status.length > MAX_ENCODED_STATUS_BYTES
-    || !BASE64_PATTERN.test(record.status)
-    || (record.fingerprint !== undefined
-      && (typeof record.fingerprint !== "string"
-        || !FINGERPRINT_PATTERN.test(record.fingerprint)))
+    Object.keys(record).some((key) => !["head", "status", "fingerprint"].includes(key)) ||
+    typeof record.head !== "string" ||
+    !SHA_PATTERN.test(record.head) ||
+    typeof record.status !== "string" ||
+    record.status.length > MAX_ENCODED_STATUS_BYTES ||
+    !BASE64_PATTERN.test(record.status) ||
+    (record.fingerprint !== undefined &&
+      (typeof record.fingerprint !== "string" || !FINGERPRINT_PATTERN.test(record.fingerprint)))
   ) {
     throw new Error("The review worktree fingerprint was malformed");
   }
   return {
     head: record.head,
     status: Buffer.from(record.status, "base64").toString("utf8"),
-    ...(record.fingerprint === undefined
-      ? {}
-      : { fingerprint: record.fingerprint as string }),
+    ...(record.fingerprint === undefined ? {} : { fingerprint: record.fingerprint as string }),
   };
 }

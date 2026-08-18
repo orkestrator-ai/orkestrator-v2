@@ -58,9 +58,7 @@ describe("eventEmitter", () => {
 
     expect(first).toEqual([before + 1, before + 2]);
     expect(second).toEqual(first);
-    expect(eventEmitter.currentCursor).toBe(
-      `${eventEmitter.generation}:${before + 2}`,
-    );
+    expect(eventEmitter.currentCursor).toBe(`${eventEmitter.generation}:${before + 2}`);
   });
 
   test("a throwing subscriber does not stop other subscribers from receiving the event", () => {

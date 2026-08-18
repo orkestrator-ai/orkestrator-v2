@@ -2,10 +2,7 @@ import { memo, useLayoutEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { usePaneLayoutStore, getAllLeaves } from "@/stores/paneLayoutStore";
 import { useConfigStore } from "@/stores";
-import {
-  createPortalTargetKey,
-  useTerminalPortalStore,
-} from "@/stores/terminalPortalStore";
+import { createPortalTargetKey, useTerminalPortalStore } from "@/stores/terminalPortalStore";
 import { PersistentTerminal } from "./PersistentTerminal";
 import type { TabInfo, PaneLeaf } from "@/types/paneLayout";
 import type { TerminalTabType } from "@/contexts";
@@ -57,9 +54,7 @@ export const TerminalPortalHost = memo(function TerminalPortalHost({
   // otherwise all environments would share the same terminal tab structure.
   // The per-environment record has a stable reference, so selecting it directly
   // avoids rerendering this host when other environments' layouts change.
-  const currentEnvState = usePaneLayoutStore(
-    (state) => state.environments.get(environmentId)
-  );
+  const currentEnvState = usePaneLayoutStore((state) => state.environments.get(environmentId));
   const activeEnvironmentId = usePaneLayoutStore((state) => state.activeEnvironmentId);
 
   // Get THIS environment's root and active pane (not the global active environment's)
@@ -72,20 +67,18 @@ export const TerminalPortalHost = memo(function TerminalPortalHost({
   const terminals = useTerminalPortalStore((state) => state.terminals);
   const paneHosts = useTerminalPortalStore((state) => state.paneHosts);
 
-  const terminalAppearance = useConfigStore(
-    (state) => state.config.global.terminalAppearance
-  ) || DEFAULT_TERMINAL_APPEARANCE;
-  const terminalScrollback = useConfigStore(
-    (state) => state.config.global.terminalScrollback
-  ) ?? DEFAULT_TERMINAL_SCROLLBACK;
+  const terminalAppearance =
+    useConfigStore((state) => state.config.global.terminalAppearance) ||
+    DEFAULT_TERMINAL_APPEARANCE;
+  const terminalScrollback =
+    useConfigStore((state) => state.config.global.terminalScrollback) ??
+    DEFAULT_TERMINAL_SCROLLBACK;
   const terminalAppearanceResolved = useMemo(
     () => ({
       ...terminalAppearance,
-      backgroundColor: resolveTerminalBackgroundColor(
-        terminalAppearance.backgroundColor,
-      ),
+      backgroundColor: resolveTerminalBackgroundColor(terminalAppearance.backgroundColor),
     }),
-    [terminalAppearance]
+    [terminalAppearance],
   );
 
   // Build a map of tabId -> paneId for all terminal tabs
@@ -127,7 +120,12 @@ export const TerminalPortalHost = memo(function TerminalPortalHost({
     // Create terminals for new tabs
     for (const [tabId] of terminalTabsMap) {
       if (!store.hasTerminal(environmentId, tabId)) {
-        console.debug("[TerminalPortalHost] Creating terminal for tab:", tabId, "in env:", environmentId);
+        console.debug(
+          "[TerminalPortalHost] Creating terminal for tab:",
+          tabId,
+          "in env:",
+          environmentId,
+        );
         store.createTerminal({
           tabId,
           containerId,
@@ -144,7 +142,12 @@ export const TerminalPortalHost = memo(function TerminalPortalHost({
       if (terminalData.environmentId !== environmentId) continue;
 
       if (!terminalTabsMap.has(terminalData.tabId)) {
-        console.debug("[TerminalPortalHost] Disposing terminal for removed tab:", terminalData.tabId, "in env:", environmentId);
+        console.debug(
+          "[TerminalPortalHost] Disposing terminal for removed tab:",
+          terminalData.tabId,
+          "in env:",
+          environmentId,
+        );
         store.disposeTerminal(environmentId, terminalData.tabId);
       }
     }
@@ -156,7 +159,6 @@ export const TerminalPortalHost = memo(function TerminalPortalHost({
     terminalAppearanceResolved,
     terminalScrollback,
   ]);
-
 
   // Render terminals via portals (only for this environment)
   const portalElements: React.ReactNode[] = [];
@@ -210,8 +212,8 @@ export const TerminalPortalHost = memo(function TerminalPortalHost({
           />
         </div>,
         portalTarget,
-        `terminal-portal-${environmentId}::${tabId}`
-      )
+        `terminal-portal-${environmentId}::${tabId}`,
+      ),
     );
   }
 

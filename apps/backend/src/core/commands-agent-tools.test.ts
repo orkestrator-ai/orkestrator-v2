@@ -1,10 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import {
-  ORKESTRATOR_AGENT_MCP_SERVER_NAME,
-  type AgentToolConnection,
-} from "./agent-tools.js";
+import { ORKESTRATOR_AGENT_MCP_SERVER_NAME, type AgentToolConnection } from "./agent-tools.js";
 import { __testing, closeLocalServerAdmission } from "./commands.js";
 
 const servers: http.Server[] = [];
@@ -14,26 +11,33 @@ afterEach(async () => {
     __testing.cancelOpenCodeAgentToolsConfiguration(key);
   }
   __testing.resetOpenCodeAgentToolsTuning();
-  await Promise.all(servers.splice(0).map((server) =>
-    new Promise<void>((resolve, reject) =>
-      server.close((error) => error ? reject(error) : resolve())
-    )
-  ));
+  await Promise.all(
+    servers
+      .splice(0)
+      .map(
+        (server) =>
+          new Promise<void>((resolve, reject) =>
+            server.close((error) => (error ? reject(error) : resolve())),
+          ),
+      ),
+  );
 });
 
 async function serveMcpResponse(
   responseFactory: (
     request: http.IncomingMessage,
     body: string,
-  ) => Promise<{
-    status?: number;
-    headers?: Record<string, string>;
-    body: string;
-  }> | {
-    status?: number;
-    headers?: Record<string, string>;
-    body: string;
-  },
+  ) =>
+    | Promise<{
+        status?: number;
+        headers?: Record<string, string>;
+        body: string;
+      }>
+    | {
+        status?: number;
+        headers?: Record<string, string>;
+        body: string;
+      },
 ): Promise<{
   port: number;
   requests: Array<{
@@ -94,11 +98,7 @@ function sleep(ms: number): Promise<void> {
  * Polls instead of sleeping a fixed span: the reconciler's timing is tuned
  * per-test, so a fixed wait would either be flaky or needlessly slow.
  */
-async function waitFor(
-  predicate: () => boolean,
-  label: string,
-  timeoutMs = 5_000,
-): Promise<void> {
+async function waitFor(predicate: () => boolean, label: string, timeoutMs = 5_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
     if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${label}`);
@@ -107,13 +107,7 @@ async function waitFor(
 }
 
 function schedule(key: string, port: number): void {
-  __testing.scheduleOpenCodeAgentToolsConfiguration(
-    key,
-    port,
-    PASSWORD,
-    connection,
-    "/workspace",
-  );
+  __testing.scheduleOpenCodeAgentToolsConfiguration(key, port, PASSWORD, connection, "/workspace");
 }
 
 describe("OpenCode agent-tool configuration", () => {
@@ -127,12 +121,14 @@ describe("OpenCode agent-tool configuration", () => {
       }),
     }));
 
-    await expect(__testing.configureOpenCodeAgentTools(
-      server.port,
-      "o".repeat(43),
-      connection,
-      "/workspace with spaces",
-    )).resolves.toBeUndefined();
+    await expect(
+      __testing.configureOpenCodeAgentTools(
+        server.port,
+        "o".repeat(43),
+        connection,
+        "/workspace with spaces",
+      ),
+    ).resolves.toBeUndefined();
 
     expect(server.requests).toHaveLength(1);
     const request = server.requests[0]!;
@@ -162,13 +158,15 @@ describe("OpenCode agent-tool configuration", () => {
       };
     });
 
-    expect(__testing.scheduleOpenCodeAgentToolsConfiguration(
-      "test",
-      server.port,
-      "o".repeat(43),
-      connection,
-      "/workspace",
-    )).toBeUndefined();
+    expect(
+      __testing.scheduleOpenCodeAgentToolsConfiguration(
+        "test",
+        server.port,
+        "o".repeat(43),
+        connection,
+        "/workspace",
+      ),
+    ).toBeUndefined();
     expect(__testing.openCodeAgentToolsConfigurationCount()).toBe(1);
     expect(__testing.configuredOpenCodeAgentToolsCount()).toBe(0);
 
@@ -253,9 +251,7 @@ describe("OpenCode agent-tool configuration", () => {
     try {
       let healthy = false;
       const server = await serveMcpResponse(() =>
-        healthy
-          ? { body: CONNECTED_BODY }
-          : { status: 500, body: "{}" }
+        healthy ? { body: CONNECTED_BODY } : { status: 500, body: "{}" },
       );
 
       schedule("test", server.port);
@@ -435,12 +431,9 @@ describe("OpenCode agent-tool configuration", () => {
     ["invalid JSON", "not-json"],
   ])("rejects a malformed response: %s", async (_label, body) => {
     const server = await serveMcpResponse(() => ({ body }));
-    await expect(__testing.configureOpenCodeAgentTools(
-      server.port,
-      "o".repeat(43),
-      connection,
-      "/workspace",
-    )).rejects.toThrow(/invalid|omitted/);
+    await expect(
+      __testing.configureOpenCodeAgentTools(server.port, "o".repeat(43), connection, "/workspace"),
+    ).rejects.toThrow(/invalid|omitted/);
   });
 
   test("rejects oversized fixed-length and streamed responses", async () => {
@@ -449,22 +442,21 @@ describe("OpenCode agent-tool configuration", () => {
       headers: { "content-length": String(Buffer.byteLength(oversized)) },
       body: oversized,
     }));
-    await expect(__testing.configureOpenCodeAgentTools(
-      fixed.port,
-      "o".repeat(43),
-      connection,
-      "/workspace",
-    )).rejects.toThrow("too large");
+    await expect(
+      __testing.configureOpenCodeAgentTools(fixed.port, "o".repeat(43), connection, "/workspace"),
+    ).rejects.toThrow("too large");
 
     const streamed = await serveMcpResponse(() => ({
       body: oversized,
     }));
-    await expect(__testing.configureOpenCodeAgentTools(
-      streamed.port,
-      "o".repeat(43),
-      connection,
-      "/workspace",
-    )).rejects.toThrow("too large");
+    await expect(
+      __testing.configureOpenCodeAgentTools(
+        streamed.port,
+        "o".repeat(43),
+        connection,
+        "/workspace",
+      ),
+    ).rejects.toThrow("too large");
   });
 
   test("rejects non-2xx responses without reading credential-bearing bodies", async () => {

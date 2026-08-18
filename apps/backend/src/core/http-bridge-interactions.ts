@@ -28,11 +28,7 @@ import {
   truncatedJoinedText,
   truncatedText,
 } from "./agent-provider-runtime.js";
-import {
-  assertOk,
-  boundedJson,
-  bridgeFetch,
-} from "./http-bridge-transport.js";
+import { assertOk, boundedJson, bridgeFetch } from "./http-bridge-transport.js";
 
 const MCP_FORM_CONTENT_QUESTION_ID = "mcp-form-content";
 const MAX_RENDERED_FILE_CHANGES = 48;
@@ -56,14 +52,10 @@ export class HttpBridgeInteractionAdapter {
     this.interactionTracker.register(sessionId, interaction);
   }
 
-  private normalizedId(
-    sessionId: string,
-    providerRequestId: string,
-    category: string,
-  ): string {
+  private normalizedId(sessionId: string, providerRequestId: string, category: string): string {
     if (
-      sessionId.length > AGENT_INTERACTION_LIMITS.maxIdLength
-      || providerRequestId.length > AGENT_INTERACTION_LIMITS.maxIdLength
+      sessionId.length > AGENT_INTERACTION_LIMITS.maxIdLength ||
+      providerRequestId.length > AGENT_INTERACTION_LIMITS.maxIdLength
     ) {
       throw new ProviderUnavailableError(
         `${this.agent} returned an oversized interaction identity`,
@@ -112,12 +104,12 @@ export class HttpBridgeInteractionAdapter {
     const questions = request?.questions;
     const expiresAt = request?.expiresAt;
     if (
-      !request
-      || !providerRequestId
-      || !Array.isArray(questions)
-      || questions.length === 0
-      || questions.length > AGENT_INTERACTION_LIMITS.maxQuestionsPerRequest
-      || (expiresAt !== undefined && !Number.isSafeInteger(expiresAt))
+      !request ||
+      !providerRequestId ||
+      !Array.isArray(questions) ||
+      questions.length === 0 ||
+      questions.length > AGENT_INTERACTION_LIMITS.maxQuestionsPerRequest ||
+      (expiresAt !== undefined && !Number.isSafeInteger(expiresAt))
     ) {
       throw new ProviderUnavailableError("Claude returned a malformed question request");
     }
@@ -126,19 +118,18 @@ export class HttpBridgeInteractionAdapter {
       const options = question?.options;
       const prompt = nonEmptyString(question?.question);
       if (
-        !question
-        || !prompt
-        || !Array.isArray(options)
-        || options.length > AGENT_INTERACTION_LIMITS.maxOptionsPerQuestion
+        !question ||
+        !prompt ||
+        !Array.isArray(options) ||
+        options.length > AGENT_INTERACTION_LIMITS.maxOptionsPerQuestion
       ) {
         throw new ProviderUnavailableError("Claude returned a malformed question request");
       }
       return {
         id: `q${questionIndex}`,
         prompt: boundedText(prompt, prompt),
-        description: question.header === undefined
-          ? undefined
-          : truncatedText(question.header, "Question"),
+        description:
+          question.header === undefined ? undefined : truncatedText(question.header, "Question"),
         required: true,
         multiple: question.multiSelect === true,
         secret: false,
@@ -146,13 +137,10 @@ export class HttpBridgeInteractionAdapter {
         options: options.map((entry, optionIndex) => {
           const option = asRecord(entry);
           const label = nonEmptyString(option?.label);
-          const rawProviderValue = option && "value" in option
-            ? nonEmptyString(option.value)
-            : label;
+          const rawProviderValue =
+            option && "value" in option ? nonEmptyString(option.value) : label;
           if (!option || !label || !rawProviderValue) {
-            throw new ProviderUnavailableError(
-              "Claude returned a malformed question option",
-            );
+            throw new ProviderUnavailableError("Claude returned a malformed question option");
           }
           const providerValue = boundedText(
             rawProviderValue,
@@ -163,9 +151,10 @@ export class HttpBridgeInteractionAdapter {
             id: opaqueOptionId(questionIndex, optionIndex),
             label: boundedText(label, label),
             providerValue,
-            description: option?.description === undefined
-              ? undefined
-              : truncatedText(option.description, "Option"),
+            description:
+              option?.description === undefined
+                ? undefined
+                : truncatedText(option.description, "Option"),
           };
         }),
       };
@@ -175,7 +164,7 @@ export class HttpBridgeInteractionAdapter {
       ? requestCreatedAt(expiresAt as number, Date.now())
       : this.interactionTracker.firstSeen(id);
     const expiry = Number.isSafeInteger(expiresAt)
-      ? expiresAt as number
+      ? (expiresAt as number)
       : createdAt + AGENT_INTERACTION_DEFAULT_TIMEOUT_MS;
     return this.interactionRequest(sessionId, providerRequestId, "question", {
       kind: "question",
@@ -190,10 +179,7 @@ export class HttpBridgeInteractionAdapter {
     const request = asRecord(raw);
     const providerRequestId = nonEmptyString(request?.id);
     const expiresAt = request?.expiresAt;
-    if (
-      !providerRequestId
-      || (expiresAt !== undefined && !Number.isSafeInteger(expiresAt))
-    ) {
+    if (!providerRequestId || (expiresAt !== undefined && !Number.isSafeInteger(expiresAt))) {
       throw new ProviderUnavailableError("Claude returned a malformed plan approval");
     }
     const id = this.normalizedId(sessionId, providerRequestId, "plan");
@@ -201,7 +187,7 @@ export class HttpBridgeInteractionAdapter {
       ? requestCreatedAt(expiresAt as number, Date.now())
       : this.interactionTracker.firstSeen(id);
     const expiry = Number.isSafeInteger(expiresAt)
-      ? expiresAt as number
+      ? (expiresAt as number)
       : createdAt + AGENT_INTERACTION_DEFAULT_TIMEOUT_MS;
     return this.interactionRequest(sessionId, providerRequestId, "plan", {
       kind: "plan-approval",
@@ -223,21 +209,22 @@ export class HttpBridgeInteractionAdapter {
     const requestedAt = request?.requestedAt;
     const expiresAt = request?.expiresAt;
     if (
-      !request
-      || !providerRequestId
-      || !Number.isSafeInteger(requestedAt)
-      || !Number.isSafeInteger(expiresAt)
+      !request ||
+      !providerRequestId ||
+      !Number.isSafeInteger(requestedAt) ||
+      !Number.isSafeInteger(expiresAt)
     ) {
       throw new ProviderUnavailableError("Codex returned a malformed approval request");
     }
     const providerKind = request?.kind;
-    const kind = providerKind === "command"
-      ? "command-approval"
-      : providerKind === "file-change"
-        ? "file-approval"
-        : providerKind === "permissions"
-          ? "permission"
-          : null;
+    const kind =
+      providerKind === "command"
+        ? "command-approval"
+        : providerKind === "file-change"
+          ? "file-approval"
+          : providerKind === "permissions"
+            ? "permission"
+            : null;
     if (!kind) throw new ProviderUnavailableError("Codex returned an unknown approval kind");
     const command = nonEmptyString(request.command);
     const cwd = nonEmptyString(request.cwd);
@@ -245,23 +232,19 @@ export class HttpBridgeInteractionAdapter {
     const grantRoot = nonEmptyString(request.grantRoot);
     const networkHost = nonEmptyString(request.networkHost);
     const rawChanges = Array.isArray(request.changes) ? request.changes : [];
-    const changes = rawChanges
-      .slice(0, MAX_RENDERED_FILE_CHANGES)
-      .map((rawChange) => {
-          const change = asRecord(rawChange);
-          const path = nonEmptyString(change?.path);
-          if (!change || !path) {
-            throw new ProviderUnavailableError(
-              "Codex returned a malformed file change",
-            );
-          }
-          const changeKind = nonEmptyString(change.kind) ?? "update";
-          return truncatedText(
-            `${changeKind}: ${path}`,
-            "File change",
-            MAX_RENDERED_FILE_CHANGE_TEXT_LENGTH,
-          );
-        });
+    const changes = rawChanges.slice(0, MAX_RENDERED_FILE_CHANGES).map((rawChange) => {
+      const change = asRecord(rawChange);
+      const path = nonEmptyString(change?.path);
+      if (!change || !path) {
+        throw new ProviderUnavailableError("Codex returned a malformed file change");
+      }
+      const changeKind = nonEmptyString(change.kind) ?? "update";
+      return truncatedText(
+        `${changeKind}: ${path}`,
+        "File change",
+        MAX_RENDERED_FILE_CHANGE_TEXT_LENGTH,
+      );
+    });
     const hiddenChangeCount = rawChanges.length - changes.length;
     const permissions = asRecord(request.permissions);
     const requestedPermissions = permissions
@@ -270,20 +253,19 @@ export class HttpBridgeInteractionAdapter {
           permissions.fileSystem === true ? "file system" : null,
         ].filter((entry): entry is string => entry !== null)
       : [];
-    const inferredActionable = kind === "command-approval"
-      ? command !== null
-      : kind === "file-approval"
-        ? rawChanges.length > 0
-        : requestedPermissions.length > 0;
+    const inferredActionable =
+      kind === "command-approval"
+        ? command !== null
+        : kind === "file-approval"
+          ? rawChanges.length > 0
+          : requestedPermissions.length > 0;
     const actionable = inferredActionable && request.actionable !== false;
     const body = truncatedJoinedText([
       ...(reason ? [`Reason: ${boundedText(reason, "Reason")}`] : []),
       ...(command ? [`Command: ${boundedText(command, "Command")}`] : []),
       ...(cwd ? [`Working directory: ${boundedText(cwd, "Working directory")}`] : []),
       ...changes.map((change) => `Change: ${change}`),
-      ...(hiddenChangeCount > 0
-        ? [`… and ${hiddenChangeCount} more files`]
-        : []),
+      ...(hiddenChangeCount > 0 ? [`… and ${hiddenChangeCount} more files`] : []),
       ...(requestedPermissions.length > 0
         ? [`Permissions: ${requestedPermissions.join(", ")}`]
         : []),
@@ -294,9 +276,12 @@ export class HttpBridgeInteractionAdapter {
     const mapped = this.interactionRequest(sessionId, providerRequestId, "approval", {
       kind,
       presentation: {
-        title: kind === "command-approval"
-          ? "Approve command"
-          : kind === "file-approval" ? "Approve file changes" : "Approve permissions",
+        title:
+          kind === "command-approval"
+            ? "Approve command"
+            : kind === "file-approval"
+              ? "Approve file changes"
+              : "Approve permissions",
         body: body === undefined ? undefined : boundedText(body, "Approval requested"),
         questions: [],
         confirmLabel: "Approve",
@@ -327,53 +312,55 @@ export class HttpBridgeInteractionAdapter {
     const title = nonEmptyString(request?.title);
     const options = request?.options;
     if (
-      !request
-      || !providerRequestId
-      || !title
-      || !Array.isArray(options)
-      || options.length === 0
-      || options.length > AGENT_INTERACTION_LIMITS.maxOptionsPerQuestion
+      !request ||
+      !providerRequestId ||
+      !title ||
+      !Array.isArray(options) ||
+      options.length === 0 ||
+      options.length > AGENT_INTERACTION_LIMITS.maxOptionsPerQuestion
     ) {
       throw new ProviderUnavailableError(`${this.agent} returned a malformed approval`);
     }
     const id = this.normalizedId(sessionId, providerRequestId, "approval");
     const createdAt = Number.isSafeInteger(request.requestedAt)
-      ? request.requestedAt as number
+      ? (request.requestedAt as number)
       : this.interactionTracker.firstSeen(id);
     const expiresAt = Number.isSafeInteger(request.expiresAt)
-      ? request.expiresAt as number
+      ? (request.expiresAt as number)
       : createdAt + AGENT_INTERACTION_DEFAULT_TIMEOUT_MS;
     return this.interactionRequest(sessionId, providerRequestId, "approval", {
       kind: "permission",
       presentation: {
         title: boundedText(title, "Approval requested"),
-        questions: [{
-          id: "decision",
-          prompt: "Choose how the agent should proceed",
-          required: true,
-          multiple: false,
-          secret: false,
-          allowFreeText: false,
-          options: options.map((entry, optionIndex) => {
-            const option = asRecord(entry);
-            const optionId = nonEmptyString(option?.optionId);
-            const label = nonEmptyString(option?.name);
-            if (!option || !optionId || !label) {
-              throw new ProviderUnavailableError(
-                `${this.agent} returned a malformed approval option`,
-              );
-            }
-            return {
-              id: opaqueOptionId(0, optionIndex),
-              label: boundedText(label, label),
-              providerValue: boundedText(
-                optionId,
-                optionId,
-                AGENT_INTERACTION_LIMITS.maxProviderValueLength,
-              ),
-            };
-          }),
-        }],
+        questions: [
+          {
+            id: "decision",
+            prompt: "Choose how the agent should proceed",
+            required: true,
+            multiple: false,
+            secret: false,
+            allowFreeText: false,
+            options: options.map((entry, optionIndex) => {
+              const option = asRecord(entry);
+              const optionId = nonEmptyString(option?.optionId);
+              const label = nonEmptyString(option?.name);
+              if (!option || !optionId || !label) {
+                throw new ProviderUnavailableError(
+                  `${this.agent} returned a malformed approval option`,
+                );
+              }
+              return {
+                id: opaqueOptionId(0, optionIndex),
+                label: boundedText(label, label),
+                providerValue: boundedText(
+                  optionId,
+                  optionId,
+                  AGENT_INTERACTION_LIMITS.maxProviderValueLength,
+                ),
+              };
+            }),
+          },
+        ],
         confirmLabel: "Continue",
         declineLabel: "Deny",
       },
@@ -390,19 +377,20 @@ export class HttpBridgeInteractionAdapter {
     const expiresAt = request?.expiresAt;
     const kind = request?.kind;
     if (
-      !request
-      || !providerRequestId
-      || !Number.isSafeInteger(requestedAt)
-      || !Number.isSafeInteger(expiresAt)
-      || (kind !== "question" && kind !== "mcp-form" && kind !== "mcp-url")
+      !request ||
+      !providerRequestId ||
+      !Number.isSafeInteger(requestedAt) ||
+      !Number.isSafeInteger(expiresAt) ||
+      (kind !== "question" && kind !== "mcp-form" && kind !== "mcp-url")
     ) {
       throw new ProviderUnavailableError("Codex returned a malformed interaction request");
     }
-    const questions: AgentInteractionQuestion[] = kind === "question"
-      ? this.mapCodexQuestions(request.questions)
-      : kind === "mcp-form"
-        ? [this.mapCodexMcpForm(request.schema)]
-        : [];
+    const questions: AgentInteractionQuestion[] =
+      kind === "question"
+        ? this.mapCodexQuestions(request.questions)
+        : kind === "mcp-form"
+          ? [this.mapCodexMcpForm(request.schema)]
+          : [];
     const url = kind === "mcp-url" ? nonEmptyString(request.url) : null;
     if (kind === "mcp-url" && !url) {
       throw new ProviderUnavailableError("Codex returned a malformed URL elicitation");
@@ -410,12 +398,14 @@ export class HttpBridgeInteractionAdapter {
     return this.interactionRequest(sessionId, providerRequestId, "interaction", {
       kind,
       presentation: {
-        title: kind === "question"
-          ? "Codex needs input"
-          : kind === "mcp-form" ? "MCP server needs input" : "MCP authorization",
-        body: request.message === undefined
-          ? undefined
-          : truncatedText(request.message, "MCP request"),
+        title:
+          kind === "question"
+            ? "Codex needs input"
+            : kind === "mcp-form"
+              ? "MCP server needs input"
+              : "MCP authorization",
+        body:
+          request.message === undefined ? undefined : truncatedText(request.message, "MCP request"),
         questions,
         url: url === null ? undefined : boundedText(url, "MCP URL"),
         confirmLabel: "Continue",
@@ -431,9 +421,8 @@ export class HttpBridgeInteractionAdapter {
     const schema = asRecord(schemaValue) ?? {};
     const serializedSchema = JSON.stringify(schema);
     if (
-      !serializedSchema
-      || new TextEncoder().encode(serializedSchema).byteLength
-        > AGENT_INTERACTION_LIMITS.maxTextLength
+      !serializedSchema ||
+      new TextEncoder().encode(serializedSchema).byteLength > AGENT_INTERACTION_LIMITS.maxTextLength
     ) {
       throw new ProviderUnavailableError("Codex returned an oversized MCP form schema");
     }
@@ -451,9 +440,9 @@ export class HttpBridgeInteractionAdapter {
 
   private mapCodexQuestions(value: unknown): AgentInteractionQuestion[] {
     if (
-      !Array.isArray(value)
-      || value.length === 0
-      || value.length > AGENT_INTERACTION_LIMITS.maxQuestionsPerRequest
+      !Array.isArray(value) ||
+      value.length === 0 ||
+      value.length > AGENT_INTERACTION_LIMITS.maxQuestionsPerRequest
     ) {
       throw new ProviderUnavailableError("Codex returned malformed questions");
     }
@@ -463,20 +452,19 @@ export class HttpBridgeInteractionAdapter {
       const prompt = nonEmptyString(question?.question);
       const options = question?.options ?? [];
       if (
-        !providerQuestionId
-        || !prompt
-        || providerQuestionId.length > AGENT_INTERACTION_LIMITS.maxIdLength
-        || !Array.isArray(options)
-        || options.length > AGENT_INTERACTION_LIMITS.maxOptionsPerQuestion
+        !providerQuestionId ||
+        !prompt ||
+        providerQuestionId.length > AGENT_INTERACTION_LIMITS.maxIdLength ||
+        !Array.isArray(options) ||
+        options.length > AGENT_INTERACTION_LIMITS.maxOptionsPerQuestion
       ) {
         throw new ProviderUnavailableError("Codex returned malformed questions");
       }
       return {
         id: providerQuestionId,
         prompt: boundedText(prompt, prompt),
-        description: question?.header === undefined
-          ? undefined
-          : truncatedText(question.header, "Question"),
+        description:
+          question?.header === undefined ? undefined : truncatedText(question.header, "Question"),
         required: true,
         // request_user_input serializes every answer as an array, but each
         // Codex option list is mutually exclusive. Wire shape is not choice
@@ -488,9 +476,7 @@ export class HttpBridgeInteractionAdapter {
           const option = asRecord(entry);
           const label = nonEmptyString(option?.label);
           if (!option || !label) {
-            throw new ProviderUnavailableError(
-              "Codex returned a malformed question option",
-            );
+            throw new ProviderUnavailableError("Codex returned a malformed question option");
           }
           return {
             id: opaqueOptionId(questionIndex, optionIndex),
@@ -500,27 +486,31 @@ export class HttpBridgeInteractionAdapter {
               label,
               AGENT_INTERACTION_LIMITS.maxProviderValueLength,
             ),
-            description: option?.description === undefined
-              ? undefined
-              : truncatedText(option.description, "Option"),
+            description:
+              option?.description === undefined
+                ? undefined
+                : truncatedText(option.description, "Option"),
           };
         }),
       };
     });
   }
 
-  async listPendingInteractions(
-    sessionId: string,
-  ): Promise<AgentInteractionSnapshot> {
-    const paths = this.agent === "claude"
-      ? ["questions", "plan-approvals"] as const
-      : ["approvals", "interactions"] as const;
-    const responses = await Promise.all(paths.map((path) => bridgeFetch(
-      this.connection,
-      `/session/${encodeURIComponent(sessionId)}/${path}`,
-      {},
-      this.fetchImpl,
-    )));
+  async listPendingInteractions(sessionId: string): Promise<AgentInteractionSnapshot> {
+    const paths =
+      this.agent === "claude"
+        ? (["questions", "plan-approvals"] as const)
+        : (["approvals", "interactions"] as const);
+    const responses = await Promise.all(
+      paths.map((path) =>
+        bridgeFetch(
+          this.connection,
+          `/session/${encodeURIComponent(sessionId)}/${path}`,
+          {},
+          this.fetchImpl,
+        ),
+      ),
+    );
     if (responses.every((response) => response.status === 404)) {
       return this.interactionTracker.snapshot(sessionId, []);
     }
@@ -528,9 +518,11 @@ export class HttpBridgeInteractionAdapter {
     const snapshotBudget = {
       remaining: AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes,
     };
-    const payloads = await Promise.all(responses.map((response) =>
-      boundedJson(response, `${this.agent} interaction snapshot`, snapshotBudget)
-    ));
+    const payloads = await Promise.all(
+      responses.map((response) =>
+        boundedJson(response, `${this.agent} interaction snapshot`, snapshotBudget),
+      ),
+    );
     const first = asRecord(payloads[0]);
     const second = asRecord(payloads[1]);
     const firstRequests = first?.[this.agent === "claude" ? "questions" : "approvals"];
@@ -624,8 +616,8 @@ export class HttpBridgeInteractionAdapter {
       return outcome("stale", sessionId, interactionId, snapshot.revision);
     }
     if (
-      (resolution.action === "answer" || resolution.action === "approve-for-session")
-      && identity.actionable === false
+      (resolution.action === "answer" || resolution.action === "approve-for-session") &&
+      identity.actionable === false
     ) {
       return outcome("rejected", sessionId, interactionId, snapshot.revision);
     }
@@ -671,12 +663,7 @@ export class HttpBridgeInteractionAdapter {
       }
       const reconciled = await this.listPendingInteractions(sessionId).catch(() => null);
       if (!reconciled) {
-        return outcome(
-          "provider-unavailable",
-          sessionId,
-          interactionId,
-          snapshot.revision,
-        );
+        return outcome("provider-unavailable", sessionId, interactionId, snapshot.revision);
       }
       return outcome(
         reconciled.requests.some((item) => item.id === interactionId)
@@ -711,7 +698,9 @@ export class HttpBridgeInteractionAdapter {
         );
         const answers = request.presentation.questions.map((question) => {
           const answer = byQuestion.get(question.id)!;
-          const options = new Map(question.options.map((option) => [option.id, option.providerValue]));
+          const options = new Map(
+            question.options.map((option) => [option.id, option.providerValue]),
+          );
           return [
             ...(answer.optionIds ?? []).map((id) => options.get(id)!),
             ...(answer.freeText === undefined ? [] : [answer.freeText]),
@@ -746,17 +735,18 @@ export class HttpBridgeInteractionAdapter {
           }),
         };
       }
-      const answer = resolution.action === "answer"
-        ? resolution.answer?.answers.find((candidate) =>
-            candidate.questionId === request.presentation.questions[0]?.id
-          )
-        : undefined;
+      const answer =
+        resolution.action === "answer"
+          ? resolution.answer?.answers.find(
+              (candidate) => candidate.questionId === request.presentation.questions[0]?.id,
+            )
+          : undefined;
       const selectedId = answer?.optionIds?.[0];
-      const providerValue = selectedId === undefined
-        ? undefined
-        : request.presentation.questions[0]?.options.find(
-            (option) => option.id === selectedId,
-          )?.providerValue;
+      const providerValue =
+        selectedId === undefined
+          ? undefined
+          : request.presentation.questions[0]?.options.find((option) => option.id === selectedId)
+              ?.providerValue;
       if (resolution.action === "answer" && !providerValue) {
         throw new ProviderUnavailableError("ACP approval option is missing");
       }
@@ -768,26 +758,32 @@ export class HttpBridgeInteractionAdapter {
     }
 
     if (
-      request.kind === "command-approval"
-      || request.kind === "file-approval"
-      || request.kind === "permission"
+      request.kind === "command-approval" ||
+      request.kind === "file-approval" ||
+      request.kind === "permission"
     ) {
       return {
         path: `${base}/approvals/${encodeURIComponent(providerRequestId)}`,
         method: "POST",
         body: JSON.stringify({
-          decision: resolution.action === "answer"
-            ? "approve"
-            : resolution.action === "approve-for-session"
-              ? "approve-for-session"
-            : resolution.action === "cancel" ? "cancel" : "deny",
+          decision:
+            resolution.action === "answer"
+              ? "approve"
+              : resolution.action === "approve-for-session"
+                ? "approve-for-session"
+                : resolution.action === "cancel"
+                  ? "cancel"
+                  : "deny",
         }),
       };
     }
     const answerBody: Record<string, unknown> = {
-      action: resolution.action === "answer"
-        ? "accept"
-        : resolution.action === "cancel" ? "cancel" : "decline",
+      action:
+        resolution.action === "answer"
+          ? "accept"
+          : resolution.action === "cancel"
+            ? "cancel"
+            : "decline",
     };
     if (resolution.action === "answer" && request.kind === "mcp-form") {
       const rawContent = resolution.answer!.answers.find(
@@ -809,11 +805,16 @@ export class HttpBridgeInteractionAdapter {
           const answer = resolution.answer!.answers.find(
             (candidate) => candidate.questionId === question.id,
           )!;
-          const options = new Map(question.options.map((option) => [option.id, option.providerValue]));
-          return [question.id, [
-            ...(answer.optionIds ?? []).map((id) => options.get(id)!),
-            ...(answer.freeText === undefined ? [] : [answer.freeText]),
-          ]];
+          const options = new Map(
+            question.options.map((option) => [option.id, option.providerValue]),
+          );
+          return [
+            question.id,
+            [
+              ...(answer.optionIds ?? []).map((id) => options.get(id)!),
+              ...(answer.freeText === undefined ? [] : [answer.freeText]),
+            ],
+          ];
         }),
       );
     }
@@ -823,6 +824,4 @@ export class HttpBridgeInteractionAdapter {
       body: JSON.stringify(answerBody),
     };
   }
-
-
 }

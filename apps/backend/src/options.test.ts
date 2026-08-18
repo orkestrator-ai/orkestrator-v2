@@ -13,40 +13,60 @@ describe("standalone backend options", () => {
     expect(defaultDataDir("darwin", {}, "/home/test")).toBe(
       path.join("/home/test", "Library", "Application Support", "orkestrator-v2"),
     );
-    expect(() => defaultDataDir("win32", {}, "C:\\Users\\test")).toThrow("does not support Windows");
+    expect(() => defaultDataDir("win32", {}, "C:\\Users\\test")).toThrow(
+      "does not support Windows",
+    );
     expect(defaultDataDir("linux", { XDG_CONFIG_HOME: "/config" }, "/home/test")).toBe(
       "/config/orkestrator-v2",
     );
   });
 
   test("uses the Tailscale CLI bundled with the macOS app when available", () => {
-    expect(defaultTailscaleExecutable("darwin", (candidate) => candidate === MACOS_TAILSCALE_APP_CLI)).toBe(
-      MACOS_TAILSCALE_APP_CLI,
-    );
+    expect(
+      defaultTailscaleExecutable("darwin", (candidate) => candidate === MACOS_TAILSCALE_APP_CLI),
+    ).toBe(MACOS_TAILSCALE_APP_CLI);
     expect(defaultTailscaleExecutable("darwin", () => false)).toBe("tailscale");
     expect(defaultTailscaleExecutable("linux", () => true)).toBe("tailscale");
   });
 
   test("parses explicit paths, ephemeral ports, and development options", () => {
-    const options = parseOptions([
-      "--data-dir", "/tmp/data",
-      "--app-root", "/tmp/app",
-      "--resource-root", "/tmp/resources",
-      "--toolchain-bin-dir", "/tmp/toolchains/bin",
-      "--renderer-root", "/tmp/web",
-      "--renderer-dev-server-url", "http://127.0.0.1:1420",
-      "--host", "127.0.0.1",
-      "--fallback-host", "127.0.0.2",
-      "--port", "0",
-      "--control-host", "127.0.0.1",
-      "--control-port", "0",
-      "--compression", "on",
-      "--allow-non-tailscale-bind",
-      "--allowed-origins", "https://orkestrator.example,https://*.vercel.app",
-      "--tailscale-serve",
-      "--tailscale-serve-port", "8443",
-      "--tailscale-bin", "/opt/tailscale",
-    ], {});
+    const options = parseOptions(
+      [
+        "--data-dir",
+        "/tmp/data",
+        "--app-root",
+        "/tmp/app",
+        "--resource-root",
+        "/tmp/resources",
+        "--toolchain-bin-dir",
+        "/tmp/toolchains/bin",
+        "--renderer-root",
+        "/tmp/web",
+        "--renderer-dev-server-url",
+        "http://127.0.0.1:1420",
+        "--host",
+        "127.0.0.1",
+        "--fallback-host",
+        "127.0.0.2",
+        "--port",
+        "0",
+        "--control-host",
+        "127.0.0.1",
+        "--control-port",
+        "0",
+        "--compression",
+        "on",
+        "--allow-non-tailscale-bind",
+        "--allowed-origins",
+        "https://orkestrator.example,https://*.vercel.app",
+        "--tailscale-serve",
+        "--tailscale-serve-port",
+        "8443",
+        "--tailscale-bin",
+        "/opt/tailscale",
+      ],
+      {},
+    );
 
     expect(options).toMatchObject({
       dataDir: "/tmp/data",
@@ -71,22 +91,40 @@ describe("standalone backend options", () => {
 
   test("accepts the deprecated --unsafe-allow-non-tailscale-bind spelling", () => {
     expect(parseOptions([], {}).allowNonTailscaleBind).toBe(false);
-    expect(parseOptions(["--unsafe-allow-non-tailscale-bind"], {}).allowNonTailscaleBind).toBe(true);
+    expect(parseOptions(["--unsafe-allow-non-tailscale-bind"], {}).allowNonTailscaleBind).toBe(
+      true,
+    );
   });
 
   test("rejects malformed, out-of-range, and missing option values", () => {
     expect(() => parseOptions(["--port", "3oops"], {})).toThrow("Invalid --port value");
     expect(() => parseOptions(["--port", "65536"], {})).toThrow("Invalid --port value");
     expect(() => parseOptions(["--host", "--port", "1"], {})).toThrow("Missing value for --host");
-    expect(() => parseOptions(["--fallback-host", "--port", "1"], {})).toThrow("Missing value for --fallback-host");
-    expect(() => parseOptions(["--control-port", "65536"], {})).toThrow("Invalid --control-port value");
-    expect(() => parseOptions(["--control-host", "--port", "1"], {})).toThrow("Missing value for --control-host");
-    expect(() => parseOptions(["--allowed-origins", "--port", "1"], {})).toThrow("Missing value for --allowed-origins");
+    expect(() => parseOptions(["--fallback-host", "--port", "1"], {})).toThrow(
+      "Missing value for --fallback-host",
+    );
+    expect(() => parseOptions(["--control-port", "65536"], {})).toThrow(
+      "Invalid --control-port value",
+    );
+    expect(() => parseOptions(["--control-host", "--port", "1"], {})).toThrow(
+      "Missing value for --control-host",
+    );
+    expect(() => parseOptions(["--allowed-origins", "--port", "1"], {})).toThrow(
+      "Missing value for --allowed-origins",
+    );
     expect(() => parseOptions(["--compression", "zip"], {})).toThrow("Invalid --compression");
-    expect(() => parseOptions(["--toolchain-bin-dir", "--port", "1"], {})).toThrow("Missing value for --toolchain-bin-dir");
-    expect(() => parseOptions(["--tailscale-serve-port", "65536"], {})).toThrow("Invalid --tailscale-serve-port value");
-    expect(() => parseOptions(["--tailscale-serve-port", "0"], {})).toThrow("Invalid --tailscale-serve-port value");
-    expect(() => parseOptions(["--tailscale-bin", "--port", "1"], {})).toThrow("Missing value for --tailscale-bin");
+    expect(() => parseOptions(["--toolchain-bin-dir", "--port", "1"], {})).toThrow(
+      "Missing value for --toolchain-bin-dir",
+    );
+    expect(() => parseOptions(["--tailscale-serve-port", "65536"], {})).toThrow(
+      "Invalid --tailscale-serve-port value",
+    );
+    expect(() => parseOptions(["--tailscale-serve-port", "0"], {})).toThrow(
+      "Invalid --tailscale-serve-port value",
+    );
+    expect(() => parseOptions(["--tailscale-bin", "--port", "1"], {})).toThrow(
+      "Missing value for --tailscale-bin",
+    );
   });
 
   test("supports environment-managed Tailscale Serve configuration", () => {
@@ -107,27 +145,40 @@ describe("standalone backend options", () => {
     expect(parseOptions(["--data-dir", "/tmp/data"], {}).toolchainBinDir).toBe(
       path.join("/tmp/data", "toolchains", "bin"),
     );
-    expect(parseOptions(["--data-dir", "/tmp/data"], {
-      ORKESTRATOR_TOOLCHAIN_BIN: "/opt/orkestrator-tools",
-    }).toolchainBinDir).toBe("/opt/orkestrator-tools");
+    expect(
+      parseOptions(["--data-dir", "/tmp/data"], {
+        ORKESTRATOR_TOOLCHAIN_BIN: "/opt/orkestrator-tools",
+      }).toolchainBinDir,
+    ).toBe("/opt/orkestrator-tools");
   });
 
   test("reads allowed origins from the environment and lets CLI values take precedence", () => {
-    expect(parseOptions([], {
-      ORKESTRATOR_GATEWAY_ALLOWED_ORIGINS: " https://one.example, ,https://*.example.net ",
-    }).allowedOrigins).toEqual(["https://one.example", "https://*.example.net"]);
+    expect(
+      parseOptions([], {
+        ORKESTRATOR_GATEWAY_ALLOWED_ORIGINS: " https://one.example, ,https://*.example.net ",
+      }).allowedOrigins,
+    ).toEqual(["https://one.example", "https://*.example.net"]);
 
-    expect(parseOptions([
-      "--allowed-origins", "https://cli.example",
-      "--compression", "off",
-      "--tailscale-serve-port", "9443",
-      "--tailscale-bin", "/cli/tailscale",
-    ], {
-      ORKESTRATOR_GATEWAY_ALLOWED_ORIGINS: "https://env.example",
-      ORKESTRATOR_TAILSCALE_SERVE_PORT: "8443",
-      ORKESTRATOR_TAILSCALE_BIN: "/env/tailscale",
-      ORKESTRATOR_GATEWAY_COMPRESSION: "body",
-    })).toMatchObject({
+    expect(
+      parseOptions(
+        [
+          "--allowed-origins",
+          "https://cli.example",
+          "--compression",
+          "off",
+          "--tailscale-serve-port",
+          "9443",
+          "--tailscale-bin",
+          "/cli/tailscale",
+        ],
+        {
+          ORKESTRATOR_GATEWAY_ALLOWED_ORIGINS: "https://env.example",
+          ORKESTRATOR_TAILSCALE_SERVE_PORT: "8443",
+          ORKESTRATOR_TAILSCALE_BIN: "/env/tailscale",
+          ORKESTRATOR_GATEWAY_COMPRESSION: "body",
+        },
+      ),
+    ).toMatchObject({
       allowedOrigins: ["https://cli.example"],
       compression: "off",
       tailscaleServePort: 9443,
@@ -153,13 +204,22 @@ describe("standalone backend options", () => {
   });
 
   test("parses an agent-test isolation policy", () => {
-    expect(parseOptions([
-      "--runtime-flavor", "agent-test",
-      "--worktree-dir", "/profiles/qa/worktrees",
-      "--docker-image", "orkestrator-v2:dev-workspace",
-      "--credential-source", "codex",
-      "--strict-gateway-port",
-    ], {})).toMatchObject({
+    expect(
+      parseOptions(
+        [
+          "--runtime-flavor",
+          "agent-test",
+          "--worktree-dir",
+          "/profiles/qa/worktrees",
+          "--docker-image",
+          "orkestrator-v2:dev-workspace",
+          "--credential-source",
+          "codex",
+          "--strict-gateway-port",
+        ],
+        {},
+      ),
+    ).toMatchObject({
       runtimeFlavor: "agent-test",
       worktreeDir: "/profiles/qa/worktrees",
       dockerImage: "orkestrator-v2:dev-workspace",
@@ -168,8 +228,10 @@ describe("standalone backend options", () => {
       credentialSources: ["codex"],
     });
     expect(() => parseOptions(["--runtime-flavor", "preview"], {})).toThrow("runtime-flavor");
-    expect(parseOptions(["--credential-source", "cursor,grok"], {}).credentialSources)
-      .toEqual(["cursor", "grok"]);
+    expect(parseOptions(["--credential-source", "cursor,grok"], {}).credentialSources).toEqual([
+      "cursor",
+      "grok",
+    ]);
     expect(() => parseOptions(["--credential-source", "github"], {})).toThrow("credential-source");
   });
 

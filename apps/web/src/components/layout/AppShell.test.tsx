@@ -99,19 +99,21 @@ mock.module("@/stores", () => ({
   ...realStoresSnapshot,
   useFilesPanelStore: <T,>(selector?: (state: { isOpen: boolean }) => T) =>
     selectState({ isOpen: filesPanelOpen }, selector),
-  useUIStore: <T,>(selector?: (state: {
-    selectedProjectId: string | null;
-    selectedEnvironmentId: string | null;
-  }) => T) => selectState({ selectedProjectId, selectedEnvironmentId }, selector),
-  useProjectStore: <T,>(selector?: (state: {
-    projects: Array<{ id: string; name: string }>;
-  }) => T) => selectState({ projects: [{ id: "project-1", name: "pgstack1" }] }, selector),
-  useEnvironmentStore: <T,>(selector?: (state: {
-    environments: Array<{ id: string; name: string }>;
-  }) => T) => selectState({ environments: [{ id: "environment-1", name: "feature-auth" }] }, selector),
-  useConfigStore: <T,>(selector?: (state: {
-    config: { global: { terminalAppearance?: undefined } };
-  }) => T) => selectState({ config: { global: {} } }, selector),
+  useUIStore: <T,>(
+    selector?: (state: {
+      selectedProjectId: string | null;
+      selectedEnvironmentId: string | null;
+    }) => T,
+  ) => selectState({ selectedProjectId, selectedEnvironmentId }, selector),
+  useProjectStore: <T,>(
+    selector?: (state: { projects: Array<{ id: string; name: string }> }) => T,
+  ) => selectState({ projects: [{ id: "project-1", name: "pgstack1" }] }, selector),
+  useEnvironmentStore: <T,>(
+    selector?: (state: { environments: Array<{ id: string; name: string }> }) => T,
+  ) => selectState({ environments: [{ id: "environment-1", name: "feature-auth" }] }, selector),
+  useConfigStore: <T,>(
+    selector?: (state: { config: { global: { terminalAppearance?: undefined } } }) => T,
+  ) => selectState({ config: { global: {} } }, selector),
 }));
 
 mock.module("@/lib/native/window", () => ({
@@ -278,22 +280,34 @@ describe("AppShell", () => {
   });
 
   test.each([
-    ["no environment is selected", () => {
-      selectedEnvironmentId = null;
-      seedPaneLayout([CLAUDE_TAB], "claude-tab");
-    }],
-    ["the environment has no pane state", () => {
-      usePaneLayoutStore.setState({
-        environments: new Map(),
-        activeEnvironmentId: null,
-      } as never);
-    }],
-    ["the active pane has no active tab", () => {
-      seedPaneLayout([CLAUDE_TAB], null);
-    }],
-    ["the active tab id matches nothing in the pane", () => {
-      seedPaneLayout([CLAUDE_TAB], "missing-tab");
-    }],
+    [
+      "no environment is selected",
+      () => {
+        selectedEnvironmentId = null;
+        seedPaneLayout([CLAUDE_TAB], "claude-tab");
+      },
+    ],
+    [
+      "the environment has no pane state",
+      () => {
+        usePaneLayoutStore.setState({
+          environments: new Map(),
+          activeEnvironmentId: null,
+        } as never);
+      },
+    ],
+    [
+      "the active pane has no active tab",
+      () => {
+        seedPaneLayout([CLAUDE_TAB], null);
+      },
+    ],
+    [
+      "the active tab id matches nothing in the pane",
+      () => {
+        seedPaneLayout([CLAUDE_TAB], "missing-tab");
+      },
+    ],
   ])("hands the button no tab when %s", (_label, seed) => {
     seed();
     render(<AppShell>Workspace</AppShell>);

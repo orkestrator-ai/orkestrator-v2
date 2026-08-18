@@ -10,14 +10,20 @@ import {
   configureDirectGatewayTransport,
 } from "./gateway-auth-transport";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "./events";
-import { decodeTerminalBinaryFrame, TERMINAL_BINARY_FRAME_TYPE } from "@orkestrator/protocol/terminal-websocket";
+import {
+  decodeTerminalBinaryFrame,
+  TERMINAL_BINARY_FRAME_TYPE,
+} from "@orkestrator/protocol/terminal-websocket";
 
 const originalFetch = globalThis.fetch;
 const originalEventSource = globalThis.EventSource;
 const originalWebSocket = globalThis.WebSocket;
 const originalClipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
 const originalGetEntriesByType = performance.getEntriesByType;
-const originalDocumentReadyStateDescriptor = Object.getOwnPropertyDescriptor(document, "readyState");
+const originalDocumentReadyStateDescriptor = Object.getOwnPropertyDescriptor(
+  document,
+  "readyState",
+);
 const originalWebkitDescriptor = Object.getOwnPropertyDescriptor(window, "webkit");
 const originalSetTimeout = globalThis.setTimeout;
 
@@ -45,9 +51,10 @@ function gatewayControlFrame(
   statusOrReason: string,
   id = "12345678:0",
 ): string {
-  const payload = event === "gateway.connected"
-    ? { status: statusOrReason, generation: "12345678", revision: 0 }
-    : { reason: statusOrReason, generation: "12345678", latestRevision: 0 };
+  const payload =
+    event === "gateway.connected"
+      ? { status: statusOrReason, generation: "12345678", revision: 0 }
+      : { reason: statusOrReason, generation: "12345678", latestRevision: 0 };
   return `id: ${id}\ndata: ${JSON.stringify({ event, payload })}\n\n`;
 }
 
@@ -139,7 +146,9 @@ class MockWebSocket {
 
   addEventListener(): void {}
   removeEventListener(): void {}
-  dispatchEvent(): boolean { return true; }
+  dispatchEvent(): boolean {
+    return true;
+  }
 }
 
 function sentControlFrames(socket: MockWebSocket): Array<Record<string, unknown>> {
@@ -151,7 +160,9 @@ function sentControlFrames(socket: MockWebSocket): Array<Record<string, unknown>
 function decodeSentBinaryFrame(value: ArrayBufferLike | ArrayBufferView) {
   if (value instanceof ArrayBuffer) return decodeTerminalBinaryFrame(value);
   if (ArrayBuffer.isView(value)) {
-    return decodeTerminalBinaryFrame(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
+    return decodeTerminalBinaryFrame(
+      new Uint8Array(value.buffer, value.byteOffset, value.byteLength),
+    );
   }
   throw new TypeError("Unsupported mock WebSocket binary frame");
 }
@@ -167,23 +178,25 @@ function subscribeTerminalSocket(
   recovery: "current" | "snapshot-required" = "snapshot-required",
   channelId = 1,
 ): number {
-  const request = sentControlFrames(socket).findLast((frame) =>
-    frame.type === "subscribe" && frame.sessionId === sessionId
+  const request = sentControlFrames(socket).findLast(
+    (frame) => frame.type === "subscribe" && frame.sessionId === sessionId,
   );
   if (!request || typeof request.requestId !== "number") {
     throw new Error(`No subscription request for ${sessionId}`);
   }
-  socket.receive(JSON.stringify({
-    type: "subscribed",
-    requestId: request.requestId,
-    sessionId,
-    channelId,
-    recovery,
-    baseGeneration: recovery === "snapshot-required" ? null : 1,
-    baseRevision: recovery === "snapshot-required" ? null : 0,
-    targetGeneration: 1,
-    targetRevision: 0,
-  }));
+  socket.receive(
+    JSON.stringify({
+      type: "subscribed",
+      requestId: request.requestId,
+      sessionId,
+      channelId,
+      recovery,
+      baseGeneration: recovery === "snapshot-required" ? null : 1,
+      baseRevision: recovery === "snapshot-required" ? null : 0,
+      targetGeneration: 1,
+      targetRevision: 0,
+    }),
+  );
   return channelId;
 }
 
@@ -367,9 +380,8 @@ describe("web gateway browser API", () => {
     }) as unknown as typeof fetch;
     // Boot metrics also POST from this install path, so every assertion below is
     // scoped to the session route rather than to the method alone.
-    const sessionCalls = (method: string) => calls.filter((call) => (
-      call.url.includes("/agent-test/session") && call.method === method
-    ));
+    const sessionCalls = (method: string) =>
+      calls.filter((call) => call.url.includes("/agent-test/session") && call.method === method);
     const fakeWindow: TestGatewayWindow = {
       location: { protocol: "http:" },
       orkestrator: undefined,
@@ -425,13 +437,17 @@ describe("web gateway browser API", () => {
       orkestratorGateway: undefined,
     };
 
-    installBrowserGatewayApi(fakeWindow as Pick<Window, "location" | "orkestrator" | "orkestratorGateway">);
+    installBrowserGatewayApi(
+      fakeWindow as Pick<Window, "location" | "orkestrator" | "orkestratorGateway">,
+    );
 
     expect(fakeWindow.orkestrator).toBe(existingApi);
     expect(fakeWindow.orkestratorGateway).toBeUndefined();
 
     fakeWindow.orkestrator = undefined;
-    installBrowserGatewayApi(fakeWindow as Pick<Window, "location" | "orkestrator" | "orkestratorGateway">);
+    installBrowserGatewayApi(
+      fakeWindow as Pick<Window, "location" | "orkestrator" | "orkestratorGateway">,
+    );
 
     expect(fakeWindow.orkestratorGateway).toEqual({ enabled: true });
     expect(typeof (fakeWindow.orkestrator as Window["orkestrator"])?.invoke).toBe("function");
@@ -507,11 +523,11 @@ describe("web gateway browser API", () => {
   test("enables boot metrics for every installed browser client", async () => {
     // The install path is the only place production turns boot metrics on, so
     // dropping the flag here would disable the feature everywhere.
-    const metricsFetch = mock(async (input: RequestInfo | URL) => (
+    const metricsFetch = mock(async (input: RequestInfo | URL) =>
       String(input).includes("/agent-test/session")
         ? new Response(null, { status: 404 })
-        : new Response(null, { status: 202 })
-    ));
+        : new Response(null, { status: 202 }),
+    );
     globalThis.fetch = metricsFetch as unknown as typeof fetch;
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
     const fakeWindow: TestGatewayWindow = {
@@ -520,7 +536,9 @@ describe("web gateway browser API", () => {
       orkestratorGateway: undefined,
     };
 
-    installBrowserGatewayApi(fakeWindow as Pick<Window, "location" | "orkestrator" | "orkestratorGateway">);
+    installBrowserGatewayApi(
+      fakeWindow as Pick<Window, "location" | "orkestrator" | "orkestratorGateway">,
+    );
     const installed = fakeWindow.orkestrator as Window["orkestrator"];
     const stop = installed!.listen("menu-zoom", () => undefined);
     MockEventSource.instances[0]?.open();
@@ -620,16 +638,17 @@ describe("web gateway browser API", () => {
     // surviving 15s timer would hold this whole closure and still report for a
     // session that has already torn down.
     Object.defineProperty(document, "readyState", { configurable: true, value: "loading" });
-    globalThis.fetch = mock(async () => new Response(null, { status: 202 })) as unknown as typeof fetch;
+    globalThis.fetch = mock(
+      async () => new Response(null, { status: 202 }),
+    ) as unknown as typeof fetch;
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
     const FALLBACK_TIMER_ID = 15_000 as unknown as ReturnType<typeof setTimeout>;
     const cleared: unknown[] = [];
     const originalClearTimeout = globalThis.clearTimeout;
-    globalThis.setTimeout = ((handler: TimerHandler, delay?: number, ...args: unknown[]) => (
+    globalThis.setTimeout = ((handler: TimerHandler, delay?: number, ...args: unknown[]) =>
       delay === 15_000
         ? FALLBACK_TIMER_ID
-        : originalSetTimeout(handler, delay, ...args)
-    )) as typeof setTimeout;
+        : originalSetTimeout(handler, delay, ...args)) as typeof setTimeout;
     globalThis.clearTimeout = ((id?: unknown) => {
       cleared.push(id);
       if (id !== FALLBACK_TIMER_ID) originalClearTimeout(id as ReturnType<typeof setTimeout>);
@@ -657,7 +676,10 @@ describe("web gateway browser API", () => {
     const api = createBrowserGatewayApi({ reportBootMetrics: true });
     const stop = api.listen("menu-zoom", () => undefined);
     MockEventSource.instances[0]?.open();
-    await waitForCondition(() => metricsFetch.mock.calls.length === 1, "Boot metrics were not reported");
+    await waitForCondition(
+      () => metricsFetch.mock.calls.length === 1,
+      "Boot metrics were not reported",
+    );
 
     const [url, init] = metricsFetch.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("/__orkestrator/client-metrics");
@@ -701,15 +723,32 @@ describe("web gateway browser API", () => {
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
     Object.defineProperty(performance, "getEntriesByType", {
       configurable: true,
-      value: mock((entryType: string) => (entryType === "resource"
-        ? [
-          // A hashed bundle URL has no .css suffix, so only initiatorType
-          // classifies it.
-          { name: "https://cdn.test/a1b2c3", initiatorType: "css", transferSize: 10, decodedBodySize: 20 },
-          { name: "https://cdn.test/app.css", initiatorType: "link", transferSize: 5, decodedBodySize: 6 },
-          { name: "https://cdn.test/app.js", initiatorType: "script", transferSize: 7, decodedBodySize: 8 },
-        ]
-        : [])),
+      value: mock((entryType: string) =>
+        entryType === "resource"
+          ? [
+              // A hashed bundle URL has no .css suffix, so only initiatorType
+              // classifies it.
+              {
+                name: "https://cdn.test/a1b2c3",
+                initiatorType: "css",
+                transferSize: 10,
+                decodedBodySize: 20,
+              },
+              {
+                name: "https://cdn.test/app.css",
+                initiatorType: "link",
+                transferSize: 5,
+                decodedBodySize: 6,
+              },
+              {
+                name: "https://cdn.test/app.js",
+                initiatorType: "script",
+                transferSize: 7,
+                decodedBodySize: 8,
+              },
+            ]
+          : [],
+      ),
     });
 
     const api = createBrowserGatewayApi({ reportBootMetrics: true });
@@ -741,47 +780,61 @@ describe("web gateway browser API", () => {
 
     const api = createBrowserGatewayApi();
 
-    await expect(api.invoke("get_projects", { projectId: "project-1" })).resolves.toEqual({ ok: true });
+    await expect(api.invoke("get_projects", { projectId: "project-1" })).resolves.toEqual({
+      ok: true,
+    });
   });
 
   test("micro-batches HTTP terminal typing and flushes Enter in order", async () => {
     const invokes: Array<{ command: string; args: Record<string, unknown> }> = [];
     globalThis.fetch = mock(async (_input, init) => {
-      invokes.push(JSON.parse(String(init?.body)) as {
-        command: string;
-        args: Record<string, unknown>;
-      });
+      invokes.push(
+        JSON.parse(String(init?.body)) as {
+          command: string;
+          args: Record<string, unknown>;
+        },
+      );
       return new Response(JSON.stringify({}), { status: 200 });
     }) as unknown as typeof fetch;
 
     const api = createBrowserGatewayApi();
-    const writes = ["h", "i", "\r"].map((data) => api.invoke("terminal_write", {
-      sessionId: "session-1",
-      data,
-    }));
+    const writes = ["h", "i", "\r"].map((data) =>
+      api.invoke("terminal_write", {
+        sessionId: "session-1",
+        data,
+      }),
+    );
     await Promise.all(writes);
 
-    expect(invokes).toEqual([{
-      command: "terminal_write",
-      args: { sessionId: "session-1", data: "hi\r" },
-    }]);
+    expect(invokes).toEqual([
+      {
+        command: "terminal_write",
+        args: { sessionId: "session-1", data: "hi\r" },
+      },
+    ]);
   });
 
   test("batches local-terminal input and keeps malformed invokes on the immediate path", async () => {
     const invokes: Array<{ command: string; args: Record<string, unknown> }> = [];
     globalThis.fetch = mock(async (_input, init) => {
-      invokes.push(JSON.parse(String(init?.body)) as {
-        command: string;
-        args: Record<string, unknown>;
-      });
+      invokes.push(
+        JSON.parse(String(init?.body)) as {
+          command: string;
+          args: Record<string, unknown>;
+        },
+      );
       return new Response(JSON.stringify({}), { status: 200 });
     }) as unknown as typeof fetch;
 
     const api = createBrowserGatewayApi();
-    await Promise.all(["o", "k", "\r"].map((data) => api.invoke("local_terminal_write", {
-      sessionId: "local-1",
-      data,
-    })));
+    await Promise.all(
+      ["o", "k", "\r"].map((data) =>
+        api.invoke("local_terminal_write", {
+          sessionId: "local-1",
+          data,
+        }),
+      ),
+    );
     await api.invoke("terminal_write", { sessionId: 42, data: "x" });
     await api.invoke("terminal_write", { sessionId: "empty", data: "" });
 
@@ -811,9 +864,11 @@ describe("web gateway browser API", () => {
 
     const encoder = new TextEncoder();
     expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.every((chunk) =>
-      encoder.encode(chunk).byteLength <= TERMINAL_HTTP_INPUT_MAX_BUFFER_BYTES
-    )).toBe(true);
+    expect(
+      chunks.every(
+        (chunk) => encoder.encode(chunk).byteLength <= TERMINAL_HTTP_INPUT_MAX_BUFFER_BYTES,
+      ),
+    ).toBe(true);
     expect(chunks.join("")).toBe(input);
   });
 
@@ -834,21 +889,26 @@ describe("web gateway browser API", () => {
     }) as unknown as typeof fetch;
 
     const api = createBrowserGatewayApi();
-    const failed = ["a", "b", "\r"].map((data) => api.invoke("terminal_write", {
-      sessionId: "session-recover",
-      data,
-    }));
+    const failed = ["a", "b", "\r"].map((data) =>
+      api.invoke("terminal_write", {
+        sessionId: "session-recover",
+        data,
+      }),
+    );
     const failedResults = await Promise.allSettled(failed);
     expect(failedResults).toHaveLength(3);
     for (const result of failedResults) {
       expect(result.status).toBe("rejected");
-      expect(String(result.status === "rejected" ? result.reason : ""))
-        .toContain("gateway unavailable");
+      expect(String(result.status === "rejected" ? result.reason : "")).toContain(
+        "gateway unavailable",
+      );
     }
-    await expect(api.invoke("terminal_write", {
-      sessionId: "session-recover",
-      data: "blocked",
-    })).rejects.toThrow("gateway unavailable");
+    await expect(
+      api.invoke("terminal_write", {
+        sessionId: "session-recover",
+        data: "blocked",
+      }),
+    ).rejects.toThrow("gateway unavailable");
     expect(invokes).toHaveLength(1);
 
     await api.invoke("start_terminal_session", { sessionId: "session-recover" });
@@ -861,10 +921,13 @@ describe("web gateway browser API", () => {
   });
 
   test("times out a hung terminal send and does not dispatch its queued suffix", async () => {
-    const fetchMock = mock((_input: RequestInfo | URL, init?: RequestInit) =>
-      new Promise<Response>((_resolve, reject) => {
-        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
-      })
+    const fetchMock = mock(
+      (_input: RequestInfo | URL, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
+            once: true,
+          });
+        }),
     );
     globalThis.fetch = fetchMock as unknown as typeof fetch;
     const api = createBrowserGatewayApi({ terminalInputSendTimeoutMs: 5 });
@@ -874,23 +937,26 @@ describe("web gateway browser API", () => {
     const timeoutResults = await Promise.allSettled([prefix, suffix]);
     for (const result of timeoutResults) {
       expect(result.status).toBe("rejected");
-      expect(String(result.status === "rejected" ? result.reason : ""))
-        .toContain("timed out");
+      expect(String(result.status === "rejected" ? result.reason : "")).toContain("timed out");
     }
-    await expect(api.invoke("terminal_write", {
-      sessionId: "hung",
-      data: "later",
-    })).rejects.toThrow("timed out");
+    await expect(
+      api.invoke("terminal_write", {
+        sessionId: "hung",
+        data: "later",
+      }),
+    ).rejects.toThrow("timed out");
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   test("flushes accepted terminal input before resize and close lifecycle commands", async () => {
     const invokes: Array<{ command: string; args: Record<string, unknown> }> = [];
     globalThis.fetch = mock(async (_input, init) => {
-      invokes.push(JSON.parse(String(init?.body)) as {
-        command: string;
-        args: Record<string, unknown>;
-      });
+      invokes.push(
+        JSON.parse(String(init?.body)) as {
+          command: string;
+          args: Record<string, unknown>;
+        },
+      );
       return new Response(JSON.stringify({}), { status: 200 });
     }) as unknown as typeof fetch;
     const api = createBrowserGatewayApi({ terminalInputBatchDelayMs: 50 });
@@ -909,10 +975,14 @@ describe("web gateway browser API", () => {
     await api.invoke("start_local_terminal_session", { sessionId: "local-restart" });
 
     expect(invokes.map(({ command }) => command)).toEqual([
-      "terminal_write", "terminal_resize",
-      "terminal_write", "detach_terminal",
-      "local_terminal_write", "local_terminal_resize",
-      "local_terminal_write", "close_local_terminal_session",
+      "terminal_write",
+      "terminal_resize",
+      "terminal_write",
+      "detach_terminal",
+      "local_terminal_write",
+      "local_terminal_resize",
+      "local_terminal_write",
+      "close_local_terminal_session",
       "start_local_terminal_session",
     ]);
   });
@@ -957,9 +1027,11 @@ describe("web gateway browser API", () => {
       }
       releaseFirst();
       await Promise.all([first, lifecycle, ...(closes ? [] : [later])]);
-      expect(invokes).toEqual(closes
-        ? [`${writeCommand}:prefix`, `${lifecycleCommand}:`]
-        : [`${writeCommand}:prefix`, `${lifecycleCommand}:`, `${writeCommand}:\r`]);
+      expect(invokes).toEqual(
+        closes
+          ? [`${writeCommand}:prefix`, `${lifecycleCommand}:`]
+          : [`${writeCommand}:prefix`, `${lifecycleCommand}:`, `${writeCommand}:\r`],
+      );
     };
 
     await runScenario({
@@ -991,7 +1063,9 @@ describe("web gateway browser API", () => {
       if (invokes.length === 1) {
         firstSignal = init?.signal ?? undefined;
         return new Promise<Response>((_resolve, reject) => {
-          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
+            once: true,
+          });
         });
       }
       return new Response(JSON.stringify({}), { status: 200 });
@@ -1014,11 +1088,13 @@ describe("web gateway browser API", () => {
     ]);
 
     await api.invoke("detach_terminal", { sessionId: "restart" });
-    await expect(api.invoke("terminal_write", { sessionId: "restart", data: "blocked" }))
-      .rejects.toThrow("closed until the session restarts");
+    await expect(
+      api.invoke("terminal_write", { sessionId: "restart", data: "blocked" }),
+    ).rejects.toThrow("closed until the session restarts");
     await api.invoke("start_terminal_session", { sessionId: "restart" });
-    await expect(api.invoke("terminal_write", { sessionId: "restart", data: "fresh\r" }))
-      .resolves.toBeUndefined();
+    await expect(
+      api.invoke("terminal_write", { sessionId: "restart", data: "fresh\r" }),
+    ).resolves.toBeUndefined();
   });
 
   test("disposing a replaced gateway aborts in-flight and queued terminal input", async () => {
@@ -1046,12 +1122,15 @@ describe("web gateway browser API", () => {
     const activeResult = active.catch((error) => error);
     const queuedResult = queued.catch((error) => error);
     await waitForCondition(() => oldSignal !== undefined, "Old terminal write did not start");
-    const resizeResult = oldApi.invoke("terminal_resize", {
-      sessionId: "old",
-      cols: 100,
-      rows: 30,
-    }).catch((error) => error);
-    const closeResult = oldApi.invoke("detach_terminal", { sessionId: "old" })
+    const resizeResult = oldApi
+      .invoke("terminal_resize", {
+        sessionId: "old",
+        cols: 100,
+        rows: 30,
+      })
+      .catch((error) => error);
+    const closeResult = oldApi
+      .invoke("detach_terminal", { sessionId: "old" })
       .catch((error) => error);
     await Promise.resolve();
     await Promise.resolve();
@@ -1067,10 +1146,12 @@ describe("web gateway browser API", () => {
     await expect(queuedResult).resolves.toEqual(new Error("Browser gateway replaced"));
     await expect(resizeResult).resolves.toEqual(new Error("Browser gateway replaced"));
     await expect(closeResult).resolves.toEqual(new Error("Browser gateway replaced"));
-    await expect(oldApi.invoke("terminal_write", { sessionId: "old", data: "later" }))
-      .rejects.toThrow("Browser gateway replaced");
-    expect(fetchMock.mock.calls.filter(([input]) => !String(input).includes("/agent-test/session")))
-      .toHaveLength(1);
+    await expect(
+      oldApi.invoke("terminal_write", { sessionId: "old", data: "later" }),
+    ).rejects.toThrow("Browser gateway replaced");
+    expect(
+      fetchMock.mock.calls.filter(([input]) => !String(input).includes("/agent-test/session")),
+    ).toHaveLength(1);
   });
 
   test("keeps a live terminal writable when its close never reached the backend", async () => {
@@ -1088,8 +1169,9 @@ describe("web gateway browser API", () => {
     }) as unknown as typeof fetch;
     const api = createBrowserGatewayApi();
 
-    await expect(api.invoke("detach_terminal", { sessionId: "still-alive" }))
-      .rejects.toThrow("gateway unavailable");
+    await expect(api.invoke("detach_terminal", { sessionId: "still-alive" })).rejects.toThrow(
+      "gateway unavailable",
+    );
 
     // The backend terminal survived the failed detach, so its input must not be
     // rejected for the lifetime of the page.
@@ -1098,8 +1180,9 @@ describe("web gateway browser API", () => {
 
     // A close that does land still closes the queue.
     await api.invoke("detach_terminal", { sessionId: "other" });
-    await expect(api.invoke("terminal_write", { sessionId: "other", data: "x" }))
-      .rejects.toThrow("closed until the session restarts");
+    await expect(api.invoke("terminal_write", { sessionId: "other", data: "x" })).rejects.toThrow(
+      "closed until the session restarts",
+    );
     expect(invokes).toEqual(["detach_terminal", "terminal_write", "detach_terminal"]);
   });
 
@@ -1119,21 +1202,19 @@ describe("web gateway browser API", () => {
     }) as unknown as typeof fetch;
     const api = createBrowserGatewayApi();
 
-    await expect(api.invoke("terminal_write", { sessionId: "flaky", data: "a\r" }))
-      .rejects.toThrow("gateway unavailable");
-    await expect(api.invoke("terminal_write", { sessionId: "flaky", data: "b\r" }))
-      .rejects.toThrow("gateway unavailable");
+    await expect(api.invoke("terminal_write", { sessionId: "flaky", data: "a\r" })).rejects.toThrow(
+      "gateway unavailable",
+    );
+    await expect(api.invoke("terminal_write", { sessionId: "flaky", data: "b\r" })).rejects.toThrow(
+      "gateway unavailable",
+    );
 
     // A resize that succeeds proves the transport recovered.
     rejectWrites = false;
     await api.invoke("terminal_resize", { sessionId: "flaky", cols: 100, rows: 30 });
     await api.invoke("terminal_write", { sessionId: "flaky", data: "c\r" });
 
-    expect(invokes).toEqual([
-      "terminal_write",
-      "terminal_resize",
-      "terminal_write",
-    ]);
+    expect(invokes).toEqual(["terminal_write", "terminal_resize", "terminal_write"]);
   });
 
   test("leaves a failed queue closed when the recovering resize also fails", async () => {
@@ -1145,12 +1226,15 @@ describe("web gateway browser API", () => {
     }) as unknown as typeof fetch;
     const api = createBrowserGatewayApi();
 
-    await expect(api.invoke("terminal_write", { sessionId: "down", data: "a\r" }))
-      .rejects.toThrow("gateway unavailable");
-    await expect(api.invoke("terminal_resize", { sessionId: "down", cols: 80, rows: 24 }))
-      .rejects.toThrow("gateway unavailable");
-    await expect(api.invoke("terminal_write", { sessionId: "down", data: "b\r" }))
-      .rejects.toThrow("gateway unavailable");
+    await expect(api.invoke("terminal_write", { sessionId: "down", data: "a\r" })).rejects.toThrow(
+      "gateway unavailable",
+    );
+    await expect(
+      api.invoke("terminal_resize", { sessionId: "down", cols: 80, rows: 24 }),
+    ).rejects.toThrow("gateway unavailable");
+    await expect(api.invoke("terminal_write", { sessionId: "down", data: "b\r" })).rejects.toThrow(
+      "gateway unavailable",
+    );
   });
 
   test("reopens a terminal whose start command failed", async () => {
@@ -1168,8 +1252,9 @@ describe("web gateway browser API", () => {
     const api = createBrowserGatewayApi();
 
     await api.invoke("detach_terminal", { sessionId: "restart" });
-    await expect(api.invoke("start_terminal_session", { sessionId: "restart" }))
-      .rejects.toThrow("container gone");
+    await expect(api.invoke("start_terminal_session", { sessionId: "restart" })).rejects.toThrow(
+      "container gone",
+    );
 
     // The failed start already cleared the close marker, so a retry works and
     // input is accepted rather than rejected against a session that now exists.
@@ -1184,8 +1269,9 @@ describe("web gateway browser API", () => {
   });
 
   test("rejects lifecycle commands issued after the gateway was replaced", async () => {
-    globalThis.fetch = mock(async () =>
-      new Response(JSON.stringify({}), { status: 200 })) as unknown as typeof fetch;
+    globalThis.fetch = mock(
+      async () => new Response(JSON.stringify({}), { status: 200 }),
+    ) as unknown as typeof fetch;
     const fakeWindow: TestGatewayWindow = {
       location: { protocol: "http:" },
       orkestrator: undefined,
@@ -1218,20 +1304,24 @@ describe("web gateway browser API", () => {
       orkestratorGateway: undefined,
     };
 
-    expect(() => installBrowserGatewayApi(
-      fakeWindow as Pick<Window, "location" | "orkestrator" | "orkestratorGateway">,
-      { replaceExisting: true },
-    )).not.toThrow();
+    expect(() =>
+      installBrowserGatewayApi(
+        fakeWindow as Pick<Window, "location" | "orkestrator" | "orkestratorGateway">,
+        { replaceExisting: true },
+      ),
+    ).not.toThrow();
     expect(fakeWindow.orkestrator).not.toBe(foreignApi);
   });
 
   test("routes a lifecycle command with no usable session id straight through", async () => {
     const invokes: Array<{ command: string; args: Record<string, unknown> }> = [];
     globalThis.fetch = mock(async (_input, init) => {
-      invokes.push(JSON.parse(String(init?.body)) as {
-        command: string;
-        args: Record<string, unknown>;
-      });
+      invokes.push(
+        JSON.parse(String(init?.body)) as {
+          command: string;
+          args: Record<string, unknown>;
+        },
+      );
       return new Response(JSON.stringify({}), { status: 200 });
     }) as unknown as typeof fetch;
     const api = createBrowserGatewayApi({ terminalInputBatchDelayMs: 50 });
@@ -1266,8 +1356,9 @@ describe("web gateway browser API", () => {
     await api.invoke("terminal_write", { sessionId: "bounded", data: "abcdefgh" });
     expect(sent).toEqual(["abcd", "efgh"]);
 
-    await expect(api.invoke("terminal_write", { sessionId: "bounded", data: "too-long-to-fit" }))
-      .rejects.toThrow("exceeds the 8-byte terminal queue limit");
+    await expect(
+      api.invoke("terminal_write", { sessionId: "bounded", data: "too-long-to-fit" }),
+    ).rejects.toThrow("exceeds the 8-byte terminal queue limit");
   });
 
   test("batches direct terminal writes with bearer authentication", async () => {
@@ -1286,21 +1377,29 @@ describe("web gateway browser API", () => {
       token: "direct-token-123456",
     });
 
-    await Promise.all(["d", "i", "r", "\r"].map((data) => api.invoke("terminal_write", {
-      sessionId: "direct-terminal",
-      data,
-    })));
+    await Promise.all(
+      ["d", "i", "r", "\r"].map((data) =>
+        api.invoke("terminal_write", {
+          sessionId: "direct-terminal",
+          data,
+        }),
+      ),
+    );
 
-    expect(requests).toEqual([{
-      url: "https://workstation.tailnet.ts.net/__orkestrator/invoke",
-      authorization: "Bearer direct-token-123456",
-      data: "dir\r",
-    }]);
+    expect(requests).toEqual([
+      {
+        url: "https://workstation.tailnet.ts.net/__orkestrator/invoke",
+        authorization: "Bearer direct-token-123456",
+        data: "dir\r",
+      },
+    ]);
   });
 
   test("opts into the terminal WebSocket explicitly or from storage and forwards URL and token", async () => {
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
-    globalThis.fetch = mock(async () => new Response("", { status: 200 })) as unknown as typeof fetch;
+    globalThis.fetch = mock(
+      async () => new Response("", { status: 200 }),
+    ) as unknown as typeof fetch;
     const createSocket = (url: string, protocols: string | string[]) =>
       new MockWebSocket(url, protocols) as unknown as WebSocket;
     const direct = createBrowserGatewayApi({
@@ -1313,7 +1412,9 @@ describe("web gateway browser API", () => {
     const stopDirect = direct.listen("terminal-output-direct", () => undefined);
     const directSocket = MockWebSocket.instances[0];
     if (!directSocket) throw new Error("Direct terminal socket was not created");
-    expect(String(directSocket.url)).toBe("wss://workstation.tailnet.ts.net/__orkestrator/terminal");
+    expect(String(directSocket.url)).toBe(
+      "wss://workstation.tailnet.ts.net/__orkestrator/terminal",
+    );
     expect(directSocket.protocols).toBe("orkestrator-terminal.v1");
     directSocket.open();
     expect(sentControlFrames(directSocket)[0]).toEqual({
@@ -1354,9 +1455,12 @@ describe("web gateway browser API", () => {
       }
       const body = JSON.parse(String(init?.body)) as { command: string };
       expect(body.command).toBe("get_terminal_output_snapshot");
-      return new Response(JSON.stringify({
-        result: { generation: 1, revision: 0, data: "" },
-      }), { status: 200 });
+      return new Response(
+        JSON.stringify({
+          result: { generation: 1, revision: 0, data: "" },
+        }),
+        { status: 200 },
+      );
     }) as unknown as typeof fetch;
     const api = createBrowserGatewayApi({
       baseUrl: "http://localhost:4319",
@@ -1405,8 +1509,9 @@ describe("web gateway browser API", () => {
     openTerminalSocket(socket);
     subscribeTerminalSocket(socket, "session-1");
 
-    await expect(api.invoke("get_terminal_output_snapshot", { sessionId: "session-1" }))
-      .rejects.toThrow("snapshot unavailable");
+    await expect(
+      api.invoke("get_terminal_output_snapshot", { sessionId: "session-1" }),
+    ).rejects.toThrow("snapshot unavailable");
     await waitForCondition(
       () => sentControlFrames(socket).some((frame) => frame.type === "unsubscribe"),
       "Snapshot failure did not reset the WebSocket subscription",
@@ -1453,26 +1558,30 @@ describe("web gateway browser API", () => {
     expect(sentControlFrames(socket).some((frame) => frame.type === "resize")).toBe(false);
     expect(invokes).toEqual([]);
 
-    socket.receive(JSON.stringify({
-      type: "operation-result",
-      channelId,
-      operationId: inputFrame.revision,
-      operation: "input",
-      ok: true,
-    }));
+    socket.receive(
+      JSON.stringify({
+        type: "operation-result",
+        channelId,
+        operationId: inputFrame.revision,
+        operation: "input",
+        ok: true,
+      }),
+    );
     await waitForCondition(
       () => sentControlFrames(socket).some((frame) => frame.type === "resize"),
       "Resize did not follow acknowledged input",
     );
     const resizeFrame = sentControlFrames(socket).find((frame) => frame.type === "resize")!;
     expect(invokes).toEqual([]);
-    socket.receive(JSON.stringify({
-      type: "operation-result",
-      channelId,
-      operationId: resizeFrame.operationId,
-      operation: "resize",
-      ok: true,
-    }));
+    socket.receive(
+      JSON.stringify({
+        type: "operation-result",
+        channelId,
+        operationId: resizeFrame.operationId,
+        operation: "resize",
+        ok: true,
+      }),
+    );
 
     await Promise.all([input, resize, close, restart]);
     expect(invokes).toEqual(["detach_terminal", "start_terminal_session"]);
@@ -1485,19 +1594,25 @@ describe("web gateway browser API", () => {
       if (String(input).includes("/__orkestrator/events?")) {
         eventStreamRequests += 1;
         const signal = init?.signal;
-        return new Response(new ReadableStream({
-          start(controller) {
-            // A real aborted body errors its reader, which is what runs the
-            // reconnect bookkeeping. A stream that just hangs would hide it.
-            signal?.addEventListener("abort", () => {
-              controller.error(new DOMException("Aborted", "AbortError"));
-            });
-          },
-        }), { status: 200 });
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              // A real aborted body errors its reader, which is what runs the
+              // reconnect bookkeeping. A stream that just hangs would hide it.
+              signal?.addEventListener("abort", () => {
+                controller.error(new DOMException("Aborted", "AbortError"));
+              });
+            },
+          }),
+          { status: 200 },
+        );
       }
-      return new Response(JSON.stringify({
-        result: { generation: 1, revision: 0, output: "" },
-      }), { status: 200 });
+      return new Response(
+        JSON.stringify({
+          result: { generation: 1, revision: 0, output: "" },
+        }),
+        { status: 200 },
+      );
     }) as unknown as typeof fetch;
     const api = createBrowserGatewayApi({
       baseUrl: "http://localhost:4319",
@@ -1514,8 +1629,9 @@ describe("web gateway browser API", () => {
     subscribeTerminalSocket(socket, "session-1");
     await api.invoke("get_terminal_output_snapshot", { sessionId: "session-1" });
     await waitForCondition(
-      () => sentControlFrames(socket).some((frame) => frame.type === "ack")
-        || eventStreamRequests === 1,
+      () =>
+        sentControlFrames(socket).some((frame) => frame.type === "ack") ||
+        eventStreamRequests === 1,
       "Channel never became ready",
     );
 
@@ -1563,13 +1679,15 @@ describe("web gateway browser API", () => {
     expect(frames.map((frame) => new TextDecoder().decode(frame.bytes))).toEqual(["a", "b", "c"]);
 
     for (const frame of frames) {
-      socket.receive(JSON.stringify({
-        type: "operation-result",
-        channelId,
-        operationId: frame.revision,
-        operation: "input",
-        ok: true,
-      }));
+      socket.receive(
+        JSON.stringify({
+          type: "operation-result",
+          channelId,
+          operationId: frame.revision,
+          operation: "input",
+          ok: true,
+        }),
+      );
     }
     await Promise.all(writes);
     stop();
@@ -1601,8 +1719,9 @@ describe("web gateway browser API", () => {
 
     // The channel is not ready yet, so this write takes the HTTP path and
     // fails, latching the batcher's queue for this terminal.
-    await expect(api.invoke("terminal_write", { sessionId: "latched", data: "x" }))
-      .rejects.toThrow();
+    await expect(
+      api.invoke("terminal_write", { sessionId: "latched", data: "x" }),
+    ).rejects.toThrow();
     failWrites = false;
 
     const channelId = subscribeTerminalSocket(socket, "latched", "current");
@@ -1616,9 +1735,15 @@ describe("web gateway browser API", () => {
     const frame = decodeSentBinaryFrame(
       socket.sent.find((value) => typeof value !== "string") as ArrayBufferLike,
     );
-    socket.receive(JSON.stringify({
-      type: "operation-result", channelId, operationId: frame.revision, operation: "input", ok: true,
-    }));
+    socket.receive(
+      JSON.stringify({
+        type: "operation-result",
+        channelId,
+        operationId: frame.revision,
+        operation: "input",
+        ok: true,
+      }),
+    );
     await write;
     stop();
   });
@@ -1649,14 +1774,16 @@ describe("web gateway browser API", () => {
       "Resize was never attempted over the socket",
     );
     const resizeFrame = sentControlFrames(socket).find((frame) => frame.type === "resize")!;
-    socket.receive(JSON.stringify({
-      type: "operation-result",
-      channelId,
-      operationId: resizeFrame.operationId,
-      operation: "resize",
-      ok: false,
-      message: "Unknown terminal channel",
-    }));
+    socket.receive(
+      JSON.stringify({
+        type: "operation-result",
+        channelId,
+        operationId: resizeFrame.operationId,
+        operation: "resize",
+        ok: false,
+        message: "Unknown terminal channel",
+      }),
+    );
 
     // A refused socket resize still has to reach the backend. Letting the
     // rejection propagate would leave the PTY at stale dimensions silently.
@@ -1667,9 +1794,15 @@ describe("web gateway browser API", () => {
 
   test("coalesces the shared browser stream rebuild when channels become ready together", async () => {
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
-    globalThis.fetch = mock(async () => new Response(JSON.stringify({
-      result: { generation: 1, revision: 0, output: "" },
-    }), { status: 200 })) as unknown as typeof fetch;
+    globalThis.fetch = mock(
+      async () =>
+        new Response(
+          JSON.stringify({
+            result: { generation: 1, revision: 0, output: "" },
+          }),
+          { status: 200 },
+        ),
+    ) as unknown as typeof fetch;
     // The shared stream is the same-origin path, so there is no base URL to
     // derive the socket address from — the document has to have a real one.
     const happyWindow = window as unknown as { happyDOM: { setURL(url: string): void } };
@@ -1701,8 +1834,9 @@ describe("web gateway browser API", () => {
 
   test("disposes an opted-in terminal socket when the browser adapter is replaced", () => {
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
-    globalThis.fetch = mock(async () =>
-      new Response(new ReadableStream({ start() {} }), { status: 200 })) as unknown as typeof fetch;
+    globalThis.fetch = mock(
+      async () => new Response(new ReadableStream({ start() {} }), { status: 200 }),
+    ) as unknown as typeof fetch;
     const fakeWindow: TestGatewayWindow = {
       location: { protocol: "http:" },
       orkestrator: undefined,
@@ -1733,10 +1867,13 @@ describe("web gateway browser API", () => {
   test("reconnects an active terminal socket with a rotated gateway token", async () => {
     globalThis.fetch = mock(async (input) => {
       if (String(input).includes("/gateway-settings")) {
-        return new Response(JSON.stringify({
-          token: "rotated-token-654321",
-          configured: true,
-        }), { status: 200 });
+        return new Response(
+          JSON.stringify({
+            token: "rotated-token-654321",
+            configured: true,
+          }),
+          { status: 200 },
+        );
       }
       return new Response(new ReadableStream({ start() {} }), { status: 200 });
     }) as unknown as typeof fetch;
@@ -1811,14 +1948,16 @@ describe("web gateway browser API", () => {
     const binary = socket.sent.find((frame) => typeof frame !== "string");
     if (!binary || binary instanceof Blob) throw new Error("Input frame was not binary");
     const inputFrame = decodeSentBinaryFrame(binary as ArrayBufferLike | ArrayBufferView);
-    socket.receive(JSON.stringify({
-      type: "operation-result",
-      channelId,
-      operationId: inputFrame.revision,
-      operation: "input",
-      ok: false,
-      message: "terminal write rejected",
-    }));
+    socket.receive(
+      JSON.stringify({
+        type: "operation-result",
+        channelId,
+        operationId: inputFrame.revision,
+        operation: "input",
+        ok: false,
+        message: "terminal write rejected",
+      }),
+    );
 
     await expect(input).rejects.toThrow("terminal write rejected");
     expect(invokes).toEqual([]);
@@ -1863,15 +2002,17 @@ describe("web gateway browser API", () => {
       configurable: true,
       value: mock((entryType: string) => {
         if (entryType === "navigation") {
-          return [{
-            type: "reload",
-            nextHopProtocol: "http/1.1",
-            transferSize: 321,
-            encodedBodySize: 222,
-            decodedBodySize: 654,
-            domContentLoadedEventEnd: 11,
-            loadEventEnd: 19,
-          }];
+          return [
+            {
+              type: "reload",
+              nextHopProtocol: "http/1.1",
+              transferSize: 321,
+              encodedBodySize: 222,
+              decodedBodySize: 654,
+              domContentLoadedEventEnd: 11,
+              loadEventEnd: 19,
+            },
+          ];
         }
         if (entryType === "resource") {
           return [
@@ -1960,8 +2101,7 @@ describe("web gateway browser API", () => {
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
     Object.defineProperty(performance, "getEntriesByType", {
       configurable: true,
-      value: mock((entryType: string) =>
-        entryType === "navigation" ? [{ loadEventEnd }] : []),
+      value: mock((entryType: string) => (entryType === "navigation" ? [{ loadEventEnd }] : [])),
     });
 
     const api = createBrowserGatewayApi({ reportBootMetrics: true });
@@ -2107,18 +2247,15 @@ describe("web gateway browser API", () => {
       const headers = new Headers(init?.headers);
       requests.push({ url: String(input), authorization: headers.get("authorization") });
       if (String(input).endsWith("/event/subscribe")) {
-        return new Response(
-          'event: message.updated\ndata: {"sessionId":"session-1"}\n\n',
-          { status: 200, headers: { "content-type": "text/event-stream" } },
-        );
+        return new Response('event: message.updated\ndata: {"sessionId":"session-1"}\n\n', {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        });
       }
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
     }) as unknown as typeof fetch;
 
-    configureDirectGatewayTransport(
-      "https://workstation.tailnet.ts.net",
-      "direct-token-123456",
-    );
+    configureDirectGatewayTransport("https://workstation.tailnet.ts.net", "direct-token-123456");
 
     await fetch(
       "https://workstation.tailnet.ts.net/__orkestrator/proxy/loopback/7777/global/health",
@@ -2154,12 +2291,17 @@ describe("web gateway browser API", () => {
     let requestSignal: AbortSignal | undefined;
     globalThis.fetch = mock(async (_input, init) => {
       requestSignal = init?.signal ?? undefined;
-      return new Response(new ReadableStream({
-        start(controller) {
-          controller.enqueue(encoder.encode("data: not-json\r\n\r"));
-          controller.enqueue(encoder.encode("\ndata: {\"event\":\"changed\",\"payload\":{\"ok\":true}}\r\n\r\n"));
-        },
-      }), { status: 200 });
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode("data: not-json\r\n\r"));
+            controller.enqueue(
+              encoder.encode('\ndata: {"event":"changed","payload":{"ok":true}}\r\n\r\n'),
+            );
+          },
+        }),
+        { status: 200 },
+      );
     }) as unknown as typeof fetch;
     const api = createBrowserGatewayApi({
       baseUrl: "https://workstation.tailnet.ts.net",
@@ -2169,7 +2311,7 @@ describe("web gateway browser API", () => {
 
     const unsubscribe = api.listen("changed", callback);
     await new Promise<void>((resolve) => {
-      const poll = () => callback.mock.calls.length > 0 ? resolve() : setTimeout(poll, 1);
+      const poll = () => (callback.mock.calls.length > 0 ? resolve() : setTimeout(poll, 1));
       poll();
     });
     expect(callback).toHaveBeenCalledWith({ ok: true });
@@ -2188,12 +2330,17 @@ describe("web gateway browser API", () => {
     globalThis.fetch = mock(async () => {
       attempt += 1;
       if (attempt === 1) return new Response(null, { status: 503 });
-      return new Response(new ReadableStream({
-        start(controller) {
-          controller.enqueue(encoder.encode(gatewayControlFrame("gateway.connected", "fresh")));
-          controller.enqueue(encoder.encode('data: {"event":"changed","payload":"reconnected"}\n\n'));
-        },
-      }), { status: 200 });
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode(gatewayControlFrame("gateway.connected", "fresh")));
+            controller.enqueue(
+              encoder.encode('data: {"event":"changed","payload":"reconnected"}\n\n'),
+            );
+          },
+        }),
+        { status: 200 },
+      );
     }) as unknown as typeof fetch;
     const api = createBrowserGatewayApi({
       baseUrl: "https://workstation.tailnet.ts.net",
@@ -2201,10 +2348,7 @@ describe("web gateway browser API", () => {
       eventReconnectDelayMs: 0,
     });
     const connected = mock(() => undefined);
-    const stopConnected = api.listen(
-      "native-event-stream-connected",
-      connected,
-    );
+    const stopConnected = api.listen("native-event-stream-connected", connected);
 
     try {
       const payload = await new Promise<string>((resolve) => {
@@ -2227,29 +2371,30 @@ describe("web gateway browser API", () => {
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
     const api = createBrowserGatewayApi();
     const connected = mock(() => undefined);
-    const unsubscribe = api.listen(
-      "native-event-stream-connected",
-      connected,
-    );
+    const unsubscribe = api.listen("native-event-stream-connected", connected);
     const source = MockEventSource.instances[0];
     if (!source) throw new Error("EventSource was not created");
 
     source.onopen?.();
-    source.onmessage?.(new MessageEvent("message", {
-      data: JSON.stringify({
-        event: "gateway.connected",
-        payload: { status: "fresh" },
+    source.onmessage?.(
+      new MessageEvent("message", {
+        data: JSON.stringify({
+          event: "gateway.connected",
+          payload: { status: "fresh" },
+        }),
+        lastEventId: "12345678:0",
       }),
-      lastEventId: "12345678:0",
-    }));
+    );
     source.onopen?.();
-    source.onmessage?.(new MessageEvent("message", {
-      data: JSON.stringify({
-        event: "gateway.connected",
-        payload: { status: "caught-up" },
+    source.onmessage?.(
+      new MessageEvent("message", {
+        data: JSON.stringify({
+          event: "gateway.connected",
+          payload: { status: "caught-up" },
+        }),
+        lastEventId: "12345678:0",
       }),
-      lastEventId: "12345678:0",
-    }));
+    );
 
     expect(connected).toHaveBeenCalledTimes(1);
     unsubscribe();
@@ -2259,10 +2404,7 @@ describe("web gateway browser API", () => {
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
     const api = createBrowserGatewayApi();
     const connected = mock(() => undefined);
-    const unsubscribe = api.listen(
-      NATIVE_EVENT_STREAM_CONNECTED_EVENT,
-      connected,
-    );
+    const unsubscribe = api.listen(NATIVE_EVENT_STREAM_CONNECTED_EVENT, connected);
     const source = MockEventSource.instances[0];
     if (!source) throw new Error("EventSource was not created");
 
@@ -2274,21 +2416,25 @@ describe("web gateway browser API", () => {
       { status: "replayed" },
       { status: "reconcile" },
     ]) {
-      source.onmessage?.(new MessageEvent("message", {
-        data: JSON.stringify({ event: "gateway.connected", payload }),
-        lastEventId: "12345678:0",
-      }));
+      source.onmessage?.(
+        new MessageEvent("message", {
+          data: JSON.stringify({ event: "gateway.connected", payload }),
+          lastEventId: "12345678:0",
+        }),
+      );
     }
 
     expect(connected).not.toHaveBeenCalled();
 
-    source.onmessage?.(new MessageEvent("message", {
-      data: JSON.stringify({
-        event: "gateway.connected",
-        payload: { status: "fresh" },
+    source.onmessage?.(
+      new MessageEvent("message", {
+        data: JSON.stringify({
+          event: "gateway.connected",
+          payload: { status: "fresh" },
+        }),
+        lastEventId: "12345678:0",
       }),
-      lastEventId: "12345678:0",
-    }));
+    );
     expect(connected).toHaveBeenCalledTimes(1);
     unsubscribe();
   });
@@ -2298,30 +2444,31 @@ describe("web gateway browser API", () => {
     const api = createBrowserGatewayApi();
     const connected = mock(() => undefined);
     const reconcileFrame = mock(() => undefined);
-    const stopConnected = api.listen(
-      NATIVE_EVENT_STREAM_CONNECTED_EVENT,
-      connected,
-    );
+    const stopConnected = api.listen(NATIVE_EVENT_STREAM_CONNECTED_EVENT, connected);
     const stopReconcile = api.listen("gateway.reconcile-required", reconcileFrame);
     const source = MockEventSource.instances[0];
     if (!source) throw new Error("EventSource was not created");
 
-    source.onmessage?.(new MessageEvent("message", {
-      data: JSON.stringify({
-        event: "gateway.connected",
-        payload: { status: "reconcile" },
+    source.onmessage?.(
+      new MessageEvent("message", {
+        data: JSON.stringify({
+          event: "gateway.connected",
+          payload: { status: "reconcile" },
+        }),
+        lastEventId: "",
       }),
-      lastEventId: "",
-    }));
+    );
     expect(connected).not.toHaveBeenCalled();
 
-    source.onmessage?.(new MessageEvent("message", {
-      data: JSON.stringify({
-        event: "gateway.reconcile-required",
-        payload: { reason: "cursor-expired" },
+    source.onmessage?.(
+      new MessageEvent("message", {
+        data: JSON.stringify({
+          event: "gateway.reconcile-required",
+          payload: { reason: "cursor-expired" },
+        }),
+        lastEventId: "12345678:9",
       }),
-      lastEventId: "12345678:9",
-    }));
+    );
 
     expect(connected).toHaveBeenCalledTimes(1);
     expect(reconcileFrame).not.toHaveBeenCalled();
@@ -2331,12 +2478,16 @@ describe("web gateway browser API", () => {
 
   test("notifies listeners when a direct gateway stream connects", async () => {
     const encoder = new TextEncoder();
-    globalThis.fetch = mock(async () =>
-      new Response(new ReadableStream({
-        start(controller) {
-          controller.enqueue(encoder.encode(gatewayControlFrame("gateway.connected", "fresh")));
-        },
-      }), { status: 200 })
+    globalThis.fetch = mock(
+      async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(encoder.encode(gatewayControlFrame("gateway.connected", "fresh")));
+            },
+          }),
+          { status: 200 },
+        ),
     ) as unknown as typeof fetch;
     const api = createBrowserGatewayApi({
       baseUrl: "https://workstation.tailnet.ts.net",
@@ -2363,30 +2514,35 @@ describe("web gateway browser API", () => {
       requestUrls.push(String(input));
       attempt += 1;
       if (attempt === 1) return new Response(null, { status: 503 });
-      return new Response(new ReadableStream({
-        start(controller) {
-          // Each attempt issues a distinct id so a `since` assertion below
-          // cannot be satisfied by a cursor that never advanced.
-          if (attempt === 2) {
-            controller.enqueue(encoder.encode(
-              gatewayControlFrame("gateway.connected", "fresh", "12345678:2"),
-            ));
-            controller.close();
-          } else if (attempt === 3) {
-            controller.enqueue(encoder.encode(
-              gatewayControlFrame("gateway.connected", "caught-up", "12345678:3"),
-            ));
-            controller.close();
-          } else {
-            controller.enqueue(encoder.encode(
-              gatewayControlFrame("gateway.connected", "reconcile", "12345678:3"),
-            ));
-            controller.enqueue(encoder.encode(
-              gatewayControlFrame("gateway.reconcile-required", "cursor-expired", "12345678:9"),
-            ));
-          }
-        },
-      }), { status: 200 });
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            // Each attempt issues a distinct id so a `since` assertion below
+            // cannot be satisfied by a cursor that never advanced.
+            if (attempt === 2) {
+              controller.enqueue(
+                encoder.encode(gatewayControlFrame("gateway.connected", "fresh", "12345678:2")),
+              );
+              controller.close();
+            } else if (attempt === 3) {
+              controller.enqueue(
+                encoder.encode(gatewayControlFrame("gateway.connected", "caught-up", "12345678:3")),
+              );
+              controller.close();
+            } else {
+              controller.enqueue(
+                encoder.encode(gatewayControlFrame("gateway.connected", "reconcile", "12345678:3")),
+              );
+              controller.enqueue(
+                encoder.encode(
+                  gatewayControlFrame("gateway.reconcile-required", "cursor-expired", "12345678:9"),
+                ),
+              );
+            }
+          },
+        }),
+        { status: 200 },
+      );
     }) as unknown as typeof fetch;
     const api = createBrowserGatewayApi({
       baseUrl: "https://workstation.tailnet.ts.net",
@@ -2428,17 +2584,20 @@ describe("web gateway browser API", () => {
       requestUrls.push(String(input));
       attempt += 1;
       if (attempt === 1) {
-        return new Response(new ReadableStream({
-          start(controller) {
-            controller.enqueue(encoder.encode(
-              gatewayControlFrame("gateway.connected", "fresh", "12345678:0"),
-            ));
-            controller.enqueue(encoder.encode(
-              'id: 12345678:7\ndata: {"event":"changed","payload":"latest"}\n\n',
-            ));
-            controller.close();
-          },
-        }), { status: 200 });
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(
+                encoder.encode(gatewayControlFrame("gateway.connected", "fresh", "12345678:0")),
+              );
+              controller.enqueue(
+                encoder.encode('id: 12345678:7\ndata: {"event":"changed","payload":"latest"}\n\n'),
+              );
+              controller.close();
+            },
+          }),
+          { status: 200 },
+        );
       }
       return new Response(new ReadableStream({ start() {} }), { status: 200 });
     }) as unknown as typeof fetch;
@@ -2450,10 +2609,7 @@ describe("web gateway browser API", () => {
     const changed = mock(() => undefined);
     const unsubscribe = api.listen("changed", changed);
 
-    await waitForCondition(
-      () => requestUrls.length === 2,
-      "The direct stream did not reconnect",
-    );
+    await waitForCondition(() => requestUrls.length === 2, "The direct stream did not reconnect");
 
     expect(changed).toHaveBeenCalledWith("latest");
     expect(new URL(requestUrls[1]!).searchParams.get("since")).toBe("12345678:7");
@@ -2468,23 +2624,28 @@ describe("web gateway browser API", () => {
       requestUrls.push(String(input));
       attempt += 1;
       if (attempt === 1) {
-        return new Response(new ReadableStream({
-          start(controller) {
-            // Last id wins within a block, per the SSE field-parsing rules.
-            controller.enqueue(encoder.encode(
-              'id: 12345678:1\nid: 12345678:4\ndata: {"event":"changed","payload":"multi"}\n\n',
-            ));
-            // No data means nothing to dispatch and no cursor to adopt.
-            controller.enqueue(encoder.encode("id: 12345678:5\n\n"));
-            // A blank id must not blank the cursor the client already holds.
-            controller.enqueue(encoder.encode(
-              'id: \ndata: {"event":"changed","payload":"blank-id"}\n\n',
-            ));
-            // A comment-only frame is a keepalive, not an event.
-            controller.enqueue(encoder.encode(": keepalive\n\n"));
-            controller.close();
-          },
-        }), { status: 200 });
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              // Last id wins within a block, per the SSE field-parsing rules.
+              controller.enqueue(
+                encoder.encode(
+                  'id: 12345678:1\nid: 12345678:4\ndata: {"event":"changed","payload":"multi"}\n\n',
+                ),
+              );
+              // No data means nothing to dispatch and no cursor to adopt.
+              controller.enqueue(encoder.encode("id: 12345678:5\n\n"));
+              // A blank id must not blank the cursor the client already holds.
+              controller.enqueue(
+                encoder.encode('id: \ndata: {"event":"changed","payload":"blank-id"}\n\n'),
+              );
+              // A comment-only frame is a keepalive, not an event.
+              controller.enqueue(encoder.encode(": keepalive\n\n"));
+              controller.close();
+            },
+          }),
+          { status: 200 },
+        );
       }
       return new Response(new ReadableStream({ start() {} }), { status: 200 });
     }) as unknown as typeof fetch;
@@ -2496,10 +2657,7 @@ describe("web gateway browser API", () => {
     const changed = mock((_payload: unknown) => undefined);
     const unsubscribe = api.listen("changed", changed);
 
-    await waitForCondition(
-      () => requestUrls.length === 2,
-      "The direct stream did not reconnect",
-    );
+    await waitForCondition(() => requestUrls.length === 2, "The direct stream did not reconnect");
 
     expect(changed.mock.calls.map(([payload]) => payload)).toEqual(["multi", "blank-id"]);
     expect(new URL(requestUrls[1]!).searchParams.get("since")).toBe("12345678:4");
@@ -2514,18 +2672,21 @@ describe("web gateway browser API", () => {
       requestUrls.push(String(input));
       attempt += 1;
       if (attempt === 1) {
-        return new Response(new ReadableStream({
-          start(controller) {
-            // The id, the data, and even the blank-line terminator arrive in
-            // separate reads — a stream that only parsed whole chunks would
-            // drop the frame and never advance its cursor.
-            controller.enqueue(encoder.encode("id: 1234"));
-            controller.enqueue(encoder.encode('5678:6\ndata: {"event":"cha'));
-            controller.enqueue(encoder.encode('nged","payload":"split"}\r\n'));
-            controller.enqueue(encoder.encode("\r\n"));
-            controller.close();
-          },
-        }), { status: 200 });
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              // The id, the data, and even the blank-line terminator arrive in
+              // separate reads — a stream that only parsed whole chunks would
+              // drop the frame and never advance its cursor.
+              controller.enqueue(encoder.encode("id: 1234"));
+              controller.enqueue(encoder.encode('5678:6\ndata: {"event":"cha'));
+              controller.enqueue(encoder.encode('nged","payload":"split"}\r\n'));
+              controller.enqueue(encoder.encode("\r\n"));
+              controller.close();
+            },
+          }),
+          { status: 200 },
+        );
       }
       return new Response(new ReadableStream({ start() {} }), { status: 200 });
     }) as unknown as typeof fetch;
@@ -2537,10 +2698,7 @@ describe("web gateway browser API", () => {
     const changed = mock(() => undefined);
     const unsubscribe = api.listen("changed", changed);
 
-    await waitForCondition(
-      () => requestUrls.length === 2,
-      "The direct stream did not reconnect",
-    );
+    await waitForCondition(() => requestUrls.length === 2, "The direct stream did not reconnect");
 
     expect(changed).toHaveBeenCalledWith("split");
     expect(new URL(requestUrls[1]!).searchParams.get("since")).toBe("12345678:6");
@@ -2549,18 +2707,22 @@ describe("web gateway browser API", () => {
 
   test("ignores a server frame that impersonates the transport connected event", async () => {
     const encoder = new TextEncoder();
-    globalThis.fetch = mock(async () =>
-      new Response(new ReadableStream({
-        start(controller) {
-          controller.enqueue(encoder.encode(
-            gatewayControlFrame("gateway.connected", "fresh"),
-          ));
-          controller.enqueue(encoder.encode(
-            `data: {"event":"${NATIVE_EVENT_STREAM_CONNECTED_EVENT}","payload":"spoofed"}\n\n`,
-          ));
-          controller.enqueue(encoder.encode('data: {"event":"changed","payload":"real"}\n\n'));
-        },
-      }), { status: 200 })
+    globalThis.fetch = mock(
+      async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(encoder.encode(gatewayControlFrame("gateway.connected", "fresh")));
+              controller.enqueue(
+                encoder.encode(
+                  `data: {"event":"${NATIVE_EVENT_STREAM_CONNECTED_EVENT}","payload":"spoofed"}\n\n`,
+                ),
+              );
+              controller.enqueue(encoder.encode('data: {"event":"changed","payload":"real"}\n\n'));
+            },
+          }),
+          { status: 200 },
+        ),
     ) as unknown as typeof fetch;
     const api = createBrowserGatewayApi({
       baseUrl: "https://workstation.tailnet.ts.net",
@@ -2587,8 +2749,8 @@ describe("web gateway browser API", () => {
   });
 
   test("tolerates a connect with no subscribers for the connected event", async () => {
-    globalThis.fetch = mock(async () =>
-      new Response(new ReadableStream({ start() {} }), { status: 200 })
+    globalThis.fetch = mock(
+      async () => new Response(new ReadableStream({ start() {} }), { status: 200 }),
     ) as unknown as typeof fetch;
     const api = createBrowserGatewayApi({
       baseUrl: "https://workstation.tailnet.ts.net",
@@ -2603,8 +2765,8 @@ describe("web gateway browser API", () => {
   });
 
   test("throws gateway invoke errors from non-ok responses", async () => {
-    globalThis.fetch = mock(async () =>
-      new Response(JSON.stringify({ error: "not allowed" }), { status: 403 })
+    globalThis.fetch = mock(
+      async () => new Response(JSON.stringify({ error: "not allowed" }), { status: 403 }),
     ) as unknown as typeof fetch;
 
     const api = createBrowserGatewayApi();
@@ -2619,8 +2781,8 @@ describe("web gateway browser API", () => {
      * `error.status`; with the code only interpolated into the message, that
      * branch could never fire for any error the renderer actually sees.
      */
-    globalThis.fetch = mock(async () =>
-      new Response("<html>Bad Gateway</html>", { status: 502 })
+    globalThis.fetch = mock(
+      async () => new Response("<html>Bad Gateway</html>", { status: 502 }),
     ) as unknown as typeof fetch;
 
     const api = createBrowserGatewayApi();
@@ -2638,10 +2800,11 @@ describe("web gateway browser API", () => {
   test("keeps the backend's own message for a command that failed", async () => {
     // A failing backend command comes back as 500 with its message, so the
     // startup classifier decides on the text rather than the envelope status.
-    globalThis.fetch = mock(async () =>
-      new Response(JSON.stringify({ error: "Container is not running" }), {
-        status: 500,
-      })
+    globalThis.fetch = mock(
+      async () =>
+        new Response(JSON.stringify({ error: "Container is not running" }), {
+          status: 500,
+        }),
     ) as unknown as typeof fetch;
 
     const api = createBrowserGatewayApi();
@@ -2659,11 +2822,15 @@ describe("web gateway browser API", () => {
     globalThis.fetch = mock(async (input, init) => {
       requests.push({ input: String(input), init });
       const token = init?.method === "PUT" ? "replacement-token-123456" : "gateway-token-123456";
-      return new Response(JSON.stringify({ token, editable: true, source: "file" }), { status: 200 });
+      return new Response(JSON.stringify({ token, editable: true, source: "file" }), {
+        status: 200,
+      });
     }) as unknown as typeof fetch;
     const api = createBrowserGatewayApi();
 
-    await expect(api.webClient.getTokenSettings()).resolves.toMatchObject({ token: "gateway-token-123456" });
+    await expect(api.webClient.getTokenSettings()).resolves.toMatchObject({
+      token: "gateway-token-123456",
+    });
     await expect(api.webClient.setToken("replacement-token-123456")).resolves.toMatchObject({
       token: "replacement-token-123456",
     });
@@ -2690,11 +2857,14 @@ describe("web gateway browser API", () => {
     globalThis.fetch = mock(async (input, init) => {
       authorization.push(new Headers(init?.headers).get("authorization"));
       if (String(input).endsWith("/gateway-settings")) {
-        return new Response(JSON.stringify({
-          token: "replacement-token-123456",
-          editable: true,
-          source: "file",
-        }), { status: 200 });
+        return new Response(
+          JSON.stringify({
+            token: "replacement-token-123456",
+            editable: true,
+            source: "file",
+          }),
+          { status: 200 },
+        );
       }
       return new Response(JSON.stringify({ result: "ok" }), { status: 200 });
     }) as unknown as typeof fetch;
@@ -2725,13 +2895,19 @@ describe("web gateway browser API", () => {
       resetAvailable: false,
     });
     await expect(api.webClient.setEnabled()).rejects.toThrow("only available in the desktop app");
-    await expect(api.webClient.resetServe()).rejects.toThrow("only available for the local desktop app");
+    await expect(api.webClient.resetServe()).rejects.toThrow(
+      "only available for the local desktop app",
+    );
   });
 
   test("surfaces JSON and non-JSON errors from gateway token requests", async () => {
     globalThis.fetch = mock()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ error: "token unavailable" }), { status: 503 }))
-      .mockResolvedValueOnce(new Response("upstream failed", { status: 502 })) as unknown as typeof fetch;
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: "token unavailable" }), { status: 503 }),
+      )
+      .mockResolvedValueOnce(
+        new Response("upstream failed", { status: 502 }),
+      ) as unknown as typeof fetch;
     const api = createBrowserGatewayApi();
 
     await expect(api.webClient.getTokenSettings()).rejects.toThrow("token unavailable");
@@ -2750,24 +2926,21 @@ describe("web gateway browser API", () => {
     expect(MockEventSource.instances).toHaveLength(1);
     const source = MockEventSource.instances[0];
     if (!source) throw new Error("EventSource was not created");
-    expect(source.url).toBe(
-      "/__orkestrator/events?excludeEvents=terminal-output-",
-    );
+    expect(source.url).toBe("/__orkestrator/events?excludeEvents=terminal-output-");
     expect(source.options).toEqual({ withCredentials: true });
 
     const connectedCallback = mock(() => undefined);
-    const unsubscribeConnected = api.listen(
-      NATIVE_EVENT_STREAM_CONNECTED_EVENT,
-      connectedCallback,
-    );
+    const unsubscribeConnected = api.listen(NATIVE_EVENT_STREAM_CONNECTED_EVENT, connectedCallback);
     source.onopen?.({} as Event);
-    source.onmessage?.(new MessageEvent("message", {
-      data: JSON.stringify({
-        event: "gateway.connected",
-        payload: { status: "fresh" },
+    source.onmessage?.(
+      new MessageEvent("message", {
+        data: JSON.stringify({
+          event: "gateway.connected",
+          payload: { status: "fresh" },
+        }),
+        lastEventId: "12345678:0",
       }),
-      lastEventId: "12345678:0",
-    }));
+    );
     expect(connectedCallback).toHaveBeenCalledTimes(1);
 
     source.onmessage?.({
@@ -2809,26 +2982,30 @@ describe("web gateway browser API", () => {
       const firstSource = MockEventSource.instances[0];
       if (!firstSource) throw new Error("EventSource was not created");
 
-      firstSource.onmessage?.(new MessageEvent("message", {
-        data: JSON.stringify({
-          event: "gateway.cursor",
-          payload: { generation: "12345678", revision: 5 },
+      firstSource.onmessage?.(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            event: "gateway.cursor",
+            payload: { generation: "12345678", revision: 5 },
+          }),
+          lastEventId: "12345678:5",
         }),
-        lastEventId: "12345678:5",
-      }));
+      );
 
       // CONNECTING means the browser owns the retry. The client must keep the
       // same EventSource and continue accepting its later authoritative IDs.
       firstSource.fail(EVENT_SOURCE_CONNECTING);
       expect(MockEventSource.instances).toHaveLength(1);
       expect(firstSource.closed).toBe(false);
-      firstSource.onmessage?.(new MessageEvent("message", {
-        data: JSON.stringify({
-          event: "gateway.cursor",
-          payload: { generation: "12345678", revision: 8 },
+      firstSource.onmessage?.(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            event: "gateway.cursor",
+            payload: { generation: "12345678", revision: 8 },
+          }),
+          lastEventId: "12345678:8",
         }),
-        lastEventId: "12345678:8",
-      }));
+      );
 
       expect(cursorCallback).not.toHaveBeenCalled();
       unsubscribe();
@@ -2856,10 +3033,12 @@ describe("web gateway browser API", () => {
       const first = MockEventSource.instances[0];
       if (!first) throw new Error("EventSource was not created");
 
-      first.onmessage?.(new MessageEvent("message", {
-        data: JSON.stringify({ event: "menu-zoom", payload: "in" }),
-        lastEventId: "12345678:4",
-      }));
+      first.onmessage?.(
+        new MessageEvent("message", {
+          data: JSON.stringify({ event: "menu-zoom", payload: "in" }),
+          lastEventId: "12345678:4",
+        }),
+      );
 
       // CLOSED means the browser has given up. Nothing else rebuilds the main
       // stream, so leaving it here strands every authoritative event until the
@@ -2876,10 +3055,12 @@ describe("web gateway browser API", () => {
       // The abandoned socket must not keep dispatching into the live listeners.
       const stale = mock(() => undefined);
       const stopStale = api.listen("menu-zoom", stale);
-      first.onmessage?.(new MessageEvent("message", {
-        data: JSON.stringify({ event: "menu-zoom", payload: "stale" }),
-        lastEventId: "12345678:9",
-      }));
+      first.onmessage?.(
+        new MessageEvent("message", {
+          data: JSON.stringify({ event: "menu-zoom", payload: "stale" }),
+          lastEventId: "12345678:9",
+        }),
+      );
       expect(stale).not.toHaveBeenCalled();
       stopStale();
       unsubscribe();
@@ -2925,30 +3106,30 @@ describe("web gateway browser API", () => {
     // A control frame has authority only on the authoritative stream. Acting on
     // one here would fire an app-wide resync, or latch the connection flag and
     // permanently suppress the main stream's own one-shot fresh announcement.
-    for (const event of [
-      "gateway.reconcile-required",
-      "gateway.connected",
-    ] as const) {
-      terminal.onmessage?.(new MessageEvent("message", {
-        data: JSON.stringify({
-          event,
-          payload: event === "gateway.connected"
-            ? { status: "fresh" }
-            : { reason: "cursor-expired" },
+    for (const event of ["gateway.reconcile-required", "gateway.connected"] as const) {
+      terminal.onmessage?.(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            event,
+            payload:
+              event === "gateway.connected" ? { status: "fresh" } : { reason: "cursor-expired" },
+          }),
+          lastEventId: "87654321:99",
         }),
-        lastEventId: "87654321:99",
-      }));
+      );
     }
     expect(connected).not.toHaveBeenCalled();
 
     // The main stream's genuine handshake still announces exactly once.
-    main.onmessage?.(new MessageEvent("message", {
-      data: JSON.stringify({
-        event: "gateway.connected",
-        payload: { status: "fresh" },
+    main.onmessage?.(
+      new MessageEvent("message", {
+        data: JSON.stringify({
+          event: "gateway.connected",
+          payload: { status: "fresh" },
+        }),
+        lastEventId: "12345678:3",
       }),
-      lastEventId: "12345678:3",
-    }));
+    );
     expect(connected).toHaveBeenCalledTimes(1);
 
     // ...and the terminal frame's id never became the authoritative cursor.
@@ -2981,10 +3162,12 @@ describe("web gateway browser API", () => {
       ["gateway.cursor", { generation: "12345678", revision: 2 }],
       ["gateway.reconcile-required", { reason: "invalid-cursor" }],
     ] as const) {
-      source.onmessage?.(new MessageEvent("message", {
-        data: JSON.stringify({ event, payload }),
-        lastEventId: "12345678:2",
-      }));
+      source.onmessage?.(
+        new MessageEvent("message", {
+          data: JSON.stringify({ event, payload }),
+          lastEventId: "12345678:2",
+        }),
+      );
     }
 
     expect(connectedListener).not.toHaveBeenCalled();
@@ -2999,10 +3182,12 @@ describe("web gateway browser API", () => {
     const stopMain = api.listen("menu-zoom", () => undefined);
     const main = MockEventSource.instances[0];
     if (!main) throw new Error("EventSource was not created");
-    main.onmessage?.(new MessageEvent("message", {
-      data: JSON.stringify({ event: "menu-zoom", payload: "in" }),
-      lastEventId: "12345678:7",
-    }));
+    main.onmessage?.(
+      new MessageEvent("message", {
+        data: JSON.stringify({ event: "menu-zoom", payload: "in" }),
+        lastEventId: "12345678:7",
+      }),
+    );
 
     const stopTerminal = api.listen("terminal-output-one", () => undefined);
     await waitForCondition(
@@ -3029,10 +3214,7 @@ describe("web gateway browser API", () => {
     const firstSource = MockEventSource.instances[0];
     if (!firstSource) throw new Error("EventSource was not created");
 
-    const unsubscribeTerminal = api.listen(
-      "terminal-output-session:one",
-      () => undefined,
-    );
+    const unsubscribeTerminal = api.listen("terminal-output-session:one", () => undefined);
     await Promise.resolve();
 
     expect(firstSource.closed).toBe(false);
@@ -3041,8 +3223,9 @@ describe("web gateway browser API", () => {
       "/__orkestrator/events?excludeEvents=terminal-output-&includeEvents=terminal-output-session%3Aone",
     );
     let ready = false;
-    const readyPromise = api.eventStreamReady("terminal-output-session:one")
-      .then(() => { ready = true; });
+    const readyPromise = api.eventStreamReady("terminal-output-session:one").then(() => {
+      ready = true;
+    });
     await Promise.resolve();
     expect(ready).toBe(false);
     MockEventSource.instances[1]?.onopen?.();
@@ -3105,9 +3288,11 @@ describe("web gateway browser API", () => {
     expect(firstOutput).toHaveBeenCalledWith({ desynced: true });
     expect(secondOutput).not.toHaveBeenCalled();
 
-    secondSource.onmessage?.(new MessageEvent("message", {
-      data: JSON.stringify({ event: "terminal-output-one", payload: "YQ==" }),
-    }));
+    secondSource.onmessage?.(
+      new MessageEvent("message", {
+        data: JSON.stringify({ event: "terminal-output-one", payload: "YQ==" }),
+      }),
+    );
     expect(firstOutput).toHaveBeenLastCalledWith("YQ==");
     expect(secondOutput).not.toHaveBeenCalled();
 
@@ -3130,7 +3315,7 @@ describe("web gateway browser API", () => {
     const api = createBrowserGatewayApi();
 
     const stops = Array.from({ length: 12 }, (_, index) =>
-      api.listen(`terminal-output-session-${index}`, () => undefined)
+      api.listen(`terminal-output-session-${index}`, () => undefined),
     );
     await Promise.resolve();
 
@@ -3138,14 +3323,13 @@ describe("web gateway browser API", () => {
     const source = MockEventSource.instances[0]!;
     const url = new URL(source.url, "https://workstation.tailnet.ts.net");
     expect(url.searchParams.get("includeEvents")?.split(",")).toEqual(
-      Array.from({ length: 12 }, (_, index) => `terminal-output-session-${index}`)
-        .sort(),
+      Array.from({ length: 12 }, (_, index) => `terminal-output-session-${index}`).sort(),
     );
 
     source.onopen?.();
     await Promise.all(
       Array.from({ length: 12 }, (_, index) =>
-        api.eventStreamReady(`terminal-output-session-${index}`)
+        api.eventStreamReady(`terminal-output-session-${index}`),
       ),
     );
 
@@ -3183,9 +3367,11 @@ describe("web gateway browser API", () => {
     // already-open socket, so no further `onopen` is coming for it.
     await api.eventStreamReady("terminal-output-two");
 
-    source.onmessage?.(new MessageEvent("message", {
-      data: JSON.stringify({ event: "terminal-output-one", payload: "YQ==" }),
-    }));
+    source.onmessage?.(
+      new MessageEvent("message", {
+        data: JSON.stringify({ event: "terminal-output-one", payload: "YQ==" }),
+      }),
+    );
     expect(firstOutput).toHaveBeenCalledWith("YQ==");
 
     stopFirst();
@@ -3214,9 +3400,7 @@ describe("web gateway browser API", () => {
       source.fail(EVENT_SOURCE_CONNECTING);
       await new Promise((resolve) => setTimeout(resolve, 10));
       expect(MockEventSource.instances).toHaveLength(1);
-      expect(warning).toHaveBeenCalledWith(
-        "[RemoteGateway] Terminal event stream disconnected",
-      );
+      expect(warning).toHaveBeenCalledWith("[RemoteGateway] Terminal event stream disconnected");
 
       // A CLOSED socket is dead. Nothing else rebuilds it, and every browser
       // terminal now shares this one socket.
@@ -3285,9 +3469,11 @@ describe("web gateway browser API", () => {
 
     // A socket the gateway has already replaced must not be able to dispatch
     // into the live generation, nor resurrect itself as the current source.
-    staleSource.onmessage?.(new MessageEvent("message", {
-      data: JSON.stringify({ event: "terminal-output-one", payload: "YQ==" }),
-    }));
+    staleSource.onmessage?.(
+      new MessageEvent("message", {
+        data: JSON.stringify({ event: "terminal-output-one", payload: "YQ==" }),
+      }),
+    );
     expect(firstOutput).not.toHaveBeenCalled();
 
     staleSource.onopen?.();
@@ -3318,18 +3504,23 @@ describe("web gateway browser API", () => {
     let attempt = 0;
     globalThis.fetch = mock(async () => {
       attempt += 1;
-      return new Response(new ReadableStream({
-        start(controller) {
-          // Only the first connection carries output; every later one stands in
-          // for a socket the gateway dropped under backpressure.
-          if (attempt === 1) {
-            controller.enqueue(encoder.encode(
-              'data: {"event":"terminal-output-session-1","payload":{"bytesBase64":"YQ==","revision":1,"generation":1}}\n\n',
-            ));
-          }
-          controller.close();
-        },
-      }), { status: 200 });
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            // Only the first connection carries output; every later one stands in
+            // for a socket the gateway dropped under backpressure.
+            if (attempt === 1) {
+              controller.enqueue(
+                encoder.encode(
+                  'data: {"event":"terminal-output-session-1","payload":{"bytesBase64":"YQ==","revision":1,"generation":1}}\n\n',
+                ),
+              );
+            }
+            controller.close();
+          },
+        }),
+        { status: 200 },
+      );
     }) as unknown as typeof fetch;
     const api = createBrowserGatewayApi({
       baseUrl: "https://workstation.tailnet.ts.net",
@@ -3341,13 +3532,10 @@ describe("web gateway browser API", () => {
       const payloads: unknown[] = [];
       let stop = () => {};
       await new Promise<void>((resolve) => {
-        stop = api.listen<{ desynced?: boolean }>(
-          "terminal-output-session-1",
-          (payload) => {
-            payloads.push(payload);
-            if (payload?.desynced) resolve();
-          },
-        );
+        stop = api.listen<{ desynced?: boolean }>("terminal-output-session-1", (payload) => {
+          payloads.push(payload);
+          if (payload?.desynced) resolve();
+        });
       });
       stop();
 
@@ -3389,10 +3577,7 @@ describe("web gateway browser API", () => {
     // Resyncing must stay scoped to this terminal; the app-wide connected event
     // would make every other consumer refetch for one dropped byte stream.
     const connected = mock(() => undefined);
-    const stopConnected = api.listen(
-      NATIVE_EVENT_STREAM_CONNECTED_EVENT,
-      connected,
-    );
+    const stopConnected = api.listen(NATIVE_EVENT_STREAM_CONNECTED_EVENT, connected);
     source.onopen?.();
     expect(connected).not.toHaveBeenCalled();
     expect(payloads).toHaveLength(2);
@@ -3408,9 +3593,14 @@ describe("web gateway browser API", () => {
     let attempt = 0;
     globalThis.fetch = mock(async () => {
       attempt += 1;
-      return new Response(new ReadableStream({
-        start(controller) { controller.close(); },
-      }), { status: 200 });
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.close();
+          },
+        }),
+        { status: 200 },
+      );
     }) as unknown as typeof fetch;
 
     try {
@@ -3473,10 +3663,10 @@ describe("web gateway browser API", () => {
 
       expect(attempt).toBe(3);
       expect(warning).toHaveBeenCalledTimes(2);
-      expect((warning.mock.calls[0]?.[1] as Error).message).toBe(
+      expect((warning.mock.calls[0]![1] as Error).message).toBe(
         "Gateway terminal event stream failed with HTTP 503",
       );
-      expect((warning.mock.calls[1]?.[1] as Error).message).toBe(
+      expect((warning.mock.calls[1]![1] as Error).message).toBe(
         "Gateway terminal event stream failed with HTTP 200",
       );
       expect(signals[2]?.aborted).toBe(false);
@@ -3501,9 +3691,9 @@ describe("web gateway browser API", () => {
       const stop = api.listen("terminal-output-session-1", () => undefined);
       await Promise.resolve();
       let ready = false;
-      const readyPromise = api
-        .eventStreamReady("terminal-output-session-1")
-        .then(() => { ready = true; });
+      const readyPromise = api.eventStreamReady("terminal-output-session-1").then(() => {
+        ready = true;
+      });
       const source = MockEventSource.instances[0];
       if (!source) throw new Error("EventSource was not created");
 
@@ -3513,9 +3703,7 @@ describe("web gateway browser API", () => {
       // therefore bound their own wait (see NATIVE_EVENT_STREAM_READY_TIMEOUT_MS)
       // instead of assuming this promise always settles while the tab lives.
       expect(ready).toBe(false);
-      expect(warning).toHaveBeenCalledWith(
-        "[RemoteGateway] Terminal event stream disconnected",
-      );
+      expect(warning).toHaveBeenCalledWith("[RemoteGateway] Terminal event stream disconnected");
 
       // Dropping the listener still releases anyone already waiting.
       stop();
@@ -3588,9 +3776,7 @@ describe("web gateway browser API", () => {
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
       value: {
-        read: mock(async () => [
-          { types: ["text/plain"], getType } as unknown as ClipboardItem,
-        ]),
+        read: mock(async () => [{ types: ["text/plain"], getType } as unknown as ClipboardItem]),
       },
     });
 
@@ -3604,9 +3790,7 @@ describe("web gateway browser API", () => {
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
       value: {
-        read: mock(async () => [
-          { types: ["image/png"], getType } as unknown as ClipboardItem,
-        ]),
+        read: mock(async () => [{ types: ["image/png"], getType } as unknown as ClipboardItem]),
       },
     });
 
@@ -3623,9 +3807,7 @@ describe("web gateway browser API", () => {
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
       value: {
-        read: mock(async () => [
-          { types: ["image/png"], getType } as unknown as ClipboardItem,
-        ]),
+        read: mock(async () => [{ types: ["image/png"], getType } as unknown as ClipboardItem]),
       },
     });
 

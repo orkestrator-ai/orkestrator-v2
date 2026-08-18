@@ -8,7 +8,11 @@ import {
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
-import type { LinearConnectionStatus, LinearIssueDetail, LinearIssueListItem } from "@/types/linear";
+import type {
+  LinearConnectionStatus,
+  LinearIssueDetail,
+  LinearIssueListItem,
+} from "@/types/linear";
 
 const realBackendSnapshot = { ...realBackend };
 
@@ -23,7 +27,9 @@ const getLinearConnectionMock = mock(async (): Promise<LinearConnectionStatus> =
   viewer: { id: "viewer-1", name: "Ada" },
 }));
 const getLinearIssuesMock = mock(async (): Promise<LinearIssueListItem[]> => []);
-const getLinearIssueMock = mock(async (_issueId: string): Promise<LinearIssueDetail> => issueDetail);
+const getLinearIssueMock = mock(
+  async (_issueId: string): Promise<LinearIssueDetail> => issueDetail,
+);
 const postLinearIssueCommentMock = mock(async () => ({
   id: "comment-2",
   body: "New note from Orkestrator",
@@ -31,22 +37,24 @@ const postLinearIssueCommentMock = mock(async () => ({
   authorName: "Ada",
 }));
 const openInBrowserMock = mock(async () => undefined);
-const getComposeDraftMock = mock(async (_draftKey: string) => null as Awaited<
-  ReturnType<typeof realBackend.getComposeDraft>
->);
-const saveComposeDraftMock = mock(async (
-  draftKey: string,
-  ownerType: "environment" | "project",
-  ownerId: string,
-  value: unknown,
-) => ({
-  draftKey,
-  ownerType,
-  ownerId,
-  value,
-  revision: 1,
-  updatedAt: "2026-07-28T00:00:00.000Z",
-}));
+const getComposeDraftMock = mock(
+  async (_draftKey: string) => null as Awaited<ReturnType<typeof realBackend.getComposeDraft>>,
+);
+const saveComposeDraftMock = mock(
+  async (
+    draftKey: string,
+    ownerType: "environment" | "project",
+    ownerId: string,
+    value: unknown,
+  ) => ({
+    draftKey,
+    ownerType,
+    ownerId,
+    value,
+    revision: 1,
+    updatedAt: "2026-07-28T00:00:00.000Z",
+  }),
+);
 const deleteComposeDraftMock = mock(async (_draftKey: string) => undefined);
 const getCachedOpenCodeModelCatalogMock = mock(async () => null);
 const retryCompletionCommentMock = mock(async (pipelineId: string) => {
@@ -108,12 +116,14 @@ const issueDetail: LinearIssueDetail = {
   projectName: "Integrations",
   cycleName: "Cycle 1",
   labels: ["linear", "pipeline"],
-  comments: [{
-    id: "comment-1",
-    body: "Initial Linear comment",
-    createdAt: "2026-06-28T12:01:00.000Z",
-    authorName: "Grace",
-  }],
+  comments: [
+    {
+      id: "comment-1",
+      body: "Initial Linear comment",
+      createdAt: "2026-06-28T12:01:00.000Z",
+      authorName: "Grace",
+    },
+  ],
 };
 
 const issue2Detail: LinearIssueDetail = {
@@ -414,8 +424,9 @@ describe("LinearTicketsView", () => {
     renderLinearTicketsView();
 
     await screen.findByText("Alpha ticket");
-    expect(screen.getByRole("combobox", { name: "Order Linear tickets by" }).textContent)
-      .toContain("Linear board");
+    expect(screen.getByRole("combobox", { name: "Order Linear tickets by" }).textContent).toContain(
+      "Linear board",
+    );
     expect(visibleTitles()).toEqual(["Alpha ticket", "Beta ticket", "Gamma ticket"]);
 
     fireEvent.click(screen.getByRole("combobox", { name: "Order Linear tickets by" }));
@@ -690,14 +701,16 @@ describe("LinearTicketsView", () => {
 
   test("opens the shared build launcher and starts a configured Linear-backed build", async () => {
     useProjectStore.setState({
-      projects: [{
-        id: "project-1",
-        name: "Project One",
-        gitUrl: "https://example.test/project-one.git",
-        localPath: "/work/project-one",
-        addedAt: "2026-08-11T00:00:00.000Z",
-        order: 0,
-      }],
+      projects: [
+        {
+          id: "project-1",
+          name: "Project One",
+          gitUrl: "https://example.test/project-one.git",
+          localPath: "/work/project-one",
+          addedAt: "2026-08-11T00:00:00.000Z",
+          order: 0,
+        },
+      ],
     });
     renderLinearTicketsView();
 
@@ -718,9 +731,11 @@ describe("LinearTicketsView", () => {
     }) as HTMLButtonElement;
     expect(includeComments.getAttribute("data-state")).toBe("checked");
     fireEvent.click(includeComments);
-    fireEvent.click(screen.getByRole("checkbox", {
-      name: /Use one configuration for every step/,
-    }));
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: /Use one configuration for every step/,
+      }),
+    );
     expect(screen.getByRole("radiogroup", { name: "Review agent" })).toBeTruthy();
     fireEvent.click(screen.getByRole("radio", { name: /^Local/ }));
     fireEvent.click(screen.getByRole("button", { name: "Start build" }));
@@ -733,8 +748,14 @@ describe("LinearTicketsView", () => {
         {
           includeComments: false,
           steps: expect.objectContaining({
-            build: expect.objectContaining({ agent: expect.any(String), model: expect.any(String) }),
-            review: expect.objectContaining({ agent: expect.any(String), model: expect.any(String) }),
+            build: expect.objectContaining({
+              agent: expect.any(String),
+              model: expect.any(String),
+            }),
+            review: expect.objectContaining({
+              agent: expect.any(String),
+              model: expect.any(String),
+            }),
           }),
         },
       );
@@ -747,9 +768,9 @@ describe("LinearTicketsView", () => {
     await screen.findByText("Build Linear support");
     fireEvent.click(screen.getByRole("button", { name: /^build/i }));
 
-    const startButton = await screen.findByRole("button", {
+    const startButton = (await screen.findByRole("button", {
       name: "Start build",
-    }) as HTMLButtonElement;
+    })) as HTMLButtonElement;
     const form = startButton.closest("form");
     expect(form).not.toBeNull();
     expect(startButton.disabled).toBe(false);
@@ -792,7 +813,10 @@ describe("LinearTicketsView", () => {
     fireEvent.click(screen.getByRole("button", { name: /^comment$/i }));
 
     await waitFor(() => {
-      expect(postLinearIssueCommentMock).toHaveBeenCalledWith("issue-1", "New note from Orkestrator");
+      expect(postLinearIssueCommentMock).toHaveBeenCalledWith(
+        "issue-1",
+        "New note from Orkestrator",
+      );
       expect(screen.getByText("New note from Orkestrator")).toBeTruthy();
       expect(toastSuccessMock).toHaveBeenCalledWith("Linear comment added");
       expect(deleteComposeDraftMock).toHaveBeenCalledWith(
@@ -806,7 +830,7 @@ describe("LinearTicketsView", () => {
     const pendingComment = deferred<Awaited<ReturnType<typeof postLinearIssueCommentMock>>>();
     postLinearIssueCommentMock.mockImplementationOnce(() => pendingComment.promise);
     getLinearIssueMock.mockImplementation(async (issueId) =>
-      issueId === "issue-2" ? issue2Detail : issueDetail
+      issueId === "issue-2" ? issue2Detail : issueDetail,
     );
     renderLinearTicketsView();
 
@@ -832,12 +856,15 @@ describe("LinearTicketsView", () => {
       authorName: "Ada",
     });
 
-    await waitFor(() => expect(deleteComposeDraftMock).toHaveBeenCalledWith(
-      "linear-comment:project-1:issue-1",
-      expect.any(Number),
-    ));
-    expect((screen.getByLabelText("Add Linear comment") as HTMLTextAreaElement).value)
-      .toBe("Keep this second-ticket draft");
+    await waitFor(() =>
+      expect(deleteComposeDraftMock).toHaveBeenCalledWith(
+        "linear-comment:project-1:issue-1",
+        expect.any(Number),
+      ),
+    );
+    expect((screen.getByLabelText("Add Linear comment") as HTMLTextAreaElement).value).toBe(
+      "Keep this second-ticket draft",
+    );
     expect(screen.queryByText("Comment for the first ticket") === null).toBe(true);
   });
 
@@ -860,10 +887,9 @@ describe("LinearTicketsView", () => {
     fireEvent.change(screen.getByLabelText("Add Linear comment"), {
       target: { value: "New draft for the same ticket" },
     });
-    const submittedDraftDeletesBeforeResolution =
-      deleteComposeDraftMock.mock.calls.filter(
-        ([draftKey]) => draftKey === "linear-comment:project-1:issue-1",
-      ).length;
+    const submittedDraftDeletesBeforeResolution = deleteComposeDraftMock.mock.calls.filter(
+      ([draftKey]) => draftKey === "linear-comment:project-1:issue-1",
+    ).length;
 
     pendingComment.resolve({
       id: "comment-late-same-ticket",
@@ -872,11 +898,10 @@ describe("LinearTicketsView", () => {
       authorName: "Ada",
     });
 
-    await waitFor(() =>
-      expect(toastSuccessMock).toHaveBeenCalledWith("Linear comment added"),
+    await waitFor(() => expect(toastSuccessMock).toHaveBeenCalledWith("Linear comment added"));
+    expect((screen.getByLabelText("Add Linear comment") as HTMLTextAreaElement).value).toBe(
+      "New draft for the same ticket",
     );
-    expect((screen.getByLabelText("Add Linear comment") as HTMLTextAreaElement).value)
-      .toBe("New draft for the same ticket");
     expect(
       deleteComposeDraftMock.mock.calls.filter(
         ([draftKey]) => draftKey === "linear-comment:project-1:issue-1",
@@ -885,7 +910,7 @@ describe("LinearTicketsView", () => {
   });
 
   test("restores a persisted Linear comment draft for the selected ticket", async () => {
-    getComposeDraftMock.mockImplementation(async (draftKey) => (
+    getComposeDraftMock.mockImplementation(async (draftKey) =>
       draftKey === "linear-comment:project-1:issue-1"
         ? {
             draftKey,
@@ -895,15 +920,17 @@ describe("LinearTicketsView", () => {
             revision: 2,
             updatedAt: "2026-07-28T00:00:00.000Z",
           }
-        : null
-    ));
+        : null,
+    );
     renderLinearTicketsView();
 
     fireEvent.click(await screen.findByText("Add Linear integration"));
 
-    await waitFor(() => expect((
-      screen.getByLabelText("Add Linear comment") as HTMLTextAreaElement
-    ).value).toBe("Recovered Linear comment"));
+    await waitFor(() =>
+      expect((screen.getByLabelText("Add Linear comment") as HTMLTextAreaElement).value).toBe(
+        "Recovered Linear comment",
+      ),
+    );
   });
 
   test("surfaces an error and keeps the draft when posting a comment fails", async () => {
@@ -926,13 +953,15 @@ describe("LinearTicketsView", () => {
       "Draft that should survive",
     );
     view.unmount();
-    await waitFor(() => expect(saveComposeDraftMock).toHaveBeenCalledWith(
-      "linear-comment:project-1:issue-1",
-      "project",
-      "project-1",
-      "Draft that should survive",
-      expect.any(Number),
-    ));
+    await waitFor(() =>
+      expect(saveComposeDraftMock).toHaveBeenCalledWith(
+        "linear-comment:project-1:issue-1",
+        "project",
+        "project-1",
+        "Draft that should survive",
+        expect.any(Number),
+      ),
+    );
   });
 
   test("shows an empty state when the ticket has no comments", async () => {
@@ -949,7 +978,7 @@ describe("LinearTicketsView", () => {
     const firstDetail = deferred<LinearIssueDetail>();
     const secondDetail = deferred<LinearIssueDetail>();
     getLinearIssueMock.mockImplementation((issueId: string) =>
-      issueId === "issue-1" ? firstDetail.promise : secondDetail.promise
+      issueId === "issue-1" ? firstDetail.promise : secondDetail.promise,
     );
 
     renderLinearTicketsView();
@@ -1014,52 +1043,58 @@ describe("LinearTicketsView", () => {
     });
 
     expect(screen.getByText("Add Linear integration")).toBeTruthy();
-    expect(screen.queryByText("Connect a Linear workspace before loading tickets.") === null).toBe(true);
+    expect(screen.queryByText("Connect a Linear workspace before loading tickets.") === null).toBe(
+      true,
+    );
   });
 
   test("uses the active Linear pipeline when the same issue has older completed runs", async () => {
     const store = useBuildPipelineStore.getState();
     const oldPipelineId = "linear-old";
-    store.replacePipeline(buildPipelineFixture({
-      id: oldPipelineId,
-      taskId: "issue-1",
-      environmentId: "env-old",
-      phase: "complete",
-      taskTitle: "ENG-123: Add Linear integration",
-      taskSnapshot: {
-        title: "ENG-123: Add Linear integration",
-        description: "Build Linear support",
-        acceptanceCriteria: "",
-        comments: [],
-        images: [],
-      },
-      source: {
-        type: "linear",
-        issueId: "issue-1",
-        issueIdentifier: "ENG-123",
-      },
-    }));
+    store.replacePipeline(
+      buildPipelineFixture({
+        id: oldPipelineId,
+        taskId: "issue-1",
+        environmentId: "env-old",
+        phase: "complete",
+        taskTitle: "ENG-123: Add Linear integration",
+        taskSnapshot: {
+          title: "ENG-123: Add Linear integration",
+          description: "Build Linear support",
+          acceptanceCriteria: "",
+          comments: [],
+          images: [],
+        },
+        source: {
+          type: "linear",
+          issueId: "issue-1",
+          issueIdentifier: "ENG-123",
+        },
+      }),
+    );
 
     const activePipelineId = "linear-active";
-    store.replacePipeline(buildPipelineFixture({
-      id: activePipelineId,
-      taskId: "issue-1",
-      environmentId: "env-active",
-      phase: "building",
-      taskTitle: "ENG-123: Add Linear integration",
-      taskSnapshot: {
-        title: "ENG-123: Add Linear integration",
-        description: "Build Linear support",
-        acceptanceCriteria: "",
-        comments: [],
-        images: [],
-      },
-      source: {
-        type: "linear",
-        issueId: "issue-1",
-        issueIdentifier: "ENG-123",
-      },
-    }));
+    store.replacePipeline(
+      buildPipelineFixture({
+        id: activePipelineId,
+        taskId: "issue-1",
+        environmentId: "env-active",
+        phase: "building",
+        taskTitle: "ENG-123: Add Linear integration",
+        taskSnapshot: {
+          title: "ENG-123: Add Linear integration",
+          description: "Build Linear support",
+          acceptanceCriteria: "",
+          comments: [],
+          images: [],
+        },
+        source: {
+          type: "linear",
+          issueId: "issue-1",
+          issueIdentifier: "ENG-123",
+        },
+      }),
+    );
 
     renderLinearTicketsView();
 
@@ -1070,7 +1105,11 @@ describe("LinearTicketsView", () => {
 
     await waitFor(() => {
       expect(navigateToPipelineMock).toHaveBeenCalledWith(
-        expect.objectContaining({ id: activePipelineId, phase: "building", environmentId: "env-active" }),
+        expect.objectContaining({
+          id: activePipelineId,
+          phase: "building",
+          environmentId: "env-active",
+        }),
       );
     });
   });
@@ -1094,26 +1133,28 @@ describe("LinearTicketsView", () => {
 
   test("clears failed completion comment state when retrying from ticket details", async () => {
     const pipelineId = "linear-completion-failed";
-    useBuildPipelineStore.getState().replacePipeline(buildPipelineFixture({
-      id: pipelineId,
-      taskId: "issue-1",
-      phase: "complete",
-      taskTitle: "ENG-123: Add Linear integration",
-      taskSnapshot: {
-        title: "ENG-123: Add Linear integration",
-        description: "Build Linear support",
-        acceptanceCriteria: "",
-        comments: [],
-        images: [],
-      },
-      source: {
-        type: "linear",
-        issueId: "issue-1",
-        issueIdentifier: "ENG-123",
-      },
-      completionCommentStatus: "failed",
-      completionCommentError: "Linear unavailable",
-    }));
+    useBuildPipelineStore.getState().replacePipeline(
+      buildPipelineFixture({
+        id: pipelineId,
+        taskId: "issue-1",
+        phase: "complete",
+        taskTitle: "ENG-123: Add Linear integration",
+        taskSnapshot: {
+          title: "ENG-123: Add Linear integration",
+          description: "Build Linear support",
+          acceptanceCriteria: "",
+          comments: [],
+          images: [],
+        },
+        source: {
+          type: "linear",
+          issueId: "issue-1",
+          issueIdentifier: "ENG-123",
+        },
+        completionCommentStatus: "failed",
+        completionCommentError: "Linear unavailable",
+      }),
+    );
 
     renderLinearTicketsView();
 
@@ -1124,36 +1165,35 @@ describe("LinearTicketsView", () => {
 
     await waitFor(() => {
       expect(
-        useBuildPipelineStore.getState().pipelines.get(pipelineId)
-          ?.completionCommentStatus,
+        useBuildPipelineStore.getState().pipelines.get(pipelineId)?.completionCommentStatus,
       ).toBeUndefined();
     });
   });
 
   test("keeps Linear completion retries single-flight and recovers after rejection", async () => {
     const pipelineId = "linear-completion-retry";
-    useBuildPipelineStore.getState().replacePipeline(buildPipelineFixture({
-      id: pipelineId,
-      taskId: "issue-1",
-      phase: "complete",
-      taskTitle: "ENG-123: Add Linear integration",
-      source: {
-        type: "linear",
-        issueId: "issue-1",
-        issueIdentifier: "ENG-123",
-      },
-      completionCommentStatus: "failed",
-      completionCommentError: "Linear unavailable",
-    }));
-    const pending = deferred<Awaited<
-      ReturnType<typeof retryCompletionCommentMock>
-    >>();
+    useBuildPipelineStore.getState().replacePipeline(
+      buildPipelineFixture({
+        id: pipelineId,
+        taskId: "issue-1",
+        phase: "complete",
+        taskTitle: "ENG-123: Add Linear integration",
+        source: {
+          type: "linear",
+          issueId: "issue-1",
+          issueIdentifier: "ENG-123",
+        },
+        completionCommentStatus: "failed",
+        completionCommentError: "Linear unavailable",
+      }),
+    );
+    const pending = deferred<Awaited<ReturnType<typeof retryCompletionCommentMock>>>();
     retryCompletionCommentMock.mockImplementationOnce(() => pending.promise);
     renderLinearTicketsView();
     fireEvent.click(await screen.findByText("Add Linear integration"));
-    const button = await screen.findByRole("button", {
+    const button = (await screen.findByRole("button", {
       name: /retry comment/i,
-    }) as HTMLButtonElement;
+    })) as HTMLButtonElement;
 
     fireEvent.click(button);
     fireEvent.click(button);
@@ -1162,13 +1202,11 @@ describe("LinearTicketsView", () => {
 
     pending.reject(new Error("still offline"));
     await waitFor(() => expect(button.disabled).toBe(false));
-    expect(toastErrorMock).toHaveBeenCalledWith(
-      "Failed to retry Linear completion comment",
-      { description: "still offline" },
-    );
+    expect(toastErrorMock).toHaveBeenCalledWith("Failed to retry Linear completion comment", {
+      description: "still offline",
+    });
 
     fireEvent.click(button);
-    await waitFor(() =>
-      expect(retryCompletionCommentMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(retryCompletionCommentMock).toHaveBeenCalledTimes(2));
   });
 });

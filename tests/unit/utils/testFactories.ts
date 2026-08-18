@@ -1,5 +1,11 @@
 // Test factory functions for creating mock data
-import type { Project, Environment, EnvironmentStatus, AppConfig, RepositoryConfig } from "../../../apps/web/src/types";
+import type {
+  Project,
+  Environment,
+  EnvironmentStatus,
+  AppConfig,
+  RepositoryConfig,
+} from "../../../apps/web/src/types";
 
 /**
  * Creates a mock Project with sensible defaults that can be overridden
@@ -35,7 +41,9 @@ export function createMockEnvironment(overrides: Partial<Environment> = {}): Env
 /**
  * Creates a mock RepositoryConfig with sensible defaults
  */
-export function createMockRepositoryConfig(overrides: Partial<RepositoryConfig> = {}): RepositoryConfig {
+export function createMockRepositoryConfig(
+  overrides: Partial<RepositoryConfig> = {},
+): RepositoryConfig {
   return {
     defaultBranch: "main",
     prBaseBranch: "main",
@@ -72,7 +80,7 @@ export function createMockProjects(count: number, baseOverrides: Partial<Project
       name: `repo-${i + 1}`,
       gitUrl: `git@github.com:test/repo${i + 1}.git`,
       ...baseOverrides,
-    })
+    }),
   );
 }
 
@@ -82,7 +90,7 @@ export function createMockProjects(count: number, baseOverrides: Partial<Project
 export function createMockEnvironments(
   count: number,
   projectId: string,
-  baseOverrides: Partial<Environment> = {}
+  baseOverrides: Partial<Environment> = {},
 ): Environment[] {
   return Array.from({ length: count }, (_, i) =>
     createMockEnvironment({
@@ -90,6 +98,6 @@ export function createMockEnvironments(
       projectId,
       name: `env-${i + 1}`,
       ...baseOverrides,
-    })
+    }),
   );
 }

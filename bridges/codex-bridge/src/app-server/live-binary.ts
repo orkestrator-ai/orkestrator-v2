@@ -55,10 +55,7 @@ export interface SelectBinaryOptions {
 }
 
 /** Where the desktop app installs its managed copy of a pinned Codex version. */
-export function managedBinaryPath(
-  version: string,
-  options: SelectBinaryOptions = {},
-): string {
+export function managedBinaryPath(version: string, options: SelectBinaryOptions = {}): string {
   const env = options.env ?? process.env;
   const currentPlatform = options.platform ?? platform();
   const currentArchitecture = options.architecture ?? process.arch;
@@ -95,10 +92,7 @@ export function managedBinaryPath(
  * upgrade, silently falling through to auto-discovery would test the *old*
  * managed binary against the new pin and report which of the two is wrong.
  */
-export function selectCodexBinary(
-  version: string,
-  options: SelectBinaryOptions = {},
-): string {
+export function selectCodexBinary(version: string, options: SelectBinaryOptions = {}): string {
   const env = options.env ?? process.env;
   const exists = options.existsImpl ?? existsSync;
 
@@ -144,10 +138,7 @@ export interface VersionProbeResult {
   exitCode: number | null;
 }
 
-export type VersionProbe = (
-  binary: string,
-  timeoutMs: number,
-) => Promise<VersionProbeResult>;
+export type VersionProbe = (binary: string, timeoutMs: number) => Promise<VersionProbeResult>;
 
 /**
  * Runs `<binary> --version`, killing it if it hangs.
@@ -190,9 +181,9 @@ export interface ResolveBinaryOptions extends SelectBinaryOptions {
 
 function describeUnusableBinary(binary: string, version: string, detail: string): string {
   return (
-    `Could not execute ${binary}: ${detail}. `
-    + `${VERSION_CONFIG_RELATIVE_PATH} pins codex ${version}; set CODEX_PROTOCOL_BINARY `
-    + "or CODEX_PATH to that binary, or install the pinned toolchain."
+    `Could not execute ${binary}: ${detail}. ` +
+    `${VERSION_CONFIG_RELATIVE_PATH} pins codex ${version}; set CODEX_PROTOCOL_BINARY ` +
+    "or CODEX_PATH to that binary, or install the pinned toolchain."
   );
 }
 
@@ -234,8 +225,8 @@ export async function resolveCodexBinaryUncached(
   const reportedVersion = parseReportedVersion(result.stdout);
   if (reportedVersion !== version) {
     throw new Error(
-      `${binary} reports ${reportedVersion || "an unknown version"}, but `
-      + `${VERSION_CONFIG_RELATIVE_PATH} pins ${version}`,
+      `${binary} reports ${reportedVersion || "an unknown version"}, but ` +
+        `${VERSION_CONFIG_RELATIVE_PATH} pins ${version}`,
     );
   }
   return binary;

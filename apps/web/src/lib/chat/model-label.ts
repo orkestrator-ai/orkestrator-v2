@@ -16,9 +16,7 @@ export function resolveCatalogModelLabel(
   if (exactMatch) return exactMatch.name?.trim() || modelId;
 
   const aliasMatches = models.filter(
-    (model) =>
-      model.resolvedModel === modelId
-      || model.aliases?.includes(modelId) === true,
+    (model) => model.resolvedModel === modelId || model.aliases?.includes(modelId) === true,
   );
 
   // A resolved provider id can back multiple selectors (for example Claude's

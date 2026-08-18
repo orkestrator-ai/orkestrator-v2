@@ -85,12 +85,17 @@ export function handlePromptStart(message: JsonObject): boolean {
     };
     const startsRpcResourceExhaustedScenario = prompt.startsWith("RESOURCEEXHAUSTEDRPC:");
     if (startsRpcResourceExhaustedScenario) state.rpcResourceExhaustedScenario = true;
-    if (state.rpcResourceExhaustedScenario
-      && (startsRpcResourceExhaustedScenario || resumesResourceExhaustedScenario)) {
-      const configuredAttempts = Number(process.env.FAKE_ACP_RPC_RESOURCE_EXHAUSTED_ATTEMPTS ?? "1");
-      const failedAttempts = Number.isSafeInteger(configuredAttempts) && configuredAttempts >= 0
-        ? configuredAttempts
-        : 1;
+    if (
+      state.rpcResourceExhaustedScenario &&
+      (startsRpcResourceExhaustedScenario || resumesResourceExhaustedScenario)
+    ) {
+      const configuredAttempts = Number(
+        process.env.FAKE_ACP_RPC_RESOURCE_EXHAUSTED_ATTEMPTS ?? "1",
+      );
+      const failedAttempts =
+        Number.isSafeInteger(configuredAttempts) && configuredAttempts >= 0
+          ? configuredAttempts
+          : 1;
       if (state.rpcResourceExhaustedAttempts < failedAttempts) {
         state.rpcResourceExhaustedAttempts += 1;
         writeResourceExhaustedPartial();
@@ -111,8 +116,9 @@ export function handlePromptStart(message: JsonObject): boolean {
             sessionUpdate: "agent_message_chunk",
             content: {
               type: "text",
-              text: process.env.FAKE_ACP_RESOURCE_EXHAUSTED_FINAL
-                ?? "Recovered from the structured RPC error.",
+              text:
+                process.env.FAKE_ACP_RESOURCE_EXHAUSTED_FINAL ??
+                "Recovered from the structured RPC error.",
             },
           },
         },
@@ -122,14 +128,17 @@ export function handlePromptStart(message: JsonObject): boolean {
     }
     const startsResourceExhaustedScenario = prompt.startsWith("RESOURCEEXHAUSTED:");
     if (startsResourceExhaustedScenario) state.flattenedResourceExhaustedScenario = true;
-    if (state.flattenedResourceExhaustedScenario
-      && (startsResourceExhaustedScenario || resumesResourceExhaustedScenario)) {
+    if (
+      state.flattenedResourceExhaustedScenario &&
+      (startsResourceExhaustedScenario || resumesResourceExhaustedScenario)
+    ) {
       const configuredAttempts = Number(
         process.env.FAKE_ACP_FLATTENED_RESOURCE_EXHAUSTED_ATTEMPTS ?? "1",
       );
-      const failedAttempts = Number.isSafeInteger(configuredAttempts) && configuredAttempts >= 0
-        ? configuredAttempts
-        : 1;
+      const failedAttempts =
+        Number.isSafeInteger(configuredAttempts) && configuredAttempts >= 0
+          ? configuredAttempts
+          : 1;
       if (state.flattenedResourceExhaustedAttempts < failedAttempts) {
         if (state.flattenedResourceExhaustedAttempts === 0) {
           write({
@@ -198,8 +207,9 @@ export function handlePromptStart(message: JsonObject): boolean {
             sessionUpdate: "agent_message_chunk",
             content: {
               type: "text",
-              text: process.env.FAKE_ACP_RESOURCE_EXHAUSTED_FINAL
-                ?? "Recovered and finished the original request.",
+              text:
+                process.env.FAKE_ACP_RESOURCE_EXHAUSTED_FINAL ??
+                "Recovered and finished the original request.",
             },
           },
         },
@@ -241,14 +251,24 @@ export function handlePromptStart(message: JsonObject): boolean {
         method: "session/update",
         params: {
           sessionId: "fake-session",
-          update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: prompt.slice("DIRECT:".length).split(`\n\n${STRUCTURED_PROMPT_INSTRUCTION_PREFIX}`)[0] } },
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: {
+              type: "text",
+              text: prompt
+                .slice("DIRECT:".length)
+                .split(`\n\n${STRUCTURED_PROMPT_INSTRUCTION_PREFIX}`)[0],
+            },
+          },
         },
       });
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
       return true;
     }
     if (prompt.startsWith("JSON_THEN_THOUGHT:")) {
-      const text = prompt.slice("JSON_THEN_THOUGHT:".length).split(`\n\n${STRUCTURED_PROMPT_INSTRUCTION_PREFIX}`)[0];
+      const text = prompt
+        .slice("JSON_THEN_THOUGHT:".length)
+        .split(`\n\n${STRUCTURED_PROMPT_INSTRUCTION_PREFIX}`)[0];
       write({
         jsonrpc: "2.0",
         method: "session/update",
@@ -272,7 +292,9 @@ export function handlePromptStart(message: JsonObject): boolean {
       return true;
     }
     if (prompt.startsWith("THOUGHT_THEN_JSON:")) {
-      const text = prompt.slice("THOUGHT_THEN_JSON:".length).split(`\n\n${STRUCTURED_PROMPT_INSTRUCTION_PREFIX}`)[0];
+      const text = prompt
+        .slice("THOUGHT_THEN_JSON:".length)
+        .split(`\n\n${STRUCTURED_PROMPT_INSTRUCTION_PREFIX}`)[0];
       write({
         jsonrpc: "2.0",
         method: "session/update",
@@ -280,7 +302,10 @@ export function handlePromptStart(message: JsonObject): boolean {
           sessionId: "fake-session",
           update: {
             sessionUpdate: "agent_thought_chunk",
-            content: { type: "text", text: "The schema requires JSON. Example {\"fromThought\":true}." },
+            content: {
+              type: "text",
+              text: 'The schema requires JSON. Example {"fromThought":true}.',
+            },
           },
         },
       });
@@ -301,7 +326,10 @@ export function handlePromptStart(message: JsonObject): boolean {
         method: "session/update",
         params: {
           sessionId: "fake-session",
-          update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "x".repeat(2 * 1024 * 1024 + 128) } },
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "x".repeat(2 * 1024 * 1024 + 128) },
+          },
         },
       });
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
@@ -315,9 +343,8 @@ export function handlePromptStart(message: JsonObject): boolean {
       const maximumBytes = 2 * 1024 * 1024;
       const markerBytes = Buffer.byteLength("\n[output truncated by Orkestrator]");
       const contentLimit = maximumBytes - markerBytes;
-      const first = "x".repeat(contentLimit - 1)
-        + "🙂"
-        + "y".repeat(markerBytes - Buffer.byteLength("🙂"));
+      const first =
+        "x".repeat(contentLimit - 1) + "🙂" + "y".repeat(markerBytes - Buffer.byteLength("🙂"));
       for (const text of [first, "yz"]) {
         write({
           jsonrpc: "2.0",
@@ -352,7 +379,10 @@ export function handlePromptStart(message: JsonObject): boolean {
         method: "session/update",
         params: {
           sessionId: "fake-session",
-          update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Led with a tool." } },
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Led with a tool." },
+          },
         },
       });
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
@@ -1053,18 +1083,16 @@ export function handlePromptStart(message: JsonObject): boolean {
           },
         });
       };
-      const writeGrokPlan = (
-        sessionUpdate: "plan" | "plan_update",
-        entries: unknown[],
-      ): void => {
+      const writeGrokPlan = (sessionUpdate: "plan" | "plan_update", entries: unknown[]): void => {
         write({
           jsonrpc: "2.0",
           method: "session/update",
           params: {
             sessionId: "fake-session",
-            update: sessionUpdate === "plan_update"
-              ? { sessionUpdate, plan: { entries } }
-              : { sessionUpdate, entries },
+            update:
+              sessionUpdate === "plan_update"
+                ? { sessionUpdate, plan: { entries } }
+                : { sessionUpdate, entries },
           },
         });
       };
@@ -1245,10 +1273,7 @@ export function handlePromptStart(message: JsonObject): boolean {
   return false;
 }
 
-function writeCursorBackgroundChild(options: {
-  toolCallId: string;
-  agentId?: string;
-}): void {
+function writeCursorBackgroundChild(options: { toolCallId: string; agentId?: string }): void {
   const description = "Run validation at HEAD";
   write({
     jsonrpc: "2.0",
@@ -1301,4 +1326,3 @@ function writeCursorBackgroundChild(options: {
     },
   });
 }
-

@@ -1,10 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Hono } from "hono";
-import {
-  createRequestLogger,
-  readDebugFlag,
-  redactRequestLogMessage,
-} from "./logger.js";
+import { createRequestLogger, readDebugFlag, redactRequestLogMessage } from "./logger.js";
 
 describe("readDebugFlag", () => {
   test("is off when the variable is unset or blank", () => {
@@ -42,16 +38,18 @@ describe("createRequestLogger", () => {
     const token = "live-bridge-credential";
     const lines: string[] = [];
     const app = new Hono();
-    app.use("*", createRequestLogger(true, (...parts) => {
-      lines.push(parts.join(" "));
-    })!);
+    app.use(
+      "*",
+      createRequestLogger(true, (...parts) => {
+        lines.push(parts.join(" "));
+      })!,
+    );
     app.get("/event/subscribe", (context) => context.text("ok"));
 
     await app.request(`/event/subscribe?token=${token}&cursor=4`);
 
     expect(lines.join("\n")).not.toContain(token);
     expect(lines.join("\n")).toContain("token=<redacted>&cursor=4");
-    expect(redactRequestLogMessage(`GET /?TOKEN=${token}`))
-      .toBe("GET /?TOKEN=<redacted>");
+    expect(redactRequestLogMessage(`GET /?TOKEN=${token}`)).toBe("GET /?TOKEN=<redacted>");
   });
 });

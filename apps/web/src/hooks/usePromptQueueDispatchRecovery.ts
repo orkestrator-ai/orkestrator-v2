@@ -6,10 +6,7 @@ import {
 } from "@/lib/prompt-queue-persistence";
 import { retryAgentPromptQueueDispatch } from "@/lib/prompt-queue-sources";
 
-export function usePromptQueueDispatchRecovery(
-  agent: string,
-  sessionKey: string,
-) {
+export function usePromptQueueDispatchRecovery(agent: string, sessionKey: string) {
   const queueKey = promptQueueKey(agent, sessionKey);
   const dispatchError = useSyncExternalStore(
     subscribePromptQueueDispatchErrors,

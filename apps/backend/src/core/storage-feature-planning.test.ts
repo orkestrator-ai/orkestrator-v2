@@ -35,9 +35,9 @@ function record(
 }
 
 afterEach(async () => {
-  await Promise.all(dataDirs.splice(0).map((dataDir) =>
-    fs.rm(dataDir, { recursive: true, force: true })
-  ));
+  await Promise.all(
+    dataDirs.splice(0).map((dataDir) => fs.rm(dataDir, { recursive: true, force: true })),
+  );
 });
 
 describe("StorageService feature planning authority", () => {
@@ -62,10 +62,12 @@ describe("StorageService feature planning authority", () => {
     const terminal = await storage.createFeaturePlan("project-1");
     const malformed = await storage.createFeaturePlan("project-1");
     await storage.startFeaturePlanning(record(active.id));
-    await storage.startFeaturePlanning(record(terminal.id, {
-      operationId: "terminal-operation",
-      phase: "complete",
-    }));
+    await storage.startFeaturePlanning(
+      record(terminal.id, {
+        operationId: "terminal-operation",
+        phase: "complete",
+      }),
+    );
 
     const plans = await storage.listAllFeaturePlans();
     const malformedPlan = plans.find((plan) => plan.id === malformed.id)!;
@@ -78,16 +80,22 @@ describe("StorageService feature planning authority", () => {
     await expect(storage.listActiveFeaturePlanning()).resolves.toEqual([
       expect.objectContaining({ featureId: active.id, phase: "dispatching" }),
     ]);
-    await expect(storage.startFeaturePlanning(record(terminal.id, {
-      operationId: "replacement-operation",
-    }))).resolves.toMatchObject({
+    await expect(
+      storage.startFeaturePlanning(
+        record(terminal.id, {
+          operationId: "replacement-operation",
+        }),
+      ),
+    ).resolves.toMatchObject({
       started: true,
       feature: { planning: { operationId: "replacement-operation" } },
     });
-    await expect(storage.startFeaturePlanning({
-      ...record(active.id),
-      backendRevision: -1,
-    })).rejects.toThrow("Feature planning record is invalid");
+    await expect(
+      storage.startFeaturePlanning({
+        ...record(active.id),
+        backendRevision: -1,
+      }),
+    ).rejects.toThrow("Feature planning record is invalid");
   });
 
   test("fences mutations, bumps revisions, and clears only the matching operation", async () => {
@@ -95,11 +103,9 @@ describe("StorageService feature planning authority", () => {
     const feature = await storage.createFeaturePlan("project-1");
     await storage.startFeaturePlanning(record(feature.id));
 
-    await expect(storage.mutateFeaturePlanning(
-      feature.id,
-      "stale-operation",
-      () => undefined,
-    )).rejects.toBeInstanceOf(FeaturePlanningFenceError);
+    await expect(
+      storage.mutateFeaturePlanning(feature.id, "stale-operation", () => undefined),
+    ).rejects.toBeInstanceOf(FeaturePlanningFenceError);
 
     const mutated = await storage.mutateFeaturePlanning(
       feature.id,
@@ -117,8 +123,7 @@ describe("StorageService feature planning authority", () => {
     });
 
     await storage.clearFeaturePlanning(feature.id, "stale-operation");
-    expect((await storage.getFeaturePlan(feature.id))?.planning?.operationId)
-      .toBe("operation-1");
+    expect((await storage.getFeaturePlan(feature.id))?.planning?.operationId).toBe("operation-1");
     await storage.clearFeaturePlanning(feature.id, "operation-1");
     expect((await storage.getFeaturePlan(feature.id))?.planning).toBeUndefined();
   });

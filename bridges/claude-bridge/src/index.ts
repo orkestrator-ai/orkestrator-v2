@@ -25,8 +25,7 @@ const BRIDGE_ALLOWED_ORIGINS_ENV = "CLAUDE_BRIDGE_ALLOWED_ORIGINS";
 // A missing or blank token env var falls back to a random token nobody holds:
 // the bridge stays fail-closed instead of fail-open. Same policy as codex-bridge.
 const configuredBridgeAuthToken = process.env[BRIDGE_TOKEN_ENV]?.trim();
-let bridgeAuthToken =
-  configuredBridgeAuthToken || randomBytes(32).toString("base64url");
+let bridgeAuthToken = configuredBridgeAuthToken || randomBytes(32).toString("base64url");
 // The token is bridge-local authentication material, not configuration for
 // SDK/CLI children. Capture it once and remove it before any later subprocess
 // can inherit the bridge credential through process.env.
@@ -40,8 +39,8 @@ function isBridgeAuthEnabled(): boolean {
   // Route tests explicitly opt out because they exercise route mapping rather
   // than process authentication. This escape hatch is inert for a real server.
   return !(
-    process.env.CLAUDE_BRIDGE_NO_SERVER === "1"
-    && process.env.CLAUDE_BRIDGE_AUTH_DISABLED_FOR_TESTING === "1"
+    process.env.CLAUDE_BRIDGE_NO_SERVER === "1" &&
+    process.env.CLAUDE_BRIDGE_AUTH_DISABLED_FOR_TESTING === "1"
   );
 }
 
@@ -71,11 +70,11 @@ function isTrustedBridgeOrigin(origin: string | undefined): boolean {
   try {
     const parsed = new URL(origin);
     return (
-      (parsed.protocol === "http:" || parsed.protocol === "https:")
-      && (parsed.hostname === "127.0.0.1"
-        || parsed.hostname === "localhost"
-        || parsed.hostname === "::1"
-        || parsed.hostname === "[::1]")
+      (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+      (parsed.hostname === "127.0.0.1" ||
+        parsed.hostname === "localhost" ||
+        parsed.hostname === "::1" ||
+        parsed.hostname === "[::1]")
     );
   } catch {
     return false;
@@ -106,21 +105,14 @@ app.use("*", async (c, next) => {
     c.header("Access-Control-Allow-Private-Network", "true");
     return c.body(null, 204);
   }
-  if (
-    isBridgeAuthEnabled()
-    && !isPublicHealthRequest(c.req.method, c.req.path)
-  ) {
-    const dedicatedHeaderToken =
-      c.req.raw.headers.get("x-orkestrator-claude-token")?.trim();
-    const headerToken = bearerToken(
-      c.req.raw.headers.get("authorization") ?? undefined,
-    );
-    const eventToken =
-      c.req.path === "/event/subscribe" ? c.req.query("token")?.trim() : undefined;
+  if (isBridgeAuthEnabled() && !isPublicHealthRequest(c.req.method, c.req.path)) {
+    const dedicatedHeaderToken = c.req.raw.headers.get("x-orkestrator-claude-token")?.trim();
+    const headerToken = bearerToken(c.req.raw.headers.get("authorization") ?? undefined);
+    const eventToken = c.req.path === "/event/subscribe" ? c.req.query("token")?.trim() : undefined;
     if (
-      !tokenMatches(dedicatedHeaderToken)
-      && !tokenMatches(headerToken)
-      && !tokenMatches(eventToken)
+      !tokenMatches(dedicatedHeaderToken) &&
+      !tokenMatches(headerToken) &&
+      !tokenMatches(eventToken)
     ) {
       return c.json({ error: "Unauthorized" }, 401);
     }
@@ -177,9 +169,7 @@ if (parentPid !== null) {
   startParentWatchdog({
     parentPid,
     onParentExit: () => {
-      console.error(
-        `[claude-bridge] Backend process ${parentPid} is gone; shutting down`,
-      );
+      console.error(`[claude-bridge] Backend process ${parentPid} is gone; shutting down`);
       process.exit(0);
     },
   });

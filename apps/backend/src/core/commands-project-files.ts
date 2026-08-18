@@ -76,7 +76,11 @@ export async function stageConfiguredProjectFilesForContainer(
   const stagingDir = await fs.mkdtemp(path.join(os.tmpdir(), "orkestrator-project-files-"));
   try {
     await copyConfiguredProjectFilesToDirectory(projectPath, stagingDir, configuredFiles);
-    await runCommand("docker", ["cp", `${stagingDir}${path.sep}.`, `${containerId}:/project-files`], { timeoutMs: 120_000 });
+    await runCommand(
+      "docker",
+      ["cp", `${stagingDir}${path.sep}.`, `${containerId}:/project-files`],
+      { timeoutMs: 120_000 },
+    );
   } finally {
     await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => undefined);
   }

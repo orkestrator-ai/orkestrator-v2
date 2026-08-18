@@ -42,5 +42,7 @@ export type CommandContext = {
   probeAgentCreatedPullRequest?: (environmentId: string) => Promise<void>;
 };
 
-export type CommandHandler = (args: JsonRecord, context: CommandContext) => Promise<unknown> | unknown;
-
+export type CommandHandler = (
+  args: JsonRecord,
+  context: CommandContext,
+) => Promise<unknown> | unknown;

@@ -2,10 +2,7 @@ import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import * as backend from "@/lib/backend";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
-import {
-  type EnvironmentPaneState,
-  usePaneLayoutStore,
-} from "@/stores/paneLayoutStore";
+import { type EnvironmentPaneState, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { Environment } from "@/types";
 import type { PaneLeaf, PersistedPaneLayout, TabInfo } from "@/types/paneLayout";
 import {
@@ -26,21 +23,20 @@ type LayoutInput = ReturnType<typeof createPersistedPaneLayoutInput>;
  * the change-feed refresh does, so a layout can never be installed for an
  * environment this client no longer has.
  */
-function seedEnvironment(
-  containerId: string | null,
-  environmentId = "env-1",
-): void {
+function seedEnvironment(containerId: string | null, environmentId = "env-1"): void {
   useEnvironmentStore.setState({
-    environments: [{
-      id: environmentId,
-      name: environmentId,
-      projectId: "project-1",
-      status: "running",
-      environmentType: containerId === null ? "local" : "docker",
-      containerId,
-      branch: "main",
-      createdAt: "2026-01-01T00:00:00.000Z",
-    } as Environment],
+    environments: [
+      {
+        id: environmentId,
+        name: environmentId,
+        projectId: "project-1",
+        status: "running",
+        environmentType: containerId === null ? "local" : "docker",
+        containerId,
+        branch: "main",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      } as Environment,
+    ],
   });
 }
 
@@ -54,10 +50,7 @@ function resetStore() {
   });
 }
 
-function savedResult(
-  environmentId: string,
-  input: LayoutInput,
-): PersistedPaneLayout {
+function savedResult(environmentId: string, input: LayoutInput): PersistedPaneLayout {
   return {
     ...input,
     environmentId,
@@ -74,7 +67,9 @@ describe("pane layout persistence", () => {
   beforeEach(resetStore);
 
   test("does not write before hydration and primes a restored snapshot without echoing it", async () => {
-    const save = mock(async (environmentId: string, input: LayoutInput) => createSaved(environmentId, input));
+    const save = mock(async (environmentId: string, input: LayoutInput) =>
+      createSaved(environmentId, input),
+    );
     const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
     const store = usePaneLayoutStore.getState();
     store.initialize("container-1", "env-1");
@@ -83,26 +78,32 @@ describe("pane layout persistence", () => {
     expect(save).not.toHaveBeenCalled();
 
     usePaneLayoutStore.getState().beginHydration("env-1");
-    usePaneLayoutStore.getState().finishHydration("env-1", usePaneLayoutStore.getState().environments.get("env-1"));
+    usePaneLayoutStore
+      .getState()
+      .finishHydration("env-1", usePaneLayoutStore.getState().environments.get("env-1"));
     await waitForTimers();
     expect(save).not.toHaveBeenCalled();
 
-    usePaneLayoutStore.getState().addTab("default", {
-      id: "native",
-      type: "agent-native",
-      initialPrompt: "do not persist",
-      agentHandoffId: "handoff-1",
-      initialAgentModel: "gpt-5.6-sol",
-      initialReasoningEffort: "xhigh",
-      initialExecutionProfileId: "plan",
-      initialCommands: ["do not persist"],
-      nativeAgentData: {
-        environmentId: "env-1",
-        containerId: "container-1",
-        hostPort: 1234,
-        sessionId: "session-1",
+    usePaneLayoutStore.getState().addTab(
+      "default",
+      {
+        id: "native",
+        type: "agent-native",
+        initialPrompt: "do not persist",
+        agentHandoffId: "handoff-1",
+        initialAgentModel: "gpt-5.6-sol",
+        initialReasoningEffort: "xhigh",
+        initialExecutionProfileId: "plan",
+        initialCommands: ["do not persist"],
+        nativeAgentData: {
+          environmentId: "env-1",
+          containerId: "container-1",
+          hostPort: 1234,
+          sessionId: "session-1",
+        },
       },
-    }, "env-1");
+      "env-1",
+    );
     await waitForTimers();
     expect(save).toHaveBeenCalledTimes(1);
     const persisted = save.mock.calls[0]?.[1];
@@ -119,12 +120,14 @@ describe("pane layout persistence", () => {
     // back, or the write is dead weight and the one-shot choice is lost on the
     // reload it exists for. Round-trip the real payload through the real
     // restorer rather than trusting the write alone.
-    const rehydrated = reconcilePersistedLayout(
-      createSaved("env-1", persisted!),
-      { environmentId: "env-1", containerId: "container-1", isLocal: false },
-    );
-    const rehydratedTab = (rehydrated?.root as unknown as { tabs: Array<Record<string, unknown>> })
-      .tabs.find((tab) => tab.id === "native");
+    const rehydrated = reconcilePersistedLayout(createSaved("env-1", persisted!), {
+      environmentId: "env-1",
+      containerId: "container-1",
+      isLocal: false,
+    });
+    const rehydratedTab = (
+      rehydrated!.root as unknown as { tabs: Array<Record<string, unknown>> }
+    ).tabs.find((tab) => tab.id === "native");
     expect(rehydratedTab?.initialAgentModel).toBe("gpt-5.6-sol");
     expect(rehydratedTab?.initialReasoningEffort).toBe("xhigh");
     expect(rehydratedTab?.initialExecutionProfileId).toBe("plan");
@@ -157,11 +160,7 @@ describe("pane layout persistence", () => {
     await waitForTimers();
     expect(save).toHaveBeenCalledTimes(1);
 
-    usePaneLayoutStore.getState().addTab(
-      "default",
-      { id: "tab-3", type: "plain" },
-      "env-1",
-    );
+    usePaneLayoutStore.getState().addTab("default", { id: "tab-3", type: "plain" }, "env-1");
     await waitForTimers();
     expect(save).toHaveBeenCalledTimes(2);
     stop();
@@ -169,7 +168,7 @@ describe("pane layout persistence", () => {
 
   test("persists active pane and tab selection immediately", async () => {
     const save = mock(async (environmentId: string, input: LayoutInput) =>
-      createSaved(environmentId, input)
+      createSaved(environmentId, input),
     );
     const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
     const store = usePaneLayoutStore.getState();
@@ -177,10 +176,7 @@ describe("pane layout persistence", () => {
     store.addTab("default", { id: "tab-1", type: "plain" }, "env-1");
     store.addTab("default", { id: "tab-2", type: "plain" }, "env-1");
     store.beginHydration("env-1");
-    store.finishHydration(
-      "env-1",
-      usePaneLayoutStore.getState().environments.get("env-1"),
-    );
+    store.finishHydration("env-1", usePaneLayoutStore.getState().environments.get("env-1"));
 
     usePaneLayoutStore.getState().setActiveTab("default", "tab-1", "env-1");
     await waitForTimers();
@@ -265,10 +261,7 @@ describe("pane layout persistence", () => {
     store.addTab("default", { id: "b", type: "plain" }, "env-1");
     store.setActiveTab("default", "a", "env-1");
     store.beginHydration("env-1");
-    store.finishHydration(
-      "env-1",
-      usePaneLayoutStore.getState().environments.get("env-1"),
-    );
+    store.finishHydration("env-1", usePaneLayoutStore.getState().environments.get("env-1"));
     const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
 
     usePaneLayoutStore.getState().setActiveTab("default", "b", "env-1");
@@ -283,9 +276,8 @@ describe("pane layout persistence", () => {
     await waitForTimers();
 
     expect(save).toHaveBeenCalledTimes(2);
-    expect((save.mock.calls.at(-1)?.[1].root as PaneLeaf).activeTabId).toBe("a");
-    expect(usePaneLayoutStore.getState().getPane("default", "env-1")?.activeTabId)
-      .toBe("a");
+    expect((save.mock.calls.at(-1)![1].root as PaneLeaf).activeTabId).toBe("a");
+    expect(usePaneLayoutStore.getState().getPane("default", "env-1")?.activeTabId).toBe("a");
     stop();
   });
 
@@ -306,10 +298,7 @@ describe("pane layout persistence", () => {
     store.addTab("default", { id: "b", type: "plain" }, "env-1");
     store.setActiveTab("default", "a", "env-1");
     store.beginHydration("env-1");
-    store.finishHydration(
-      "env-1",
-      usePaneLayoutStore.getState().environments.get("env-1"),
-    );
+    store.finishHydration("env-1", usePaneLayoutStore.getState().environments.get("env-1"));
     const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
 
     store.setActiveTab("default", "b", "env-1");
@@ -317,9 +306,7 @@ describe("pane layout persistence", () => {
     store.setActiveTab("default", "a", "env-1");
     const flushed = flushPaneLayoutNow(
       "env-1",
-      createPersistedPaneLayoutInput(
-        usePaneLayoutStore.getState().environments.get("env-1")!,
-      ),
+      createPersistedPaneLayoutInput(usePaneLayoutStore.getState().environments.get("env-1")!),
     );
     expect(save).toHaveBeenCalledTimes(1);
 
@@ -328,9 +315,10 @@ describe("pane layout persistence", () => {
     await waitForTimers();
 
     expect(save).toHaveBeenCalledTimes(2);
-    expect(save.mock.calls.map(([, layout]) =>
-      (layout.root as PaneLeaf).activeTabId
-    )).toEqual(["b", "a"]);
+    expect(save.mock.calls.map(([, layout]) => (layout.root as PaneLeaf).activeTabId)).toEqual([
+      "b",
+      "a",
+    ]);
     expect(store.getPane("default", "env-1")?.activeTabId).toBe("a");
     stop();
   });
@@ -352,20 +340,13 @@ describe("pane layout persistence", () => {
     store.addTab("default", { id: "b", type: "plain" }, "env-1");
     store.setActiveTab("default", "a", "env-1");
     store.beginHydration("env-1");
-    store.finishHydration(
-      "env-1",
-      usePaneLayoutStore.getState().environments.get("env-1"),
-    );
+    store.finishHydration("env-1", usePaneLayoutStore.getState().environments.get("env-1"));
     const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
 
     usePaneLayoutStore.getState().setActiveTab("default", "b", "env-1");
     await waitForTimers();
     for (let index = 0; index < 500; index += 1) {
-      usePaneLayoutStore.getState().setActiveTab(
-        "default",
-        index % 2 === 0 ? "b" : "a",
-        "env-1",
-      );
+      usePaneLayoutStore.getState().setActiveTab("default", index % 2 === 0 ? "b" : "a", "env-1");
     }
     expect(save).toHaveBeenCalledTimes(1);
 
@@ -374,13 +355,13 @@ describe("pane layout persistence", () => {
     await waitForTimers();
 
     expect(save).toHaveBeenCalledTimes(2);
-    expect((save.mock.calls[1]?.[1].root as PaneLeaf).activeTabId).toBe("a");
+    expect((save.mock.calls[1]![1].root as PaneLeaf).activeTabId).toBe("a");
     stop();
   });
 
   test("debounces a rapid focus cycle into one backend write", async () => {
     const save = mock(async (environmentId: string, input: LayoutInput) =>
-      createSaved(environmentId, input)
+      createSaved(environmentId, input),
     );
     const store = usePaneLayoutStore.getState();
     store.initialize("container-1", "env-1");
@@ -388,10 +369,7 @@ describe("pane layout persistence", () => {
     store.addTab("default", { id: "b", type: "plain" }, "env-1");
     store.setActiveTab("default", "a", "env-1");
     store.beginHydration("env-1");
-    store.finishHydration(
-      "env-1",
-      usePaneLayoutStore.getState().environments.get("env-1"),
-    );
+    store.finishHydration("env-1", usePaneLayoutStore.getState().environments.get("env-1"));
     const stop = startPaneLayoutPersistence({
       save,
       debounceMs: 60_000,
@@ -405,33 +383,26 @@ describe("pane layout persistence", () => {
     await new Promise((resolve) => setTimeout(resolve, 40));
 
     expect(save).toHaveBeenCalledTimes(1);
-    expect((save.mock.calls[0]?.[1].root as PaneLeaf).activeTabId).toBe("a");
+    expect((save.mock.calls[0]![1].root as PaneLeaf).activeTabId).toBe("a");
     stop();
   });
 
   test("promotes a pending structural edit together with its latest focus", async () => {
     const save = mock(async (environmentId: string, input: LayoutInput) =>
-      createSaved(environmentId, input)
+      createSaved(environmentId, input),
     );
     const store = usePaneLayoutStore.getState();
     store.initialize("container-1", "env-1");
     store.addTab("default", { id: "a", type: "plain" }, "env-1");
     store.beginHydration("env-1");
-    store.finishHydration(
-      "env-1",
-      usePaneLayoutStore.getState().environments.get("env-1"),
-    );
+    store.finishHydration("env-1", usePaneLayoutStore.getState().environments.get("env-1"));
     const stop = startPaneLayoutPersistence({
       save,
       debounceMs: 60_000,
       selectionDebounceMs: 5,
     });
 
-    usePaneLayoutStore.getState().addTab(
-      "default",
-      { id: "b", type: "plain" },
-      "env-1",
-    );
+    usePaneLayoutStore.getState().addTab("default", { id: "b", type: "plain" }, "env-1");
     usePaneLayoutStore.getState().setActiveTab("default", "a", "env-1");
     await waitForTimers();
 
@@ -445,7 +416,7 @@ describe("pane layout persistence", () => {
 
   test("does not adopt an older snapshot over a queued local tab change", () => {
     const save = mock(async (environmentId: string, input: LayoutInput) =>
-      createSaved(environmentId, input)
+      createSaved(environmentId, input),
     );
     const stop = startPaneLayoutPersistence({ save, debounceMs: 60_000 });
     const store = usePaneLayoutStore.getState();
@@ -467,13 +438,18 @@ describe("pane layout persistence", () => {
 
     expect(adoptPersistedPaneLayout("env-1", olderSnapshot)).toBe(false);
     expect(
-      usePaneLayoutStore.getState().getAllTabs("env-1").map(({ id }) => id),
+      usePaneLayoutStore
+        .getState()
+        .getAllTabs("env-1")
+        .map(({ id }) => id),
     ).toEqual(["new-local-tab"]);
     stop();
   });
 
   test("flushes a pending write when persistence is stopped", async () => {
-    const save = mock(async (environmentId: string, input: LayoutInput) => createSaved(environmentId, input));
+    const save = mock(async (environmentId: string, input: LayoutInput) =>
+      createSaved(environmentId, input),
+    );
     const stop = startPaneLayoutPersistence({ save, debounceMs: 60_000 });
     const store = usePaneLayoutStore.getState();
     store.initialize("container-1", "env-1");
@@ -493,7 +469,9 @@ describe("pane layout persistence", () => {
   });
 
   test("persists hydrated environments independently", async () => {
-    const save = mock(async (environmentId: string, input: LayoutInput) => createSaved(environmentId, input));
+    const save = mock(async (environmentId: string, input: LayoutInput) =>
+      createSaved(environmentId, input),
+    );
     const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
     const store = usePaneLayoutStore.getState();
     for (const environmentId of ["env-1", "env-2"]) {
@@ -506,12 +484,17 @@ describe("pane layout persistence", () => {
     await waitForTimers();
 
     expect(save).toHaveBeenCalledTimes(2);
-    expect(save.mock.calls.map(([environmentId]) => environmentId).sort()).toEqual(["env-1", "env-2"]);
+    expect(save.mock.calls.map(([environmentId]) => environmentId).sort()).toEqual([
+      "env-1",
+      "env-2",
+    ]);
     stop();
   });
 
   test("cancels a pending write when its environment is removed", async () => {
-    const save = mock(async (environmentId: string, input: LayoutInput) => createSaved(environmentId, input));
+    const save = mock(async (environmentId: string, input: LayoutInput) =>
+      createSaved(environmentId, input),
+    );
     const stop = startPaneLayoutPersistence({ save, debounceMs: 10 });
     const store = usePaneLayoutStore.getState();
     store.initialize("container-1", "env-1");
@@ -527,7 +510,9 @@ describe("pane layout persistence", () => {
   });
 
   test("does not write when a state update has an identical sanitized snapshot", async () => {
-    const save = mock(async (environmentId: string, input: LayoutInput) => createSaved(environmentId, input));
+    const save = mock(async (environmentId: string, input: LayoutInput) =>
+      createSaved(environmentId, input),
+    );
     const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
     const store = usePaneLayoutStore.getState();
     store.initialize("container-1", "env-1");
@@ -567,8 +552,8 @@ describe("pane layout persistence", () => {
     releaseFirst();
     await waitForTimers();
     expect(save).toHaveBeenCalledTimes(2);
-    const firstTabs = (save.mock.calls[0]?.[1].root as { tabs: Array<{ id: string }> }).tabs;
-    const secondTabs = (save.mock.calls[1]?.[1].root as { tabs: Array<{ id: string }> }).tabs;
+    const firstTabs = (save.mock.calls[0]![1].root as { tabs: Array<{ id: string }> }).tabs;
+    const secondTabs = (save.mock.calls[1]![1].root as { tabs: Array<{ id: string }> }).tabs;
     expect(firstTabs.map(({ id }) => id)).toEqual(["tab-1"]);
     expect(secondTabs.map(({ id }) => id)).toEqual(["tab-1", "tab-2"]);
     stop();
@@ -592,17 +577,10 @@ describe("pane layout persistence", () => {
     store.initialize("container-1", "env-1");
     store.addTab("default", { id: "a", type: "plain" }, "env-1");
     store.beginHydration("env-1");
-    store.finishHydration(
-      "env-1",
-      usePaneLayoutStore.getState().environments.get("env-1"),
-    );
+    store.finishHydration("env-1", usePaneLayoutStore.getState().environments.get("env-1"));
     const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
 
-    usePaneLayoutStore.getState().addTab(
-      "default",
-      { id: "structural", type: "plain" },
-      "env-1",
-    );
+    usePaneLayoutStore.getState().addTab("default", { id: "structural", type: "plain" }, "env-1");
     await waitForTimers();
     usePaneLayoutStore.getState().setActiveTab("default", "a", "env-1");
     releaseFirst();
@@ -650,8 +628,8 @@ describe("pane layout persistence", () => {
     await flushed;
     await waitForTimers();
 
-    const order = save.mock.calls.map(
-      ([, input]) => (input.root as { tabs: Array<{ id: string }> }).tabs.map(({ id }) => id),
+    const order = save.mock.calls.map(([, input]) =>
+      (input.root as { tabs: Array<{ id: string }> }).tabs.map(({ id }) => id),
     );
     expect(order[0]).toEqual(["tab-1"]);
     expect(order[1]).toEqual(["tab-1", "agent"]);
@@ -682,12 +660,9 @@ describe("pane layout persistence", () => {
   });
 
   test("flushPaneLayoutNow falls back to a direct save when no persistence loop is running", async () => {
-    const directSave = mock(async (
-      environmentId: string,
-      layout: LayoutInput,
-      _expectedRevision: number,
-    ) =>
-      createSaved(environmentId, layout)
+    const directSave = mock(
+      async (environmentId: string, layout: LayoutInput, _expectedRevision: number) =>
+        createSaved(environmentId, layout),
     );
     const store = usePaneLayoutStore.getState();
     store.initialize("container-1", "env-1");
@@ -712,12 +687,15 @@ describe("pane layout persistence", () => {
       root: {
         kind: "leaf",
         id: "default",
-        tabs: [{ id: "a", type: "plain" }, { id: "b", type: "plain" }],
+        tabs: [
+          { id: "a", type: "plain" },
+          { id: "b", type: "plain" },
+        ],
         activeTabId: "b",
       },
     });
     const save = mock(async (environmentId: string, layout: LayoutInput) =>
-      createSaved(environmentId, layout)
+      createSaved(environmentId, layout),
     );
 
     await flushPaneLayoutNow("env-1", input, save, async () => ({
@@ -745,13 +723,15 @@ describe("pane layout persistence", () => {
       },
     });
     const save = mock(async (environmentId: string, layout: LayoutInput) =>
-      createSaved(environmentId, layout)
+      createSaved(environmentId, layout),
     );
 
-    await expect(flushPaneLayoutNow("env-1", input, save, async () => ({
-      ...createSaved("env-1", { ...input, version: 4 }),
-      revision: 9,
-    }))).rejects.toThrow("Unsupported pane layout version: 4");
+    await expect(
+      flushPaneLayoutNow("env-1", input, save, async () => ({
+        ...createSaved("env-1", { ...input, version: 4 }),
+        revision: 9,
+      })),
+    ).rejects.toThrow("Unsupported pane layout version: 4");
     expect(save).not.toHaveBeenCalled();
   });
 
@@ -772,29 +752,22 @@ describe("pane layout persistence", () => {
       ...state,
       root: {
         ...localRoot,
-        tabs: [
-          ...localRoot.tabs,
-          { id: "remote", type: "plain" },
-        ],
+        tabs: [...localRoot.tabs, { id: "remote", type: "plain" }],
       },
     });
-    const directSave = mock(async (
-      environmentId: string,
-      layout: LayoutInput,
-      _expectedRevision: number,
-    ) => createSaved(environmentId, layout));
+    const directSave = mock(
+      async (environmentId: string, layout: LayoutInput, _expectedRevision: number) =>
+        createSaved(environmentId, layout),
+    );
 
-    await expect(flushPaneLayoutNow(
-      "env-1",
-      input,
-      directSave,
-      async () => ({
+    await expect(
+      flushPaneLayoutNow("env-1", input, directSave, async () => ({
         ...remoteInput,
         environmentId: "env-1",
         updatedAt: "2026-01-01T00:00:00.000Z",
         revision: 2,
-      }),
-    )).rejects.toThrow("authoritative merge base");
+      })),
+    ).rejects.toThrow("authoritative merge base");
     expect(directSave).not.toHaveBeenCalled();
   });
 
@@ -818,23 +791,17 @@ describe("pane layout persistence", () => {
     const load = mock(async () => {
       throw new Error("the pre-hydrated base should avoid a fresh read");
     });
-    const save = mock(async (
-      environmentId: string,
-      layout: LayoutInput,
-      _expectedRevision: number,
-    ) => ({
-      ...layout,
-      environmentId,
-      updatedAt: "2026-01-01T00:00:00.000Z",
-      revision: 6,
-    }));
+    const save = mock(
+      async (environmentId: string, layout: LayoutInput, _expectedRevision: number) => ({
+        ...layout,
+        environmentId,
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        revision: 6,
+      }),
+    );
     const stop = startPaneLayoutPersistence({ save, load, debounceMs: 5 });
 
-    usePaneLayoutStore.getState().addTab(
-      "default",
-      { id: "local-new", type: "plain" },
-      "env-1",
-    );
+    usePaneLayoutStore.getState().addTab("default", { id: "local-new", type: "plain" }, "env-1");
     await waitForTimers();
 
     expect(load).not.toHaveBeenCalled();
@@ -847,8 +814,12 @@ describe("pane layout persistence", () => {
   });
 
   test("flushPaneLayoutNow prefers the active write chain over the direct save", async () => {
-    const chainSave = mock(async (environmentId: string, input: LayoutInput) => createSaved(environmentId, input));
-    const directSave = mock(async (environmentId: string, input: LayoutInput) => createSaved(environmentId, input));
+    const chainSave = mock(async (environmentId: string, input: LayoutInput) =>
+      createSaved(environmentId, input),
+    );
+    const directSave = mock(async (environmentId: string, input: LayoutInput) =>
+      createSaved(environmentId, input),
+    );
     const stop = startPaneLayoutPersistence({ save: chainSave, debounceMs: 60_000 });
     const store = usePaneLayoutStore.getState();
     store.initialize("container-1", "env-1");
@@ -905,11 +876,13 @@ describe("pane layout persistence", () => {
           {
             kind: "leaf" as const,
             id: "right",
-            tabs: [{
-              id: "opencode",
-              type: "agent-native" as const,
-              nativeAgentData: { environmentId: "env-1", hostPort: 3 },
-            }],
+            tabs: [
+              {
+                id: "opencode",
+                type: "agent-native" as const,
+                nativeAgentData: { environmentId: "env-1", hostPort: 3 },
+              },
+            ],
             activeTabId: "opencode",
           },
         ],
@@ -920,10 +893,7 @@ describe("pane layout persistence", () => {
 
     expect(persisted.activePaneId).toBe("right");
     expect(persisted.root).toMatchObject({
-      children: [
-        { activeTabId: "codex" },
-        { activeTabId: "opencode" },
-      ],
+      children: [{ activeTabId: "codex" }, { activeTabId: "opencode" }],
     });
     expect(JSON.stringify(persisted)).not.toContain("hostPort");
     expect(state.activePaneId).toBe("right");
@@ -992,22 +962,22 @@ describe("pane layout persistence", () => {
       root: {
         kind: "leaf" as const,
         id: "pane",
-        tabs: [{
-          id: "codex",
-          type: "agent-native" as const,
-          nativeAgentData: {
-            platform: "codex" as const,
-            environmentId: "env-1",
-            sessionId: "thread-1",
+        tabs: [
+          {
+            id: "codex",
+            type: "agent-native" as const,
+            nativeAgentData: {
+              platform: "codex" as const,
+              environmentId: "env-1",
+              sessionId: "thread-1",
+            },
           },
-        }],
+        ],
         activeTabId: "codex",
       },
     } satisfies EnvironmentPaneState;
 
-    const [tab] = (
-      createPersistedPaneLayoutInput(state).root as { tabs: TabInfo[] }
-    ).tabs;
+    const [tab] = (createPersistedPaneLayoutInput(state).root as { tabs: TabInfo[] }).tabs;
 
     expect(tab?.nativeAgentData).toEqual({
       platform: "codex",
@@ -1023,18 +993,18 @@ describe("pane layout persistence", () => {
       root: {
         kind: "leaf" as const,
         id: "pane",
-        tabs: [{
-          id: "tmux",
-          type: "claude-tmux" as const,
-          claudeTmuxData: { environmentId: "env-1", isLocal: true },
-        }],
+        tabs: [
+          {
+            id: "tmux",
+            type: "claude-tmux" as const,
+            claudeTmuxData: { environmentId: "env-1", isLocal: true },
+          },
+        ],
         activeTabId: "tmux",
       },
     } satisfies EnvironmentPaneState;
 
-    const [tab] = (
-      createPersistedPaneLayoutInput(state).root as { tabs: TabInfo[] }
-    ).tabs;
+    const [tab] = (createPersistedPaneLayoutInput(state).root as { tabs: TabInfo[] }).tabs;
 
     expect(tab?.nativeAgentData).toBeUndefined();
   });
@@ -1054,21 +1024,25 @@ describe("pane layout persistence", () => {
           {
             kind: "leaf" as const,
             id: "left",
-            tabs: [{
-              id: "browser-left",
-              type: "browser" as const,
-              browserData: { url: sensitive, history: [sensitive], historyIndex: 0 },
-            }],
+            tabs: [
+              {
+                id: "browser-left",
+                type: "browser" as const,
+                browserData: { url: sensitive, history: [sensitive], historyIndex: 0 },
+              },
+            ],
             activeTabId: "browser-left",
           },
           {
             kind: "leaf" as const,
             id: "right",
-            tabs: [{
-              id: "browser-right",
-              type: "browser" as const,
-              browserData: { url: sensitive, history: [sensitive], historyIndex: 0 },
-            }],
+            tabs: [
+              {
+                id: "browser-right",
+                type: "browser" as const,
+                browserData: { url: sensitive, history: [sensitive], historyIndex: 0 },
+              },
+            ],
             activeTabId: "browser-right",
           },
         ],
@@ -1105,29 +1079,22 @@ describe("pane layout persistence", () => {
       ...baseState,
       root: {
         ...baseState.root,
-        tabs: [
-          ...baseState.root.tabs,
-          { id: "remote", type: "plain" as const },
-        ],
+        tabs: [...baseState.root.tabs, { id: "remote", type: "plain" as const }],
       },
     });
-    const save = mock(async (
-      environmentId: string,
-      layout: LayoutInput,
-      expectedRevision: number,
-    ) => {
-      if (save.mock.calls.length === 1) {
-        throw new Error(
-          `Pane layout revision conflict: expected ${expectedRevision}, current 2`,
-        );
-      }
-      return {
-        ...layout,
-        environmentId,
-        updatedAt: "2026-01-01T00:00:00.000Z",
-        revision: 3,
-      };
-    });
+    const save = mock(
+      async (environmentId: string, layout: LayoutInput, expectedRevision: number) => {
+        if (save.mock.calls.length === 1) {
+          throw new Error(`Pane layout revision conflict: expected ${expectedRevision}, current 2`);
+        }
+        return {
+          ...layout,
+          environmentId,
+          updatedAt: "2026-01-01T00:00:00.000Z",
+          revision: 3,
+        };
+      },
+    );
     const load = mock(async () => ({
       ...remoteInput,
       environmentId: "env-1",
@@ -1139,39 +1106,28 @@ describe("pane layout persistence", () => {
     store.initialize("container-1", "env-1");
     store.beginHydration("env-1");
     store.finishHydration("env-1", baseState);
-    usePaneLayoutStore.getState().addTab(
-      "default",
-      { id: "local", type: "plain" },
-      "env-1",
-    );
+    usePaneLayoutStore.getState().addTab("default", { id: "local", type: "plain" }, "env-1");
 
     await waitForTimers();
 
     expect(save).toHaveBeenCalledTimes(2);
     expect(save.mock.calls.map((call) => call[2])).toEqual([1, 2]);
     expect(
-      (save.mock.calls[1]![1].root as { tabs: Array<{ id: string }> })
-        .tabs.map(({ id }) => id),
+      (save.mock.calls[1]![1].root as { tabs: Array<{ id: string }> }).tabs.map(({ id }) => id),
     ).toEqual(["base", "remote", "local"]);
     expect(
-      usePaneLayoutStore.getState().getAllTabs("env-1").map(({ id }) => id),
+      usePaneLayoutStore
+        .getState()
+        .getAllTabs("env-1")
+        .map(({ id }) => id),
     ).toEqual(["base", "remote", "local"]);
 
-    usePaneLayoutStore.getState().addTab(
-      "default",
-      { id: "later-local", type: "plain" },
-      "env-1",
-    );
+    usePaneLayoutStore.getState().addTab("default", { id: "later-local", type: "plain" }, "env-1");
     await waitForTimers();
     expect(save).toHaveBeenCalledTimes(3);
     expect(save.mock.calls[2]?.[2]).toBe(3);
     expect(save.mock.calls[2]?.[1].root).toMatchObject({
-      tabs: [
-        { id: "base" },
-        { id: "remote" },
-        { id: "local" },
-        { id: "later-local" },
-      ],
+      tabs: [{ id: "base" }, { id: "remote" }, { id: "local" }, { id: "later-local" }],
     });
     stop();
   });
@@ -1198,23 +1154,19 @@ describe("pane layout persistence", () => {
         activeTabId: "remote",
       },
     });
-    const save = mock(async (
-      environmentId: string,
-      layout: LayoutInput,
-      expectedRevision: number,
-    ) => {
-      if (save.mock.calls.length === 1) {
-        throw new Error(
-          `Pane layout revision conflict: expected ${expectedRevision}, current 2`,
-        );
-      }
-      return {
-        ...layout,
-        environmentId,
-        updatedAt: "2026-01-01T00:00:00.000Z",
-        revision: 3,
-      };
-    });
+    const save = mock(
+      async (environmentId: string, layout: LayoutInput, expectedRevision: number) => {
+        if (save.mock.calls.length === 1) {
+          throw new Error(`Pane layout revision conflict: expected ${expectedRevision}, current 2`);
+        }
+        return {
+          ...layout,
+          environmentId,
+          updatedAt: "2026-01-01T00:00:00.000Z",
+          revision: 3,
+        };
+      },
+    );
     const load = mock(async () => ({
       ...remoteInput,
       environmentId: "env-1",
@@ -1227,20 +1179,18 @@ describe("pane layout persistence", () => {
     store.finishHydration("env-1", localState);
     const stop = startPaneLayoutPersistence({ save, load, debounceMs: 5 });
 
-    usePaneLayoutStore.getState().addTab(
-      "default",
-      { id: "new-local", type: "plain" },
-      "env-1",
-    );
+    usePaneLayoutStore.getState().addTab("default", { id: "new-local", type: "plain" }, "env-1");
     await waitForTimers();
 
     expect(save.mock.calls.map((call) => call[2])).toEqual([0, 2]);
     expect(
-      (save.mock.calls[1]![1].root as { tabs: Array<{ id: string }> })
-        .tabs.map(({ id }) => id),
+      (save.mock.calls[1]![1].root as { tabs: Array<{ id: string }> }).tabs.map(({ id }) => id),
     ).toEqual(["remote", "setup", "new-local"]);
     expect(
-      usePaneLayoutStore.getState().getAllTabs("env-1").map(({ id }) => id),
+      usePaneLayoutStore
+        .getState()
+        .getAllTabs("env-1")
+        .map(({ id }) => id),
     ).toEqual(["remote", "setup", "new-local"]);
     stop();
   });
@@ -1262,28 +1212,23 @@ describe("pane layout persistence", () => {
       ...baseState,
       root: {
         ...baseRoot,
-        tabs: [
-          ...baseRoot.tabs,
-          { id: "remote", type: "plain" as const },
-        ],
+        tabs: [...baseRoot.tabs, { id: "remote", type: "plain" as const }],
       },
     });
-    const save = mock(async (
-      environmentId: string,
-      layout: LayoutInput,
-      expectedRevision: number,
-    ) => {
-      if (save.mock.calls.length === 1) {
-        throw new Error(
-          "Error invoking remote method 'orkestrator:invoke': Error: "
-            + `Pane layout revision conflict: expected ${expectedRevision}, current 2`,
-        );
-      }
-      return {
-        ...createSaved(environmentId, layout),
-        revision: 3,
-      };
-    });
+    const save = mock(
+      async (environmentId: string, layout: LayoutInput, expectedRevision: number) => {
+        if (save.mock.calls.length === 1) {
+          throw new Error(
+            "Error invoking remote method 'orkestrator:invoke': Error: " +
+              `Pane layout revision conflict: expected ${expectedRevision}, current 2`,
+          );
+        }
+        return {
+          ...createSaved(environmentId, layout),
+          revision: 3,
+        };
+      },
+    );
     const load = mock(async () => ({
       ...remoteInput,
       environmentId: "env-1",
@@ -1295,19 +1240,14 @@ describe("pane layout persistence", () => {
     store.initialize("container-1", "env-1");
     store.beginHydration("env-1");
     store.finishHydration("env-1", baseState);
-    usePaneLayoutStore.getState().addTab(
-      "default",
-      { id: "local", type: "plain" },
-      "env-1",
-    );
+    usePaneLayoutStore.getState().addTab("default", { id: "local", type: "plain" }, "env-1");
 
     await waitForTimers();
 
     expect(save).toHaveBeenCalledTimes(2);
     expect(save.mock.calls.map((call) => call[2])).toEqual([1, 2]);
     expect(
-      (save.mock.calls[1]![1].root as { tabs: Array<{ id: string }> })
-        .tabs.map(({ id }) => id),
+      (save.mock.calls[1]![1].root as { tabs: Array<{ id: string }> }).tabs.map(({ id }) => id),
     ).toEqual(["base", "remote", "local"]);
     stop();
   });
@@ -1328,29 +1268,22 @@ describe("pane layout persistence", () => {
       ...oldState,
       root: {
         ...oldState.root,
-        tabs: [
-          ...oldState.root.tabs,
-          { id: "remote-old-session", type: "plain" as const },
-        ],
+        tabs: [...oldState.root.tabs, { id: "remote-old-session", type: "plain" as const }],
       },
     });
-    const save = mock(async (
-      environmentId: string,
-      layout: LayoutInput,
-      expectedRevision: number,
-    ) => {
-      if (save.mock.calls.length === 1) {
-        throw new Error(
-          `Pane layout revision conflict: expected ${expectedRevision}, current 2`,
-        );
-      }
-      return {
-        ...layout,
-        environmentId,
-        updatedAt: "2026-01-01T00:00:00.000Z",
-        revision: 3,
-      };
-    });
+    const save = mock(
+      async (environmentId: string, layout: LayoutInput, expectedRevision: number) => {
+        if (save.mock.calls.length === 1) {
+          throw new Error(`Pane layout revision conflict: expected ${expectedRevision}, current 2`);
+        }
+        return {
+          ...layout,
+          environmentId,
+          updatedAt: "2026-01-01T00:00:00.000Z",
+          revision: 3,
+        };
+      },
+    );
     const load = mock(async () => ({
       ...remoteOldInput,
       environmentId: "env-1",
@@ -1382,9 +1315,9 @@ describe("pane layout persistence", () => {
     expect(save.mock.calls.map((call) => call[2])).toEqual([1, 2]);
     const retried = save.mock.calls[1]![1];
     expect(retried.containerId).toBe("container-new");
-    expect(
-      (retried.root as { tabs: Array<{ id: string }> }).tabs.map(({ id }) => id),
-    ).toEqual(["new-session"]);
+    expect((retried.root as { tabs: Array<{ id: string }> }).tabs.map(({ id }) => id)).toEqual([
+      "new-session",
+    ]);
     stop();
   });
 
@@ -1426,9 +1359,10 @@ describe("pane layout persistence", () => {
   });
 
   test("accepts an idle authoritative revision without echoing it", async () => {
-    const save = mock(async (environmentId: string, input: LayoutInput) =>
-      ({ ...createSaved(environmentId, input), revision: 3 })
-    );
+    const save = mock(async (environmentId: string, input: LayoutInput) => ({
+      ...createSaved(environmentId, input),
+      revision: 3,
+    }));
     const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
     const store = usePaneLayoutStore.getState();
     store.initialize("container-1", "env-1");
@@ -1447,10 +1381,7 @@ describe("pane layout persistence", () => {
     };
 
     expect(adoptPersistedPaneLayout("env-1", authoritative)).toBe(true);
-    usePaneLayoutStore.getState().applyAuthoritativeLayout(
-      "env-1",
-      authoritative,
-    );
+    usePaneLayoutStore.getState().applyAuthoritativeLayout("env-1", authoritative);
     await waitForTimers();
 
     expect(save).not.toHaveBeenCalled();
@@ -1474,17 +1405,19 @@ describe("pane layout persistence", () => {
     store.addTab("default", { id: "local", type: "plain" }, "env-1");
     await waitForTimers();
 
-    expect(adoptPersistedPaneLayout("env-1", {
-      containerId: "container-1",
-      activePaneId: "default",
-      backendRevision: 2,
-      root: {
-        kind: "leaf",
-        id: "default",
-        tabs: [{ id: "remote", type: "plain" }],
-        activeTabId: "remote",
-      },
-    })).toBe(false);
+    expect(
+      adoptPersistedPaneLayout("env-1", {
+        containerId: "container-1",
+        activePaneId: "default",
+        backendRevision: 2,
+        root: {
+          kind: "leaf",
+          id: "default",
+          tabs: [{ id: "remote", type: "plain" }],
+          activeTabId: "remote",
+        },
+      }),
+    ).toBe(false);
     release();
     await waitForTimers();
     stop();
@@ -1492,7 +1425,7 @@ describe("pane layout persistence", () => {
 
   test("flushes pending writes on pagehide and hidden visibility", async () => {
     const save = mock(async (environmentId: string, input: LayoutInput) =>
-      createSaved(environmentId, input)
+      createSaved(environmentId, input),
     );
     const stop = startPaneLayoutPersistence({ save, debounceMs: 60_000 });
     const store = usePaneLayoutStore.getState();
@@ -1504,15 +1437,8 @@ describe("pane layout persistence", () => {
     await waitForTimers();
     expect(save).toHaveBeenCalledTimes(1);
 
-    usePaneLayoutStore.getState().addTab(
-      "default",
-      { id: "hidden", type: "plain" },
-      "env-1",
-    );
-    const originalVisibility = Object.getOwnPropertyDescriptor(
-      document,
-      "visibilityState",
-    );
+    usePaneLayoutStore.getState().addTab("default", { id: "hidden", type: "plain" }, "env-1");
+    const originalVisibility = Object.getOwnPropertyDescriptor(document, "visibilityState");
     Object.defineProperty(document, "visibilityState", {
       configurable: true,
       value: "hidden",
@@ -1528,7 +1454,7 @@ describe("pane layout persistence", () => {
 
   test("pagehide flushes a selection still parked in its debounce", async () => {
     const save = mock(async (environmentId: string, input: LayoutInput) =>
-      createSaved(environmentId, input)
+      createSaved(environmentId, input),
     );
     const store = usePaneLayoutStore.getState();
     store.initialize("container-1", "env-1");
@@ -1536,10 +1462,7 @@ describe("pane layout persistence", () => {
     store.addTab("default", { id: "b", type: "plain" }, "env-1");
     store.setActiveTab("default", "a", "env-1");
     store.beginHydration("env-1");
-    store.finishHydration(
-      "env-1",
-      usePaneLayoutStore.getState().environments.get("env-1"),
-    );
+    store.finishHydration("env-1", usePaneLayoutStore.getState().environments.get("env-1"));
     const stop = startPaneLayoutPersistence({
       save,
       debounceMs: 60_000,
@@ -1552,7 +1475,7 @@ describe("pane layout persistence", () => {
     await waitForTimers();
 
     expect(save).toHaveBeenCalledTimes(1);
-    expect((save.mock.calls[0]?.[1].root as PaneLeaf).activeTabId).toBe("b");
+    expect((save.mock.calls[0]![1].root as PaneLeaf).activeTabId).toBe("b");
     stop();
   });
 
@@ -1567,14 +1490,16 @@ describe("pane layout persistence", () => {
         activeTabId: null,
       },
     });
-    await expect(flushPaneLayoutNow(
-      "env-1",
-      input,
-      async () => {
-        throw new Error("direct offline");
-      },
-      async () => null,
-    )).rejects.toThrow("direct offline");
+    await expect(
+      flushPaneLayoutNow(
+        "env-1",
+        input,
+        async () => {
+          throw new Error("direct offline");
+        },
+        async () => null,
+      ),
+    ).rejects.toThrow("direct offline");
 
     const stop = startPaneLayoutPersistence({
       save: async () => {
@@ -1582,9 +1507,7 @@ describe("pane layout persistence", () => {
       },
       debounceMs: 60_000,
     });
-    await expect(flushPaneLayoutNow("env-1", input)).rejects.toThrow(
-      "chain offline",
-    );
+    await expect(flushPaneLayoutNow("env-1", input)).rejects.toThrow("chain offline");
     stop();
   });
 
@@ -1600,14 +1523,13 @@ describe("pane layout persistence", () => {
       },
     });
     const save = mock(async (environmentId: string, layout: LayoutInput) =>
-      createSaved(environmentId, layout)
+      createSaved(environmentId, layout),
     );
     const load = mock(async () => savedResult("env-1", input));
 
     // Identical content means the caller's durability requirement is already
     // met; a write here would burn a revision for nothing.
-    await expect(flushPaneLayoutNow("env-1", input, save, load)).resolves
-      .toBeUndefined();
+    await expect(flushPaneLayoutNow("env-1", input, save, load)).resolves.toBeUndefined();
     expect(save).not.toHaveBeenCalled();
   });
 
@@ -1623,7 +1545,7 @@ describe("pane layout persistence", () => {
       },
     });
     const save = mock(async (environmentId: string, layout: LayoutInput) =>
-      createSaved(environmentId, layout)
+      createSaved(environmentId, layout),
     );
     const load = mock(async () => ({
       ...savedResult("env-1", input),
@@ -1640,7 +1562,7 @@ describe("pane layout persistence", () => {
 
   test("refuses a chained write for an environment that never hydrated", async () => {
     const save = mock(async (environmentId: string, layout: LayoutInput) =>
-      createSaved(environmentId, layout)
+      createSaved(environmentId, layout),
     );
     const divergent = createPersistedPaneLayoutInput({
       containerId: "container-1",
@@ -1658,19 +1580,21 @@ describe("pane layout persistence", () => {
     // Nothing hydrated this environment, so the mirror holds no common base and
     // the stored record disagrees. Blessing it with a freshly read revision
     // would silently drop whatever the other client wrote.
-    await expect(flushPaneLayoutNow(
-      "env-1",
-      createPersistedPaneLayoutInput({
-        containerId: "container-1",
-        activePaneId: "default",
-        root: {
-          kind: "leaf",
-          id: "default",
-          tabs: [{ id: "local-only", type: "plain" }],
-          activeTabId: "local-only",
-        },
-      }),
-    )).rejects.toThrow("authoritative merge base");
+    await expect(
+      flushPaneLayoutNow(
+        "env-1",
+        createPersistedPaneLayoutInput({
+          containerId: "container-1",
+          activePaneId: "default",
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [{ id: "local-only", type: "plain" }],
+            activeTabId: "local-only",
+          },
+        }),
+      ),
+    ).rejects.toThrow("authoritative merge base");
     expect(save).not.toHaveBeenCalled();
     stop();
   });
@@ -1690,14 +1614,12 @@ describe("pane layout persistence", () => {
       ...savedResult("env-unhydrated", input),
       revision: 7,
     }));
-    const save = mock(async (
-      environmentId: string,
-      layout: LayoutInput,
-      expectedRevision: number,
-    ) => ({
-      ...savedResult(environmentId, layout),
-      revision: expectedRevision + 1,
-    }));
+    const save = mock(
+      async (environmentId: string, layout: LayoutInput, expectedRevision: number) => ({
+        ...savedResult(environmentId, layout),
+        revision: expectedRevision + 1,
+      }),
+    );
     const stop = startPaneLayoutPersistence({ save, load, debounceMs: 60_000 });
 
     await flushPaneLayoutNow("env-unhydrated", input);
@@ -1708,18 +1630,14 @@ describe("pane layout persistence", () => {
   });
 
   test("retries against revision zero when the record vanished mid-conflict", async () => {
-    const save = mock(async (
-      environmentId: string,
-      layout: LayoutInput,
-      expectedRevision: number,
-    ) => {
-      if (save.mock.calls.length === 1) {
-        throw new Error(
-          `Pane layout revision conflict: expected ${expectedRevision}, current 9`,
-        );
-      }
-      return { ...savedResult(environmentId, layout), revision: 1 };
-    });
+    const save = mock(
+      async (environmentId: string, layout: LayoutInput, expectedRevision: number) => {
+        if (save.mock.calls.length === 1) {
+          throw new Error(`Pane layout revision conflict: expected ${expectedRevision}, current 9`);
+        }
+        return { ...savedResult(environmentId, layout), revision: 1 };
+      },
+    );
     // Another client deleted the environment's layout between our save and the
     // re-read, so there is nothing to merge with and nothing to overwrite.
     const load = mock(async () => null);
@@ -1734,25 +1652,20 @@ describe("pane layout persistence", () => {
     expect(save).toHaveBeenCalledTimes(2);
     expect(save.mock.calls[1]?.[2]).toBe(0);
     expect(
-      (save.mock.calls[1]![1].root as { tabs: Array<{ id: string }> })
-        .tabs.map(({ id }) => id),
+      (save.mock.calls[1]![1].root as { tabs: Array<{ id: string }> }).tabs.map(({ id }) => id),
     ).toEqual(["local"]);
     stop();
   });
 
   test("replaces an unparseable remote record at its own revision", async () => {
-    const save = mock(async (
-      environmentId: string,
-      layout: LayoutInput,
-      expectedRevision: number,
-    ) => {
-      if (save.mock.calls.length === 1) {
-        throw new Error(
-          `Pane layout revision conflict: expected ${expectedRevision}, current 6`,
-        );
-      }
-      return { ...savedResult(environmentId, layout), revision: 7 };
-    });
+    const save = mock(
+      async (environmentId: string, layout: LayoutInput, expectedRevision: number) => {
+        if (save.mock.calls.length === 1) {
+          throw new Error(`Pane layout revision conflict: expected ${expectedRevision}, current 6`);
+        }
+        return { ...savedResult(environmentId, layout), revision: 7 };
+      },
+    );
     const load = mock(async () => ({
       version: 1,
       environmentId: "env-1",
@@ -1775,25 +1688,20 @@ describe("pane layout persistence", () => {
     expect(save).toHaveBeenCalledTimes(2);
     expect(save.mock.calls[1]?.[2]).toBe(6);
     expect(
-      (save.mock.calls[1]![1].root as { tabs: Array<{ id: string }> })
-        .tabs.map(({ id }) => id),
+      (save.mock.calls[1]![1].root as { tabs: Array<{ id: string }> }).tabs.map(({ id }) => id),
     ).toEqual(["local"]);
     stop();
   });
 
   test("refuses to overwrite a conflicting layout written by a newer client", async () => {
-    const save = mock(async (
-      environmentId: string,
-      layout: LayoutInput,
-      expectedRevision: number,
-    ) => {
-      if (save.mock.calls.length === 1) {
-        throw new Error(
-          `Pane layout revision conflict: expected ${expectedRevision}, current 4`,
-        );
-      }
-      return { ...savedResult(environmentId, layout), revision: 5 };
-    });
+    const save = mock(
+      async (environmentId: string, layout: LayoutInput, expectedRevision: number) => {
+        if (save.mock.calls.length === 1) {
+          throw new Error(`Pane layout revision conflict: expected ${expectedRevision}, current 4`);
+        }
+        return { ...savedResult(environmentId, layout), revision: 5 };
+      },
+    );
     const load = mock(async () => ({
       version: 99,
       environmentId: "env-1",
@@ -1871,18 +1779,14 @@ describe("pane layout persistence", () => {
         ],
       } as typeof splitState.root,
     });
-    const save = mock(async (
-      environmentId: string,
-      layout: LayoutInput,
-      expectedRevision: number,
-    ) => {
-      if (save.mock.calls.length === 1) {
-        throw new Error(
-          `Pane layout revision conflict: expected ${expectedRevision}, current 3`,
-        );
-      }
-      return { ...savedResult(environmentId, layout), revision: 4 };
-    });
+    const save = mock(
+      async (environmentId: string, layout: LayoutInput, expectedRevision: number) => {
+        if (save.mock.calls.length === 1) {
+          throw new Error(`Pane layout revision conflict: expected ${expectedRevision}, current 3`);
+        }
+        return { ...savedResult(environmentId, layout), revision: 4 };
+      },
+    );
     const load = mock(async () => ({
       ...savedResult("env-1", remoteInput),
       revision: 3,
@@ -1892,11 +1796,7 @@ describe("pane layout persistence", () => {
     store.initialize("container-1", "env-1");
     store.beginHydration("env-1");
     store.finishHydration("env-1", splitState);
-    usePaneLayoutStore.getState().addTab(
-      "left",
-      { id: "new-local", type: "plain" },
-      "env-1",
-    );
+    usePaneLayoutStore.getState().addTab("left", { id: "new-local", type: "plain" }, "env-1");
     await waitForTimers();
 
     // Revision zero means nothing local was ever saved, so the merge base has
@@ -1905,8 +1805,9 @@ describe("pane layout persistence", () => {
     const merged = save.mock.calls[1]![1].root as {
       children: Array<{ tabs: Array<{ id: string }> }>;
     };
-    expect(merged.children.flatMap(({ tabs }) => tabs.map(({ id }) => id)).sort())
-      .toEqual(["local-left", "local-right", "new-local", "remote-left"].sort());
+    expect(merged.children.flatMap(({ tabs }) => tabs.map(({ id }) => id)).sort()).toEqual(
+      ["local-left", "local-right", "new-local", "remote-left"].sort(),
+    );
     stop();
   });
 
@@ -1973,18 +1874,17 @@ describe("pane layout persistence", () => {
     await waitForTimers();
     expect(save).toHaveBeenCalledTimes(1);
 
-    usePaneLayoutStore.getState().addTab(
-      "default",
-      { id: "second", type: "plain" },
-      "env-1",
-    );
+    usePaneLayoutStore.getState().addTab("default", { id: "second", type: "plain" }, "env-1");
     inFlight.release?.();
     await waitForTimers();
 
     // The completed save only knew about "first". Installing its result would
     // have wiped "second" out of the UI until the next write came back.
     expect(
-      usePaneLayoutStore.getState().getAllTabs("env-1").map(({ id }) => id),
+      usePaneLayoutStore
+        .getState()
+        .getAllTabs("env-1")
+        .map(({ id }) => id),
     ).toEqual(["first", "second"]);
     stop();
   });
@@ -2025,8 +1925,7 @@ describe("pane layout persistence", () => {
     await waitForTimers();
 
     expect(hydrateDependencies).toHaveBeenCalledTimes(1);
-    expect(usePaneLayoutStore.getState().environments.get("env-1")?.backendRevision)
-      .toBe(0);
+    expect(usePaneLayoutStore.getState().environments.get("env-1")?.backendRevision).toBe(0);
     stop();
   });
 
@@ -2058,18 +1957,16 @@ describe("pane layout persistence", () => {
       root: { ...baseRoot, tabs: [...baseRoot.tabs, buildTab] },
     });
     const runRebase = async () => {
-      const save = mock(async (
-        environmentId: string,
-        layout: LayoutInput,
-        expectedRevision: number,
-      ) => {
-        if (save.mock.calls.length === 1) {
-          throw new Error(
-            `Pane layout revision conflict: expected ${expectedRevision}, current 2`,
-          );
-        }
-        return { ...savedResult(environmentId, layout), revision: 3 };
-      });
+      const save = mock(
+        async (environmentId: string, layout: LayoutInput, expectedRevision: number) => {
+          if (save.mock.calls.length === 1) {
+            throw new Error(
+              `Pane layout revision conflict: expected ${expectedRevision}, current 2`,
+            );
+          }
+          return { ...savedResult(environmentId, layout), revision: 3 };
+        },
+      );
       const load = mock(async () => ({
         ...savedResult("env-1", remoteInput),
         revision: 2,
@@ -2079,17 +1976,15 @@ describe("pane layout persistence", () => {
       store.initialize("container-1", "env-1");
       store.beginHydration("env-1");
       store.finishHydration("env-1", baseState);
-      usePaneLayoutStore.getState().addTab(
-        "default",
-        { id: "local", type: "plain" },
-        "env-1",
-      );
+      usePaneLayoutStore.getState().addTab("default", { id: "local", type: "plain" }, "env-1");
       await waitForTimers();
-      const savedTabIds =
-        (save.mock.calls[1]![1].root as { tabs: Array<{ id: string }> })
-          .tabs.map(({ id }) => id);
-      const storeTabIds = usePaneLayoutStore.getState()
-        .getAllTabs("env-1").map(({ id }) => id);
+      const savedTabIds = (save.mock.calls[1]![1].root as { tabs: Array<{ id: string }> }).tabs.map(
+        ({ id }) => id,
+      );
+      const storeTabIds = usePaneLayoutStore
+        .getState()
+        .getAllTabs("env-1")
+        .map(({ id }) => id);
       stop();
       return { savedTabIds, storeTabIds };
     };
@@ -2135,11 +2030,7 @@ describe("pane layout persistence", () => {
     await waitForTimers();
     expect(settled).toEqual(["env-1"]);
 
-    usePaneLayoutStore.getState().addTab(
-      "default",
-      { id: "fails", type: "plain" },
-      "env-1",
-    );
+    usePaneLayoutStore.getState().addTab("default", { id: "fails", type: "plain" }, "env-1");
     await waitForTimers();
     // A failed write must still announce: the whole point of the signal is to
     // let a dropped remote snapshot be re-fetched when the write it deferred
@@ -2147,11 +2038,7 @@ describe("pane layout persistence", () => {
     expect(settled).toEqual(["env-1", "env-1"]);
 
     unsubscribe();
-    usePaneLayoutStore.getState().addTab(
-      "default",
-      { id: "after", type: "plain" },
-      "env-1",
-    );
+    usePaneLayoutStore.getState().addTab("default", { id: "after", type: "plain" }, "env-1");
     await waitForTimers();
     expect(settled).toEqual(["env-1", "env-1"]);
     stop();
@@ -2169,7 +2056,7 @@ describe("pane layout persistence", () => {
     });
     try {
       const save = mock(async (environmentId: string, input: LayoutInput) =>
-        createSaved(environmentId, input)
+        createSaved(environmentId, input),
       );
       const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
       const store = usePaneLayoutStore.getState();
@@ -2201,14 +2088,19 @@ describe("pane layout persistence", () => {
         revision: 7,
       }),
     );
-    localStorage.setItem("orkestrator.pane-selection.v1", JSON.stringify({
-      version: 1,
-      entries: [{
-        environmentId: "env-1",
-        activePaneId: "default",
-        activeTabIds: {},
-      }],
-    }));
+    localStorage.setItem(
+      "orkestrator.pane-selection.v1",
+      JSON.stringify({
+        version: 1,
+        entries: [
+          {
+            environmentId: "env-1",
+            activePaneId: "default",
+            activeTabIds: {},
+          },
+        ],
+      }),
+    );
 
     const stop = startPaneLayoutPersistence({
       hydrateDependencies: async () => undefined,
@@ -2228,10 +2120,10 @@ describe("pane layout persistence", () => {
       expect(base.root.kind).toBe("leaf");
       expect(desired.root.kind).toBe("leaf");
       expect(JSON.stringify(desired)).toContain("production-write");
-      expect(usePaneLayoutStore.getState().environments.get("env-1")?.backendRevision)
-        .toBe(7);
-      expect(localStorage.getItem("orkestrator.pane-selection.v1"))
-        .toBe(JSON.stringify({ version: 1, entries: [] }));
+      expect(usePaneLayoutStore.getState().environments.get("env-1")?.backendRevision).toBe(7);
+      expect(localStorage.getItem("orkestrator.pane-selection.v1")).toBe(
+        JSON.stringify({ version: 1, entries: [] }),
+      );
     } finally {
       stop();
       applyIntent.mockRestore();
@@ -2269,11 +2161,7 @@ describe("pane layout persistence", () => {
         expect.objectContaining({ message: "intent transport failed" }),
       );
 
-      usePaneLayoutStore.getState().addTab(
-        "default",
-        { id: "second", type: "plain" },
-        "env-1",
-      );
+      usePaneLayoutStore.getState().addTab("default", { id: "second", type: "plain" }, "env-1");
       await waitForTimers();
       expect(applyIntent).toHaveBeenCalledTimes(2);
       expect(JSON.stringify(applyIntent.mock.calls[1]?.[2])).toContain("second");

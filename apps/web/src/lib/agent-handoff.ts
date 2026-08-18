@@ -1,13 +1,7 @@
-import type {
-  NativeMessage,
-  NativeMessagePart,
-} from "@/lib/chat/native-message-types";
+import type { NativeMessage, NativeMessagePart } from "@/lib/chat/native-message-types";
 import { isClientOnlyNativeMessage } from "@/lib/chat/client-only-messages";
 import * as backend from "@/lib/backend";
-import {
-  AGENT_PLATFORMS,
-  type AgentPlatform,
-} from "@orkestrator/protocol/agent-platforms";
+import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 
 export const AGENT_HANDOFF_VERSION = 1;
 export const AGENT_HANDOFF_PROMPT_BUDGET = 180_000;
@@ -32,12 +26,12 @@ const HANDOFF_METADATA_CLOSE = "</orkestrator-handoff-metadata-json>";
 const HANDOFF_TRANSCRIPT_OPEN = "<orkestrator-handoff-transcript-json>";
 const HANDOFF_TRANSCRIPT_CLOSE = "</orkestrator-handoff-transcript-json>";
 const HANDOFF_FOLLOW_UP =
-  "Briefly acknowledge the handoff, state the next concrete action implied by "
-  + "the transcript, and continue unfinished work when it is safe to do so. "
-  + "Ask the user if the transcript does not establish a safe next action.";
+  "Briefly acknowledge the handoff, state the next concrete action implied by " +
+  "the transcript, and continue unfinished work when it is safe to do so. " +
+  "Ask the user if the transcript does not establish a safe next action.";
 const HANDOFF_CURRENT_USER_MESSAGE =
-  "The handoff above is prior conversation history. Respond to the user's new "
-  + "message below as the latest message in that continued conversation:";
+  "The handoff above is prior conversation history. Respond to the user's new " +
+  "message below as the latest message in that continued conversation:";
 
 /**
  * Every agent platform can both originate and receive a transfer.
@@ -122,8 +116,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isProvider(value: unknown): value is AgentProvider {
-  return typeof value === "string"
-    && (AGENT_PLATFORMS as readonly string[]).includes(value);
+  return typeof value === "string" && (AGENT_PLATFORMS as readonly string[]).includes(value);
 }
 
 function isNonBlankString(value: unknown): value is string {
@@ -161,15 +154,17 @@ function hasValidOptionalPartStrings(value: Record<string, unknown>): boolean {
 function hasValidToolDiff(value: unknown): boolean {
   if (value === undefined) return true;
   if (!isRecord(value)) return false;
-  return (value.filePath === undefined || typeof value.filePath === "string")
-    && (value.diff === undefined || typeof value.diff === "string");
+  return (
+    (value.filePath === undefined || typeof value.filePath === "string") &&
+    (value.diff === undefined || typeof value.diff === "string")
+  );
 }
 
 function isNativeMessagePart(value: unknown): value is NativeMessagePart {
   if (
-    !isRecord(value)
-    || typeof value.content !== "string"
-    || ![
+    !isRecord(value) ||
+    typeof value.content !== "string" ||
+    ![
       "text",
       "thinking",
       "file",
@@ -179,9 +174,9 @@ function isNativeMessagePart(value: unknown): value is NativeMessagePart {
       "agent-group",
       "tool-group",
       "task-group",
-    ].includes(String(value.type))
-    || !hasValidOptionalPartStrings(value)
-    || !hasValidToolDiff(value.toolDiff)
+    ].includes(String(value.type)) ||
+    !hasValidOptionalPartStrings(value) ||
+    !hasValidToolDiff(value.toolDiff)
   ) {
     return false;
   }
@@ -189,26 +184,27 @@ function isNativeMessagePart(value: unknown): value is NativeMessagePart {
     return Array.isArray(value.parts) && value.parts.every(isNativeMessagePart);
   }
   if (value.type === "task-group") {
-    return isNativeMessagePart(value.task)
-      && value.task.type === "tool-invocation"
-      && Array.isArray(value.childTools)
-      && value.childTools.every(isNativeMessagePart);
-  }
-  return value.subagentActions === undefined
-    || (
-      Array.isArray(value.subagentActions)
-      && value.subagentActions.every(isNativeMessagePart)
+    return (
+      isNativeMessagePart(value.task) &&
+      value.task.type === "tool-invocation" &&
+      Array.isArray(value.childTools) &&
+      value.childTools.every(isNativeMessagePart)
     );
+  }
+  return (
+    value.subagentActions === undefined ||
+    (Array.isArray(value.subagentActions) && value.subagentActions.every(isNativeMessagePart))
+  );
 }
 
 function isNativeMessage(value: unknown): value is NativeMessage {
   if (!isRecord(value)) return false;
   if (
-    typeof value.id !== "string"
-    || (value.role !== "user" && value.role !== "assistant" && value.role !== "system")
-    || typeof value.content !== "string"
-    || !isValidTimestamp(value.createdAt)
-    || !Array.isArray(value.parts)
+    typeof value.id !== "string" ||
+    (value.role !== "user" && value.role !== "assistant" && value.role !== "system") ||
+    typeof value.content !== "string" ||
+    !isValidTimestamp(value.createdAt) ||
+    !Array.isArray(value.parts)
   ) {
     return false;
   }
@@ -226,9 +222,7 @@ function normalizeNativeMessages(
         ? { ...message, createdAt: fallbackCreatedAt }
         : message;
     });
-    return normalized.every(isNativeMessage)
-      ? normalized as NativeMessage[]
-      : null;
+    return normalized.every(isNativeMessage) ? (normalized as NativeMessage[]) : null;
   } catch {
     // A malformed persisted object can contain a cycle in `parts` or
     // `subagentActions`. Validation is a trust boundary and must return null,
@@ -240,47 +234,39 @@ function normalizeNativeMessages(
 export function parseAgentHandoffSnapshot(value: unknown): AgentHandoffSnapshot | null {
   if (!isRecord(value)) return null;
   if (
-    value.version !== AGENT_HANDOFF_VERSION
-    || !isNonBlankString(value.id)
-    || !isNonBlankString(value.environmentId)
-    || !isProvider(value.sourceProvider)
-    || !isProvider(value.destinationProvider)
-    || value.sourceProvider === value.destinationProvider
-    || !isNonBlankString(value.sourceSessionId)
-    || !isValidTimestamp(value.createdAt)
-    || (value.sourceTitle !== undefined && typeof value.sourceTitle !== "string")
-    || (value.sourceModel !== undefined && typeof value.sourceModel !== "string")
-    || (value.sourceAgent !== undefined && typeof value.sourceAgent !== "string")
-    || !Array.isArray(value.messages)
-    || typeof value.bootstrapPrompt !== "string"
-    || !isRecord(value.stats)
+    value.version !== AGENT_HANDOFF_VERSION ||
+    !isNonBlankString(value.id) ||
+    !isNonBlankString(value.environmentId) ||
+    !isProvider(value.sourceProvider) ||
+    !isProvider(value.destinationProvider) ||
+    value.sourceProvider === value.destinationProvider ||
+    !isNonBlankString(value.sourceSessionId) ||
+    !isValidTimestamp(value.createdAt) ||
+    (value.sourceTitle !== undefined && typeof value.sourceTitle !== "string") ||
+    (value.sourceModel !== undefined && typeof value.sourceModel !== "string") ||
+    (value.sourceAgent !== undefined && typeof value.sourceAgent !== "string") ||
+    !Array.isArray(value.messages) ||
+    typeof value.bootstrapPrompt !== "string" ||
+    !isRecord(value.stats)
   ) {
     return null;
   }
-  const normalizedMessages = normalizeNativeMessages(
-    value.messages,
-    value.createdAt as string,
-  );
+  const normalizedMessages = normalizeNativeMessages(value.messages, value.createdAt as string);
   if (!normalizedMessages) return null;
   const stats = value.stats;
   if (
-    !Number.isInteger(stats.messageCount)
-    || !Number.isInteger(stats.toolCallCount)
-    || !Number.isInteger(stats.includedMessageCount)
-    || !Number.isInteger(stats.omittedMessageCount)
-    || !Number.isInteger(stats.promptCharacters)
-    || (stats.messageCount as number) < 0
-    || (stats.toolCallCount as number) < 0
-    || (stats.includedMessageCount as number) < 0
-    || (stats.omittedMessageCount as number) < 0
-    || (stats.promptCharacters as number) < 0
-    || (
-      stats.droppedMessageCount !== undefined
-      && (
-        !Number.isInteger(stats.droppedMessageCount)
-        || (stats.droppedMessageCount as number) < 0
-      )
-    )
+    !Number.isInteger(stats.messageCount) ||
+    !Number.isInteger(stats.toolCallCount) ||
+    !Number.isInteger(stats.includedMessageCount) ||
+    !Number.isInteger(stats.omittedMessageCount) ||
+    !Number.isInteger(stats.promptCharacters) ||
+    (stats.messageCount as number) < 0 ||
+    (stats.toolCallCount as number) < 0 ||
+    (stats.includedMessageCount as number) < 0 ||
+    (stats.omittedMessageCount as number) < 0 ||
+    (stats.promptCharacters as number) < 0 ||
+    (stats.droppedMessageCount !== undefined &&
+      (!Number.isInteger(stats.droppedMessageCount) || (stats.droppedMessageCount as number) < 0))
   ) {
     return null;
   }
@@ -381,13 +367,13 @@ function parseTranscriptRecord(
   fallbackCreatedAt: string,
 ): NativeMessage | null {
   if (
-    !isRecord(value)
-    || !Number.isInteger(value.index)
-    || (value.index as number) < 0
-    || (value.role !== "user" && value.role !== "assistant" && value.role !== "system")
-    || typeof value.body !== "string"
-    || typeof value.sourceId !== "string"
-    || typeof value.createdAt !== "string"
+    !isRecord(value) ||
+    !Number.isInteger(value.index) ||
+    (value.index as number) < 0 ||
+    (value.role !== "user" && value.role !== "assistant" && value.role !== "system") ||
+    typeof value.body !== "string" ||
+    typeof value.sourceId !== "string" ||
+    typeof value.createdAt !== "string"
   ) {
     return null;
   }
@@ -396,9 +382,7 @@ function parseTranscriptRecord(
     role: value.role,
     content: value.body,
     parts: [{ type: "text", content: value.body }],
-    createdAt: isValidTimestamp(value.createdAt)
-      ? value.createdAt
-      : fallbackCreatedAt,
+    createdAt: isValidTimestamp(value.createdAt) ? value.createdAt : fallbackCreatedAt,
   };
 }
 
@@ -423,10 +407,10 @@ function parseJsonHandoffCarrier(
   const transcriptStart = carrier.indexOf(HANDOFF_TRANSCRIPT_OPEN);
   const transcriptEnd = carrier.indexOf(HANDOFF_TRANSCRIPT_CLOSE);
   if (
-    metadataStart < 0
-    || metadataEnd <= metadataStart
-    || transcriptStart < 0
-    || transcriptEnd <= transcriptStart
+    metadataStart < 0 ||
+    metadataEnd <= metadataStart ||
+    transcriptStart < 0 ||
+    transcriptEnd <= transcriptStart
   ) {
     return null;
   }
@@ -438,12 +422,12 @@ function parseJsonHandoffCarrier(
     carrier.slice(transcriptStart + HANDOFF_TRANSCRIPT_OPEN.length, transcriptEnd).trim(),
   );
   if (
-    !isRecord(metadata)
-    || !isNonBlankString(metadata.id)
-    || !isProvider(metadata.sourceProvider)
-    || !isProvider(metadata.destinationProvider)
-    || metadata.sourceProvider === metadata.destinationProvider
-    || !Array.isArray(records)
+    !isRecord(metadata) ||
+    !isNonBlankString(metadata.id) ||
+    !isProvider(metadata.sourceProvider) ||
+    !isProvider(metadata.destinationProvider) ||
+    metadata.sourceProvider === metadata.destinationProvider ||
+    !Array.isArray(records)
   ) {
     return null;
   }
@@ -474,17 +458,14 @@ function parseLegacyHandoffCarrier(
   LEGACY_OPENING_PATTERN.lastIndex = from;
   const opening = LEGACY_OPENING_PATTERN.exec(content);
   if (
-    !opening
-    || opening.index === undefined
-    || !isNonBlankString(opening[1])
-    || opening[2] === opening[3]
+    !opening ||
+    opening.index === undefined ||
+    !isNonBlankString(opening[1]) ||
+    opening[2] === opening[3]
   ) {
     return null;
   }
-  const closeStart = findStructuralCarrierClose(
-    content,
-    opening.index + opening[0].length,
-  );
+  const closeStart = findStructuralCarrierClose(content, opening.index + opening[0].length);
   if (closeStart < 0) return null;
   const bodyStart = opening.index + opening[0].length;
   const body = content.slice(bodyStart, closeStart);
@@ -560,8 +541,9 @@ function stripCarriersFromText(
   handoffIds: ReadonlySet<string>,
   fallbackCreatedAt: string,
 ): StrippedCarrierText {
-  const carriers = collectHandoffCarriers(text, fallbackCreatedAt)
-    .filter((carrier) => handoffIds.has(carrier.id));
+  const carriers = collectHandoffCarriers(text, fallbackCreatedAt).filter((carrier) =>
+    handoffIds.has(carrier.id),
+  );
   if (carriers.length === 0) {
     return { matched: false, residual: text, extracted: [] };
   }
@@ -585,16 +567,10 @@ function stripCarrierFromMessage(
   extracted: NativeMessage[];
   residual: NativeMessage[];
 } {
-  const fromContent = stripCarriersFromText(
-    message.content,
-    handoffIds,
-    message.createdAt,
-  );
+  const fromContent = stripCarriersFromText(message.content, handoffIds, message.createdAt);
   if (fromContent.matched) {
     const residualParts = [
-      ...(fromContent.residual
-        ? [{ type: "text" as const, content: fromContent.residual }]
-        : []),
+      ...(fromContent.residual ? [{ type: "text" as const, content: fromContent.residual }] : []),
       ...message.parts.filter((part) => part.type !== "text"),
     ];
     if (!fromContent.residual && residualParts.length === 0) {
@@ -611,11 +587,7 @@ function stripCarrierFromMessage(
   const extracted: NativeMessage[] = [];
   const residualParts = message.parts.flatMap((part): NativeMessagePart[] => {
     if (part.type !== "text") return [part];
-    const stripped = stripCarriersFromText(
-      part.content,
-      handoffIds,
-      message.createdAt,
-    );
+    const stripped = stripCarriersFromText(part.content, handoffIds, message.createdAt);
     if (!stripped.matched) return [part];
     matched = true;
     extracted.push(...stripped.extracted);
@@ -673,19 +645,13 @@ function childParts(part: NativeMessagePart): NativeMessagePart[] {
 
 function countToolCallsInPart(part: NativeMessagePart): number {
   const own = part.type === "tool-invocation" ? 1 : 0;
-  return own + childParts(part).reduce(
-    (count, child) => count + countToolCallsInPart(child),
-    0,
-  );
+  return own + childParts(part).reduce((count, child) => count + countToolCallsInPart(child), 0);
 }
 
 export function countAgentHandoffToolCalls(messages: NativeMessage[]): number {
   return messages.reduce(
     (count, message) =>
-      count + message.parts.reduce(
-        (partCount, part) => partCount + countToolCallsInPart(part),
-        0,
-      ),
+      count + message.parts.reduce((partCount, part) => partCount + countToolCallsInPart(part), 0),
     0,
   );
 }
@@ -702,10 +668,7 @@ function renderPart(part: NativeMessagePart, depth = 0): string[] {
           : part.type === "agent-group"
             ? "AGENT GROUP"
             : "TOOL GROUP";
-    return [
-      `${indent}[${label}]`,
-      ...nested.flatMap((child) => renderPart(child, depth + 1)),
-    ];
+    return [`${indent}[${label}]`, ...nested.flatMap((child) => renderPart(child, depth + 1))];
   }
 
   if (part.type === "thinking") {
@@ -734,8 +697,8 @@ function renderPart(part: NativeMessagePart, depth = 0): string[] {
     }
     if (part.toolDiff?.filePath) {
       lines.push(
-        `${indent}changed: ${part.toolDiff.filePath}`
-        + ` (+${part.toolDiff.additions ?? 0}/-${part.toolDiff.deletions ?? 0})`,
+        `${indent}changed: ${part.toolDiff.filePath}` +
+          ` (+${part.toolDiff.additions ?? 0}/-${part.toolDiff.deletions ?? 0})`,
       );
     }
     if (part.toolDiff?.diff) {
@@ -752,10 +715,7 @@ function renderPart(part: NativeMessagePart, depth = 0): string[] {
   return [];
 }
 
-function renderMessage(
-  message: NativeMessage,
-  index: number,
-): HandoffTranscriptRecord {
+function renderMessage(message: NativeMessage, index: number): HandoffTranscriptRecord {
   const parts = message.parts.flatMap((part) => renderPart(part));
   const body = parts.length > 0 ? parts.join("\n") : message.content;
   return {
@@ -827,9 +787,11 @@ function selectTranscriptRecords(
 
 function formatOmissionNotice(omitted: number): string {
   if (omitted <= 0) return "";
-  return `\n[${omitted} earlier messages were omitted from this JSON frame because`
-    + " of the transfer budget. They remain visible in Orkestrator's imported"
-    + " transcript.]\n";
+  return (
+    `\n[${omitted} earlier messages were omitted from this JSON frame because` +
+    " of the transfer budget. They remain visible in Orkestrator's imported" +
+    " transcript.]\n"
+  );
 }
 
 /**
@@ -856,18 +818,11 @@ function boundSnapshotMessages(
     try {
       const ancestors: object[] = [];
       serialized = JSON.stringify(messages[index], function (_key, value: unknown) {
-        if (
-          typeof value === "bigint"
-          || typeof value === "function"
-          || typeof value === "symbol"
-        ) {
+        if (typeof value === "bigint" || typeof value === "function" || typeof value === "symbol") {
           return "[unserializable]";
         }
         if (typeof value === "object" && value !== null) {
-          while (
-            ancestors.length > 0
-            && ancestors.at(-1) !== this
-          ) {
+          while (ancestors.length > 0 && ancestors.at(-1) !== this) {
             ancestors.pop();
           }
           if (ancestors.includes(value)) return "[unserializable]";
@@ -876,10 +831,7 @@ function boundSnapshotMessages(
         return value;
       });
       persistable = JSON.parse(serialized) as NativeMessage;
-      if (
-        typeof persistable.createdAt === "string"
-        && !isValidTimestamp(persistable.createdAt)
-      ) {
+      if (typeof persistable.createdAt === "string" && !isValidTimestamp(persistable.createdAt)) {
         persistable.createdAt = fallbackCreatedAt;
         serialized = JSON.stringify(persistable);
       }
@@ -893,8 +845,8 @@ function boundSnapshotMessages(
       continue;
     }
     if (
-      retainedNewestFirst.length > 0
-      && used + 1 + serialized.length > AGENT_HANDOFF_SNAPSHOT_BUDGET
+      retainedNewestFirst.length > 0 &&
+      used + 1 + serialized.length > AGENT_HANDOFF_SNAPSHOT_BUDGET
     ) {
       dropped += index + 1;
       break;
@@ -953,17 +905,17 @@ ${HANDOFF_CLOSE}`;
   const omissionNoticeReserve = formatOmissionNotice(retainedMessages.length).length;
   const available = Math.max(
     1_000,
-    AGENT_HANDOFF_PROMPT_BUDGET
-      - header.length
-      - transcriptFooter.length
-      - carrierFooter.length
-      - omissionNoticeReserve,
+    AGENT_HANDOFF_PROMPT_BUDGET -
+      header.length -
+      transcriptFooter.length -
+      carrierFooter.length -
+      omissionNoticeReserve,
   );
   const selection = selectTranscriptRecords(retainedMessages, available);
   const omissionNotice = formatOmissionNotice(selection.omitted);
   const bootstrapPrompt =
-    `${header}${carrierJson(selection.records)}${transcriptFooter}`
-    + `${omissionNotice}${carrierFooter}`;
+    `${header}${carrierJson(selection.records)}${transcriptFooter}` +
+    `${omissionNotice}${carrierFooter}`;
   return {
     version: AGENT_HANDOFF_VERSION,
     id: options.id,
@@ -1001,10 +953,7 @@ export function prependAgentHandoffHistory(
   bootstrapPrompt: string | undefined,
   userPrompt: string,
 ): string {
-  if (
-    !bootstrapPrompt?.trim()
-    || userPrompt.startsWith(bootstrapPrompt)
-  ) {
+  if (!bootstrapPrompt?.trim() || userPrompt.startsWith(bootstrapPrompt)) {
     return userPrompt;
   }
   return `${bootstrapPrompt}\n\n${HANDOFF_CURRENT_USER_MESSAGE}\n\n${userPrompt}`;
@@ -1137,14 +1086,13 @@ export function agentHandoffTranscriptDigest(messages: NativeMessage[]): string 
   };
 
   visit(messages);
-  return `${visitedValueCount}:${hashA.toString(16).padStart(8, "0")}`
-    + `:${hashB.toString(16).padStart(8, "0")}`;
+  return (
+    `${visitedValueCount}:${hashA.toString(16).padStart(8, "0")}` +
+    `:${hashB.toString(16).padStart(8, "0")}`
+  );
 }
 
-function prefixImportedMessage(
-  handoffId: string,
-  message: NativeMessage,
-): NativeMessage {
+function prefixImportedMessage(handoffId: string, message: NativeMessage): NativeMessage {
   return {
     ...message,
     id: `handoff:${handoffId}:source:${message.id}`,
@@ -1194,15 +1142,13 @@ export function stripAgentHandoffCarriers(
  * objects are re-created for every imported message, and recomputing them on
  * each streaming tick re-renders the entire imported history.
  */
-export function buildAgentHandoffImportedMessages(
-  handoff: AgentHandoffSnapshot,
-): NativeMessage[] {
+export function buildAgentHandoffImportedMessages(handoff: AgentHandoffSnapshot): NativeMessage[] {
   const sourceLabel = AGENT_PROVIDER_LABELS[handoff.sourceProvider];
   const destinationLabel = AGENT_PROVIDER_LABELS[handoff.destinationProvider];
   const boundaryText =
-    `Continued in ${destinationLabel} from ${sourceLabel}`
-    + ` · ${handoff.stats.messageCount} messages`
-    + ` · ${handoff.stats.toolCallCount} tool calls`;
+    `Continued in ${destinationLabel} from ${sourceLabel}` +
+    ` · ${handoff.stats.messageCount} messages` +
+    ` · ${handoff.stats.toolCallCount} tool calls`;
   return [
     ...handoff.messages.map((message) => prefixImportedMessage(handoff.id, message)),
     {
@@ -1252,38 +1198,32 @@ export function resetAgentHandoffCache(): void {
   handoffLoadEpochs.clear();
 }
 
-export async function loadAgentHandoff(
-  handoffId: string,
-): Promise<AgentHandoffSnapshot | null> {
+export async function loadAgentHandoff(handoffId: string): Promise<AgentHandoffSnapshot | null> {
   if (handoffCache.has(handoffId)) return handoffCache.get(handoffId) ?? null;
   const existing = handoffLoads.get(handoffId);
   if (existing) return existing;
   const generation = handoffCacheGeneration;
   const epoch = handoffLoadEpochs.get(handoffId) ?? 0;
-  const request = backend.getAgentHandoff(handoffId)
-    .then((record) => {
-      const candidate = record
-        && record.id === handoffId
-        && record.version === AGENT_HANDOFF_VERSION
+  const request = backend.getAgentHandoff(handoffId).then((record) => {
+    const candidate =
+      record && record.id === handoffId && record.version === AGENT_HANDOFF_VERSION
         ? parseAgentHandoffSnapshot(record.snapshot)
         : null;
-      const parsed =
-        candidate
-        && candidate.id === handoffId
-        && candidate.environmentId === record?.environmentId
-          ? candidate
-          : null;
-      if (
-        generation === handoffCacheGeneration
-        && epoch === (handoffLoadEpochs.get(handoffId) ?? 0)
-      ) {
-        handoffCache.set(handoffId, parsed);
-        return parsed;
-      }
-      // The handoff was forgotten or the whole cache was reset while this read
-      // was in flight. Suppress the obsolete value for both cache and caller.
-      return null;
-    });
+    const parsed =
+      candidate && candidate.id === handoffId && candidate.environmentId === record?.environmentId
+        ? candidate
+        : null;
+    if (
+      generation === handoffCacheGeneration &&
+      epoch === (handoffLoadEpochs.get(handoffId) ?? 0)
+    ) {
+      handoffCache.set(handoffId, parsed);
+      return parsed;
+    }
+    // The handoff was forgotten or the whole cache was reset while this read
+    // was in flight. Suppress the obsolete value for both cache and caller.
+    return null;
+  });
   let pending: Promise<AgentHandoffSnapshot | null>;
   pending = request.finally(() => {
     if (handoffLoads.get(handoffId) === pending) {
@@ -1294,9 +1234,7 @@ export async function loadAgentHandoff(
   return pending;
 }
 
-export async function persistAgentHandoff(
-  handoff: AgentHandoffSnapshot,
-): Promise<void> {
+export async function persistAgentHandoff(handoff: AgentHandoffSnapshot): Promise<void> {
   const saved = await backend.saveAgentHandoff(
     handoff.id,
     handoff.environmentId,
@@ -1307,12 +1245,10 @@ export async function persistAgentHandoff(
   // the committed record instead of replacing it. Caching the local snapshot
   // without checking would leave memory and disk silently disagreeing.
   if (
-    saved
-    && (
-      saved.id !== handoff.id
-      || saved.environmentId !== handoff.environmentId
-      || saved.version !== AGENT_HANDOFF_VERSION
-    )
+    saved &&
+    (saved.id !== handoff.id ||
+      saved.environmentId !== handoff.environmentId ||
+      saved.version !== AGENT_HANDOFF_VERSION)
   ) {
     throw new Error("The conversation transfer was not stored as written");
   }

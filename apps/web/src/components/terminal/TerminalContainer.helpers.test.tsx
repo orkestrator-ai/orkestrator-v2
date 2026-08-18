@@ -1,97 +1,61 @@
-import { afterAll,beforeEach,describe,expect,mock,test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 
+import { useEffect, useRef, type ReactNode } from "react";
 
-import { useEffect,useRef,type ReactNode } from "react";
+import { act, cleanup, render, waitFor } from "@testing-library/react";
 
-
-import { act,cleanup,render,waitFor } from "@testing-library/react";
-
-
-import { MAX_TABS,TerminalProvider,useTerminalContext,type CreatableTabType,type CreateFileTabOptions,type CreateTabOptions } from "@/contexts";
-
+import {
+  MAX_TABS,
+  TerminalProvider,
+  useTerminalContext,
+  type CreatableTabType,
+  type CreateFileTabOptions,
+  type CreateTabOptions,
+} from "@/contexts";
 
 import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
 
-
 import { useConfigStore } from "@/stores/configStore";
-
 
 import { useEnvironmentStore } from "@/stores/environmentStore";
 
-
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-
 
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 
-
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 
-
-
-
-
-
-import {
-useLoopedReviewStore,
-type LoopedReviewWorkflow,
-} from "@/stores/loopedReviewStore";
-
-
-
+import { useLoopedReviewStore, type LoopedReviewWorkflow } from "@/stores/loopedReviewStore";
 
 import { useTerminalSessionStore } from "@/stores/terminalSessionStore";
 
-
 import { createSessionKey as createNativeSessionKey } from "@/lib/utils";
 
+import { type PaneLeaf, type PersistedPaneLayout } from "@/types/paneLayout";
 
-import {
-type PaneLeaf,
-type PersistedPaneLayout
-} from "@/types/paneLayout";
-
-
-import type { EnsureEnvironmentSetupResult,EnvironmentSetupSession } from "@/types";
-
+import type { EnsureEnvironmentSetupResult, EnvironmentSetupSession } from "@/types";
 
 import type { CollisionDetection } from "@dnd-kit/core";
 
-
 import * as realBackend from "@/lib/backend";
-
 
 import * as realSetupCommands from "@/lib/setup-commands";
 
-
 import { requestTerminalBrowserTab } from "@/lib/terminal-links";
-
 
 import * as realDndKitCore from "@dnd-kit/core";
 
-
-
-
 import { mockToastError } from "../../../../../tests/mocks/sonner";
-
 
 import * as realNativeEvents from "@/lib/native/events";
 
-
-import {
-listen
-} from "@/lib/native/events";
-
-
+import { listen } from "@/lib/native/events";
 
 const realBackendSnapshot = { ...realBackend };
 
-
 const realSetupCommandsSnapshot = { ...realSetupCommands };
 
-
 const realDndKitCoreSnapshot = { ...realDndKitCore };
-
 
 // `@/lib/native/events` is mocked once in tests/setup.ts and shared with every
 // other suite. Snapshot it here so `afterAll` can put the module back, and
@@ -100,16 +64,11 @@ const realDndKitCoreSnapshot = { ...realDndKitCore };
 // mock into a file that runs after this one.
 const realNativeEventsSnapshot = { ...realNativeEvents };
 
-
 const originalOrkestrator = window.orkestrator;
-
 
 const listenMock = listen as ReturnType<typeof mock>;
 
-
 const defaultListenImplementation = () => Promise.resolve(() => {});
-
-
 
 type DndContextHarnessProps = {
   children: ReactNode;
@@ -119,20 +78,13 @@ type DndContextHarnessProps = {
   onDragEnd: (event: { active: { id: string }; over: { id: string } | null }) => void;
 };
 
-
-
 let latestDndContextProps: DndContextHarnessProps | null = null;
-
 
 const pointerWithinMock = mock<CollisionDetection>((_args) => []);
 
-
 const rectIntersectionMock = mock<CollisionDetection>((_args) => []);
 
-
 const closestCenterMock = mock<CollisionDetection>((_args) => []);
-
-
 
 mock.module("@dnd-kit/core", () => ({
   ...realDndKitCoreSnapshot,
@@ -145,138 +97,141 @@ mock.module("@dnd-kit/core", () => ({
   closestCenter: closestCenterMock,
 }));
 
-
-
 const markSetupScriptsCompleteMock = mock(() => {});
-
 
 const getSetupCommandsMock = mock(async (): Promise<string[] | null> => null);
 
-
-const ensureEnvironmentSetupMock = mock(async (environmentId: string): Promise<EnsureEnvironmentSetupResult> => {
-  const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId)!;
-  return {
-    setupStarted: false,
-    environment: {
-      ...environment,
-      setupScriptsComplete: true,
-    },
-  };
-});
-
+const ensureEnvironmentSetupMock = mock(
+  async (environmentId: string): Promise<EnsureEnvironmentSetupResult> => {
+    const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId)!;
+    return {
+      setupStarted: false,
+      environment: {
+        ...environment,
+        setupScriptsComplete: true,
+      },
+    };
+  },
+);
 
 const runEnvironmentSetupMock = mock(async (environmentId: string) => ({
   ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
   setupScriptsComplete: true,
 }));
 
-
-const getEnvironmentSetupSessionMock = mock(async (_environmentId: string): Promise<EnvironmentSetupSession | null> => null);
-
+const getEnvironmentSetupSessionMock = mock(
+  async (_environmentId: string): Promise<EnvironmentSetupSession | null> => null,
+);
 
 const awaitEnvironmentSetupSessionMock = mock(
   async (environmentId: string): Promise<EnvironmentSetupSession | null> =>
     getEnvironmentSetupSessionMock(environmentId),
 );
 
-
-const setEnvironmentPendingAgentLaunchMock = mock(async (environmentId: string, pending: boolean) => ({
-  ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
-  pendingAgentLaunch: pending,
-  ...(pending
-    ? {}
-    : {
-        initialAgentModel: undefined,
-        initialReasoningEffort: undefined,
-      }),
-}));
-
+const setEnvironmentPendingAgentLaunchMock = mock(
+  async (environmentId: string, pending: boolean) => ({
+    ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+    pendingAgentLaunch: pending,
+    ...(pending
+      ? {}
+      : {
+          initialAgentModel: undefined,
+          initialReasoningEffort: undefined,
+        }),
+  }),
+);
 
 const acknowledgeStartupAgentSessionMock = mock(async (environmentId: string) => ({
   ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
   startupAgentSession: undefined,
 }));
 
+const setEnvironmentInitialPromptMock = mock(
+  async (environmentId: string, initialPrompt: string) => ({
+    ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+    initialPrompt,
+  }),
+);
 
-const setEnvironmentInitialPromptMock = mock(async (environmentId: string, initialPrompt: string) => ({
-  ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
-  initialPrompt,
-}));
+const savePaneLayoutMock = mock(
+  async (
+    environmentId: string,
+    layout: Parameters<typeof realBackend.savePaneLayout>[1],
+    _expectedRevision: number,
+  ): Promise<PersistedPaneLayout> => ({
+    ...layout,
+    environmentId,
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    revision: 1,
+  }),
+);
 
+const getPaneLayoutMock = mock(
+  async (_environmentId: string): Promise<PersistedPaneLayout | null> => null,
+);
 
-const savePaneLayoutMock = mock(async (
-  environmentId: string,
-  layout: Parameters<typeof realBackend.savePaneLayout>[1],
-  _expectedRevision: number,
-): Promise<PersistedPaneLayout> => ({
-  ...layout,
-  environmentId,
-  updatedAt: "2026-01-01T00:00:00.000Z",
-  revision: 1,
-}));
+const deletePaneLayoutMock = mock(async (_environmentId: string, _expectedRevision?: number) => {});
 
+const listLoopedReviewWorkflowsMock = mock(
+  async (_environmentId: string) =>
+    [] as Array<{
+      version: number;
+      id: string;
+      environmentId: string;
+      snapshot: LoopedReviewWorkflow;
+      updatedAt: string;
+      revision: number;
+    }>,
+);
 
-const getPaneLayoutMock = mock(async (_environmentId: string): Promise<PersistedPaneLayout | null> => null);
+const writeContainerFileMock = mock(
+  async (_containerId: string, filePath: string, _base64Data: string) => `/workspace/${filePath}`,
+);
 
+const writeLocalFileMock = mock(
+  async (worktreePath: string, filePath: string, _base64Data: string) =>
+    `${worktreePath}/${filePath}`,
+);
 
-const deletePaneLayoutMock = mock(async (
-  _environmentId: string,
-  _expectedRevision?: number,
-) => {});
-
-
-const listLoopedReviewWorkflowsMock = mock(async (_environmentId: string) => [] as Array<{
-  version: number;
-  id: string;
-  environmentId: string;
-  snapshot: LoopedReviewWorkflow;
-  updatedAt: string;
-  revision: number;
-}>);
-
-
-const writeContainerFileMock = mock(async (
-  _containerId: string,
-  filePath: string,
-  _base64Data: string,
-) => `/workspace/${filePath}`);
-
-
-const writeLocalFileMock = mock(async (
-  worktreePath: string,
-  filePath: string,
-  _base64Data: string,
-) => `${worktreePath}/${filePath}`);
-
-
-const writeInitialPromptAttachmentsMock = mock(async (
-  environmentId: string,
-  attachments: Parameters<typeof realBackend.writeInitialPromptAttachments>[1],
-) => {
-  const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
-  if (!environment) throw new Error(`Environment not found: ${environmentId}`);
-  const usedNames = new Set<string>();
-  return Promise.all(attachments.map(async (attachment) => {
-    const sanitized = attachment.name.replace(/[^a-zA-Z0-9._-]/g, "-");
-    const dot = sanitized.lastIndexOf(".");
-    const stem = dot > 0 ? sanitized.slice(0, dot) : sanitized;
-    const extension = dot > 0 ? sanitized.slice(dot) : "";
-    let name = sanitized;
-    let suffix = 2;
-    while (usedNames.has(name.toLowerCase())) {
-      name = `${stem}-${suffix}${extension}`;
-      suffix += 1;
-    }
-    usedNames.add(name.toLowerCase());
-    const relativePath = `.orkestrator/initial-prompt/${name}`;
-    const savedPath = environment.environmentType === "local"
-      ? await writeLocalFileMock(environment.worktreePath!, relativePath, attachment.base64Data)
-      : await writeContainerFileMock(environment.containerId!, relativePath, attachment.base64Data);
-    return { name, path: savedPath };
-  }));
-});
-
-
+const writeInitialPromptAttachmentsMock = mock(
+  async (
+    environmentId: string,
+    attachments: Parameters<typeof realBackend.writeInitialPromptAttachments>[1],
+  ) => {
+    const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
+    if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+    const usedNames = new Set<string>();
+    return Promise.all(
+      attachments.map(async (attachment) => {
+        const sanitized = attachment.name.replace(/[^a-zA-Z0-9._-]/g, "-");
+        const dot = sanitized.lastIndexOf(".");
+        const stem = dot > 0 ? sanitized.slice(0, dot) : sanitized;
+        const extension = dot > 0 ? sanitized.slice(dot) : "";
+        let name = sanitized;
+        let suffix = 2;
+        while (usedNames.has(name.toLowerCase())) {
+          name = `${stem}-${suffix}${extension}`;
+          suffix += 1;
+        }
+        usedNames.add(name.toLowerCase());
+        const relativePath = `.orkestrator/initial-prompt/${name}`;
+        const savedPath =
+          environment.environmentType === "local"
+            ? await writeLocalFileMock(
+                environment.worktreePath!,
+                relativePath,
+                attachment.base64Data,
+              )
+            : await writeContainerFileMock(
+                environment.containerId!,
+                relativePath,
+                attachment.base64Data,
+              );
+        return { name, path: savedPath };
+      }),
+    );
+  },
+);
 
 mock.module("@/lib/setup-commands", () => ({
   ...realSetupCommandsSnapshot,
@@ -291,14 +246,9 @@ mock.module("@/lib/setup-commands", () => ({
     setupCommandsResolved: boolean;
     hasPendingCommands: boolean;
   }) =>
-    isLocalEnvironment &&
-    isLocalEnvironmentReady &&
-    !setupCommandsResolved &&
-    !hasPendingCommands,
+    isLocalEnvironment && isLocalEnvironmentReady && !setupCommandsResolved && !hasPendingCommands,
   markSetupScriptsComplete: markSetupScriptsCompleteMock,
 }));
-
-
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
@@ -319,13 +269,9 @@ mock.module("@/lib/backend", () => ({
   writeInitialPromptAttachments: writeInitialPromptAttachmentsMock,
 }));
 
-
-
 mock.module("@/components/pane-layout", () => ({
   PaneTree: () => null,
 }));
-
-
 
 mock.module("@/components/ui/context-menu", () => ({
   ContextMenu: ({ children }: { children: ReactNode }) => <>{children}</>,
@@ -346,13 +292,9 @@ mock.module("@/components/ui/context-menu", () => ({
   ),
 }));
 
-
-
 mock.module("./TerminalPortalHost", () => ({
   TerminalPortalHost: () => null,
 }));
-
-
 
 mock.module("./InitializationLogs", () => ({
   InitializationLogs: ({ containerId }: { containerId: string }) => (
@@ -360,17 +302,10 @@ mock.module("./InitializationLogs", () => ({
   ),
 }));
 
-
-
-const {
-  TerminalContainer,
-  createTerminalCollisionDetection,
-  getTerminalTabDragEndAction,
-} = await import("./TerminalContainer");
+const { TerminalContainer, createTerminalCollisionDetection, getTerminalTabDragEndAction } =
+  await import("./TerminalContainer");
 
 describe("TerminalContainer", () => {
-
-
   afterAll(() => {
     window.orkestrator = originalOrkestrator;
     mock.module("@/lib/setup-commands", () => realSetupCommandsSnapshot);
@@ -380,8 +315,6 @@ describe("TerminalContainer", () => {
     listenMock.mockImplementation(defaultListenImplementation);
     mock.module("@/lib/native/events", () => realNativeEventsSnapshot);
   });
-
-
 
   beforeEach(() => {
     cleanup();
@@ -398,16 +331,19 @@ describe("TerminalContainer", () => {
 
     usePaneLayoutStore.setState({
       environments: new Map([
-        ["env-visible", {
-          root: {
-            kind: "leaf",
-            id: "default",
-            tabs: [{ id: "visible-tab", type: "plain" }],
-            activeTabId: "visible-tab",
+        [
+          "env-visible",
+          {
+            root: {
+              kind: "leaf",
+              id: "default",
+              tabs: [{ id: "visible-tab", type: "plain" }],
+              activeTabId: "visible-tab",
+            },
+            activePaneId: "default",
+            containerId: "container-visible",
           },
-          activePaneId: "default",
-          containerId: "container-visible",
-        }],
+        ],
       ]),
       hydration: new Map(),
       activeEnvironmentId: "env-visible",
@@ -487,26 +423,30 @@ describe("TerminalContainer", () => {
     getEnvironmentSetupSessionMock.mockResolvedValue(null);
     awaitEnvironmentSetupSessionMock.mockClear();
     setEnvironmentPendingAgentLaunchMock.mockReset();
-    setEnvironmentPendingAgentLaunchMock.mockImplementation(async (environmentId: string, pending: boolean) => ({
-      ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
-      pendingAgentLaunch: pending,
-      ...(pending
-        ? {}
-        : {
-            initialAgentModel: undefined,
-            initialReasoningEffort: undefined,
-          }),
-    }));
+    setEnvironmentPendingAgentLaunchMock.mockImplementation(
+      async (environmentId: string, pending: boolean) => ({
+        ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+        pendingAgentLaunch: pending,
+        ...(pending
+          ? {}
+          : {
+              initialAgentModel: undefined,
+              initialReasoningEffort: undefined,
+            }),
+      }),
+    );
     acknowledgeStartupAgentSessionMock.mockReset();
     acknowledgeStartupAgentSessionMock.mockImplementation(async (environmentId: string) => ({
       ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
       startupAgentSession: undefined,
     }));
     setEnvironmentInitialPromptMock.mockReset();
-    setEnvironmentInitialPromptMock.mockImplementation(async (environmentId: string, initialPrompt: string) => ({
-      ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
-      initialPrompt,
-    }));
+    setEnvironmentInitialPromptMock.mockImplementation(
+      async (environmentId: string, initialPrompt: string) => ({
+        ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+        initialPrompt,
+      }),
+    );
     savePaneLayoutMock.mockClear();
     getPaneLayoutMock.mockReset();
     getPaneLayoutMock.mockResolvedValue(null);
@@ -518,8 +458,12 @@ describe("TerminalContainer", () => {
     writeContainerFileMock.mockReset();
     writeLocalFileMock.mockReset();
     writeInitialPromptAttachmentsMock.mockClear();
-    writeContainerFileMock.mockImplementation(async (_containerId: string, filePath: string) => `/workspace/${filePath}`);
-    writeLocalFileMock.mockImplementation(async (worktreePath: string, filePath: string) => `${worktreePath}/${filePath}`);
+    writeContainerFileMock.mockImplementation(
+      async (_containerId: string, filePath: string) => `/workspace/${filePath}`,
+    );
+    writeLocalFileMock.mockImplementation(
+      async (worktreePath: string, filePath: string) => `${worktreePath}/${filePath}`,
+    );
 
     useConfigStore.setState((state) => ({
       ...state,
@@ -541,8 +485,6 @@ describe("TerminalContainer", () => {
       pendingNativeLaunches: {},
     });
   });
-
-
 
   describe("createFileTab", () => {
     function CreateFileTabHarness({
@@ -577,7 +519,7 @@ describe("TerminalContainer", () => {
               { filePath: "src/App.tsx", options: { isDiff: false, gitStatus: "invalid" } },
             ]}
           />
-        </TerminalProvider>
+        </TerminalProvider>,
       );
 
       await waitFor(() => {
@@ -614,7 +556,7 @@ describe("TerminalContainer", () => {
               { filePath: "src/main.tsx", options: { isDiff: true, gitStatus: "A" } },
             ]}
           />
-        </TerminalProvider>
+        </TerminalProvider>,
       );
 
       await waitFor(() => {
@@ -642,10 +584,10 @@ describe("TerminalContainer", () => {
                   isDiff: true,
                 },
               },
-              ...Array.from(
-                { length: MAX_TABS - 1 },
-                (_, index) => ({ id: `tab-${index}`, type: "plain" as const }),
-              ),
+              ...Array.from({ length: MAX_TABS - 1 }, (_, index) => ({
+                id: `tab-${index}`,
+                type: "plain" as const,
+              })),
             ],
             activeTabId: "tab-0",
           },
@@ -683,16 +625,19 @@ describe("TerminalContainer", () => {
     test("creates local file tabs with worktree metadata and no container id", async () => {
       usePaneLayoutStore.setState({
         environments: new Map([
-          ["env-visible", {
-            root: {
-              kind: "leaf",
-              id: "default",
-              tabs: [{ id: "visible-tab", type: "plain" }],
-              activeTabId: "visible-tab",
+          [
+            "env-visible",
+            {
+              root: {
+                kind: "leaf",
+                id: "default",
+                tabs: [{ id: "visible-tab", type: "plain" }],
+                activeTabId: "visible-tab",
+              },
+              activePaneId: "default",
+              containerId: null,
             },
-            activePaneId: "default",
-            containerId: null,
-          }],
+          ],
         ]),
         activeEnvironmentId: "env-visible",
       });
@@ -706,21 +651,15 @@ describe("TerminalContainer", () => {
                 environmentType: "local",
                 worktreePath: "/tmp/env-visible-worktree",
               }
-            : env
+            : env,
         ),
       }));
 
       render(
         <TerminalProvider>
-          <TerminalContainer
-            environmentId="env-visible"
-            containerId={null}
-            isActive
-          />
-          <CreateFileTabHarness
-            calls={[{ filePath: "README.md", options: { gitStatus: "?" } }]}
-          />
-        </TerminalProvider>
+          <TerminalContainer environmentId="env-visible" containerId={null} isActive />
+          <CreateFileTabHarness calls={[{ filePath: "README.md", options: { gitStatus: "?" } }]} />
+        </TerminalProvider>,
       );
 
       await waitFor(() => {
@@ -743,10 +682,10 @@ describe("TerminalContainer", () => {
           root: {
             kind: "leaf",
             id: "default",
-            tabs: Array.from(
-              { length: MAX_TABS },
-              (_, index) => ({ id: `tab-${index}`, type: "plain" as const }),
-            ),
+            tabs: Array.from({ length: MAX_TABS }, (_, index) => ({
+              id: `tab-${index}`,
+              type: "plain" as const,
+            })),
             activeTabId: "tab-0",
           },
           activePaneId: "default",
@@ -778,8 +717,6 @@ describe("TerminalContainer", () => {
     });
   });
 
-
-
   describe("tab drag-end decisions", () => {
     const pane = (id: string, tabIds: string[]): PaneLeaf => ({
       kind: "leaf",
@@ -801,7 +738,7 @@ describe("TerminalContainer", () => {
           overId: "edge:right:bottom",
           lastDragOverPaneId: null,
           getPane,
-        })
+        }),
       ).toEqual({
         type: "split",
         targetPaneId: "right",
@@ -816,7 +753,7 @@ describe("TerminalContainer", () => {
           overId: "tab:c:pane:left",
           lastDragOverPaneId: null,
           getPane,
-        })
+        }),
       ).toEqual({ type: "reorder", paneId: "left", fromIndex: 0, toIndex: 2 });
 
       expect(
@@ -825,7 +762,7 @@ describe("TerminalContainer", () => {
           overId: "tab:y:pane:right",
           lastDragOverPaneId: null,
           getPane,
-        })
+        }),
       ).toEqual({
         type: "move",
         fromPaneId: "left",
@@ -840,7 +777,7 @@ describe("TerminalContainer", () => {
           overId: "tab:b:pane:left",
           lastDragOverPaneId: "right",
           getPane,
-        })
+        }),
       ).toEqual({
         type: "move",
         fromPaneId: "left",
@@ -850,7 +787,7 @@ describe("TerminalContainer", () => {
     });
 
     test("returns none for invalid drops and no-op same-pane tabbar drops", () => {
-      const getPane = (paneId: string) => paneId === "left" ? pane("left", ["a"]) : null;
+      const getPane = (paneId: string) => (paneId === "left" ? pane("left", ["a"]) : null);
 
       expect(
         getTerminalTabDragEndAction({
@@ -858,7 +795,7 @@ describe("TerminalContainer", () => {
           overId: null,
           lastDragOverPaneId: null,
           getPane,
-        })
+        }),
       ).toEqual({ type: "none" });
       expect(
         getTerminalTabDragEndAction({
@@ -866,7 +803,7 @@ describe("TerminalContainer", () => {
           overId: "tab:a:pane:left",
           lastDragOverPaneId: null,
           getPane,
-        })
+        }),
       ).toEqual({ type: "none" });
       expect(
         getTerminalTabDragEndAction({
@@ -874,21 +811,17 @@ describe("TerminalContainer", () => {
           overId: "tab:a:pane:left",
           lastDragOverPaneId: null,
           getPane,
-        })
+        }),
       ).toEqual({ type: "none" });
       const getTwoPanes = (paneId: string) =>
-        paneId === "left"
-          ? pane("left", ["a"])
-          : paneId === "right"
-            ? pane("right", ["x"])
-            : null;
+        paneId === "left" ? pane("left", ["a"]) : paneId === "right" ? pane("right", ["x"]) : null;
       expect(
         getTerminalTabDragEndAction({
           activeId: "tab:a:pane:left",
           overId: "tab:missing:pane:right",
           lastDragOverPaneId: null,
           getPane: getTwoPanes,
-        })
+        }),
       ).toEqual({ type: "none" });
       expect(
         getTerminalTabDragEndAction({
@@ -896,7 +829,7 @@ describe("TerminalContainer", () => {
           overId: "tabbar:left",
           lastDragOverPaneId: null,
           getPane,
-        })
+        }),
       ).toEqual({ type: "none" });
       expect(
         getTerminalTabDragEndAction({
@@ -904,7 +837,7 @@ describe("TerminalContainer", () => {
           overId: "tabbar:left",
           lastDragOverPaneId: null,
           getPane,
-        })
+        }),
       ).toEqual({ type: "none" });
       expect(
         getTerminalTabDragEndAction({
@@ -912,7 +845,7 @@ describe("TerminalContainer", () => {
           overId: "not-a-drop-target",
           lastDragOverPaneId: null,
           getPane,
-        })
+        }),
       ).toEqual({ type: "none" });
       expect(
         getTerminalTabDragEndAction({
@@ -920,7 +853,7 @@ describe("TerminalContainer", () => {
           overId: "tab:a:pane:left",
           lastDragOverPaneId: null,
           getPane,
-        })
+        }),
       ).toEqual({ type: "none" });
       expect(
         getTerminalTabDragEndAction({
@@ -928,7 +861,7 @@ describe("TerminalContainer", () => {
           overId: "tab:missing:pane:right",
           lastDragOverPaneId: null,
           getPane,
-        })
+        }),
       ).toEqual({ type: "none" });
     });
 
@@ -945,7 +878,7 @@ describe("TerminalContainer", () => {
           overId: "tabbar:right",
           lastDragOverPaneId: null,
           getPane,
-        })
+        }),
       ).toEqual({
         type: "move",
         fromPaneId: "left",
@@ -958,7 +891,7 @@ describe("TerminalContainer", () => {
           overId: "tabbar:left",
           lastDragOverPaneId: null,
           getPane,
-        })
+        }),
       ).toEqual({ type: "reorder", paneId: "left", fromIndex: 0, toIndex: 2 });
       expect(
         getTerminalTabDragEndAction({
@@ -966,7 +899,7 @@ describe("TerminalContainer", () => {
           overId: "tabbar:missing",
           lastDragOverPaneId: null,
           getPane,
-        })
+        }),
       ).toEqual({ type: "none" });
     });
 
@@ -1021,7 +954,10 @@ describe("TerminalContainer", () => {
               {
                 kind: "leaf",
                 id: "left",
-                tabs: [{ id: "a", type: "plain" }, { id: "b", type: "plain" }],
+                tabs: [
+                  { id: "a", type: "plain" },
+                  { id: "b", type: "plain" },
+                ],
                 activeTabId: "a",
               },
               {
@@ -1062,10 +998,16 @@ describe("TerminalContainer", () => {
 
       await waitFor(() => {
         expect(
-          usePaneLayoutStore.getState().getPane("left", "env-visible")?.tabs.map((tab) => tab.id),
+          usePaneLayoutStore
+            .getState()
+            .getPane("left", "env-visible")
+            ?.tabs.map((tab) => tab.id),
         ).toEqual(["b"]);
         expect(
-          usePaneLayoutStore.getState().getPane("right", "env-visible")?.tabs.map((tab) => tab.id),
+          usePaneLayoutStore
+            .getState()
+            .getPane("right", "env-visible")
+            ?.tabs.map((tab) => tab.id),
         ).toEqual(["x", "a"]);
       });
 
@@ -1083,11 +1025,9 @@ describe("TerminalContainer", () => {
     });
 
     test("wires tabbar hover, reorder, split, and unknown hover drag events", async () => {
-      usePaneLayoutStore.getState().addTab(
-        "default",
-        { id: "second-tab", type: "plain" },
-        "env-visible",
-      );
+      usePaneLayoutStore
+        .getState()
+        .addTab("default", { id: "second-tab", type: "plain" }, "env-visible");
       render(
         <TerminalProvider>
           <TerminalContainer
@@ -1109,7 +1049,10 @@ describe("TerminalContainer", () => {
         });
       });
       expect(
-        usePaneLayoutStore.getState().getPane("default", "env-visible")?.tabs.map((tab) => tab.id),
+        usePaneLayoutStore
+          .getState()
+          .getPane("default", "env-visible")
+          ?.tabs.map((tab) => tab.id),
       ).toEqual(["second-tab", "visible-tab"]);
 
       act(() => {
@@ -1120,14 +1063,12 @@ describe("TerminalContainer", () => {
       });
 
       await waitFor(() => {
-        expect(
-          usePaneLayoutStore.getState().environments.get("env-visible")?.root.kind,
-        ).toBe("split");
+        expect(usePaneLayoutStore.getState().environments.get("env-visible")?.root.kind).toBe(
+          "split",
+        );
       });
     });
   });
-
-
 
   describe("createTab forwards displayTitle", () => {
     function CreateTabHarness({
@@ -1168,13 +1109,14 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => expect(accepted).toHaveBeenCalledWith(true));
-      expect(usePaneLayoutStore.getState().getAllTabs("env-visible"))
-        .toContainEqual(expect.objectContaining({
+      expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toContainEqual(
+        expect.objectContaining({
           type: "looped-review",
           loopedReviewTabData: expect.objectContaining({
             workflowId: "workflow-1",
           }),
-        }));
+        }),
+      );
     });
 
     test("creates a read-only Multi Review reviewer transcript tab", async () => {
@@ -1200,15 +1142,16 @@ describe("TerminalContainer", () => {
       );
 
       await waitFor(() => expect(accepted).toHaveBeenCalledWith(true));
-      expect(usePaneLayoutStore.getState().getAllTabs("env-visible"))
-        .toContainEqual(expect.objectContaining({
+      expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toContainEqual(
+        expect.objectContaining({
           type: "multi-review",
           displayTitle: "Reviewer 1",
           multiReviewTabData: expect.objectContaining({
             workflowId: "multi-1",
             reviewerId: "reviewer-1",
           }),
-        }));
+        }),
+      );
     });
 
     test("opens a backend workflow provider session in the created native tab", async () => {
@@ -1231,12 +1174,15 @@ describe("TerminalContainer", () => {
         </TerminalProvider>,
       );
 
-      await waitFor(() => expect(usePaneLayoutStore.getState().getAllTabs("env-visible"))
-        .toContainEqual(expect.objectContaining({
-          type: "agent-native",
-          isReviewTab: true,
-          nativeAgentData: expect.objectContaining({ sessionId: "provider-thread-1" }),
-        })));
+      await waitFor(() =>
+        expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toContainEqual(
+          expect.objectContaining({
+            type: "agent-native",
+            isReviewTab: true,
+            nativeAgentData: expect.objectContaining({ sessionId: "provider-thread-1" }),
+          }),
+        ),
+      );
     });
 
     test("applies a one-shot build mode when resuming a provider session", async () => {
@@ -1261,14 +1207,17 @@ describe("TerminalContainer", () => {
         </TerminalProvider>,
       );
 
-      await waitFor(() => expect(usePaneLayoutStore.getState().getAllTabs("env-visible"))
-        .toContainEqual(expect.objectContaining({
-          type: "agent-native",
-          isReviewTab: true,
-          initialPrompt: "Please address all the issues and coverage gaps",
-          initialConversationMode: "build",
-          nativeAgentData: expect.objectContaining({ sessionId: "provider-thread-1" }),
-        })));
+      await waitFor(() =>
+        expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toContainEqual(
+          expect.objectContaining({
+            type: "agent-native",
+            isReviewTab: true,
+            initialPrompt: "Please address all the issues and coverage gaps",
+            initialConversationMode: "build",
+            nativeAgentData: expect.objectContaining({ sessionId: "provider-thread-1" }),
+          }),
+        ),
+      );
     });
 
     test("propagates provider session identity to Claude native tabs", async () => {
@@ -1291,12 +1240,15 @@ describe("TerminalContainer", () => {
         </TerminalProvider>,
       );
 
-      await waitFor(() => expect(usePaneLayoutStore.getState().getAllTabs("env-visible"))
-        .toContainEqual(expect.objectContaining({
-          type: "agent-native",
-          isReviewTab: true,
-          nativeAgentData: expect.objectContaining({ sessionId: "provider-claude-1" }),
-        })));
+      await waitFor(() =>
+        expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toContainEqual(
+          expect.objectContaining({
+            type: "agent-native",
+            isReviewTab: true,
+            nativeAgentData: expect.objectContaining({ sessionId: "provider-claude-1" }),
+          }),
+        ),
+      );
     });
 
     test("propagates provider session identity to OpenCode native tabs", async () => {
@@ -1319,12 +1271,15 @@ describe("TerminalContainer", () => {
         </TerminalProvider>,
       );
 
-      await waitFor(() => expect(usePaneLayoutStore.getState().getAllTabs("env-visible"))
-        .toContainEqual(expect.objectContaining({
-          type: "agent-native",
-          isReviewTab: true,
-          nativeAgentData: expect.objectContaining({ sessionId: "provider-opencode-1" }),
-        })));
+      await waitFor(() =>
+        expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toContainEqual(
+          expect.objectContaining({
+            type: "agent-native",
+            isReviewTab: true,
+            nativeAgentData: expect.objectContaining({ sessionId: "provider-opencode-1" }),
+          }),
+        ),
+      );
     });
 
     test("rejects a looped-review tab without a workflow id", async () => {
@@ -1338,17 +1293,12 @@ describe("TerminalContainer", () => {
             isContainerRunning
             isActive
           />
-          <CreateTabHarness
-            type="looped-review"
-            options={{}}
-            onResult={refused}
-          />
+          <CreateTabHarness type="looped-review" options={{}} onResult={refused} />
         </TerminalProvider>,
       );
 
       await waitFor(() => expect(refused).toHaveBeenCalledWith(false));
-      expect(usePaneLayoutStore.getState().getAllTabs("env-visible"))
-        .toEqual(originalTabs);
+      expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toEqual(originalTabs);
     });
 
     test("reports refusal instead of claiming a looped-review tab was created", async () => {
@@ -1357,10 +1307,10 @@ describe("TerminalContainer", () => {
           root: {
             kind: "leaf",
             id: "default",
-            tabs: Array.from(
-              { length: MAX_TABS },
-              (_, index) => ({ id: `tab-${index}`, type: "plain" as const }),
-            ),
+            tabs: Array.from({ length: MAX_TABS }, (_, index) => ({
+              id: `tab-${index}`,
+              type: "plain" as const,
+            })),
             activeTabId: "tab-0",
           },
           activePaneId: "default",
@@ -1401,11 +1351,8 @@ describe("TerminalContainer", () => {
             isContainerRunning
             isActive
           />
-          <CreateTabHarness
-            type="plain"
-            options={{ displayTitle: "Custom", isReviewTab: true }}
-          />
-        </TerminalProvider>
+          <CreateTabHarness type="plain" options={{ displayTitle: "Custom", isReviewTab: true }} />
+        </TerminalProvider>,
       );
 
       await waitFor(() => {
@@ -1426,15 +1373,13 @@ describe("TerminalContainer", () => {
             isContainerRunning
             isActive
           />
-          <CreateTabHarness
-            type="agent-native"
-            options={{ tabId: "neutral-native" }}
-          />
+          <CreateTabHarness type="agent-native" options={{ tabId: "neutral-native" }} />
         </TerminalProvider>,
       );
 
       await waitFor(() => {
-        const created = usePaneLayoutStore.getState()
+        const created = usePaneLayoutStore
+          .getState()
           .getAllTabs("env-visible")
           .find((tab) => tab.id === "neutral-native");
         expect(created).toMatchObject({
@@ -1445,8 +1390,9 @@ describe("TerminalContainer", () => {
           },
         });
         expect(
-          useNativeComposeStore.getState().drafts
-            .get(createNativeSessionKey("env-visible", "neutral-native")),
+          useNativeComposeStore
+            .getState()
+            .drafts.get(createNativeSessionKey("env-visible", "neutral-native")),
         ).toBeUndefined();
       });
     });
@@ -1474,7 +1420,8 @@ describe("TerminalContainer", () => {
 
         await waitFor(() => {
           expect(
-            usePaneLayoutStore.getState()
+            usePaneLayoutStore
+              .getState()
               .getAllTabs("env-visible")
               .find((tab) => tab.id === `${platform}-cli`),
           ).toMatchObject({ id: `${platform}-cli`, type: platform });
@@ -1495,7 +1442,7 @@ describe("TerminalContainer", () => {
             type="browser"
             options={{ initialUrl: "  http://localhost:49152/  " }}
           />
-        </TerminalProvider>
+        </TerminalProvider>,
       );
 
       await waitFor(() => {
@@ -1543,7 +1490,10 @@ describe("TerminalContainer", () => {
 
       await waitFor(() => {
         expect(
-          usePaneLayoutStore.getState().getAllTabs("env-visible").some((tab) => tab.type === "browser"),
+          usePaneLayoutStore
+            .getState()
+            .getAllTabs("env-visible")
+            .some((tab) => tab.type === "browser"),
         ).toBe(false);
       });
     });
@@ -1554,7 +1504,10 @@ describe("TerminalContainer", () => {
           root: {
             kind: "leaf",
             id: "default",
-            tabs: Array.from({ length: 9 }, (_, index) => ({ id: `tab-${index}`, type: "plain" as const })),
+            tabs: Array.from({ length: 9 }, (_, index) => ({
+              id: `tab-${index}`,
+              type: "plain" as const,
+            })),
             activeTabId: "tab-0",
           },
           activePaneId: "default",
@@ -1591,8 +1544,18 @@ describe("TerminalContainer", () => {
             sizes: [50, 50],
             depth: 1,
             children: [
-              { kind: "leaf", id: "left", tabs: [{ id: "left-tab", type: "plain" }], activeTabId: "left-tab" },
-              { kind: "leaf", id: "right", tabs: [{ id: "right-tab", type: "plain" }], activeTabId: "right-tab" },
+              {
+                kind: "leaf",
+                id: "left",
+                tabs: [{ id: "left-tab", type: "plain" }],
+                activeTabId: "left-tab",
+              },
+              {
+                kind: "leaf",
+                id: "right",
+                tabs: [{ id: "right-tab", type: "plain" }],
+                activeTabId: "right-tab",
+              },
             ],
           },
           activePaneId: "right",
@@ -1630,8 +1593,18 @@ describe("TerminalContainer", () => {
             sizes: [50, 50],
             depth: 1,
             children: [
-              { kind: "leaf", id: "left", tabs: [{ id: "source-terminal", type: "plain" }], activeTabId: "source-terminal" },
-              { kind: "leaf", id: "right", tabs: [{ id: "right-tab", type: "plain" }], activeTabId: "right-tab" },
+              {
+                kind: "leaf",
+                id: "left",
+                tabs: [{ id: "source-terminal", type: "plain" }],
+                activeTabId: "source-terminal",
+              },
+              {
+                kind: "leaf",
+                id: "right",
+                tabs: [{ id: "right-tab", type: "plain" }],
+                activeTabId: "right-tab",
+              },
             ],
           },
           activePaneId: "right",
@@ -1678,9 +1651,7 @@ describe("TerminalContainer", () => {
     });
 
     test("opens a native preview link in a browser tab beside its source preview", async () => {
-      let openLinkListener:
-        | ((event: { tabId: string; url: string }) => void)
-        | undefined;
+      let openLinkListener: ((event: { tabId: string; url: string }) => void) | undefined;
       window.orkestrator = {
         listen: (event: string, callback: (payload: unknown) => void) => {
           if (event === "browser-preview-open-link") {
@@ -1701,11 +1672,13 @@ describe("TerminalContainer", () => {
               {
                 kind: "leaf",
                 id: "left",
-                tabs: [{
-                  id: "browser-source",
-                  type: "browser",
-                  browserData: { url: "http://localhost:3000/" },
-                }],
+                tabs: [
+                  {
+                    id: "browser-source",
+                    type: "browser",
+                    browserData: { url: "http://localhost:3000/" },
+                  },
+                ],
                 activeTabId: "browser-source",
               },
               {
@@ -1952,12 +1925,14 @@ describe("TerminalContainer", () => {
       await waitFor(() => expect(closeTabListener).toBeDefined());
 
       act(() => {
-        window.dispatchEvent(new KeyboardEvent("keydown", {
-          key: "w",
-          metaKey: true,
-          bubbles: true,
-          cancelable: true,
-        }));
+        window.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "w",
+            metaKey: true,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
         closeTabListener?.();
       });
 
@@ -2022,9 +1997,7 @@ describe("TerminalContainer", () => {
     });
 
     test("ignores a native preview link whose source tab is missing or is not a browser tab", async () => {
-      let openLinkListener:
-        | ((event: { tabId: string; url: string }) => void)
-        | undefined;
+      let openLinkListener: ((event: { tabId: string; url: string }) => void) | undefined;
       window.orkestrator = {
         listen: (event: string, callback: (payload: unknown) => void) => {
           if (event === "browser-preview-open-link") {
@@ -2056,7 +2029,10 @@ describe("TerminalContainer", () => {
 
       expect(usePaneLayoutStore.getState().environments.get("env-visible")).toEqual(before);
       expect(
-        usePaneLayoutStore.getState().getAllTabs("env-visible").some((tab) => tab.type === "browser"),
+        usePaneLayoutStore
+          .getState()
+          .getAllTabs("env-visible")
+          .some((tab) => tab.type === "browser"),
       ).toBe(false);
     });
 
@@ -2118,10 +2094,10 @@ describe("TerminalContainer", () => {
     });
 
     test("rejects terminal links at the tab limit without changing the active pane", async () => {
-      const fillerTabs = Array.from(
-        { length: MAX_TABS - 2 },
-        (_, index) => ({ id: `filler-${index}`, type: "plain" as const }),
-      );
+      const fillerTabs = Array.from({ length: MAX_TABS - 2 }, (_, index) => ({
+        id: `filler-${index}`,
+        type: "plain" as const,
+      }));
       usePaneLayoutStore.setState((state) => ({
         environments: new Map(state.environments).set("env-visible", {
           root: {
@@ -2172,7 +2148,10 @@ describe("TerminalContainer", () => {
       const environment = usePaneLayoutStore.getState().environments.get("env-visible");
       expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toHaveLength(MAX_TABS);
       expect(
-        usePaneLayoutStore.getState().getAllTabs("env-visible").some((tab) => tab.type === "browser"),
+        usePaneLayoutStore
+          .getState()
+          .getAllTabs("env-visible")
+          .some((tab) => tab.type === "browser"),
       ).toBe(false);
       expect(environment?.activePaneId).toBe("right");
       expect(mockToastError).toHaveBeenCalledWith("Tab limit reached", {
@@ -2246,11 +2225,7 @@ describe("TerminalContainer", () => {
       }));
       render(
         <TerminalProvider>
-          <TerminalContainer
-            environmentId="env-visible"
-            containerId={null}
-            isActive
-          />
+          <TerminalContainer environmentId="env-visible" containerId={null} isActive />
         </TerminalProvider>,
       );
       const localBefore = usePaneLayoutStore.getState().environments.get("env-visible");
@@ -2319,7 +2294,7 @@ describe("TerminalContainer", () => {
             isActive
           />
           <CreateTabHarness type="claude" options={{ displayTitle: "Review" }} />
-        </TerminalProvider>
+        </TerminalProvider>,
       );
 
       await waitFor(() => {
@@ -2352,11 +2327,8 @@ describe("TerminalContainer", () => {
             isContainerRunning
             isActive
           />
-          <CreateTabHarness
-            type="claude"
-            options={{ displayTitle: "Tmux", initialPrompt: "hi" }}
-          />
-        </TerminalProvider>
+          <CreateTabHarness type="claude" options={{ displayTitle: "Tmux", initialPrompt: "hi" }} />
+        </TerminalProvider>,
       );
 
       await waitFor(() => {
@@ -2402,7 +2374,7 @@ describe("TerminalContainer", () => {
             isActive
           />
           <CreateTabHarness type="claude" options={{ displayTitle: "Repo tmux" }} />
-        </TerminalProvider>
+        </TerminalProvider>,
       );
 
       await waitFor(() => {
@@ -2431,11 +2403,8 @@ describe("TerminalContainer", () => {
             isContainerRunning
             isActive
           />
-          <CreateTabHarness
-            type="codex"
-            options={{ displayTitle: "PR", isReviewTab: true }}
-          />
-        </TerminalProvider>
+          <CreateTabHarness type="codex" options={{ displayTitle: "PR", isReviewTab: true }} />
+        </TerminalProvider>,
       );
 
       await waitFor(() => {
@@ -2466,7 +2435,7 @@ describe("TerminalContainer", () => {
             isActive
           />
           <CreateTabHarness type="opencode" options={{ displayTitle: "Conflict" }} />
-        </TerminalProvider>
+        </TerminalProvider>,
       );
 
       await waitFor(() => {
@@ -2503,7 +2472,7 @@ describe("TerminalContainer", () => {
             type="claude"
             options={{ agentLaunchMode: "tmux", displayTitle: "Forced tmux" }}
           />
-        </TerminalProvider>
+        </TerminalProvider>,
       );
 
       await waitFor(() => {
@@ -2536,7 +2505,7 @@ describe("TerminalContainer", () => {
             type="codex"
             options={{ agentLaunchMode: "native", displayTitle: "Forced native" }}
           />
-        </TerminalProvider>
+        </TerminalProvider>,
       );
 
       await waitFor(() => {
@@ -2569,7 +2538,8 @@ describe("TerminalContainer", () => {
         );
 
         await waitFor(() => {
-          const created = usePaneLayoutStore.getState()
+          const created = usePaneLayoutStore
+            .getState()
             .getAllTabs("env-visible")
             .find((tab) => tab.id === `explicit-${platform}`);
           expect(created).toMatchObject({
@@ -2580,9 +2550,9 @@ describe("TerminalContainer", () => {
             },
           });
           expect(
-            useNativeComposeStore.getState().drafts
-              .get(createNativeSessionKey("env-visible", `explicit-${platform}`))
-              ?.platform,
+            useNativeComposeStore
+              .getState()
+              .drafts.get(createNativeSessionKey("env-visible", `explicit-${platform}`))?.platform,
           ).toBe(platform);
         });
       },
@@ -2609,7 +2579,7 @@ describe("TerminalContainer", () => {
               isReviewTab: true,
             }}
           />
-        </TerminalProvider>
+        </TerminalProvider>,
       );
 
       await waitFor(() => {
@@ -2644,16 +2614,8 @@ describe("TerminalContainer", () => {
             isContainerRunning
             isActive
           />
-          <CreateTabHarness
-            type="codex"
-            options={options}
-            onResult={firstResult}
-          />
-          <CreateTabHarness
-            type="codex"
-            options={options}
-            onResult={duplicateResult}
-          />
+          <CreateTabHarness type="codex" options={options} onResult={firstResult} />
+          <CreateTabHarness type="codex" options={options} onResult={duplicateResult} />
         </TerminalProvider>,
       );
 
@@ -2662,7 +2624,9 @@ describe("TerminalContainer", () => {
         expect(duplicateResult).toHaveBeenCalledWith(false);
       });
       expect(
-        usePaneLayoutStore.getState().getAllTabs("env-visible")
+        usePaneLayoutStore
+          .getState()
+          .getAllTabs("env-visible")
           .filter((tab) => tab.id === options.tabId),
       ).toHaveLength(1);
     });
@@ -2670,12 +2634,27 @@ describe("TerminalContainer", () => {
     test("carries one-shot review options through every agent launch mode", async () => {
       const launchCases = [
         { type: "claude", mode: "cli", title: "Claude CLI review", expectedType: "claude" },
-        { type: "claude", mode: "native", title: "Claude Native review", expectedType: "agent-native" },
+        {
+          type: "claude",
+          mode: "native",
+          title: "Claude Native review",
+          expectedType: "agent-native",
+        },
         { type: "claude", mode: "tmux", title: "Claude Tmux review", expectedType: "claude-tmux" },
         { type: "codex", mode: "cli", title: "Codex CLI review", expectedType: "codex" },
-        { type: "codex", mode: "native", title: "Codex Native review", expectedType: "agent-native" },
+        {
+          type: "codex",
+          mode: "native",
+          title: "Codex Native review",
+          expectedType: "agent-native",
+        },
         { type: "opencode", mode: "cli", title: "OpenCode CLI review", expectedType: "opencode" },
-        { type: "opencode", mode: "native", title: "OpenCode Native review", expectedType: "agent-native" },
+        {
+          type: "opencode",
+          mode: "native",
+          title: "OpenCode Native review",
+          expectedType: "agent-native",
+        },
       ] as const;
 
       render(
@@ -2741,7 +2720,7 @@ describe("TerminalContainer", () => {
             type="opencode"
             options={{ agentLaunchMode: "cli", displayTitle: "Forced CLI" }}
           />
-        </TerminalProvider>
+        </TerminalProvider>,
       );
 
       await waitFor(() => {
@@ -2778,7 +2757,7 @@ describe("TerminalContainer", () => {
             type="claude"
             options={{ agentLaunchMode: "cli", displayTitle: "Forced Claude CLI" }}
           />
-        </TerminalProvider>
+        </TerminalProvider>,
       );
 
       await waitFor(() => {
@@ -2815,7 +2794,7 @@ describe("TerminalContainer", () => {
             type="claude"
             options={{ agentLaunchMode: "native", displayTitle: "Forced Claude Native" }}
           />
-        </TerminalProvider>
+        </TerminalProvider>,
       );
 
       await waitFor(() => {
@@ -2849,7 +2828,7 @@ describe("TerminalContainer", () => {
             type="codex"
             options={{ agentLaunchMode: "cli", displayTitle: "Forced Codex CLI" }}
           />
-        </TerminalProvider>
+        </TerminalProvider>,
       );
 
       await waitFor(() => {
@@ -2882,7 +2861,7 @@ describe("TerminalContainer", () => {
             type="opencode"
             options={{ agentLaunchMode: "native", displayTitle: "Forced OpenCode Native" }}
           />
-        </TerminalProvider>
+        </TerminalProvider>,
       );
 
       await waitFor(() => {
@@ -2893,5 +2872,4 @@ describe("TerminalContainer", () => {
       });
     });
   });
-
 });

@@ -84,21 +84,28 @@ describe("Electron StorageService", () => {
     const dataDir = await createTempDir("ork-storage-connections-");
     const storage = new StorageService(dataDir);
     await storage.init();
-    await expect(storage.getDesktopConnections()).resolves.toEqual({ activeConnectionId: "local", connections: [] });
+    await expect(storage.getDesktopConnections()).resolves.toEqual({
+      activeConnectionId: "local",
+      connections: [],
+    });
 
     const connections = {
       activeConnectionId: "remote-1",
-      connections: [{
-        id: "remote-1",
-        name: "desk.example",
-        address: "https://desk.example",
-        encryptedToken: "encrypted-token",
-        lastConnectedAt: "2026-07-14T00:00:00.000Z",
-      }],
+      connections: [
+        {
+          id: "remote-1",
+          name: "desk.example",
+          address: "https://desk.example",
+          encryptedToken: "encrypted-token",
+          lastConnectedAt: "2026-07-14T00:00:00.000Z",
+        },
+      ],
     };
     await storage.saveDesktopConnections(connections);
     await expect(storage.getDesktopConnections()).resolves.toEqual(connections);
-    await expect(storage.saveDesktopConnections({ activeConnectionId: "local", connections: null } as never)).rejects.toThrow("connections");
+    await expect(
+      storage.saveDesktopConnections({ activeConnectionId: "local", connections: null } as never),
+    ).rejects.toThrow("connections");
 
     const malformed = defaultConfig();
     malformed.desktopConnections = { activeConnectionId: "remote-1" } as never;
@@ -106,7 +113,10 @@ describe("Electron StorageService", () => {
     const originalWarn = console.warn;
     console.warn = mock(() => undefined) as typeof console.warn;
     try {
-      await expect(storage.getDesktopConnections()).resolves.toEqual({ activeConnectionId: "local", connections: [] });
+      await expect(storage.getDesktopConnections()).resolves.toEqual({
+        activeConnectionId: "local",
+        connections: [],
+      });
     } finally {
       console.warn = originalWarn;
     }
@@ -126,26 +136,34 @@ describe("Electron StorageService", () => {
     };
     const desktopConnections = {
       activeConnectionId: "remote-1",
-      connections: [{
-        id: "remote-1",
-        name: "desk.example",
-        address: "https://desk.example",
-        encryptedToken: "encrypted-token",
-        lastConnectedAt: "2026-07-14T00:00:00.000Z",
-      }],
+      connections: [
+        {
+          id: "remote-1",
+          name: "desk.example",
+          address: "https://desk.example",
+          encryptedToken: "encrypted-token",
+          lastConnectedAt: "2026-07-14T00:00:00.000Z",
+        },
+      ],
     };
     await Promise.all([
       first.saveDesktopConnections(desktopConnections),
       second.updateGlobalConfig(global),
       first.updateAgentModelDefault("claudeModel", "claude-opus-4"),
-      first.updateRepositoryConfig("project-1", { defaultBranch: "develop", prBaseBranch: "develop" }),
+      first.updateRepositoryConfig("project-1", {
+        defaultBranch: "develop",
+        prBaseBranch: "develop",
+      }),
     ]);
 
     const config = await second.loadConfig();
     expect(config.desktopConnections).toEqual(desktopConnections);
     expect(config.global.defaultAgent).toBe("codex");
     expect(config.global.claudeModel).toBe("claude-opus-4");
-    expect(config.repositories["project-1"]).toMatchObject({ defaultBranch: "develop", prBaseBranch: "develop" });
+    expect(config.repositories["project-1"]).toMatchObject({
+      defaultBranch: "develop",
+      prBaseBranch: "develop",
+    });
   });
 
   test("updates one agent model default at a time and leaves its siblings alone", async () => {
@@ -257,12 +275,10 @@ describe("Electron StorageService", () => {
     expect(persisted.debugLogging).toBe(true);
 
     await storage.setCursorApiKey("replacement-cursor-key");
-    expect((await storage.loadConfig()).global.cursorApiKey)
-      .toBe("replacement-cursor-key");
+    expect((await storage.loadConfig()).global.cursorApiKey).toBe("replacement-cursor-key");
     await storage.setCursorApiKey(null);
     await storage.setAnthropicApiKey("replacement-anthropic-key");
-    expect((await storage.loadConfig()).global.anthropicApiKey)
-      .toBe("replacement-anthropic-key");
+    expect((await storage.loadConfig()).global.anthropicApiKey).toBe("replacement-anthropic-key");
     await storage.setAnthropicApiKey(null);
     persisted = (await storage.loadConfig()).global;
     expect(persisted.cursorApiKey).toBeUndefined();
@@ -426,20 +442,39 @@ describe("Electron StorageService", () => {
     const storage = new StorageService(dataDir);
     await storage.init();
 
-    const firstProject = await storage.addProject(createProject("https://github.com/acme/first.git"));
-    const secondProject = await storage.addProject(createProject("https://github.com/acme/second.git", "/tmp/second"));
-    await expect(storage.addProject(createProject(firstProject.gitUrl))).rejects.toThrow("Duplicate project URL");
-    await expect(storage.updateProject("missing", { name: "x" })).rejects.toThrow("Project not found");
-    await storage.updateProject(firstProject.id, { name: "First renamed", localPath: "/tmp/first" });
-    expect(await storage.getProject(firstProject.id)).toMatchObject({ name: "First renamed", localPath: "/tmp/first" });
-    expect((await storage.reorderProjects([secondProject.id])).map((project) => project.id)).toEqual([
-      secondProject.id,
-      firstProject.id,
-    ]);
+    const firstProject = await storage.addProject(
+      createProject("https://github.com/acme/first.git"),
+    );
+    const secondProject = await storage.addProject(
+      createProject("https://github.com/acme/second.git", "/tmp/second"),
+    );
+    await expect(storage.addProject(createProject(firstProject.gitUrl))).rejects.toThrow(
+      "Duplicate project URL",
+    );
+    await expect(storage.updateProject("missing", { name: "x" })).rejects.toThrow(
+      "Project not found",
+    );
+    await storage.updateProject(firstProject.id, {
+      name: "First renamed",
+      localPath: "/tmp/first",
+    });
+    expect(await storage.getProject(firstProject.id)).toMatchObject({
+      name: "First renamed",
+      localPath: "/tmp/first",
+    });
+    expect(
+      (await storage.reorderProjects([secondProject.id])).map((project) => project.id),
+    ).toEqual([secondProject.id, firstProject.id]);
 
-    const firstEnvironment = await storage.addEnvironment(createEnvironment(firstProject.id, { name: "first" }));
-    const secondEnvironment = await storage.addEnvironment(createEnvironment(firstProject.id, { name: "second" }));
-    const otherEnvironment = await storage.addEnvironment(createEnvironment(secondProject.id, { name: "other" }));
+    const firstEnvironment = await storage.addEnvironment(
+      createEnvironment(firstProject.id, { name: "first" }),
+    );
+    const secondEnvironment = await storage.addEnvironment(
+      createEnvironment(firstProject.id, { name: "second" }),
+    );
+    const otherEnvironment = await storage.addEnvironment(
+      createEnvironment(secondProject.id, { name: "other" }),
+    );
     const updated = await storage.updateEnvironment(firstEnvironment.id, {
       containerId: "container-1",
       allowedDomains: ["example.com", 42],
@@ -473,7 +508,9 @@ describe("Electron StorageService", () => {
       initialReasoningEffort: null,
     });
     expect((await storage.getEnvironment(firstEnvironment.id))?.initialAgentModel).toBeUndefined();
-    expect((await storage.getEnvironment(firstEnvironment.id))?.initialReasoningEffort).toBeUndefined();
+    expect(
+      (await storage.getEnvironment(firstEnvironment.id))?.initialReasoningEffort,
+    ).toBeUndefined();
     await storage.updateEnvironment(firstEnvironment.id, {
       initialAgentModel: "gpt-5.6-sol",
       initialReasoningEffort: "high",
@@ -504,30 +541,52 @@ describe("Electron StorageService", () => {
       cleanupAfterMergeError: undefined,
       lifecycleError: null,
     });
-    expect((await storage.getEnvironment(firstEnvironment.id))?.pendingRenamePrompt).toBeUndefined();
+    expect(
+      (await storage.getEnvironment(firstEnvironment.id))?.pendingRenamePrompt,
+    ).toBeUndefined();
     expect((await storage.getEnvironment(firstEnvironment.id))?.initialAgentModel).toBeUndefined();
-    expect((await storage.getEnvironment(firstEnvironment.id))?.initialReasoningEffort).toBeUndefined();
-    expect((await storage.getEnvironment(firstEnvironment.id))?.cleanupAfterMergeRequestedAt).toBeUndefined();
-    expect((await storage.getEnvironment(firstEnvironment.id))?.cleanupAfterMergeError).toBeUndefined();
+    expect(
+      (await storage.getEnvironment(firstEnvironment.id))?.initialReasoningEffort,
+    ).toBeUndefined();
+    expect(
+      (await storage.getEnvironment(firstEnvironment.id))?.cleanupAfterMergeRequestedAt,
+    ).toBeUndefined();
+    expect(
+      (await storage.getEnvironment(firstEnvironment.id))?.cleanupAfterMergeError,
+    ).toBeUndefined();
     // Explicitly null rather than undefined: JSON.stringify drops undefined
     // keys, so a cleared failure would reach the renderer as an absent key and
     // leave the stale message on screen through a field-by-field merge.
     expect((await storage.getEnvironment(firstEnvironment.id))?.lifecycleError).toBeNull();
     await storage.updateEnvironment(firstEnvironment.id, { lifecycleError: undefined });
     expect((await storage.getEnvironment(firstEnvironment.id))?.lifecycleError).toBeNull();
-    expect(
-      JSON.stringify(await storage.getEnvironment(firstEnvironment.id)),
-    ).toContain("\"lifecycleError\":null");
+    expect(JSON.stringify(await storage.getEnvironment(firstEnvironment.id))).toContain(
+      '"lifecycleError":null',
+    );
     await expect(storage.updateEnvironment("missing", {})).rejects.toThrow("Environment not found");
-    expect((await storage.reorderEnvironments(firstProject.id, [secondEnvironment.id])).map((environment) => environment.id)).toEqual([
-      secondEnvironment.id,
-      firstEnvironment.id,
-    ]);
-    expect((await storage.getEnvironmentsByProject(secondProject.id)).map((environment) => environment.id)).toEqual([otherEnvironment.id]);
+    expect(
+      (await storage.reorderEnvironments(firstProject.id, [secondEnvironment.id])).map(
+        (environment) => environment.id,
+      ),
+    ).toEqual([secondEnvironment.id, firstEnvironment.id]);
+    expect(
+      (await storage.getEnvironmentsByProject(secondProject.id)).map(
+        (environment) => environment.id,
+      ),
+    ).toEqual([otherEnvironment.id]);
 
-    expect(await storage.getRepositoryConfig("missing")).toEqual({ defaultBranch: "main", prBaseBranch: "main" });
-    await storage.updateRepositoryConfig(firstProject.id, { defaultBranch: "develop", prBaseBranch: "release" });
-    expect(await storage.getRepositoryConfig(firstProject.id)).toEqual({ defaultBranch: "develop", prBaseBranch: "release" });
+    expect(await storage.getRepositoryConfig("missing")).toEqual({
+      defaultBranch: "main",
+      prBaseBranch: "main",
+    });
+    await storage.updateRepositoryConfig(firstProject.id, {
+      defaultBranch: "develop",
+      prBaseBranch: "release",
+    });
+    expect(await storage.getRepositoryConfig(firstProject.id)).toEqual({
+      defaultBranch: "develop",
+      prBaseBranch: "release",
+    });
     const global = defaultConfig().global;
     global.webClientEnabled = false;
     global.reviewInstruction = "Review origin/{{targetBranch}}...HEAD.";
@@ -538,7 +597,9 @@ describe("Electron StorageService", () => {
     });
 
     await storage.removeEnvironment(otherEnvironment.id);
-    await expect(storage.removeEnvironment(otherEnvironment.id)).rejects.toThrow("Environment not found");
+    await expect(storage.removeEnvironment(otherEnvironment.id)).rejects.toThrow(
+      "Environment not found",
+    );
     await storage.removeProject(secondProject.id);
     await expect(storage.removeProject(secondProject.id)).rejects.toThrow("Project not found");
   });
@@ -560,9 +621,9 @@ describe("Electron StorageService", () => {
     await storage.updateGlobalConfig(withoutPrompt);
 
     expect((await storage.loadConfig()).global.reviewInstruction).toBeUndefined();
-    const persisted = JSON.parse(
-      await fs.readFile(path.join(dataDir, "config.json"), "utf8"),
-    ) as { global: Record<string, unknown> };
+    const persisted = JSON.parse(await fs.readFile(path.join(dataDir, "config.json"), "utf8")) as {
+      global: Record<string, unknown>;
+    };
     expect(Object.hasOwn(persisted.global, "reviewInstruction")).toBe(false);
   });
 
@@ -584,10 +645,7 @@ describe("Electron StorageService", () => {
       };
       config.global.defaultAgent = "codex";
       config.global.reviewInstruction = reviewInstruction;
-      await fs.writeFile(
-        path.join(dataDir, "config.json"),
-        `${JSON.stringify(config)}\n`,
-      );
+      await fs.writeFile(path.join(dataDir, "config.json"), `${JSON.stringify(config)}\n`);
 
       const loaded = await storage.loadConfig();
       expect(loaded.global.defaultAgent).toBe("codex");
@@ -609,19 +667,16 @@ describe("Electron StorageService", () => {
       repositories: Record<string, unknown>;
     };
     config.global.reviewPrompt = legacyPrompt;
-    await fs.writeFile(
-      path.join(dataDir, "config.json"),
-      `${JSON.stringify(config)}\n`,
-    );
+    await fs.writeFile(path.join(dataDir, "config.json"), `${JSON.stringify(config)}\n`);
 
     const loaded = await storage.loadConfig();
     expect(loaded.global.reviewInstruction).toBe(legacyPrompt);
     expect(Object.hasOwn(loaded.global, "reviewPrompt")).toBe(false);
 
     await storage.saveConfig(loaded);
-    const persisted = JSON.parse(
-      await fs.readFile(path.join(dataDir, "config.json"), "utf8"),
-    ) as { global: Record<string, unknown> };
+    const persisted = JSON.parse(await fs.readFile(path.join(dataDir, "config.json"), "utf8")) as {
+      global: Record<string, unknown>;
+    };
     expect(persisted.global.reviewInstruction).toBe(legacyPrompt);
     expect(Object.hasOwn(persisted.global, "reviewPrompt")).toBe(false);
   });
@@ -632,10 +687,7 @@ describe("Electron StorageService", () => {
     await storage.init();
     const config = defaultConfig();
     delete config.global.useHostGitHubCredentials;
-    await fs.writeFile(
-      path.join(dataDir, "config.json"),
-      `${JSON.stringify(config)}\n`,
-    );
+    await fs.writeFile(path.join(dataDir, "config.json"), `${JSON.stringify(config)}\n`);
 
     expect((await storage.loadConfig()).global.useHostGitHubCredentials).toBe(true);
   });
@@ -647,10 +699,7 @@ describe("Electron StorageService", () => {
     const config = defaultConfig();
     config.global.githubToken = "legacy-pat";
     delete config.global.useHostGitHubCredentials;
-    await fs.writeFile(
-      path.join(dataDir, "config.json"),
-      `${JSON.stringify(config)}\n`,
-    );
+    await fs.writeFile(path.join(dataDir, "config.json"), `${JSON.stringify(config)}\n`);
 
     const loaded = await storage.loadConfig();
     expect(loaded.global.useHostGitHubCredentials).toBe(false);
@@ -663,10 +712,7 @@ describe("Electron StorageService", () => {
     await storage.init();
     const config = defaultConfig();
     config.global.useHostGitHubCredentials = false;
-    await fs.writeFile(
-      path.join(dataDir, "config.json"),
-      `${JSON.stringify(config)}\n`,
-    );
+    await fs.writeFile(path.join(dataDir, "config.json"), `${JSON.stringify(config)}\n`);
 
     expect((await storage.loadConfig()).global.useHostGitHubCredentials).toBe(false);
   });
@@ -676,16 +722,26 @@ describe("Electron StorageService", () => {
     const storage = new StorageService(dataDir);
     await storage.init();
 
-    for (const reviewInstruction of [null, 42, {}, " ", "x".repeat(REVIEW_INSTRUCTION_MAX_LENGTH + 1)]) {
-      await expect(storage.updateGlobalConfig({
-        ...defaultConfig().global,
-        reviewInstruction,
-      } as never)).rejects.toThrow("Review instruction");
+    for (const reviewInstruction of [
+      null,
+      42,
+      {},
+      " ",
+      "x".repeat(REVIEW_INSTRUCTION_MAX_LENGTH + 1),
+    ]) {
+      await expect(
+        storage.updateGlobalConfig({
+          ...defaultConfig().global,
+          reviewInstruction,
+        } as never),
+      ).rejects.toThrow("Review instruction");
     }
 
     const malformed = defaultConfig();
     malformed.global.reviewInstruction = 42 as never;
-    await expect(storage.saveConfig(malformed)).rejects.toThrow("Review instruction must be a string");
+    await expect(storage.saveConfig(malformed)).rejects.toThrow(
+      "Review instruction must be a string",
+    );
 
     await storage.updateGlobalConfig({
       ...defaultConfig().global,
@@ -737,25 +793,27 @@ describe("Electron StorageService", () => {
     await Promise.all([firstStorage.init(), secondStorage.init()]);
 
     const environments = Array.from({ length: 12 }, (_, index) =>
-      createEnvironment("project-1", { name: `environment-${index}` })
+      createEnvironment("project-1", { name: `environment-${index}` }),
     );
     await Promise.all(
       environments.map((environment, index) =>
-        (index % 2 === 0 ? firstStorage : secondStorage).addEnvironment(environment)
+        (index % 2 === 0 ? firstStorage : secondStorage).addEnvironment(environment),
       ),
     );
 
     const persisted = await firstStorage.getEnvironmentsByProject("project-1");
     expect(persisted).toHaveLength(environments.length);
     expect(new Set(persisted.map((environment) => environment.id)).size).toBe(environments.length);
-    expect(new Set(persisted.map((environment) => environment.order)).size).toBe(environments.length);
+    expect(new Set(persisted.map((environment) => environment.order)).size).toBe(
+      environments.length,
+    );
 
     await Promise.all(
       persisted.map((environment, index) =>
         (index % 2 === 0 ? firstStorage : secondStorage).updateEnvironment(environment.id, {
           status: index % 2 === 0 ? "running" : "stopped",
           name: `updated-${index}`,
-        })
+        }),
       ),
     );
 
@@ -772,22 +830,20 @@ describe("Electron StorageService", () => {
     await Promise.all([firstStorage.init(), secondStorage.init()]);
 
     const environment = await firstStorage.addEnvironment(createEnvironment("project-1"));
-    expect((await secondStorage.getEnvironment(environment.id))?.lastActivityAt)
-      .toBe(environment.createdAt);
+    expect((await secondStorage.getEnvironment(environment.id))?.lastActivityAt).toBe(
+      environment.createdAt,
+    );
     await firstStorage.updateEnvironment(environment.id, { lastActivityAt: undefined });
 
-    await expect(firstStorage.recordEnvironmentActivity(
-      environment.id,
-      "2026-07-23T11:00:00+01:00",
-    )).resolves.toMatchObject({ lastActivityAt: "2026-07-23T10:00:00.000Z" });
-    await expect(secondStorage.recordEnvironmentActivity(
-      environment.id,
-      "2026-07-23T10:00:00.000Z",
-    )).resolves.toMatchObject({ lastActivityAt: "2026-07-23T10:00:00.000Z" });
-    await expect(secondStorage.recordEnvironmentActivity(
-      environment.id,
-      "2026-07-22T10:00:00.000Z",
-    )).resolves.toMatchObject({ lastActivityAt: "2026-07-23T10:00:00.000Z" });
+    await expect(
+      firstStorage.recordEnvironmentActivity(environment.id, "2026-07-23T11:00:00+01:00"),
+    ).resolves.toMatchObject({ lastActivityAt: "2026-07-23T10:00:00.000Z" });
+    await expect(
+      secondStorage.recordEnvironmentActivity(environment.id, "2026-07-23T10:00:00.000Z"),
+    ).resolves.toMatchObject({ lastActivityAt: "2026-07-23T10:00:00.000Z" });
+    await expect(
+      secondStorage.recordEnvironmentActivity(environment.id, "2026-07-22T10:00:00.000Z"),
+    ).resolves.toMatchObject({ lastActivityAt: "2026-07-23T10:00:00.000Z" });
 
     await firstStorage.updateEnvironment(environment.id, { lastActivityAt: undefined });
     expect((await secondStorage.getEnvironment(environment.id))?.lastActivityAt).toBeUndefined();
@@ -807,10 +863,12 @@ describe("Electron StorageService", () => {
     ]);
     expect((await secondStorage.getEnvironment(environment.id))?.lastActivityAt).toBe(newer);
 
-    await expect(firstStorage.recordEnvironmentActivity(environment.id, "invalid"))
-      .rejects.toThrow("occurredAt must be a valid ISO timestamp");
-    await expect(firstStorage.recordEnvironmentActivity("missing", newer))
-      .rejects.toThrow("Environment not found: missing");
+    await expect(firstStorage.recordEnvironmentActivity(environment.id, "invalid")).rejects.toThrow(
+      "occurredAt must be a valid ISO timestamp",
+    );
+    await expect(firstStorage.recordEnvironmentActivity("missing", newer)).rejects.toThrow(
+      "Environment not found: missing",
+    );
   });
 
   test("stores and aggregates monotonic agent activity observations", async () => {
@@ -819,9 +877,7 @@ describe("Electron StorageService", () => {
     const secondStorage = new StorageService(dataDir);
     await Promise.all([firstStorage.init(), secondStorage.init()]);
 
-    const environment = await firstStorage.addEnvironment(
-      createEnvironment("project-1"),
-    );
+    const environment = await firstStorage.addEnvironment(createEnvironment("project-1"));
     const createdTime = Date.parse(environment.agentActivityUpdatedAt!);
     const frontendWorkingAt = new Date(createdTime + 1_000).toISOString();
     const terminalIdleAt = new Date(createdTime + 2_000).toISOString();
@@ -829,102 +885,98 @@ describe("Electron StorageService", () => {
     const frontendIdleAt = new Date(createdTime + 4_000).toISOString();
     const terminalStoppedAt = new Date(createdTime + 5_000).toISOString();
 
-    await expect(firstStorage.setEnvironmentAgentActivity(
-      environment.id,
-      "working",
-      frontendWorkingAt,
-    )).resolves.toMatchObject({
+    await expect(
+      firstStorage.setEnvironmentAgentActivity(environment.id, "working", frontendWorkingAt),
+    ).resolves.toMatchObject({
       agentActivityState: "working",
       agentActivityUpdatedAt: frontendWorkingAt,
     });
-    await expect(secondStorage.setEnvironmentAgentActivity(
-      environment.id,
-      "idle",
-      terminalIdleAt,
-      "claude-terminal",
-    )).resolves.toMatchObject({
+    await expect(
+      secondStorage.setEnvironmentAgentActivity(
+        environment.id,
+        "idle",
+        terminalIdleAt,
+        "claude-terminal",
+      ),
+    ).resolves.toMatchObject({
       agentActivityState: "working",
       agentActivityUpdatedAt: terminalIdleAt,
     });
-    await expect(secondStorage.setEnvironmentAgentActivity(
-      environment.id,
-      "working",
-      terminalWorkingAt,
-      "claude-terminal",
-    )).resolves.toMatchObject({
+    await expect(
+      secondStorage.setEnvironmentAgentActivity(
+        environment.id,
+        "working",
+        terminalWorkingAt,
+        "claude-terminal",
+      ),
+    ).resolves.toMatchObject({
       agentActivityState: "working",
       agentActivityUpdatedAt: terminalWorkingAt,
     });
-    await expect(firstStorage.setEnvironmentAgentActivity(
-      environment.id,
-      "idle",
-      frontendIdleAt,
-    )).resolves.toMatchObject({
+    await expect(
+      firstStorage.setEnvironmentAgentActivity(environment.id, "idle", frontendIdleAt),
+    ).resolves.toMatchObject({
       agentActivityState: "working",
       agentActivityUpdatedAt: frontendIdleAt,
     });
-    await expect(secondStorage.setEnvironmentAgentActivity(
-      environment.id,
-      "idle",
-      new Date(createdTime + 2_500).toISOString(),
-      "claude-terminal",
-    )).resolves.toMatchObject({
+    await expect(
+      secondStorage.setEnvironmentAgentActivity(
+        environment.id,
+        "idle",
+        new Date(createdTime + 2_500).toISOString(),
+        "claude-terminal",
+      ),
+    ).resolves.toMatchObject({
       agentActivityState: "working",
       agentActivityUpdatedAt: frontendIdleAt,
     });
-    await expect(secondStorage.setEnvironmentAgentActivity(
-      environment.id,
-      "idle",
-      terminalStoppedAt,
-      "claude-terminal",
-    )).resolves.toMatchObject({
+    await expect(
+      secondStorage.setEnvironmentAgentActivity(
+        environment.id,
+        "idle",
+        terminalStoppedAt,
+        "claude-terminal",
+      ),
+    ).resolves.toMatchObject({
       agentActivityState: "idle",
       agentActivityUpdatedAt: terminalStoppedAt,
     });
 
     const workingAgainAt = new Date(createdTime + 6_000).toISOString();
-    await firstStorage.setEnvironmentAgentActivity(
-      environment.id,
-      "working",
-      workingAgainAt,
-    );
-    await expect(secondStorage.updateEnvironment(
-      environment.id,
-      { status: "stopped" },
-    )).resolves.toMatchObject({
+    await firstStorage.setEnvironmentAgentActivity(environment.id, "working", workingAgainAt);
+    await expect(
+      secondStorage.updateEnvironment(environment.id, { status: "stopped" }),
+    ).resolves.toMatchObject({
       status: "stopped",
       agentActivityState: "idle",
       agentActivitySources: {},
     });
     const stoppedEnvironment = (await firstStorage.getEnvironment(environment.id))!;
-    expect(Date.parse(stoppedEnvironment.agentActivityUpdatedAt!))
-      .toBeGreaterThan(Date.parse(workingAgainAt));
-    await expect(firstStorage.setEnvironmentAgentActivity(
-      environment.id,
-      "working",
-      workingAgainAt,
-    )).resolves.toMatchObject({
+    expect(Date.parse(stoppedEnvironment.agentActivityUpdatedAt!)).toBeGreaterThan(
+      Date.parse(workingAgainAt),
+    );
+    await expect(
+      firstStorage.setEnvironmentAgentActivity(environment.id, "working", workingAgainAt),
+    ).resolves.toMatchObject({
       agentActivityState: "idle",
       agentActivityUpdatedAt: stoppedEnvironment.agentActivityUpdatedAt,
       agentActivitySources: {},
     });
 
-    await expect(firstStorage.setEnvironmentAgentActivity(
-      environment.id,
-      "busy" as never,
-      frontendIdleAt,
-    )).rejects.toThrow("state must be idle, working, or waiting");
-    await expect(firstStorage.setEnvironmentAgentActivity(
-      environment.id,
-      "working",
-      "invalid",
-    )).rejects.toThrow("occurredAt must be a valid ISO timestamp");
-    await expect(firstStorage.setEnvironmentAgentActivity(
-      environment.id,
-      "working",
-      frontendIdleAt,
-      "unknown-source" as never,
-    )).rejects.toThrow(
+    await expect(
+      firstStorage.setEnvironmentAgentActivity(environment.id, "busy" as never, frontendIdleAt),
+    ).rejects.toThrow("state must be idle, working, or waiting");
+    await expect(
+      firstStorage.setEnvironmentAgentActivity(environment.id, "working", "invalid"),
+    ).rejects.toThrow("occurredAt must be a valid ISO timestamp");
+    await expect(
+      firstStorage.setEnvironmentAgentActivity(
+        environment.id,
+        "working",
+        frontendIdleAt,
+        "unknown-source" as never,
+      ),
+    ).rejects.toThrow(
       "source must be frontend, claude-terminal, claude-tmux, native-agent, or multi-review",
     );
   });
@@ -933,32 +985,29 @@ describe("Electron StorageService", () => {
     const dataDir = await createTempDir("ork-storage-multi-review-activity-");
     const storage = new StorageService(dataDir);
     await storage.init();
-    const environment = await storage.addEnvironment(
-      createEnvironment("project-1"),
-    );
+    const environment = await storage.addEnvironment(createEnvironment("project-1"));
     const occurredAt = new Date(
       Date.parse(environment.agentActivityUpdatedAt!) + 1_000,
     ).toISOString();
 
-    await expect(storage.setEnvironmentAgentActivity(
-      environment.id,
-      "working",
-      occurredAt,
-      "multi-review",
-    )).resolves.toMatchObject({
+    await expect(
+      storage.setEnvironmentAgentActivity(environment.id, "working", occurredAt, "multi-review"),
+    ).resolves.toMatchObject({
       agentActivityState: "working",
       agentActivitySources: {
         "multi-review": { state: "working", updatedAt: occurredAt },
       },
     });
 
-    await expect(storage.setEnvironmentAgentActivity(
-      environment.id,
-      "idle",
-      new Date(Date.parse(occurredAt) + 1_000).toISOString(),
-      "multi-review",
-      "renderer-observer-id",
-    )).rejects.toThrow(
+    await expect(
+      storage.setEnvironmentAgentActivity(
+        environment.id,
+        "idle",
+        new Date(Date.parse(occurredAt) + 1_000).toISOString(),
+        "multi-review",
+        "renderer-observer-id",
+      ),
+    ).rejects.toThrow(
       "observerId must be a non-blank string of at most 256 characters for frontend activity",
     );
   });
@@ -967,32 +1016,29 @@ describe("Electron StorageService", () => {
     const dataDir = await createTempDir("ork-storage-native-agent-activity-");
     const storage = new StorageService(dataDir);
     await storage.init();
-    const environment = await storage.addEnvironment(
-      createEnvironment("project-1"),
-    );
+    const environment = await storage.addEnvironment(createEnvironment("project-1"));
     const occurredAt = new Date(
       Date.parse(environment.agentActivityUpdatedAt!) + 1_000,
     ).toISOString();
 
-    await expect(storage.setEnvironmentAgentActivity(
-      environment.id,
-      "waiting",
-      occurredAt,
-      "native-agent",
-    )).resolves.toMatchObject({
+    await expect(
+      storage.setEnvironmentAgentActivity(environment.id, "waiting", occurredAt, "native-agent"),
+    ).resolves.toMatchObject({
       agentActivityState: "waiting",
       agentActivitySources: {
         "native-agent": { state: "waiting", updatedAt: occurredAt },
       },
     });
 
-    await expect(storage.setEnvironmentAgentActivity(
-      environment.id,
-      "working",
-      new Date(Date.parse(occurredAt) + 1_000).toISOString(),
-      "native-agent",
-      "renderer-observer-id",
-    )).rejects.toThrow(
+    await expect(
+      storage.setEnvironmentAgentActivity(
+        environment.id,
+        "working",
+        new Date(Date.parse(occurredAt) + 1_000).toISOString(),
+        "native-agent",
+        "renderer-observer-id",
+      ),
+    ).rejects.toThrow(
       "observerId must be a non-blank string of at most 256 characters for frontend activity",
     );
     // A renderer supplying an observer id is claiming a lease only `frontend`
@@ -1013,9 +1059,7 @@ describe("Electron StorageService", () => {
     const dataDir = await createTempDir("ork-storage-agent-native-aggregate-");
     const storage = new StorageService(dataDir);
     await storage.init();
-    const environment = await storage.addEnvironment(
-      createEnvironment("project-1"),
-    );
+    const environment = await storage.addEnvironment(createEnvironment("project-1"));
     const createdTime = Date.parse(environment.agentActivityUpdatedAt!);
     let elapsed = 0;
     const next = () => new Date(createdTime + (elapsed += 1_000)).toISOString();
@@ -1033,12 +1077,9 @@ describe("Electron StorageService", () => {
         next(),
         "native-agent",
       );
-      await expect(storage.setEnvironmentAgentActivity(
-        environment.id,
-        frontendState,
-        next(),
-        "frontend",
-      )).resolves.toMatchObject({
+      await expect(
+        storage.setEnvironmentAgentActivity(environment.id, frontendState, next(), "frontend"),
+      ).resolves.toMatchObject({
         agentActivityState: aggregate,
         agentActivitySources: {
           "native-agent": { state: nativeState },
@@ -1052,9 +1093,7 @@ describe("Electron StorageService", () => {
     const dataDir = await createTempDir("ork-storage-agent-observers-");
     const storage = new StorageService(dataDir);
     await storage.init();
-    const environment = await storage.addEnvironment(
-      createEnvironment("project-1"),
-    );
+    const environment = await storage.addEnvironment(createEnvironment("project-1"));
     const baseTime = Date.now();
     const at = (offset: number) => new Date(baseTime + offset).toISOString();
     const observerA = "opaque-renderer-token-a";
@@ -1095,27 +1134,19 @@ describe("Electron StorageService", () => {
         leaseExpiresAt: expect.any(String),
       },
     });
-    expect(JSON.stringify(afterACompletes.frontendAgentActivityObservers))
-      .not.toContain(observerA);
-    expect(JSON.stringify(afterACompletes.frontendAgentActivityObservers))
-      .not.toContain(observerB);
+    expect(JSON.stringify(afterACompletes.frontendAgentActivityObservers)).not.toContain(observerA);
+    expect(JSON.stringify(afterACompletes.frontendAgentActivityObservers)).not.toContain(observerB);
 
-    await expect(storage.setEnvironmentAgentActivity(
-      environment.id,
-      "idle",
-      at(4),
-      "frontend",
-      observerB,
-    )).resolves.toMatchObject({ agentActivityState: "idle" });
+    await expect(
+      storage.setEnvironmentAgentActivity(environment.id, "idle", at(4), "frontend", observerB),
+    ).resolves.toMatchObject({ agentActivityState: "idle" });
   });
 
   test("expires abandoned renderer observations and republishes the aggregate", async () => {
     const dataDir = await createTempDir("ork-storage-agent-observer-expiry-");
     const storage = new StorageService(dataDir);
     await storage.init();
-    const environment = await storage.addEnvironment(
-      createEnvironment("project-1"),
-    );
+    const environment = await storage.addEnvironment(createEnvironment("project-1"));
     const updated = await storage.setEnvironmentAgentActivity(
       environment.id,
       "working",
@@ -1123,15 +1154,13 @@ describe("Electron StorageService", () => {
       "frontend",
       "abandoned-renderer-token",
     );
-    const observer = Object.values(
-      updated.frontendAgentActivityObservers ?? {},
-    )[0]!;
+    const observer = Object.values(updated.frontendAgentActivityObservers ?? {})[0]!;
     const announced: string[] = [];
     storage.setResourceChangeListener((change) => announced.push(change.id));
 
-    await expect(storage.expireFrontendAgentActivityLeases(
-      Date.parse(observer.leaseExpiresAt) + 1,
-    )).resolves.toEqual([environment.id]);
+    await expect(
+      storage.expireFrontendAgentActivityLeases(Date.parse(observer.leaseExpiresAt) + 1),
+    ).resolves.toEqual([environment.id]);
 
     await expect(storage.getEnvironment(environment.id)).resolves.toMatchObject({
       agentActivityState: "idle",
@@ -1144,33 +1173,27 @@ describe("Electron StorageService", () => {
     const dataDir = await createTempDir("ork-storage-agent-waiting-");
     const storage = new StorageService(dataDir);
     await storage.init();
-    const environment = await storage.addEnvironment(
-      createEnvironment("project-1"),
-    );
+    const environment = await storage.addEnvironment(createEnvironment("project-1"));
     const createdTime = Date.parse(environment.agentActivityUpdatedAt!);
     const waitingAt = new Date(createdTime + 1_000).toISOString();
     const terminalIdleAt = new Date(createdTime + 2_000).toISOString();
 
-    await storage.setEnvironmentAgentActivity(
-      environment.id,
-      "waiting",
-      waitingAt,
-    );
-    await expect(storage.setEnvironmentAgentActivity(
-      environment.id,
-      "idle",
-      terminalIdleAt,
-      "claude-terminal",
-    )).resolves.toMatchObject({
+    await storage.setEnvironmentAgentActivity(environment.id, "waiting", waitingAt);
+    await expect(
+      storage.setEnvironmentAgentActivity(
+        environment.id,
+        "idle",
+        terminalIdleAt,
+        "claude-terminal",
+      ),
+    ).resolves.toMatchObject({
       agentActivityState: "waiting",
       agentActivityUpdatedAt: terminalIdleAt,
     });
 
-    await expect(storage.setEnvironmentAgentActivity(
-      environment.id,
-      "idle",
-      waitingAt,
-    )).resolves.toMatchObject({
+    await expect(
+      storage.setEnvironmentAgentActivity(environment.id, "idle", waitingAt),
+    ).resolves.toMatchObject({
       agentActivityState: "waiting",
       agentActivityUpdatedAt: terminalIdleAt,
       agentActivitySources: {
@@ -1183,12 +1206,8 @@ describe("Electron StorageService", () => {
     const dataDir = await createTempDir("ork-storage-agent-terminal-clock-");
     const storage = new StorageService(dataDir);
     await storage.init();
-    const environment = await storage.addEnvironment(
-      createEnvironment("project-1"),
-    );
-    const occurredAt = new Date(
-      Date.parse(environment.createdAt) + 1_000,
-    ).toISOString();
+    const environment = await storage.addEnvironment(createEnvironment("project-1"));
+    const occurredAt = new Date(Date.parse(environment.createdAt) + 1_000).toISOString();
 
     await storage.setEnvironmentAgentActivity(
       environment.id,
@@ -1204,49 +1223,48 @@ describe("Electron StorageService", () => {
     );
 
     expect(updated.agentActivityState).toBe("idle");
-    expect(Date.parse(
-      updated.agentActivitySources!["claude-terminal"]!.updatedAt,
-    )).toBe(Date.parse(occurredAt) + 1);
+    expect(Date.parse(updated.agentActivitySources!["claude-terminal"]!.updatedAt)).toBe(
+      Date.parse(occurredAt) + 1,
+    );
   });
 
   test("bounds client clocks and recovers poisoned legacy activity timestamps", async () => {
     const dataDir = await createTempDir("ork-storage-agent-clock-");
     const storage = new StorageService(dataDir);
     await storage.init();
-    const environment = await storage.addEnvironment(
-      createEnvironment("project-1"),
-    );
+    const environment = await storage.addEnvironment(createEnvironment("project-1"));
     const maximumDate = "+275760-09-13T00:00:00.000Z";
 
-    await expect(storage.setEnvironmentAgentActivity(
-      environment.id,
-      "working",
-      maximumDate,
-    )).rejects.toThrow("occurredAt must not be more than 5 minutes in the future");
+    await expect(
+      storage.setEnvironmentAgentActivity(environment.id, "working", maximumDate),
+    ).rejects.toThrow("occurredAt must not be more than 5 minutes in the future");
 
     const environmentsPath = path.join(dataDir, "environments.json");
-    await fs.writeFile(environmentsPath, JSON.stringify([{
-      ...environment,
-      agentActivityState: "working",
-      agentActivityUpdatedAt: maximumDate,
-      agentActivitySources: {
-        frontend: {
-          state: "working",
-          updatedAt: maximumDate,
+    await fs.writeFile(
+      environmentsPath,
+      JSON.stringify([
+        {
+          ...environment,
+          agentActivityState: "working",
+          agentActivityUpdatedAt: maximumDate,
+          agentActivitySources: {
+            frontend: {
+              state: "working",
+              updatedAt: maximumDate,
+            },
+            "claude-terminal": {
+              state: "invalid-legacy-state",
+              updatedAt: "not-a-date",
+            },
+          },
         },
-        "claude-terminal": {
-          state: "invalid-legacy-state",
-          updatedAt: "not-a-date",
-        },
-      },
-    }]));
+      ]),
+    );
 
     const occurredAt = new Date().toISOString();
-    await expect(storage.setEnvironmentAgentActivity(
-      environment.id,
-      "idle",
-      occurredAt,
-    )).resolves.toMatchObject({
+    await expect(
+      storage.setEnvironmentAgentActivity(environment.id, "idle", occurredAt),
+    ).resolves.toMatchObject({
       agentActivityState: "idle",
       agentActivityUpdatedAt: occurredAt,
       agentActivitySources: {
@@ -1254,19 +1272,23 @@ describe("Electron StorageService", () => {
       },
     });
 
-    await fs.writeFile(environmentsPath, JSON.stringify([{
-      ...environment,
-      status: "running",
-      agentActivityState: "working",
-      agentActivityUpdatedAt: maximumDate,
-      agentActivitySources: {
-        frontend: { state: "working", updatedAt: maximumDate },
-      },
-    }]));
-    await expect(storage.updateEnvironment(
-      environment.id,
-      { status: "error" },
-    )).resolves.toMatchObject({
+    await fs.writeFile(
+      environmentsPath,
+      JSON.stringify([
+        {
+          ...environment,
+          status: "running",
+          agentActivityState: "working",
+          agentActivityUpdatedAt: maximumDate,
+          agentActivitySources: {
+            frontend: { state: "working", updatedAt: maximumDate },
+          },
+        },
+      ]),
+    );
+    await expect(
+      storage.updateEnvironment(environment.id, { status: "error" }),
+    ).resolves.toMatchObject({
       status: "error",
       agentActivityState: "idle",
       agentActivitySources: {},
@@ -1284,21 +1306,16 @@ describe("Electron StorageService", () => {
     delete environment.agentActivityState;
     delete environment.agentActivityUpdatedAt;
     delete environment.agentActivitySources;
-    await fs.writeFile(
-      path.join(dataDir, "environments.json"),
-      JSON.stringify([environment]),
-    );
+    await fs.writeFile(path.join(dataDir, "environments.json"), JSON.stringify([environment]));
 
     const legacy = await storage.getEnvironment(environment.id);
     expect(legacy?.id).toBe(environment.id);
     expect(legacy).not.toHaveProperty("agentActivityState");
     expect(legacy).not.toHaveProperty("agentActivityUpdatedAt");
     const occurredAt = new Date().toISOString();
-    await expect(storage.setEnvironmentAgentActivity(
-      environment.id,
-      "working",
-      occurredAt,
-    )).resolves.toMatchObject({
+    await expect(
+      storage.setEnvironmentAgentActivity(environment.id, "working", occurredAt),
+    ).resolves.toMatchObject({
       agentActivityState: "working",
       agentActivityUpdatedAt: occurredAt,
       agentActivitySources: {
@@ -1313,9 +1330,7 @@ describe("Electron StorageService", () => {
     const dataDir = await createTempDir("ork-storage-agent-status-");
     const storage = new StorageService(dataDir);
     await storage.init();
-    const environment = await storage.addEnvironment(
-      createEnvironment("project-1"),
-    );
+    const environment = await storage.addEnvironment(createEnvironment("project-1"));
     const workingAt = new Date(
       Date.parse(environment.agentActivityUpdatedAt!) + 1_000,
     ).toISOString();
@@ -1327,39 +1342,40 @@ describe("Electron StorageService", () => {
     };
 
     for (const status of ["creating", "running", "stopping"] as const) {
-      await storage.setEnvironmentAgentActivity(
-        environment.id,
-        "working",
-        workingAt,
-      );
-      await expect(storage.updateEnvironment(environment.id, { status }))
-        .resolves.toMatchObject({ status, ...working });
+      await storage.setEnvironmentAgentActivity(environment.id, "working", workingAt);
+      await expect(storage.updateEnvironment(environment.id, { status })).resolves.toMatchObject({
+        status,
+        ...working,
+      });
     }
 
-    await expect(storage.updateEnvironment(environment.id, { name: "Renamed" }))
-      .resolves.toMatchObject(working);
+    await expect(
+      storage.updateEnvironment(environment.id, { name: "Renamed" }),
+    ).resolves.toMatchObject(working);
   });
 
   test("bounds the accepted clock skew at exactly five minutes", async () => {
     const dataDir = await createTempDir("ork-storage-agent-skew-");
     const storage = new StorageService(dataDir);
     await storage.init();
-    const environment = await storage.addEnvironment(
-      createEnvironment("project-1"),
-    );
+    const environment = await storage.addEnvironment(createEnvironment("project-1"));
 
     // Comfortably inside the window, so a slow test runner cannot flip it.
-    await expect(storage.setEnvironmentAgentActivity(
-      environment.id,
-      "working",
-      new Date(Date.now() + 4 * 60_000).toISOString(),
-    )).resolves.toMatchObject({ agentActivityState: "working" });
+    await expect(
+      storage.setEnvironmentAgentActivity(
+        environment.id,
+        "working",
+        new Date(Date.now() + 4 * 60_000).toISOString(),
+      ),
+    ).resolves.toMatchObject({ agentActivityState: "working" });
 
-    await expect(storage.setEnvironmentAgentActivity(
-      environment.id,
-      "idle",
-      new Date(Date.now() + 6 * 60_000).toISOString(),
-    )).rejects.toThrow("occurredAt must not be more than 5 minutes in the future");
+    await expect(
+      storage.setEnvironmentAgentActivity(
+        environment.id,
+        "idle",
+        new Date(Date.now() + 6 * 60_000).toISOString(),
+      ),
+    ).rejects.toThrow("occurredAt must not be more than 5 minutes in the future");
   });
 
   test("rejects the loose date forms Date.parse would otherwise accept", async () => {
@@ -1368,25 +1384,16 @@ describe("Electron StorageService", () => {
     const dataDir = await createTempDir("ork-storage-agent-iso-");
     const storage = new StorageService(dataDir);
     await storage.init();
-    const environment = await storage.addEnvironment(
-      createEnvironment("project-1"),
-    );
+    const environment = await storage.addEnvironment(createEnvironment("project-1"));
 
-    for (const occurredAt of [
-      "Jul 27 2026 12:00:00",
-      "2026-07-27",
-      "2026/07/27 12:00:00",
-    ]) {
+    for (const occurredAt of ["Jul 27 2026 12:00:00", "2026-07-27", "2026/07/27 12:00:00"]) {
       expect(Number.isFinite(Date.parse(occurredAt))).toBe(true);
-      await expect(storage.setEnvironmentAgentActivity(
-        environment.id,
-        "working",
-        occurredAt,
-      )).rejects.toThrow("occurredAt must be a valid ISO timestamp");
+      await expect(
+        storage.setEnvironmentAgentActivity(environment.id, "working", occurredAt),
+      ).rejects.toThrow("occurredAt must be a valid ISO timestamp");
     }
 
-    expect((await storage.getEnvironment(environment.id))?.agentActivityState)
-      .toBe("idle");
+    expect((await storage.getEnvironment(environment.id))?.agentActivityState).toBe("idle");
   });
 
   test("orders a source's first report against the aggregate token", async () => {
@@ -1396,9 +1403,7 @@ describe("Electron StorageService", () => {
     const dataDir = await createTempDir("ork-storage-agent-first-report-");
     const storage = new StorageService(dataDir);
     await storage.init();
-    const environment = await storage.addEnvironment(
-      createEnvironment("project-1"),
-    );
+    const environment = await storage.addEnvironment(createEnvironment("project-1"));
     const createdTime = Date.parse(environment.agentActivityUpdatedAt!);
     const terminalIdleAt = new Date(createdTime + 5_000).toISOString();
     const staleFrontendWorkingAt = new Date(createdTime + 1_000).toISOString();
@@ -1410,24 +1415,21 @@ describe("Electron StorageService", () => {
       "claude-terminal",
     );
 
-    await expect(storage.setEnvironmentAgentActivity(
-      environment.id,
-      "working",
-      staleFrontendWorkingAt,
-    )).resolves.toMatchObject({
+    await expect(
+      storage.setEnvironmentAgentActivity(environment.id, "working", staleFrontendWorkingAt),
+    ).resolves.toMatchObject({
       agentActivityState: "idle",
       agentActivityUpdatedAt: terminalIdleAt,
     });
-    expect((await storage.getEnvironment(environment.id))?.agentActivitySources)
-      .not.toHaveProperty("frontend");
+    expect((await storage.getEnvironment(environment.id))?.agentActivitySources).not.toHaveProperty(
+      "frontend",
+    );
 
     // A report that is genuinely newer than the aggregate still lands.
     const freshFrontendWorkingAt = new Date(createdTime + 6_000).toISOString();
-    await expect(storage.setEnvironmentAgentActivity(
-      environment.id,
-      "working",
-      freshFrontendWorkingAt,
-    )).resolves.toMatchObject({
+    await expect(
+      storage.setEnvironmentAgentActivity(environment.id, "working", freshFrontendWorkingAt),
+    ).resolves.toMatchObject({
       agentActivityState: "working",
       agentActivityUpdatedAt: freshFrontendWorkingAt,
     });
@@ -1439,9 +1441,7 @@ describe("Electron StorageService", () => {
     const dataDir = await createTempDir("ork-storage-agent-tie-aggregate-");
     const storage = new StorageService(dataDir);
     await storage.init();
-    const environment = await storage.addEnvironment(
-      createEnvironment("project-1"),
-    );
+    const environment = await storage.addEnvironment(createEnvironment("project-1"));
     await storage.updateEnvironment(environment.id, { status: "stopped" });
     const reset = (await storage.getEnvironment(environment.id))!;
     expect(reset.agentActivitySources).toEqual({});
@@ -1454,16 +1454,15 @@ describe("Electron StorageService", () => {
     );
 
     expect(updated.agentActivityState).toBe("working");
-    expect(Date.parse(updated.agentActivitySources!["claude-terminal"]!.updatedAt))
-      .toBe(Date.parse(reset.agentActivityUpdatedAt!) + 1);
+    expect(Date.parse(updated.agentActivitySources!["claude-terminal"]!.updatedAt)).toBe(
+      Date.parse(reset.agentActivityUpdatedAt!) + 1,
+    );
 
     // A frontend tie against the same token is still simply rejected: only the
     // serialized backend poller earns the monotonic bump.
-    await expect(storage.setEnvironmentAgentActivity(
-      environment.id,
-      "idle",
-      reset.agentActivityUpdatedAt!,
-    )).resolves.toMatchObject({ agentActivityState: "working" });
+    await expect(
+      storage.setEnvironmentAgentActivity(environment.id, "idle", reset.agentActivityUpdatedAt!),
+    ).resolves.toMatchObject({ agentActivityState: "working" });
   });
 
   test("clears renderer-reported activity without touching backend observations", async () => {
@@ -1486,11 +1485,7 @@ describe("Electron StorageService", () => {
       terminalWaitingAt,
       "claude-terminal",
     );
-    await storage.setEnvironmentAgentActivity(
-      stuck.id,
-      "working",
-      frontendWorkingAt,
-    );
+    await storage.setEnvironmentAgentActivity(stuck.id, "working", frontendWorkingAt);
     await storage.setEnvironmentAgentActivity(
       untouched.id,
       "working",
@@ -1521,8 +1516,9 @@ describe("Electron StorageService", () => {
     expect(cleared.frontendAgentActivityObservers).toEqual({});
     // The token moves forward so a frontend hydrating from this snapshot
     // prefers it over any observation it made before the restart.
-    expect(Date.parse(cleared.agentActivityUpdatedAt!))
-      .toBeGreaterThan(Date.parse(observerWorkingAt));
+    expect(Date.parse(cleared.agentActivityUpdatedAt!)).toBeGreaterThan(
+      Date.parse(observerWorkingAt),
+    );
 
     await expect(storage.getEnvironment(untouched.id)).resolves.toMatchObject({
       agentActivityState: "working",
@@ -1537,9 +1533,7 @@ describe("Electron StorageService", () => {
     const dataDir = await createTempDir("ork-storage-agent-clear-native-");
     const storage = new StorageService(dataDir);
     await storage.init();
-    const environment = await storage.addEnvironment(
-      createEnvironment("project-1"),
-    );
+    const environment = await storage.addEnvironment(createEnvironment("project-1"));
     const createdTime = Date.parse(environment.agentActivityUpdatedAt!);
     const nativeWaitingAt = new Date(createdTime + 1_000).toISOString();
     const frontendWorkingAt = new Date(createdTime + 2_000).toISOString();
@@ -1550,16 +1544,17 @@ describe("Electron StorageService", () => {
       nativeWaitingAt,
       "native-agent",
     );
-    await expect(storage.setEnvironmentAgentActivity(
-      environment.id,
-      "working",
-      frontendWorkingAt,
-      "frontend",
-      "renderer-to-clear",
-    )).resolves.toMatchObject({ agentActivityState: "working" });
+    await expect(
+      storage.setEnvironmentAgentActivity(
+        environment.id,
+        "working",
+        frontendWorkingAt,
+        "frontend",
+        "renderer-to-clear",
+      ),
+    ).resolves.toMatchObject({ agentActivityState: "working" });
 
-    await expect(storage.clearFrontendAgentActivity())
-      .resolves.toEqual([environment.id]);
+    await expect(storage.clearFrontendAgentActivity()).resolves.toEqual([environment.id]);
 
     const cleared = (await storage.getEnvironment(environment.id))!;
     // State and token both survive intact; only `frontend` is dropped, and the
@@ -1575,9 +1570,7 @@ describe("Electron StorageService", () => {
     const dataDir = await createTempDir("ork-storage-agent-clear-noop-");
     const storage = new StorageService(dataDir);
     await storage.init();
-    const environment = await storage.addEnvironment(
-      createEnvironment("project-1"),
-    );
+    const environment = await storage.addEnvironment(createEnvironment("project-1"));
     const before = (await storage.getEnvironment(environment.id))!;
 
     const announced: string[] = [];
@@ -1644,24 +1637,14 @@ describe("Electron StorageService", () => {
     const firstStorage = new StorageService(dataDir);
     const secondStorage = new StorageService(dataDir);
     await Promise.all([firstStorage.init(), secondStorage.init()]);
-    const environment = await firstStorage.addEnvironment(
-      createEnvironment("project-1"),
-    );
+    const environment = await firstStorage.addEnvironment(createEnvironment("project-1"));
     const createdTime = Date.parse(environment.createdAt);
     const older = new Date(createdTime + 1_000).toISOString();
     const newer = new Date(createdTime + 2_000).toISOString();
 
     await Promise.all([
-      firstStorage.setEnvironmentAgentActivity(
-        environment.id,
-        "working",
-        newer,
-      ),
-      secondStorage.setEnvironmentAgentActivity(
-        environment.id,
-        "waiting",
-        older,
-      ),
+      firstStorage.setEnvironmentAgentActivity(environment.id, "working", newer),
+      secondStorage.setEnvironmentAgentActivity(environment.id, "waiting", older),
     ]);
 
     await expect(firstStorage.getEnvironment(environment.id)).resolves.toMatchObject({
@@ -1749,12 +1732,21 @@ describe("Electron StorageService", () => {
 
     const first = await storage.createSession("env-1", "container-1", "tab-1", "terminal");
     const second = await storage.createSession("env-1", "container-1", "tab-2", "claude");
-    await expect(storage.updateSession("missing", { name: "x" })).rejects.toThrow("Session not found");
+    await expect(storage.updateSession("missing", { name: "x" })).rejects.toThrow(
+      "Session not found",
+    );
     await storage.updateSession(first.id, { name: "Shell" });
-    expect(await storage.getSession(first.id)).toMatchObject({ status: "connected", name: "Shell" });
-    expect((await storage.reorderSessions("env-1", [second.id])).map((session) => session.id)).toEqual([second.id, first.id]);
+    expect(await storage.getSession(first.id)).toMatchObject({
+      status: "connected",
+      name: "Shell",
+    });
+    expect(
+      (await storage.reorderSessions("env-1", [second.id])).map((session) => session.id),
+    ).toEqual([second.id, first.id]);
     expect(await storage.disconnectEnvironmentSessions("env-1")).toHaveLength(2);
-    expect(await storage.removeSessionsByEnvironment("env-1")).toEqual(expect.arrayContaining([first.id, second.id]));
+    expect(await storage.removeSessionsByEnvironment("env-1")).toEqual(
+      expect.arrayContaining([first.id, second.id]),
+    );
     expect(await storage.getSessionsByEnvironment("env-1")).toEqual([]);
   });
 
@@ -1768,7 +1760,9 @@ describe("Electron StorageService", () => {
       ...createEnvironment("project-1", { name: "first" }),
       containerId: "container-1",
     });
-    const secondEnvironment = await storage.addEnvironment(createEnvironment("project-1", { name: "second" }));
+    const secondEnvironment = await storage.addEnvironment(
+      createEnvironment("project-1", { name: "second" }),
+    );
     const root = {
       kind: "leaf",
       id: "default",
@@ -1776,79 +1770,115 @@ describe("Electron StorageService", () => {
       activeTabId: "tab-1",
     };
 
-    const first = await storage.savePaneLayout(firstEnvironment.id, {
-      version: 1,
-      containerId: "container-1",
-      activePaneId: "default",
-      root,
-    }, 0);
+    const first = await storage.savePaneLayout(
+      firstEnvironment.id,
+      {
+        version: 1,
+        containerId: "container-1",
+        activePaneId: "default",
+        root,
+      },
+      0,
+    );
     expect(first).toMatchObject({
       environmentId: firstEnvironment.id,
       revision: 1,
       root,
     });
     await expect(storage.getPaneLayout(firstEnvironment.id)).resolves.toEqual(first);
-    await expect(storage.savePaneLayout(firstEnvironment.id, {
-      version: 1,
-      containerId: "container-1",
-      activePaneId: "default",
-      root,
-    }, -1)).rejects.toThrow("non-negative integer");
+    await expect(
+      storage.savePaneLayout(
+        firstEnvironment.id,
+        {
+          version: 1,
+          containerId: "container-1",
+          activePaneId: "default",
+          root,
+        },
+        -1,
+      ),
+    ).rejects.toThrow("non-negative integer");
 
     const competingStorage = new StorageService(dataDir);
     await competingStorage.init();
     const competingWrites = await Promise.allSettled([
-      storage.savePaneLayout(firstEnvironment.id, {
-        version: 1,
-        containerId: "container-1",
-        activePaneId: "default",
-        root: { ...root, activeTabId: "tab-2" },
-      }, 1),
-      competingStorage.savePaneLayout(firstEnvironment.id, {
-        version: 1,
-        containerId: "container-1",
-        activePaneId: "default",
-        root: { ...root, activeTabId: "tab-3" },
-      }, 1),
+      storage.savePaneLayout(
+        firstEnvironment.id,
+        {
+          version: 1,
+          containerId: "container-1",
+          activePaneId: "default",
+          root: { ...root, activeTabId: "tab-2" },
+        },
+        1,
+      ),
+      competingStorage.savePaneLayout(
+        firstEnvironment.id,
+        {
+          version: 1,
+          containerId: "container-1",
+          activePaneId: "default",
+          root: { ...root, activeTabId: "tab-3" },
+        },
+        1,
+      ),
     ]);
     expect(competingWrites.filter(({ status }) => status === "fulfilled")).toHaveLength(1);
     const rejected = competingWrites.find(
       (result): result is PromiseRejectedResult => result.status === "rejected",
     );
-    expect(rejected?.reason).toEqual(
-      new Error(paneLayoutRevisionConflictMessage(1, 2)),
-    );
+    expect(rejected?.reason).toEqual(new Error(paneLayoutRevisionConflictMessage(1, 2)));
     expect((await storage.getPaneLayout(firstEnvironment.id))?.revision).toBe(2);
 
-    const third = await storage.savePaneLayout(firstEnvironment.id, {
-      version: 1,
-      containerId: "container-1",
-      activePaneId: "default",
-      root: { ...root, activeTabId: "tab-3" },
-    }, 2);
+    const third = await storage.savePaneLayout(
+      firstEnvironment.id,
+      {
+        version: 1,
+        containerId: "container-1",
+        activePaneId: "default",
+        root: { ...root, activeTabId: "tab-3" },
+      },
+      2,
+    );
     expect(third.revision).toBe(3);
 
-    const isolated = await storage.savePaneLayout(secondEnvironment.id, {
-      version: 1,
-      containerId: null,
-      activePaneId: "local-pane",
-      root: { kind: "leaf", id: "local-pane", tabs: [], activeTabId: null },
-    }, 0);
+    const isolated = await storage.savePaneLayout(
+      secondEnvironment.id,
+      {
+        version: 1,
+        containerId: null,
+        activePaneId: "local-pane",
+        root: { kind: "leaf", id: "local-pane", tabs: [], activeTabId: null },
+      },
+      0,
+    );
     expect(isolated.revision).toBe(1);
     expect((await storage.getPaneLayout(firstEnvironment.id))?.revision).toBe(3);
 
-    await expect(storage.savePaneLayout(firstEnvironment.id, {
-      version: 1,
-      containerId: "container-1",
-      activePaneId: "default",
-      root: { value: "x".repeat(256 * 1024) },
-    }, 3)).rejects.toThrow("256 KB");
-    await expect(storage.savePaneLayout("missing", {
-      version: 1,
-      containerId: null,
-      activePaneId: "default",
-      root,
-    }, 0)).rejects.toThrow("Environment not found");
+    await expect(
+      storage.savePaneLayout(
+        firstEnvironment.id,
+        {
+          version: 1,
+          containerId: "container-1",
+          activePaneId: "default",
+          root: { value: "x".repeat(256 * 1024) },
+        },
+        3,
+      ),
+    ).rejects.toThrow("256 KB");
+    await expect(
+      storage.savePaneLayout(
+        "missing",
+        {
+          version: 1,
+          containerId: null,
+          activePaneId: "default",
+          root,
+        },
+        0,
+      ),
+    ).rejects.toThrow("Environment not found");
 
     await storage.deletePaneLayout(firstEnvironment.id);
     await expect(storage.getPaneLayout(firstEnvironment.id)).resolves.toBeNull();
@@ -1863,25 +1893,43 @@ describe("Electron StorageService", () => {
     const cyclicRoot: Record<string, unknown> = { kind: "leaf" };
     cyclicRoot.self = cyclicRoot;
 
-    await expect(storage.savePaneLayout(environment.id, {
-      version: 1,
-      containerId: null,
-      activePaneId: "default",
-      root: cyclicRoot,
-    }, 0)).rejects.toThrow("JSON serializable");
-    await expect(storage.savePaneLayout("missing", {
-      version: 1,
-      containerId: null,
-      activePaneId: "default",
-      root: {},
-    }, 0)).rejects.toThrow("Environment not found");
+    await expect(
+      storage.savePaneLayout(
+        environment.id,
+        {
+          version: 1,
+          containerId: null,
+          activePaneId: "default",
+          root: cyclicRoot,
+        },
+        0,
+      ),
+    ).rejects.toThrow("JSON serializable");
+    await expect(
+      storage.savePaneLayout(
+        "missing",
+        {
+          version: 1,
+          containerId: null,
+          activePaneId: "default",
+          root: {},
+        },
+        0,
+      ),
+    ).rejects.toThrow("Environment not found");
 
-    await expect(storage.savePaneLayout(environment.id, {
-      version: 1,
-      containerId: null,
-      activePaneId: "default",
-      root: { kind: "leaf", id: "default", tabs: [], activeTabId: null },
-    }, 0)).resolves.toMatchObject({ environmentId: environment.id, revision: 1 });
+    await expect(
+      storage.savePaneLayout(
+        environment.id,
+        {
+          version: 1,
+          containerId: null,
+          activePaneId: "default",
+          root: { kind: "leaf", id: "default", tabs: [], activeTabId: null },
+        },
+        0,
+      ),
+    ).resolves.toMatchObject({ environmentId: environment.id, revision: 1 });
   });
 
   test("deleting an absent pane layout is a no-op", async () => {
@@ -1911,26 +1959,33 @@ describe("Electron StorageService", () => {
 
     // Each call passes the revision it would see if the queue ran them in issue
     // order, so any reordering or interleaving turns into a revision conflict.
-    const writes = await Promise.allSettled(expectedRevisions.map((expectedRevision) =>
-      storage.savePaneLayout(environment.id, {
-        version: 1,
-        containerId: "container-1",
-        activePaneId: "default",
-        root: rootFor(expectedRevision),
-      }, expectedRevision)));
+    const writes = await Promise.allSettled(
+      expectedRevisions.map((expectedRevision) =>
+        storage.savePaneLayout(
+          environment.id,
+          {
+            version: 1,
+            containerId: "container-1",
+            activePaneId: "default",
+            root: rootFor(expectedRevision),
+          },
+          expectedRevision,
+        ),
+      ),
+    );
 
-    expect(writes.map((result) =>
-      result.status === "fulfilled" ? result.value.revision : result.reason,
-    )).toEqual([1, 2, 3, 4, 5]);
-    expect(writes.map((result) =>
-      result.status === "fulfilled" ? result.value.root : result.reason,
-    )).toEqual(expectedRevisions.map(rootFor));
+    expect(
+      writes.map((result) =>
+        result.status === "fulfilled" ? result.value.revision : result.reason,
+      ),
+    ).toEqual([1, 2, 3, 4, 5]);
+    expect(
+      writes.map((result) => (result.status === "fulfilled" ? result.value.root : result.reason)),
+    ).toEqual(expectedRevisions.map(rootFor));
 
     const stored = await storage.getPaneLayout(environment.id);
     expect(stored).toMatchObject({ revision: 5, root: rootFor(4) });
-    const onDisk = JSON.parse(
-      await fs.readFile(path.join(dataDir, "pane-layouts.json"), "utf8"),
-    );
+    const onDisk = JSON.parse(await fs.readFile(path.join(dataDir, "pane-layouts.json"), "utf8"));
     expect(Object.keys(onDisk)).toEqual([environment.id]);
     expect(onDisk[environment.id]).toEqual(stored);
   });
@@ -1944,21 +1999,29 @@ describe("Electron StorageService", () => {
       containerId: "container-1",
     });
     const root = { kind: "leaf", id: "default", tabs: [], activeTabId: null };
-    await storage.savePaneLayout(environment.id, {
-      version: 1,
-      containerId: "container-1",
-      activePaneId: "default",
-      root,
-    }, 0);
-
-    const [deleted, saved] = await Promise.allSettled([
-      storage.deletePaneLayout(environment.id),
-      storage.savePaneLayout(environment.id, {
+    await storage.savePaneLayout(
+      environment.id,
+      {
         version: 1,
         containerId: "container-1",
         activePaneId: "default",
-        root: { ...root, activeTabId: "tab-2" },
-      }, 1),
+        root,
+      },
+      0,
+    );
+
+    const [deleted, saved] = await Promise.allSettled([
+      storage.deletePaneLayout(environment.id),
+      storage.savePaneLayout(
+        environment.id,
+        {
+          version: 1,
+          containerId: "container-1",
+          activePaneId: "default",
+          root: { ...root, activeTabId: "tab-2" },
+        },
+        1,
+      ),
     ]);
 
     expect(deleted).toEqual({ status: "fulfilled", value: undefined });
@@ -1970,17 +2033,21 @@ describe("Electron StorageService", () => {
       expect(saved.reason).toEqual(new Error(paneLayoutRevisionConflictMessage(1, 0)));
     }
     await expect(storage.getPaneLayout(environment.id)).resolves.toBeNull();
-    const onDisk = JSON.parse(
-      await fs.readFile(path.join(dataDir, "pane-layouts.json"), "utf8"),
-    );
+    const onDisk = JSON.parse(await fs.readFile(path.join(dataDir, "pane-layouts.json"), "utf8"));
     expect(onDisk).toEqual({});
 
-    await expect(storage.savePaneLayout(environment.id, {
-      version: 1,
-      containerId: "container-1",
-      activePaneId: "default",
-      root,
-    }, 0)).resolves.toMatchObject({ revision: 1 });
+    await expect(
+      storage.savePaneLayout(
+        environment.id,
+        {
+          version: 1,
+          containerId: "container-1",
+          activePaneId: "default",
+          root,
+        },
+        0,
+      ),
+    ).resolves.toMatchObject({ revision: 1 });
   });
 
   test("keeps a cross-instance pane layout delete racing a save non-corrupt", async () => {
@@ -1992,23 +2059,31 @@ describe("Electron StorageService", () => {
       containerId: "container-1",
     });
     const root = { kind: "leaf", id: "default", tabs: [], activeTabId: null };
-    await storage.savePaneLayout(environment.id, {
-      version: 1,
-      containerId: "container-1",
-      activePaneId: "default",
-      root,
-    }, 0);
+    await storage.savePaneLayout(
+      environment.id,
+      {
+        version: 1,
+        containerId: "container-1",
+        activePaneId: "default",
+        root,
+      },
+      0,
+    );
 
     const competingStorage = new StorageService(dataDir);
     await competingStorage.init();
     const [deleted, saved] = await Promise.allSettled([
       storage.deletePaneLayout(environment.id),
-      competingStorage.savePaneLayout(environment.id, {
-        version: 1,
-        containerId: "container-1",
-        activePaneId: "default",
-        root: { ...root, activeTabId: "tab-2" },
-      }, 1),
+      competingStorage.savePaneLayout(
+        environment.id,
+        {
+          version: 1,
+          containerId: "container-1",
+          activePaneId: "default",
+          root: { ...root, activeTabId: "tab-2" },
+        },
+        1,
+      ),
     ]);
 
     expect(deleted).toEqual({ status: "fulfilled", value: undefined });
@@ -2018,16 +2093,22 @@ describe("Electron StorageService", () => {
       expect(saved.reason).toEqual(new Error(paneLayoutRevisionConflictMessage(1, 0)));
     }
     await expect(storage.getPaneLayout(environment.id)).resolves.toBeNull();
-    expect(JSON.parse(
-      await fs.readFile(path.join(dataDir, "pane-layouts.json"), "utf8"),
-    )).toEqual({});
+    expect(JSON.parse(await fs.readFile(path.join(dataDir, "pane-layouts.json"), "utf8"))).toEqual(
+      {},
+    );
 
-    await expect(competingStorage.savePaneLayout(environment.id, {
-      version: 1,
-      containerId: "container-1",
-      activePaneId: "default",
-      root,
-    }, 0)).resolves.toMatchObject({ revision: 1 });
+    await expect(
+      competingStorage.savePaneLayout(
+        environment.id,
+        {
+          version: 1,
+          containerId: "container-1",
+          activePaneId: "default",
+          root,
+        },
+        0,
+      ),
+    ).resolves.toMatchObject({ revision: 1 });
   });
 
   test("rejects non-integer and non-finite pane layout expected revisions", async () => {
@@ -2038,23 +2119,33 @@ describe("Electron StorageService", () => {
     const root = { kind: "leaf", id: "default", tabs: [], activeTabId: null };
 
     for (const expectedRevision of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
-      await expect(storage.savePaneLayout(environment.id, {
-        version: 1,
-        containerId: null,
-        activePaneId: "default",
-        root,
-      }, expectedRevision)).rejects.toThrow(
-        "Pane layout expected revision must be a non-negative integer",
-      );
+      await expect(
+        storage.savePaneLayout(
+          environment.id,
+          {
+            version: 1,
+            containerId: null,
+            activePaneId: "default",
+            root,
+          },
+          expectedRevision,
+        ),
+      ).rejects.toThrow("Pane layout expected revision must be a non-negative integer");
     }
     await expect(storage.getPaneLayout(environment.id)).resolves.toBeNull();
 
-    await expect(storage.savePaneLayout(environment.id, {
-      version: 1,
-      containerId: null,
-      activePaneId: "default",
-      root,
-    }, 0)).resolves.toMatchObject({ revision: 1 });
+    await expect(
+      storage.savePaneLayout(
+        environment.id,
+        {
+          version: 1,
+          containerId: null,
+          activePaneId: "default",
+          root,
+        },
+        0,
+      ),
+    ).resolves.toMatchObject({ revision: 1 });
   });
 
   test("an oversize pane layout root rejects without consuming the revision", async () => {
@@ -2064,29 +2155,43 @@ describe("Electron StorageService", () => {
     const environment = await storage.addEnvironment(createEnvironment("project-1"));
     const root = { kind: "leaf", id: "default", tabs: [], activeTabId: null };
 
-    const first = await storage.savePaneLayout(environment.id, {
-      version: 1,
-      containerId: null,
-      activePaneId: "default",
-      root,
-    }, 0);
+    const first = await storage.savePaneLayout(
+      environment.id,
+      {
+        version: 1,
+        containerId: null,
+        activePaneId: "default",
+        root,
+      },
+      0,
+    );
     expect(first.revision).toBe(1);
 
-    await expect(storage.savePaneLayout(environment.id, {
-      version: 1,
-      containerId: null,
-      activePaneId: "default",
-      root: { value: "x".repeat(256 * 1024) },
-    }, 1)).rejects.toThrow("Pane layout root exceeds the 256 KB limit");
+    await expect(
+      storage.savePaneLayout(
+        environment.id,
+        {
+          version: 1,
+          containerId: null,
+          activePaneId: "default",
+          root: { value: "x".repeat(256 * 1024) },
+        },
+        1,
+      ),
+    ).rejects.toThrow("Pane layout root exceeds the 256 KB limit");
     await expect(storage.getPaneLayout(environment.id)).resolves.toEqual(first);
 
     // The rejected oversize write must not have burned revision 1.
-    const second = await storage.savePaneLayout(environment.id, {
-      version: 1,
-      containerId: null,
-      activePaneId: "default",
-      root: { ...root, activeTabId: "tab-2" },
-    }, 1);
+    const second = await storage.savePaneLayout(
+      environment.id,
+      {
+        version: 1,
+        containerId: null,
+        activePaneId: "default",
+        root: { ...root, activeTabId: "tab-2" },
+      },
+      1,
+    );
     expect(second).toMatchObject({ revision: 2, root: { ...root, activeTabId: "tab-2" } });
   });
 
@@ -2099,14 +2204,17 @@ describe("Electron StorageService", () => {
     const layout = { version: 1, containerId: null, activePaneId: "default", root };
 
     await storage.savePaneLayout(environment.id, layout, 0);
-    await expect(storage.savePaneLayout(environment.id, layout, 0))
-      .rejects.toThrow(paneLayoutRevisionConflictMessage(0, 1));
-    await expect(storage.savePaneLayout(environment.id, layout, 7))
-      .rejects.toThrow(paneLayoutRevisionConflictMessage(7, 1));
+    await expect(storage.savePaneLayout(environment.id, layout, 0)).rejects.toThrow(
+      paneLayoutRevisionConflictMessage(0, 1),
+    );
+    await expect(storage.savePaneLayout(environment.id, layout, 7)).rejects.toThrow(
+      paneLayoutRevisionConflictMessage(7, 1),
+    );
     // A save against an environment that has never stored a layout compares to 0.
     const other = await storage.addEnvironment(createEnvironment("project-1", { name: "other" }));
-    await expect(storage.savePaneLayout(other.id, layout, 3))
-      .rejects.toThrow(paneLayoutRevisionConflictMessage(3, 0));
+    await expect(storage.savePaneLayout(other.id, layout, 3)).rejects.toThrow(
+      paneLayoutRevisionConflictMessage(3, 0),
+    );
   });
 
   test("updates and deletes kanban tasks and comments with missing-id errors", async () => {
@@ -2122,9 +2230,13 @@ describe("Electron StorageService", () => {
     expect(commentId).toBeTruthy();
     expect((await storage.deleteKanbanComment(task.id, commentId!)).comments).toEqual([]);
     await expect(storage.addKanbanComment("missing", "x")).rejects.toThrow("Kanban task not found");
-    await expect(storage.deleteKanbanComment(task.id, "missing")).resolves.toMatchObject({ comments: [] });
+    await expect(storage.deleteKanbanComment(task.id, "missing")).resolves.toMatchObject({
+      comments: [],
+    });
     await storage.deleteKanbanTask(task.id);
-    await expect(storage.updateKanbanTask(task.id, { title: "x" })).rejects.toThrow("Kanban task not found");
+    await expect(storage.updateKanbanTask(task.id, { title: "x" })).rejects.toThrow(
+      "Kanban task not found",
+    );
   });
 
   test("stores project notes and updates the existing note for the project", async () => {
@@ -2132,14 +2244,19 @@ describe("Electron StorageService", () => {
     const storage = new StorageService(dataDir);
     await storage.init();
 
-    await expect(storage.getProjectNotes("project-1")).resolves.toMatchObject({ projectId: "project-1", content: "" });
+    await expect(storage.getProjectNotes("project-1")).resolves.toMatchObject({
+      projectId: "project-1",
+      content: "",
+    });
 
     const first = await storage.saveProjectNotes("project-1", "initial notes");
     expect(first).toMatchObject({ projectId: "project-1", content: "initial notes" });
 
     const second = await storage.saveProjectNotes("project-1", "updated notes");
     expect(second).toMatchObject({ projectId: "project-1", content: "updated notes" });
-    await expect(storage.getProjectNotes("project-1")).resolves.toMatchObject({ content: "updated notes" });
+    await expect(storage.getProjectNotes("project-1")).resolves.toMatchObject({
+      content: "updated notes",
+    });
   });
 
   test("persists feature planning chats and story refinements", async () => {
@@ -2174,15 +2291,17 @@ describe("Electron StorageService", () => {
     await storage.updateFeaturePlan(feature.id, {
       status: "stories",
       summary: "Users can save and reuse filtered views.",
-      stories: [{
-        id: storyId,
-        title: "Save a filtered view",
-        description: "A user can save the current filters so they can return to that view later.",
-        acceptanceCriteria: ["Saved filters can be named", "Saved filters can be reopened"],
-        messages: [],
-        createdAt: "2026-01-01T00:00:00.000Z",
-        updatedAt: "2026-01-01T00:00:00.000Z",
-      }],
+      stories: [
+        {
+          id: storyId,
+          title: "Save a filtered view",
+          description: "A user can save the current filters so they can return to that view later.",
+          acceptanceCriteria: ["Saved filters can be named", "Saved filters can be reopened"],
+          messages: [],
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
     });
 
     const withStoryChat = await storage.appendFeatureStoryMessage(
@@ -2252,9 +2371,15 @@ describe("Electron StorageService", () => {
     expect(updated.projectId).toBe("project-1");
     expect(updated.title).toBe("renamed");
 
-    await expect(storage.updateFeaturePlan("missing", { title: "x" })).rejects.toThrow(/not found/i);
-    await expect(storage.appendFeaturePlanMessage("missing", "user", "hi")).rejects.toThrow(/not found/i);
-    await expect(storage.appendFeatureStoryMessage(feature.id, "missing-story", "user", "hi")).rejects.toThrow(/not found/i);
+    await expect(storage.updateFeaturePlan("missing", { title: "x" })).rejects.toThrow(
+      /not found/i,
+    );
+    await expect(storage.appendFeaturePlanMessage("missing", "user", "hi")).rejects.toThrow(
+      /not found/i,
+    );
+    await expect(
+      storage.appendFeatureStoryMessage(feature.id, "missing-story", "user", "hi"),
+    ).rejects.toThrow(/not found/i);
 
     // A failed mutation must not corrupt the persisted plan.
     await expect(storage.getFeaturePlans("project-1")).resolves.toEqual([
@@ -2269,15 +2394,17 @@ describe("Electron StorageService", () => {
 
     const feature = await storage.createFeaturePlan("project-1");
     await storage.updateFeaturePlan(feature.id, {
-      stories: [{
-        id: "story-1",
-        title: "Story one",
-        description: "desc",
-        acceptanceCriteria: [],
-        messages: [],
-        createdAt: "2026-01-01T00:00:00.000Z",
-        updatedAt: "2026-01-01T00:00:00.000Z",
-      }],
+      stories: [
+        {
+          id: "story-1",
+          title: "Story one",
+          description: "desc",
+          acceptanceCriteria: [],
+          messages: [],
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
     });
 
     // Fire a feature-chat append and a story append concurrently. With a stale
@@ -2290,7 +2417,9 @@ describe("Electron StorageService", () => {
 
     const [reloaded] = await storage.getFeaturePlans("project-1");
     expect(reloaded?.messages.some((message) => message.content === "feature note")).toBe(true);
-    expect(reloaded?.stories[0]?.messages.some((message) => message.content === "story note")).toBe(true);
+    expect(reloaded?.stories[0]?.messages.some((message) => message.content === "story note")).toBe(
+      true,
+    );
   });
 
   test("stores Linear auth separately and tracks completion comments by pipeline", async () => {
@@ -2329,7 +2458,11 @@ describe("Electron StorageService", () => {
       commentId: "comment-1",
       postedAt: "2026-06-28T12:00:00.000Z",
     });
-    expect(posted).toMatchObject({ pipelineId: "pipeline-1", status: "posted", commentId: "comment-1" });
+    expect(posted).toMatchObject({
+      pipelineId: "pipeline-1",
+      status: "posted",
+      commentId: "comment-1",
+    });
     await expect(storage.getLinearCompletionComment("pipeline-1")).resolves.toMatchObject({
       issueId: "issue-1",
       commentId: "comment-1",
@@ -2341,7 +2474,11 @@ describe("Electron StorageService", () => {
       status: "failed",
       error: "Linear API unavailable",
     });
-    expect(failed).toMatchObject({ pipelineId: "pipeline-1", status: "failed", error: "Linear API unavailable" });
+    expect(failed).toMatchObject({
+      pipelineId: "pipeline-1",
+      status: "failed",
+      error: "Linear API unavailable",
+    });
     await expect(storage.getLinearCompletionComment("pipeline-1")).resolves.toMatchObject({
       status: "failed",
       error: "Linear API unavailable",
@@ -2396,19 +2533,21 @@ describe("Electron StorageService", () => {
     const second = new StorageService(dataDir);
     await Promise.all([first.init(), second.init()]);
 
-    await Promise.all(Array.from({ length: 20 }, (_, index) => {
-      const storage = index % 2 === 0 ? first : second;
-      return storage.saveGitHubCompletionComment({
-        pipelineId: `pipeline-${index}`,
-        repositoryOwner: "acme",
-        repositoryName: "widget",
-        issueNumber: index + 1,
-        status: index % 3 === 0 ? "failed" : "posted",
-        ...(index % 3 === 0
-          ? { error: `failure-${index}` }
-          : { commentId: String(9_000 + index), postedAt: "2026-07-24T12:00:00.000Z" }),
-      });
-    }));
+    await Promise.all(
+      Array.from({ length: 20 }, (_, index) => {
+        const storage = index % 2 === 0 ? first : second;
+        return storage.saveGitHubCompletionComment({
+          pipelineId: `pipeline-${index}`,
+          repositoryOwner: "acme",
+          repositoryName: "widget",
+          issueNumber: index + 1,
+          status: index % 3 === 0 ? "failed" : "posted",
+          ...(index % 3 === 0
+            ? { error: `failure-${index}` }
+            : { commentId: String(9_000 + index), postedAt: "2026-07-24T12:00:00.000Z" }),
+        });
+      }),
+    );
 
     const records = JSON.parse(
       await fs.readFile(path.join(dataDir, "github-completion-comments.json"), "utf8"),
@@ -2475,10 +2614,9 @@ describe("Electron StorageService", () => {
     const staleTime = new Date(Date.now() - 20_000);
     await fs.utimes(lockPath, staleTime, staleTime);
 
-    await expect(storage.withGitHubCompletionCommentLock(
-      pipelineId,
-      async () => "recovered",
-    )).resolves.toBe("recovered");
+    await expect(
+      storage.withGitHubCompletionCommentLock(pipelineId, async () => "recovered"),
+    ).resolves.toBe("recovered");
     await expect(fs.access(lockPath)).rejects.toThrow();
   });
 
@@ -2526,7 +2664,9 @@ describe("Electron StorageService", () => {
     await expect(storage.saveLinearAuth("lin_api_secret")).rejects.toThrow();
 
     const files = await fs.readdir(dataDir);
-    expect(files.filter((file) => file.startsWith(".linear-auth.json.") && file.endsWith(".tmp"))).toEqual([]);
+    expect(
+      files.filter((file) => file.startsWith(".linear-auth.json.") && file.endsWith(".tmp")),
+    ).toEqual([]);
   });
 
   test("persists kanban images as retrievable files and removes them when deleted", async () => {
@@ -2554,9 +2694,9 @@ describe("Electron StorageService", () => {
     const task = await storage.addKanbanTask("project-1", "Build thing", "Details");
     resizeKanbanImageToBuffer.mockRejectedValueOnce(new Error("image resize failed"));
 
-    await expect(storage.addKanbanImage(task.id, "pixel.png", transparentPngBase64)).rejects.toThrow(
-      "image resize failed",
-    );
+    await expect(
+      storage.addKanbanImage(task.id, "pixel.png", transparentPngBase64),
+    ).rejects.toThrow("image resize failed");
 
     expect((await storage.getKanbanTasks("project-1"))[0]?.images).toEqual([]);
     await expect(fs.readdir(path.join(dataDir, "kanban-images"))).rejects.toThrow();
@@ -2580,13 +2720,9 @@ describe("Electron StorageService", () => {
       0,
     );
     expect(first.revision).toBe(1);
-    await expect(storage.saveLoopedReviewWorkflow(
-      "workflow-1",
-      environment.id,
-      1,
-      { phase: "fixing" },
-      0,
-    )).rejects.toThrow("revision conflict");
+    await expect(
+      storage.saveLoopedReviewWorkflow("workflow-1", environment.id, 1, { phase: "fixing" }, 0),
+    ).rejects.toThrow("revision conflict");
 
     const second = await storage.saveLoopedReviewWorkflow(
       "workflow-1",
@@ -2639,17 +2775,21 @@ describe("Electron StorageService", () => {
       0,
     );
 
-    await expect(storage.listLoopedReviewWorkflows(firstEnvironment.id))
-      .resolves.toMatchObject([{ id: "workflow-first" }]);
-    await expect(storage.listLoopedReviewWorkflows(secondEnvironment.id))
-      .resolves.toMatchObject([{ id: "workflow-second" }]);
-    await expect(storage.saveLoopedReviewWorkflow(
-      "workflow-first",
-      secondEnvironment.id,
-      1,
-      { id: "workflow-first", phase: "preparing" },
-      1,
-    )).rejects.toThrow("belongs to another environment");
+    await expect(storage.listLoopedReviewWorkflows(firstEnvironment.id)).resolves.toMatchObject([
+      { id: "workflow-first" },
+    ]);
+    await expect(storage.listLoopedReviewWorkflows(secondEnvironment.id)).resolves.toMatchObject([
+      { id: "workflow-second" },
+    ]);
+    await expect(
+      storage.saveLoopedReviewWorkflow(
+        "workflow-first",
+        secondEnvironment.id,
+        1,
+        { id: "workflow-first", phase: "preparing" },
+        1,
+      ),
+    ).rejects.toThrow("belongs to another environment");
     await expect(storage.getLoopedReviewWorkflow("missing")).resolves.toBeNull();
     await expect(storage.getLoopedReviewWorkflow(" ")).rejects.toThrow(
       "workflow ID must not be blank",
@@ -2657,27 +2797,15 @@ describe("Electron StorageService", () => {
     await expect(storage.listLoopedReviewWorkflows("")).rejects.toThrow(
       "environment ID must not be blank",
     );
-    await expect(storage.saveLoopedReviewWorkflow(
-      "workflow-invalid-version",
-      firstEnvironment.id,
-      0,
-      {},
-      0,
-    )).rejects.toThrow("version must be a positive integer");
-    await expect(storage.saveLoopedReviewWorkflow(
-      "workflow-invalid-revision",
-      firstEnvironment.id,
-      1,
-      {},
-      -1,
-    )).rejects.toThrow("expected revision must be a non-negative integer");
-    await expect(storage.saveLoopedReviewWorkflow(
-      "workflow-invalid-snapshot",
-      firstEnvironment.id,
-      1,
-      [],
-      0,
-    )).rejects.toThrow("snapshot must be a JSON object");
+    await expect(
+      storage.saveLoopedReviewWorkflow("workflow-invalid-version", firstEnvironment.id, 0, {}, 0),
+    ).rejects.toThrow("version must be a positive integer");
+    await expect(
+      storage.saveLoopedReviewWorkflow("workflow-invalid-revision", firstEnvironment.id, 1, {}, -1),
+    ).rejects.toThrow("expected revision must be a non-negative integer");
+    await expect(
+      storage.saveLoopedReviewWorkflow("workflow-invalid-snapshot", firstEnvironment.id, 1, [], 0),
+    ).rejects.toThrow("snapshot must be a JSON object");
   });
 
   test("serializes compare-and-swap across storage instances", async () => {
@@ -2714,8 +2842,9 @@ describe("Electron StorageService", () => {
       status: "rejected",
       reason: expect.objectContaining({ message: expect.stringContaining("revision conflict") }),
     });
-    await expect(firstStorage.getLoopedReviewWorkflow("workflow-cas")).resolves
-      .toMatchObject({ revision: 1 });
+    await expect(firstStorage.getLoopedReviewWorkflow("workflow-cas")).resolves.toMatchObject({
+      revision: 1,
+    });
   });
 
   test("recovers a looped-review snapshot from backup after file corruption", async () => {
@@ -2745,11 +2874,10 @@ describe("Electron StorageService", () => {
 
     const restarted = new StorageService(dataDir);
     await restarted.init();
-    await expect(restarted.getLoopedReviewWorkflow("workflow-corrupt")).resolves
-      .toMatchObject({
-        revision: 1,
-        snapshot: { phase: "preparing" },
-      });
+    await expect(restarted.getLoopedReviewWorkflow("workflow-corrupt")).resolves.toMatchObject({
+      revision: 1,
+      snapshot: { phase: "preparing" },
+    });
   });
 
   test("ignores structurally corrupt looped-review envelopes during hydration", async () => {
@@ -2788,15 +2916,12 @@ describe("Electron StorageService", () => {
     await expect(storage.getLoopedReviewWorkflow("primitive-snapshot")).resolves.toBeNull();
     await expect(storage.listLoopedReviewWorkflows(environment.id)).resolves.toEqual([]);
 
-    await expect(storage.saveLoopedReviewWorkflow(
-      "wrong-key",
-      environment.id,
-      1,
-      { phase: "preparing" },
-      0,
-    )).resolves.toMatchObject({ id: "wrong-key", revision: 1 });
-    await expect(storage.listLoopedReviewWorkflows(environment.id)).resolves
-      .toMatchObject([{ id: "wrong-key" }]);
+    await expect(
+      storage.saveLoopedReviewWorkflow("wrong-key", environment.id, 1, { phase: "preparing" }, 0),
+    ).resolves.toMatchObject({ id: "wrong-key", revision: 1 });
+    await expect(storage.listLoopedReviewWorkflows(environment.id)).resolves.toMatchObject([
+      { id: "wrong-key" },
+    ]);
   });
 
   test("rejects unsafe looped-review persistence instead of truncating it", async () => {
@@ -2811,22 +2936,20 @@ describe("Electron StorageService", () => {
     const circular: Record<string, unknown> = {};
     circular.self = circular;
 
-    await expect(storage.saveLoopedReviewWorkflow(
-      "workflow-invalid",
-      environment.id,
-      1,
-      circular,
-      0,
-    )).rejects.toThrow("JSON serializable");
+    await expect(
+      storage.saveLoopedReviewWorkflow("workflow-invalid", environment.id, 1, circular, 0),
+    ).rejects.toThrow("JSON serializable");
     await expect(storage.getLoopedReviewWorkflow("workflow-invalid")).resolves.toBeNull();
 
-    await expect(storage.saveLoopedReviewWorkflow(
-      "workflow-oversized",
-      environment.id,
-      1,
-      { completeDiff: "x".repeat(32 * 1024 * 1024) },
-      0,
-    )).rejects.toThrow("exceeds the 32 MB limit");
+    await expect(
+      storage.saveLoopedReviewWorkflow(
+        "workflow-oversized",
+        environment.id,
+        1,
+        { completeDiff: "x".repeat(32 * 1024 * 1024) },
+        0,
+      ),
+    ).rejects.toThrow("exceeds the 32 MB limit");
     await expect(storage.getLoopedReviewWorkflow("workflow-oversized")).resolves.toBeNull();
   });
 
@@ -2855,7 +2978,8 @@ describe("Electron StorageService", () => {
     );
 
     const primaryMode = (await fs.stat(path.join(dataDir, "looped-reviews.json"))).mode & 0o777;
-    const backupMode = (await fs.stat(path.join(dataDir, "looped-reviews.json.bak.1"))).mode & 0o777;
+    const backupMode =
+      (await fs.stat(path.join(dataDir, "looped-reviews.json.bak.1"))).mode & 0o777;
     expect(primaryMode).toBe(0o600);
     expect(backupMode).toBe(0o600);
   });
@@ -2898,16 +3022,13 @@ describe("Electron StorageService", () => {
       1,
     );
 
-    await storage.deleteLoopedReviewWorkflowsByEnvironment(
-      deletedEnvironment.id,
-    );
+    await storage.deleteLoopedReviewWorkflowsByEnvironment(deletedEnvironment.id);
 
-    await expect(storage.listLoopedReviewWorkflows(deletedEnvironment.id))
-      .resolves.toEqual([]);
-    await expect(storage.getLoopedReviewWorkflow("workflow-deleted"))
-      .resolves.toBeNull();
-    await expect(storage.listLoopedReviewWorkflows(retainedEnvironment.id))
-      .resolves.toMatchObject([{ id: "workflow-retained" }]);
+    await expect(storage.listLoopedReviewWorkflows(deletedEnvironment.id)).resolves.toEqual([]);
+    await expect(storage.getLoopedReviewWorkflow("workflow-deleted")).resolves.toBeNull();
+    await expect(storage.listLoopedReviewWorkflows(retainedEnvironment.id)).resolves.toMatchObject([
+      { id: "workflow-retained" },
+    ]);
     for (const name of await fs.readdir(dataDir)) {
       if (!name.startsWith("looped-reviews.json")) continue;
       const contents = await fs.readFile(path.join(dataDir, name), "utf8");

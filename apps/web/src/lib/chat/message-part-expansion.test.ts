@@ -14,9 +14,7 @@ afterEach(() => {
 
 describe("useMessagePartExpansion", () => {
   test("starts collapsed and exposes a setter that opens and closes the part", () => {
-    const { result } = renderHook(() =>
-      useMessagePartExpansion("message-1/part-0")
-    );
+    const { result } = renderHook(() => useMessagePartExpansion("message-1/part-0"));
 
     expect(result.current[0]).toBe(false);
 
@@ -24,49 +22,33 @@ describe("useMessagePartExpansion", () => {
       result.current[1](true);
     });
     expect(result.current[0]).toBe(true);
-    expect(
-      useMessagePartExpansionStore
-        .getState()
-        .expandedKeys
-        .has("message-1/part-0"),
-    ).toBe(true);
+    expect(useMessagePartExpansionStore.getState().expandedKeys.has("message-1/part-0")).toBe(true);
 
     act(() => {
       result.current[1](false);
     });
     expect(result.current[0]).toBe(false);
-    expect(
-      useMessagePartExpansionStore
-        .getState()
-        .expandedKeys
-        .has("message-1/part-0"),
-    ).toBe(false);
+    expect(useMessagePartExpansionStore.getState().expandedKeys.has("message-1/part-0")).toBe(
+      false,
+    );
   });
 
   test("rehydrates an expanded part after the hook unmounts", () => {
-    const first = renderHook(() =>
-      useMessagePartExpansion("message-1/part-0")
-    );
+    const first = renderHook(() => useMessagePartExpansion("message-1/part-0"));
 
     act(() => {
       first.result.current[1](true);
     });
     first.unmount();
 
-    const second = renderHook(() =>
-      useMessagePartExpansion("message-1/part-0")
-    );
+    const second = renderHook(() => useMessagePartExpansion("message-1/part-0"));
 
     expect(second.result.current[0]).toBe(true);
   });
 
   test("keeps expansion state isolated by key", () => {
-    const first = renderHook(() =>
-      useMessagePartExpansion("message-1/part-0")
-    );
-    const second = renderHook(() =>
-      useMessagePartExpansion("message-1/part-1")
-    );
+    const first = renderHook(() => useMessagePartExpansion("message-1/part-0"));
+    const second = renderHook(() => useMessagePartExpansion("message-1/part-1"));
 
     act(() => {
       first.result.current[1](true);
@@ -77,14 +59,10 @@ describe("useMessagePartExpansion", () => {
   });
 
   test("subscribes to expansion changes made outside the hook", () => {
-    const { result } = renderHook(() =>
-      useMessagePartExpansion("message-1/part-0")
-    );
+    const { result } = renderHook(() => useMessagePartExpansion("message-1/part-0"));
 
     act(() => {
-      useMessagePartExpansionStore
-        .getState()
-        .setExpanded("message-1/part-0", true);
+      useMessagePartExpansionStore.getState().setExpanded("message-1/part-0", true);
     });
 
     expect(result.current[0]).toBe(true);
@@ -92,8 +70,7 @@ describe("useMessagePartExpansion", () => {
 
   test("targets the current key after the key changes", () => {
     const { result, rerender } = renderHook(
-      ({ expansionKey }: { expansionKey: string }) =>
-        useMessagePartExpansion(expansionKey),
+      ({ expansionKey }: { expansionKey: string }) => useMessagePartExpansion(expansionKey),
       { initialProps: { expansionKey: "message-1/part-0" } },
     );
 
@@ -127,9 +104,7 @@ describe("useMessagePartExpansion", () => {
     });
 
     expect(mounted.result.current[0]).toBe(true);
-    expect(
-      useMessagePartExpansionStore.getState().expandedKeys.has("mounted-part"),
-    ).toBe(true);
+    expect(useMessagePartExpansionStore.getState().expandedKeys.has("mounted-part")).toBe(true);
 
     mounted.unmount();
     act(() => {
@@ -137,16 +112,13 @@ describe("useMessagePartExpansion", () => {
     });
 
     // Unmounted, it is the oldest key with nothing holding it on screen.
-    expect(
-      useMessagePartExpansionStore.getState().expandedKeys.has("mounted-part"),
-    ).toBe(false);
+    expect(useMessagePartExpansionStore.getState().expandedKeys.has("mounted-part")).toBe(false);
   });
 
   test("moves its cap protection to the new key when the key changes", () => {
     const store = useMessagePartExpansionStore.getState();
     const { rerender } = renderHook(
-      ({ expansionKey }: { expansionKey: string }) =>
-        useMessagePartExpansion(expansionKey),
+      ({ expansionKey }: { expansionKey: string }) => useMessagePartExpansion(expansionKey),
       { initialProps: { expansionKey: "first-key" } },
     );
 
@@ -168,9 +140,7 @@ describe("useMessagePartExpansion", () => {
   });
 
   test("keeps the setter stable while the key is unchanged", () => {
-    const { result, rerender } = renderHook(() =>
-      useMessagePartExpansion("message-1/part-0")
-    );
+    const { result, rerender } = renderHook(() => useMessagePartExpansion("message-1/part-0"));
     const setter = result.current[1];
 
     rerender();

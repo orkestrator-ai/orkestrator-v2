@@ -39,10 +39,7 @@ type ObserverHarness = {
     target: Node;
     options?: MutationObserverInit;
   }>;
-  mutationCallback?: (
-    records: MutationRecord[],
-    observer: MutationObserver
-  ) => void;
+  mutationCallback?: (records: MutationRecord[], observer: MutationObserver) => void;
   restore: () => void;
 };
 
@@ -76,9 +73,7 @@ function installObservers(): ObserverHarness {
   }
 
   class MockMutationObserver {
-    constructor(
-      callback: (records: MutationRecord[], observer: MutationObserver) => void
-    ) {
+    constructor(callback: (records: MutationRecord[], observer: MutationObserver) => void) {
       harness.mutationCallback = callback;
     }
 
@@ -133,9 +128,7 @@ describe("useVirtuosoScrollState", () => {
     });
 
     test("restoreStateFrom is undefined when persistKey has no saved state", () => {
-      const { result } = renderHook(() =>
-        useVirtuosoScrollState({ persistKey: "test-key" })
-      );
+      const { result } = renderHook(() => useVirtuosoScrollState({ persistKey: "test-key" }));
       expect(result.current.scrollProps.restoreStateFrom).toBeUndefined();
     });
   });
@@ -313,9 +306,7 @@ describe("useVirtuosoScrollState", () => {
     });
 
     test("does not scroll on total list height changes while inactive", () => {
-      const { result } = renderHook(() =>
-        useVirtuosoScrollState({ isActive: false })
-      );
+      const { result } = renderHook(() => useVirtuosoScrollState({ isActive: false }));
 
       const scrollToIndexCalls: any[] = [];
       result.current.virtuosoRef.current = {
@@ -433,12 +424,15 @@ describe("useVirtuosoScrollState", () => {
 
       // Each retry schedules the next one, so fixed wall-clock slack becomes
       // flaky when the full repository suite is competing for the event loop.
-      await waitFor(() => {
-        expect(scrollToIndexCalls).toHaveLength(10);
-        expect(scrollToCalls).toHaveLength(1);
-      }, {
-        timeout: 2_000,
-      });
+      await waitFor(
+        () => {
+          expect(scrollToIndexCalls).toHaveLength(10);
+          expect(scrollToCalls).toHaveLength(1);
+        },
+        {
+          timeout: 2_000,
+        },
+      );
 
       // Exhaustion: exactly MAX_ATTEMPTS (10) retries when isAtBottom never flips
       expect(scrollToIndexCalls).toHaveLength(10);
@@ -479,12 +473,15 @@ describe("useVirtuosoScrollState", () => {
       // `scrollTo` is asserted inside the same wait because it lands a tick
       // after the tenth `scrollToIndex`. Reading it immediately after the wait
       // resolved made this test lose that race under load.
-      await waitFor(() => {
-        expect(scrollToIndexCalls).toHaveLength(10);
-        expect(scrollToCalls).toHaveLength(1);
-      }, {
-        timeout: 2_000,
-      });
+      await waitFor(
+        () => {
+          expect(scrollToIndexCalls).toHaveLength(10);
+          expect(scrollToCalls).toHaveLength(1);
+        },
+        {
+          timeout: 2_000,
+        },
+      );
     });
 
     test("can be invoked again after a previous scroll completes", async () => {
@@ -897,9 +894,7 @@ describe("useVirtuosoScrollState", () => {
       // The scroller stays mounted when a tab goes inactive, so the isActive
       // guard is the only thing stopping a background view from scrolling.
       const harness = installObservers();
-      const { result, unmount } = renderHook(() =>
-        useVirtuosoScrollState({ isActive: false })
-      );
+      const { result, unmount } = renderHook(() => useVirtuosoScrollState({ isActive: false }));
       const scroller = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
       scroller.appendChild(document.createElement("div"));
 
@@ -1161,43 +1156,37 @@ describe("useVirtuosoScrollState", () => {
       }
     });
 
-    test.each(["ArrowUp", "PageUp", "Home"])(
-      "releases stick intent on %s",
-      (key) => {
-        const { result } = renderHook(() => useVirtuosoScrollState());
-        const scroller = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
+    test.each(["ArrowUp", "PageUp", "Home"])("releases stick intent on %s", (key) => {
+      const { result } = renderHook(() => useVirtuosoScrollState());
+      const scroller = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
 
-        try {
-          act(() => result.current.scrollProps.scrollerRef(scroller));
-          act(() => {
-            scroller.dispatchEvent(new KeyboardEvent("keydown", { key }));
-          });
+      try {
+        act(() => result.current.scrollProps.scrollerRef(scroller));
+        act(() => {
+          scroller.dispatchEvent(new KeyboardEvent("keydown", { key }));
+        });
 
-          expect(result.current.scrollProps.followOutput(false)).toBe(false);
-        } finally {
-          document.body.removeChild(scroller);
-        }
+        expect(result.current.scrollProps.followOutput(false)).toBe(false);
+      } finally {
+        document.body.removeChild(scroller);
       }
-    );
+    });
 
-    test.each(["ArrowDown", "PageDown", "End"])(
-      "keeps stick intent on %s",
-      (key) => {
-        const { result } = renderHook(() => useVirtuosoScrollState());
-        const scroller = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
+    test.each(["ArrowDown", "PageDown", "End"])("keeps stick intent on %s", (key) => {
+      const { result } = renderHook(() => useVirtuosoScrollState());
+      const scroller = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
 
-        try {
-          act(() => result.current.scrollProps.scrollerRef(scroller));
-          act(() => {
-            scroller.dispatchEvent(new KeyboardEvent("keydown", { key }));
-          });
+      try {
+        act(() => result.current.scrollProps.scrollerRef(scroller));
+        act(() => {
+          scroller.dispatchEvent(new KeyboardEvent("keydown", { key }));
+        });
 
-          expect(result.current.scrollProps.followOutput(false)).toBe("auto");
-        } finally {
-          document.body.removeChild(scroller);
-        }
+        expect(result.current.scrollProps.followOutput(false)).toBe("auto");
+      } finally {
+        document.body.removeChild(scroller);
       }
-    );
+    });
 
     test("stops releasing stick intent after the scroller is detached", () => {
       const { result } = renderHook(() => useVirtuosoScrollState());
@@ -1228,9 +1217,8 @@ describe("useVirtuosoScrollState", () => {
         scrollTop: 500,
       };
       const { result, rerender } = renderHook(
-        ({ isActive }) =>
-          useVirtuosoScrollState({ isActive, persistKey: "test-key" }),
-        { initialProps: { isActive: true } }
+        ({ isActive }) => useVirtuosoScrollState({ isActive, persistKey: "test-key" }),
+        { initialProps: { isActive: true } },
       );
 
       // Simulate a user scroll up so stick intent is released; the snapshot
@@ -1251,11 +1239,9 @@ describe("useVirtuosoScrollState", () => {
         rerender({ isActive: false });
 
         const { result: result2 } = renderHook(() =>
-          useVirtuosoScrollState({ persistKey: "test-key" })
+          useVirtuosoScrollState({ persistKey: "test-key" }),
         );
-        expect(result2.current.scrollProps.restoreStateFrom).toEqual(
-          mockSnapshot,
-        );
+        expect(result2.current.scrollProps.restoreStateFrom).toEqual(mockSnapshot);
       } finally {
         document.body.removeChild(el);
       }
@@ -1288,16 +1274,12 @@ describe("useVirtuosoScrollState", () => {
 
       rerender({ isActive: false });
 
-      const { result: refused } = renderHook(() =>
-        useVirtuosoScrollState({ persistKey }),
-      );
+      const { result: refused } = renderHook(() => useVirtuosoScrollState({ persistKey }));
       expect(refused.current.scrollProps.restoreStateFrom).toBeUndefined();
 
       // A later remount must also refuse: the initializer deletes the poison
       // so retry cannot restore it from the module-level map.
-      const { result: stillRefused } = renderHook(() =>
-        useVirtuosoScrollState({ persistKey }),
-      );
+      const { result: stillRefused } = renderHook(() => useVirtuosoScrollState({ persistKey }));
       expect(stillRefused.current.scrollProps.restoreStateFrom).toBeUndefined();
 
       // The key is not bricked: a later well-formed snapshot still restores.
@@ -1311,9 +1293,7 @@ describe("useVirtuosoScrollState", () => {
       } as any;
       rerenderWriter({ isActive: false });
 
-      const { result: restored } = renderHook(() =>
-        useVirtuosoScrollState({ persistKey }),
-      );
+      const { result: restored } = renderHook(() => useVirtuosoScrollState({ persistKey }));
       expect(restored.current.scrollProps.restoreStateFrom).toEqual(healthy);
       clearPersistedVirtuosoState(persistKey);
     });
@@ -1340,15 +1320,11 @@ describe("useVirtuosoScrollState", () => {
       } as any;
       rerender({ isActive: false });
 
-      const { result: restored } = renderHook(() =>
-        useVirtuosoScrollState({ persistKey }),
-      );
+      const { result: restored } = renderHook(() => useVirtuosoScrollState({ persistKey }));
       expect(restored.current.scrollProps.restoreStateFrom).toEqual(headerOffset);
 
       // Not consumed-and-dropped either: the entry survives for later mounts.
-      const { result: again } = renderHook(() =>
-        useVirtuosoScrollState({ persistKey }),
-      );
+      const { result: again } = renderHook(() => useVirtuosoScrollState({ persistKey }));
       expect(again.current.scrollProps.restoreStateFrom).toEqual(headerOffset);
       clearPersistedVirtuosoState(persistKey);
     });
@@ -1360,9 +1336,8 @@ describe("useVirtuosoScrollState", () => {
       // a subsequent re-activation handles jumping to any newer bottom.
       const mockSnapshot = { ranges: [], scrollTop: 500 } as any;
       const { result, rerender } = renderHook(
-        ({ isActive }) =>
-          useVirtuosoScrollState({ isActive, persistKey: "sticky-key" }),
-        { initialProps: { isActive: true } }
+        ({ isActive }) => useVirtuosoScrollState({ isActive, persistKey: "sticky-key" }),
+        { initialProps: { isActive: true } },
       );
 
       result.current.virtuosoRef.current = {
@@ -1374,7 +1349,7 @@ describe("useVirtuosoScrollState", () => {
       rerender({ isActive: false });
 
       const { result: result2 } = renderHook(() =>
-        useVirtuosoScrollState({ persistKey: "sticky-key" })
+        useVirtuosoScrollState({ persistKey: "sticky-key" }),
       );
       expect(result2.current.scrollProps.restoreStateFrom).toEqual(mockSnapshot);
       clearPersistedVirtuosoState("sticky-key");
@@ -1383,20 +1358,19 @@ describe("useVirtuosoScrollState", () => {
     test("does not persist when no persistKey is provided", () => {
       const { result, rerender } = renderHook(
         ({ isActive }) => useVirtuosoScrollState({ isActive }),
-        { initialProps: { isActive: true } }
+        { initialProps: { isActive: true } },
       );
 
       result.current.virtuosoRef.current = {
         scrollToIndex: () => {},
-        getState: (cb: (state: any) => void) =>
-          cb({ ranges: [], scrollTop: 100 }),
+        getState: (cb: (state: any) => void) => cb({ ranges: [], scrollTop: 100 }),
       } as any;
 
       rerender({ isActive: false });
 
       // A new hook with a fresh key should have no restore state
       const { result: result2 } = renderHook(() =>
-        useVirtuosoScrollState({ persistKey: "no-state-here" })
+        useVirtuosoScrollState({ persistKey: "no-state-here" }),
       );
       expect(result2.current.scrollProps.restoreStateFrom).toBeUndefined();
     });
@@ -1405,16 +1379,14 @@ describe("useVirtuosoScrollState", () => {
       const scrollToIndexCalls: any[] = [];
       const scrollToCalls: any[] = [];
       const { result, rerender } = renderHook(
-        ({ isActive }) =>
-          useVirtuosoScrollState({ isActive, persistKey: "reactivate-key" }),
-        { initialProps: { isActive: true } }
+        ({ isActive }) => useVirtuosoScrollState({ isActive, persistKey: "reactivate-key" }),
+        { initialProps: { isActive: true } },
       );
 
       result.current.virtuosoRef.current = {
         scrollToIndex: (opts: any) => scrollToIndexCalls.push(opts),
         scrollTo: (opts: any) => scrollToCalls.push(opts),
-        getState: (cb: (state: any) => void) =>
-          cb({ ranges: [], scrollTop: 100 } as any),
+        getState: (cb: (state: any) => void) => cb({ ranges: [], scrollTop: 100 } as any),
       } as any;
 
       // Deactivate (persists wantsStick=true) then re-activate.
@@ -1429,9 +1401,7 @@ describe("useVirtuosoScrollState", () => {
       // Re-activation issues an instant scrollToIndex + scrollTo (auto, not
       // smooth). The smooth retry loop is intentionally NOT used here.
       expect(scrollToIndexCalls.length - before).toBe(1);
-      expect(scrollToCalls).toEqual([
-        { top: 10_000_000, behavior: "auto" },
-      ]);
+      expect(scrollToCalls).toEqual([{ top: 10_000_000, behavior: "auto" }]);
 
       clearPersistedVirtuosoState("reactivate-key");
     });
@@ -1443,7 +1413,7 @@ describe("useVirtuosoScrollState", () => {
       // silently no-op. Re-activation must reset that flag.
       const { result, rerender } = renderHook(
         ({ isActive }) => useVirtuosoScrollState({ isActive }),
-        { initialProps: { isActive: true } }
+        { initialProps: { isActive: true } },
       );
 
       const scrollToIndexCalls: any[] = [];
@@ -1508,9 +1478,8 @@ describe("useVirtuosoScrollState", () => {
 
       // Seed persisted sticky state so a fresh mount sees wantsStick=true.
       const { result: seedResult, rerender: seedRerender } = renderHook(
-        ({ isActive }) =>
-          useVirtuosoScrollState({ isActive, persistKey: "first-mount-key" }),
-        { initialProps: { isActive: true } }
+        ({ isActive }) => useVirtuosoScrollState({ isActive, persistKey: "first-mount-key" }),
+        { initialProps: { isActive: true } },
       );
       seedResult.current.virtuosoRef.current = {
         scrollToIndex: () => {},
@@ -1524,7 +1493,7 @@ describe("useVirtuosoScrollState", () => {
       const scrollToIndexCalls: any[] = [];
       const scrollToCalls: any[] = [];
       const { result } = renderHook(() =>
-        useVirtuosoScrollState({ isActive: true, persistKey: "first-mount-key" })
+        useVirtuosoScrollState({ isActive: true, persistKey: "first-mount-key" }),
       );
       result.current.virtuosoRef.current = {
         scrollToIndex: (opts: any) => scrollToIndexCalls.push(opts),
@@ -1552,7 +1521,7 @@ describe("useVirtuosoScrollState", () => {
       // return — it should only reset scrollInFlightRef and exit.
       const { result, rerender } = renderHook(
         ({ isActive }) => useVirtuosoScrollState({ isActive }),
-        { initialProps: { isActive: true } }
+        { initialProps: { isActive: true } },
       );
 
       const scrollToIndexCalls: any[] = [];
@@ -1593,7 +1562,7 @@ describe("useVirtuosoScrollState", () => {
             isActive,
             stickToBottomOnActivation: true,
           }),
-        { initialProps: { isActive: false } }
+        { initialProps: { isActive: false } },
       );
 
       const scrollToIndexCalls: any[] = [];
@@ -1620,9 +1589,7 @@ describe("useVirtuosoScrollState", () => {
         });
 
         expect(scrollToIndexCalls).toEqual([{ index: "LAST", align: "end" }]);
-        expect(scrollToCalls).toEqual([
-          { top: 10_000_000, behavior: "auto" },
-        ]);
+        expect(scrollToCalls).toEqual([{ top: 10_000_000, behavior: "auto" }]);
         expect(result.current.scrollProps.followOutput(false)).toBe("auto");
       } finally {
         document.body.removeChild(el);
@@ -1636,7 +1603,7 @@ describe("useVirtuosoScrollState", () => {
             isActive,
             stickToBottomOnActivation: true,
           }),
-        { initialProps: { isActive: false } }
+        { initialProps: { isActive: false } },
       );
 
       rerender({ isActive: true });
@@ -1666,9 +1633,7 @@ describe("useVirtuosoScrollState", () => {
         });
 
         expect(scrollToIndexCalls).toEqual([{ index: "LAST", align: "end" }]);
-        expect(scrollToCalls).toEqual([
-          { top: 10_000_000, behavior: "auto" },
-        ]);
+        expect(scrollToCalls).toEqual([{ top: 10_000_000, behavior: "auto" }]);
       } finally {
         document.body.removeChild(scroller);
       }
@@ -1685,7 +1650,7 @@ describe("useVirtuosoScrollState", () => {
             isActive,
             stickToBottomOnActivation: true,
           }),
-        { initialProps: { isActive: false } }
+        { initialProps: { isActive: false } },
       );
 
       const scroller = document.createElement("div");
@@ -1746,7 +1711,7 @@ describe("useVirtuosoScrollState", () => {
             isActive,
             stickToBottomOnActivation: true,
           }),
-        { initialProps: { isActive: false } }
+        { initialProps: { isActive: false } },
       );
 
       const scroller = document.createElement("div");
@@ -1802,7 +1767,7 @@ describe("useVirtuosoScrollState", () => {
             isActive,
             stickToBottomOnActivation: true,
           }),
-        { initialProps: { isActive: false } }
+        { initialProps: { isActive: false } },
       );
 
       const scroller = document.createElement("div");
@@ -1839,9 +1804,8 @@ describe("useVirtuosoScrollState", () => {
       // returns a cleanup that cancels it. If the user toggles tabs again
       // before the rAF body runs, the scroll must not fire.
       const { result, rerender } = renderHook(
-        ({ isActive }) =>
-          useVirtuosoScrollState({ isActive, persistKey: "cancel-raf-key" }),
-        { initialProps: { isActive: true } }
+        ({ isActive }) => useVirtuosoScrollState({ isActive, persistKey: "cancel-raf-key" }),
+        { initialProps: { isActive: true } },
       );
 
       const scrollToIndexCalls: any[] = [];
@@ -1849,8 +1813,7 @@ describe("useVirtuosoScrollState", () => {
       result.current.virtuosoRef.current = {
         scrollToIndex: (opts: any) => scrollToIndexCalls.push(opts),
         scrollTo: (opts: any) => scrollToCalls.push(opts),
-        getState: (cb: (state: any) => void) =>
-          cb({ ranges: [], scrollTop: 100 } as any),
+        getState: (cb: (state: any) => void) => cb({ ranges: [], scrollTop: 100 } as any),
       } as any;
 
       // Deactivate (persists wantsStick=true), re-activate, then immediately
@@ -1873,9 +1836,8 @@ describe("useVirtuosoScrollState", () => {
     test("does not persist when isActive stays true", () => {
       const getStateCalls: number[] = [];
       const { result, rerender } = renderHook(
-        ({ isActive }) =>
-          useVirtuosoScrollState({ isActive, persistKey: "test-key" }),
-        { initialProps: { isActive: true } }
+        ({ isActive }) => useVirtuosoScrollState({ isActive, persistKey: "test-key" }),
+        { initialProps: { isActive: true } },
       );
 
       result.current.virtuosoRef.current = {
@@ -1893,32 +1855,24 @@ describe("useVirtuosoScrollState", () => {
   });
 
   describe("environment switch handling", () => {
-    function makeHandle(
-      scrollToIndexCalls: any[],
-      scrollToCalls: any[]
-    ) {
+    function makeHandle(scrollToIndexCalls: any[], scrollToCalls: any[]) {
       return {
         scrollToIndex: (opts: any) => scrollToIndexCalls.push(opts),
         scrollTo: (opts: any) => scrollToCalls.push(opts),
-        getState: (cb: (state: any) => void) =>
-          cb({ ranges: [], scrollTop: 100 } as any),
+        getState: (cb: (state: any) => void) => cb({ ranges: [], scrollTop: 100 } as any),
       } as any;
     }
 
     test("jumps to bottom on re-activation after env switch even when user had scrolled up", async () => {
       useUIStore.setState({ selectedEnvironmentId: "env-1" });
       const { result, rerender } = renderHook(
-        ({ isActive }) =>
-          useVirtuosoScrollState({ isActive, environmentId: "env-1" }),
-        { initialProps: { isActive: true } }
+        ({ isActive }) => useVirtuosoScrollState({ isActive, environmentId: "env-1" }),
+        { initialProps: { isActive: true } },
       );
 
       const scrollToIndexCalls: any[] = [];
       const scrollToCalls: any[] = [];
-      result.current.virtuosoRef.current = makeHandle(
-        scrollToIndexCalls,
-        scrollToCalls
-      );
+      result.current.virtuosoRef.current = makeHandle(scrollToIndexCalls, scrollToCalls);
 
       const el = document.createElement("div");
       document.body.appendChild(el);
@@ -1962,17 +1916,13 @@ describe("useVirtuosoScrollState", () => {
     test("does not jump on within-environment tab switch when user had scrolled up", async () => {
       useUIStore.setState({ selectedEnvironmentId: "env-1" });
       const { result, rerender } = renderHook(
-        ({ isActive }) =>
-          useVirtuosoScrollState({ isActive, environmentId: "env-1" }),
-        { initialProps: { isActive: true } }
+        ({ isActive }) => useVirtuosoScrollState({ isActive, environmentId: "env-1" }),
+        { initialProps: { isActive: true } },
       );
 
       const scrollToIndexCalls: any[] = [];
       const scrollToCalls: any[] = [];
-      result.current.virtuosoRef.current = makeHandle(
-        scrollToIndexCalls,
-        scrollToCalls
-      );
+      result.current.virtuosoRef.current = makeHandle(scrollToIndexCalls, scrollToCalls);
 
       const el = document.createElement("div");
       document.body.appendChild(el);
@@ -2005,17 +1955,13 @@ describe("useVirtuosoScrollState", () => {
       // jump must keep retrying scrollToIndex until isAtBottom flips.
       useUIStore.setState({ selectedEnvironmentId: "env-1" });
       const { result, rerender } = renderHook(
-        ({ isActive }) =>
-          useVirtuosoScrollState({ isActive, environmentId: "env-1" }),
-        { initialProps: { isActive: true } }
+        ({ isActive }) => useVirtuosoScrollState({ isActive, environmentId: "env-1" }),
+        { initialProps: { isActive: true } },
       );
 
       const scrollToIndexCalls: any[] = [];
       const scrollToCalls: any[] = [];
-      result.current.virtuosoRef.current = makeHandle(
-        scrollToIndexCalls,
-        scrollToCalls
-      );
+      result.current.virtuosoRef.current = makeHandle(scrollToIndexCalls, scrollToCalls);
 
       try {
         // Simulate not-at-bottom (estimated heights keep landing short).
@@ -2065,9 +2011,8 @@ describe("useVirtuosoScrollState", () => {
       // "reaching bottom re-engages stick" invariant.
       const mockSnapshot = { ranges: [], scrollTop: 500 } as any;
       const { result, rerender } = renderHook(
-        ({ isActive }) =>
-          useVirtuosoScrollState({ isActive, persistKey: "regress-key" }),
-        { initialProps: { isActive: true } }
+        ({ isActive }) => useVirtuosoScrollState({ isActive, persistKey: "regress-key" }),
+        { initialProps: { isActive: true } },
       );
 
       const el = document.createElement("div");
@@ -2089,7 +2034,7 @@ describe("useVirtuosoScrollState", () => {
         // Remount: persisted has wantsStick=false, so restoreStateFrom is set
         // and initial followOutput(false) returns false.
         const { result: result2 } = renderHook(() =>
-          useVirtuosoScrollState({ persistKey: "regress-key" })
+          useVirtuosoScrollState({ persistKey: "regress-key" }),
         );
         expect(result2.current.scrollProps.followOutput(false)).toBe(false);
 
@@ -2223,9 +2168,8 @@ describe("useVirtuosoScrollState", () => {
     test("clears persisted state for a given key", () => {
       const mockSnapshot = { ranges: [], scrollTop: 200 } as any;
       const { result, rerender } = renderHook(
-        ({ isActive }) =>
-          useVirtuosoScrollState({ isActive, persistKey: "test-key" }),
-        { initialProps: { isActive: true } }
+        ({ isActive }) => useVirtuosoScrollState({ isActive, persistKey: "test-key" }),
+        { initialProps: { isActive: true } },
       );
 
       // Release stick intent so the snapshot will be restored on remount.
@@ -2245,16 +2189,14 @@ describe("useVirtuosoScrollState", () => {
         rerender({ isActive: false });
 
         const { result: before } = renderHook(() =>
-          useVirtuosoScrollState({ persistKey: "test-key" })
+          useVirtuosoScrollState({ persistKey: "test-key" }),
         );
-        expect(before.current.scrollProps.restoreStateFrom).toEqual(
-          mockSnapshot,
-        );
+        expect(before.current.scrollProps.restoreStateFrom).toEqual(mockSnapshot);
 
         clearPersistedVirtuosoState("test-key");
 
         const { result: after } = renderHook(() =>
-          useVirtuosoScrollState({ persistKey: "test-key" })
+          useVirtuosoScrollState({ persistKey: "test-key" }),
         );
         expect(after.current.scrollProps.restoreStateFrom).toBeUndefined();
       } finally {
@@ -2271,22 +2213,19 @@ describe("useVirtuosoScrollState", () => {
     function persistSnapshot(persistKey: string, scrollTop: number) {
       const { result, rerender, unmount } = renderHook(
         ({ isActive }) => useVirtuosoScrollState({ isActive, persistKey }),
-        { initialProps: { isActive: true } }
+        { initialProps: { isActive: true } },
       );
       result.current.virtuosoRef.current = {
         scrollToIndex: () => {},
         scrollTo: () => {},
-        getState: (cb: (state: any) => void) =>
-          cb({ ranges: [], scrollTop } as any),
+        getState: (cb: (state: any) => void) => cb({ ranges: [], scrollTop } as any),
       } as any;
       rerender({ isActive: false });
       unmount();
     }
 
     function isPersisted(persistKey: string) {
-      const { result, unmount } = renderHook(() =>
-        useVirtuosoScrollState({ persistKey })
-      );
+      const { result, unmount } = renderHook(() => useVirtuosoScrollState({ persistKey }));
       const persisted = result.current.scrollProps.restoreStateFrom;
       unmount();
       return persisted !== undefined;
@@ -2351,9 +2290,8 @@ describe("useVirtuosoScrollState", () => {
 
       try {
         const { rerender } = renderHook(
-          ({ isActive }) =>
-            useVirtuosoScrollState({ isActive, environmentId: "env-1" }),
-          { initialProps: { isActive: false } }
+          ({ isActive }) => useVirtuosoScrollState({ isActive, environmentId: "env-1" }),
+          { initialProps: { isActive: false } },
         );
         expect(unsubscribeCalls).toBe(0);
 
@@ -2381,7 +2319,7 @@ describe("useVirtuosoScrollState", () => {
 
       try {
         const { unmount } = renderHook(() =>
-          useVirtuosoScrollState({ isActive: false, environmentId: "env-1" })
+          useVirtuosoScrollState({ isActive: false, environmentId: "env-1" }),
         );
         expect(unsubscribeCalls).toBe(0);
 

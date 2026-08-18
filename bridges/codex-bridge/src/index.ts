@@ -32,16 +32,10 @@ import {
   type PersistedSessionTitleSource,
 } from "./session-titles.js";
 import { AppServerRuntime } from "./app-server-runtime.js";
-import {
-  AppServerEngine,
-  type AppServerEngineOptions,
-} from "./engine/app-server-engine.js";
+import { AppServerEngine, type AppServerEngineOptions } from "./engine/app-server-engine.js";
 import { codexAppServerConfigOverrides } from "./codex-config.js";
 import { APPROVAL_DECISIONS, isApprovalDecision } from "./app-server/approvals.js";
-import {
-  parseInteractionAnswer,
-  type InteractionAnswer,
-} from "./app-server/interactions.js";
+import { parseInteractionAnswer, type InteractionAnswer } from "./app-server/interactions.js";
 import { EventRing, parseEventCursor } from "./event-ring.js";
 import {
   BUILTIN_SLASH_COMMANDS,
@@ -100,10 +94,7 @@ import {
   type BridgeModel,
   type BridgeReasoningEffort,
 } from "./models-cache.js";
-import {
-  applyRuntimeEnvironmentOutput,
-  refreshRuntimeEnvironment,
-} from "./runtime-env.js";
+import { applyRuntimeEnvironmentOutput, refreshRuntimeEnvironment } from "./runtime-env.js";
 
 // The normalized message model and the item renderer live in ./messages so both
 // engines share one implementation. Re-exported here because existing importers
@@ -144,7 +135,6 @@ interface PromptAttachmentInput {
   dataUrl?: string;
   filename?: string;
 }
-
 
 export const app = new Hono();
 export const MAX_CODEX_TRANSCRIPT_RESPONSE_BYTES = 16 * 1024 * 1024;
@@ -311,8 +301,8 @@ function isBridgeAuthEnabled(): boolean {
   // Route tests explicitly opt out because they exercise route mapping rather
   // than process authentication. This escape hatch is inert for a real server.
   return !(
-    process.env.CODEX_BRIDGE_NO_SERVER === "1"
-    && process.env.CODEX_BRIDGE_AUTH_DISABLED_FOR_TESTING === "1"
+    process.env.CODEX_BRIDGE_NO_SERVER === "1" &&
+    process.env.CODEX_BRIDGE_AUTH_DISABLED_FOR_TESTING === "1"
   );
 }
 
@@ -342,11 +332,11 @@ function isTrustedBridgeOrigin(origin: string | undefined): boolean {
   try {
     const parsed = new URL(origin);
     return (
-      (parsed.protocol === "http:" || parsed.protocol === "https:")
-      && (parsed.hostname === "127.0.0.1"
-        || parsed.hostname === "localhost"
-        || parsed.hostname === "::1"
-        || parsed.hostname === "[::1]")
+      (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+      (parsed.hostname === "127.0.0.1" ||
+        parsed.hostname === "localhost" ||
+        parsed.hostname === "::1" ||
+        parsed.hostname === "[::1]")
     );
   } catch {
     return false;
@@ -498,7 +488,7 @@ function serializeSseEventData(
   try {
     return JSON.stringify({
       sessionId: event.sessionId,
-      ...(event.data ?? {}),
+      ...event.data,
     });
   } catch (error) {
     // A payload that cannot be encoded (a cycle, a throwing getter, a BigInt)
@@ -602,13 +592,9 @@ function emit(event: SseEvent): void {
     // string is then reused by replay, so an attached client pays nothing extra.
     // With nobody attached the encoding is deferred to a replay that will usually
     // never happen, because the next snapshot for this message collapses this one.
-    eager =
-      subscribers.size > 0 ? serializeSseEventData({ sessionId, data: payload }) : null;
+    eager = subscribers.size > 0 ? serializeSseEventData({ sessionId, data: payload }) : null;
     messageId = retainedMessageId(event.type, payload);
-    bytes =
-      eager === null
-        ? estimateSsePayloadBytes(payload)
-        : Buffer.byteLength(eager, "utf8");
+    bytes = eager === null ? estimateSsePayloadBytes(payload) : Buffer.byteLength(eager, "utf8");
   } catch {
     // Snapshotting and size estimation also walk untrusted payloads. Accessors
     // can throw before JSON.stringify gets its chance to contain them, so retain
@@ -616,13 +602,9 @@ function emit(event: SseEvent): void {
     // As above, the thrown value is payload-controlled and must not reach logs.
     console.error("[codex-bridge] Failed to snapshot an SSE payload");
     payload = { error: "payload could not be serialized" };
-    eager =
-      subscribers.size > 0 ? serializeSseEventData({ sessionId, data: payload }) : null;
+    eager = subscribers.size > 0 ? serializeSseEventData({ sessionId, data: payload }) : null;
     messageId = undefined;
-    bytes =
-      eager === null
-        ? estimateSsePayloadBytes(payload)
-        : Buffer.byteLength(eager, "utf8");
+    bytes = eager === null ? estimateSsePayloadBytes(payload) : Buffer.byteLength(eager, "utf8");
   }
   const revision = eventRing.append({
     type: event.type,
@@ -829,7 +811,6 @@ async function startSelectedEngine(
   }
 }
 
-
 /**
  * Test seams for engine-neutral helpers that live in this module.
  *
@@ -924,10 +905,7 @@ function startSseKeepalive(
   let lastSentAt = Date.now();
   return setInterval(() => {
     const now = Date.now();
-    if (
-      !shouldSendAtActiveCadence()
-      && now - lastSentAt < idleIntervalMs
-    ) return;
+    if (!shouldSendAtActiveCadence() && now - lastSentAt < idleIntervalMs) return;
     lastSentAt = now;
     void writeSSE({
       event: "keepalive",
@@ -1035,21 +1013,14 @@ app.use("*", async (c, next) => {
     c.header("Access-Control-Allow-Private-Network", "true");
     return c.body(null, 204);
   }
-  if (
-    isBridgeAuthEnabled()
-    && !isPublicHealthRequest(c.req.method, c.req.path)
-  ) {
-    const dedicatedHeaderToken =
-      c.req.raw.headers.get("x-orkestrator-codex-token")?.trim();
-    const headerToken = bearerToken(
-      c.req.raw.headers.get("authorization") ?? undefined,
-    );
-    const eventToken =
-      c.req.path === "/event/subscribe" ? c.req.query("token")?.trim() : undefined;
+  if (isBridgeAuthEnabled() && !isPublicHealthRequest(c.req.method, c.req.path)) {
+    const dedicatedHeaderToken = c.req.raw.headers.get("x-orkestrator-codex-token")?.trim();
+    const headerToken = bearerToken(c.req.raw.headers.get("authorization") ?? undefined);
+    const eventToken = c.req.path === "/event/subscribe" ? c.req.query("token")?.trim() : undefined;
     if (
-      !tokenMatches(dedicatedHeaderToken)
-      && !tokenMatches(headerToken)
-      && !tokenMatches(eventToken)
+      !tokenMatches(dedicatedHeaderToken) &&
+      !tokenMatches(headerToken) &&
+      !tokenMatches(eventToken)
     ) {
       return c.json({ error: "Unauthorized" }, 401);
     }
@@ -1217,8 +1188,9 @@ app.get("/session/:id/dispatch", (c) => {
   // Unlike the other two bridges this journal is process-global, so the record
   // has to be checked against the session that is asking. Answering across
   // sessions would let one session's history settle another's parked dispatch.
-  const dispatched = record?.bridgeSessionId === c.req.param("id")
-    && (record.state === "accepted" || record.state === "terminal");
+  const dispatched =
+    record?.bridgeSessionId === c.req.param("id") &&
+    (record.state === "accepted" || record.state === "terminal");
   return c.json({ dispatch: dispatched ? "dispatched" : "unknown" });
 });
 
@@ -1238,10 +1210,13 @@ app.post("/session/:id/prompt", async (c) => {
   const requestId = typeof body.requestId === "string" ? body.requestId.trim() : "";
   const outputSchema = body.outputSchema;
   const rawAttachments = Array.isArray(body.attachments) ? body.attachments : [];
-  if (rawAttachments.some((entry: unknown) =>
-    typeof (entry as PromptAttachmentInput | null)?.path !== "string"
-    || (entry as PromptAttachmentInput).type !== "image"
-  )) {
+  if (
+    rawAttachments.some(
+      (entry: unknown) =>
+        typeof (entry as PromptAttachmentInput | null)?.path !== "string" ||
+        (entry as PromptAttachmentInput).type !== "image",
+    )
+  ) {
     return c.json({ error: "Codex supports image attachments only" }, 400);
   }
   // Every surviving entry is already a well-formed image: the guard above
@@ -1260,10 +1235,7 @@ app.post("/session/:id/prompt", async (c) => {
     return c.json({ error: "Prompt or image attachment is required" }, 400);
   }
   if (!requestId || requestId.length > 200) {
-    return c.json(
-      { error: "requestId must be a non-empty string of at most 200 characters" },
-      400,
-    );
+    return c.json({ error: "requestId must be a non-empty string of at most 200 characters" }, 400);
   }
   if (outputSchema !== undefined && !isJsonSchema(outputSchema)) {
     return c.json({ error: "outputSchema must be a JSON Schema object" }, 400);
@@ -1294,10 +1266,7 @@ app.get("/session/:id/approvals", (c) => {
 app.post("/session/:id/approvals/:approvalId", async (c) => {
   const body = await c.req.json().catch(() => ({}));
   if (!isApprovalDecision(body.decision)) {
-    return c.json(
-      { error: `decision must be one of: ${APPROVAL_DECISIONS.join(", ")}` },
-      400,
-    );
+    return c.json({ error: `decision must be one of: ${APPROVAL_DECISIONS.join(", ")}` }, 400);
   }
 
   const outcome = appServerRuntime.respondToApproval(
@@ -1311,10 +1280,7 @@ app.post("/session/:id/approvals/:approvalId", async (c) => {
   if (outcome === "not-actionable") {
     // The bridge could not recover what would be approved, so there is nothing a
     // user could have consented to. Deny and cancel remain available.
-    return c.json(
-      { error: "Approval lacks the detail required to approve it" },
-      422,
-    );
+    return c.json({ error: "Approval lacks the detail required to approve it" }, 422);
   }
   if (outcome === "unknown") {
     // 409, not 404: the approval existed but the window closed (answered,
@@ -1332,11 +1298,7 @@ app.get("/session/:id/interactions", (c) => {
 
 app.post("/session/:id/interactions/:interactionId", async (c) => {
   const body = await c.req.json().catch(() => ({}));
-  if (
-    body.action !== "accept"
-    && body.action !== "decline"
-    && body.action !== "cancel"
-  ) {
+  if (body.action !== "accept" && body.action !== "decline" && body.action !== "cancel") {
     return c.json({ error: "action must be accept, decline, or cancel" }, 400);
   }
   /**
@@ -1413,9 +1375,10 @@ app.post("/session/:id/steer", async (c) => {
   let body: Record<string, unknown>;
   try {
     const parsed: unknown = await c.req.json();
-    body = parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : {};
+    body =
+      parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : {};
   } catch {
     return c.json({ error: "Request body must be valid JSON" }, 400);
   }
@@ -1466,8 +1429,7 @@ app.post("/session/:id/review", async (c) => {
    * started a *different* review from the one asked for — spending a turn and
    * tokens — and answered 202 as if it had succeeded.
    */
-  const trimmed = (value: unknown): string =>
-    typeof value === "string" ? value.trim() : "";
+  const trimmed = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
   let target:
     | { type: "uncommittedChanges" }
     | { type: "baseBranch"; branch: string }
@@ -1522,9 +1484,7 @@ app.post("/session/:id/review", async (c) => {
 /** Authenticated, allowlisted runtime inventory for one known bridge session. */
 app.get("/session/:id/runtime-health", async (c) => {
   const health = await appServerRuntime.getRuntimeHealth(c.req.param("id"));
-  return health
-    ? c.json(health)
-    : c.json({ error: "Session not found" }, 404);
+  return health ? c.json(health) : c.json({ error: "Session not found" }, 404);
 });
 
 app.post("/session/:id/abort", async (c) => {
@@ -1622,8 +1582,8 @@ app.get("/event/subscribe", (c) => {
     const listener: SseSubscriber = async (event, revision, serializedData) => {
       if (buffered) {
         if (
-          buffered.length
-          >= (sseRouteTestHooks?.maxBufferedReplayEvents ?? MAX_BUFFERED_REPLAY_EVENTS)
+          buffered.length >=
+          (sseRouteTestHooks?.maxBufferedReplayEvents ?? MAX_BUFFERED_REPLAY_EVENTS)
         ) {
           failSlowSubscriber("replay buffer overflowed");
           return;
@@ -1721,9 +1681,7 @@ app.get("/event/subscribe", (c) => {
         if (sseRouteTestHooks?.beforeBufferedWrite) {
           await sseRouteTestHooks.beforeBufferedWrite(entry.revision);
         }
-        await writeWhileOpen(
-          frameFor(entry.event, entry.revision, () => entry.serializedData),
-        );
+        await writeWhileOpen(frameFor(entry.event, entry.revision, () => entry.serializedData));
       }
       buffered = null;
       // Start only after replay and its buffered tail are flushed. A heartbeat
@@ -1787,9 +1745,7 @@ if (parentPid !== null) {
   startParentWatchdog({
     parentPid,
     onParentExit: () => {
-      console.error(
-        `[codex-bridge] Backend process ${parentPid} is gone; shutting down`,
-      );
+      console.error(`[codex-bridge] Backend process ${parentPid} is gone; shutting down`);
       shutdownHandler();
     },
   });

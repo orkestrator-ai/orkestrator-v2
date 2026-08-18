@@ -10,13 +10,15 @@ import {
   threadPayload,
 } from "./app-server-runtime-test-harness.js";
 
-
 describe("ordered event backpressure", () => {
   test("bounds a slow-render queue and emits explicit authoritative reconciliation", async () => {
-    const h = await harness({}, {
-      orderedEventMaxCount: 3,
-      orderedEventMaxBytes: 1_024,
-    });
+    const h = await harness(
+      {},
+      {
+        orderedEventMaxCount: 3,
+        orderedEventMaxBytes: 1_024,
+      },
+    );
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     await h.runtime.prompt(sessionId, {
       prompt: "start",
@@ -26,11 +28,14 @@ describe("ordered event backpressure", () => {
     await h.drain();
 
     const runtime = h.runtime as unknown as {
-      threadState: Map<string, {
-        coalescer: { flushNow: () => Promise<void> };
-        orderedEvents: Array<{ bytes: number }>;
-        orderedEventBytes: number;
-      }>;
+      threadState: Map<
+        string,
+        {
+          coalescer: { flushNow: () => Promise<void> };
+          orderedEvents: Array<{ bytes: number }>;
+          orderedEventBytes: number;
+        }
+      >;
       enqueueAfterMessageFlush: (
         threadId: string,
         publish: () => void,
@@ -54,9 +59,7 @@ describe("ordered event backpressure", () => {
 
     expect(state.orderedEvents).toHaveLength(0);
     expect(state.orderedEventBytes).toBeLessThanOrEqual(1_024);
-    expect(
-      h.events.some((event) => event.type === "session.reconcile-required"),
-    ).toBe(false);
+    expect(h.events.some((event) => event.type === "session.reconcile-required")).toBe(false);
 
     releaseRender();
     await h.runtime.drainPendingWork();
@@ -78,10 +81,13 @@ describe("ordered event backpressure", () => {
     await h.drain();
 
     const runtime = h.runtime as unknown as {
-      threadState: Map<string, {
-        coalescer: { flushNow: () => Promise<void> };
-        orderedEvents: Array<{ coalesceKey?: "status" }>;
-      }>;
+      threadState: Map<
+        string,
+        {
+          coalescer: { flushNow: () => Promise<void> };
+          orderedEvents: Array<{ coalesceKey?: "status" }>;
+        }
+      >;
       enqueueAfterMessageFlush: (
         threadId: string,
         publish: () => void,
@@ -98,21 +104,15 @@ describe("ordered event backpressure", () => {
 
     runtime.enqueueAfterMessageFlush("thread-1", () => published.push(0));
     await Promise.resolve();
-    runtime.enqueueAfterMessageFlush(
-      "thread-1",
-      () => published.push(1),
-      { coalesceKey: "status" },
-    );
-    runtime.enqueueAfterMessageFlush(
-      "thread-1",
-      () => published.push(2),
-      { coalesceKey: "status" },
-    );
-    runtime.enqueueAfterMessageFlush(
-      "thread-1",
-      () => published.push(3),
-      { coalesceKey: "status" },
-    );
+    runtime.enqueueAfterMessageFlush("thread-1", () => published.push(1), {
+      coalesceKey: "status",
+    });
+    runtime.enqueueAfterMessageFlush("thread-1", () => published.push(2), {
+      coalesceKey: "status",
+    });
+    runtime.enqueueAfterMessageFlush("thread-1", () => published.push(3), {
+      coalesceKey: "status",
+    });
 
     expect(state.orderedEvents).toHaveLength(1);
     releaseRender();
@@ -131,11 +131,14 @@ describe("ordered event backpressure", () => {
     await h.drain();
 
     const runtime = h.runtime as unknown as {
-      threadState: Map<string, {
-        coalescer: { flushNow: () => Promise<void> };
-        orderedEvents: unknown[];
-        orderedReconcilePending: boolean;
-      }>;
+      threadState: Map<
+        string,
+        {
+          coalescer: { flushNow: () => Promise<void> };
+          orderedEvents: unknown[];
+          orderedReconcilePending: boolean;
+        }
+      >;
       enqueueAfterMessageFlush: (
         threadId: string,
         publish: () => void,
@@ -189,7 +192,9 @@ describe("ordered event backpressure", () => {
     const published: number[] = [];
     const errors: unknown[] = [];
     const originalError = console.error;
-    console.error = (...args: unknown[]) => { errors.push(args); };
+    console.error = (...args: unknown[]) => {
+      errors.push(args);
+    };
     try {
       runtime.enqueueAfterMessageFlush("thread-1", () => {
         throw new Error("render blew up");
@@ -235,7 +240,9 @@ describe("ordered event backpressure", () => {
     expect(runtime.threadState.has("thread-1")).toBe(false);
 
     let published = 0;
-    runtime.enqueueAfterMessageFlush("thread-1", () => { published += 1; });
+    runtime.enqueueAfterMessageFlush("thread-1", () => {
+      published += 1;
+    });
 
     expect(published).toBe(1);
     expect(runtime.threadState.has("thread-1")).toBe(false);
@@ -253,11 +260,14 @@ describe("ordered event backpressure", () => {
     const h = await harness({});
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     const runtime = h.runtime as unknown as {
-      threadState: Map<string, {
-        assistantMessageId?: string;
-        publishedMessageId?: string;
-        publishedParts: unknown[];
-      }>;
+      threadState: Map<
+        string,
+        {
+          assistantMessageId?: string;
+          publishedMessageId?: string;
+          publishedParts: unknown[];
+        }
+      >;
       releaseThreadRuntimeState: (threadId: string) => void;
     };
 
@@ -281,15 +291,15 @@ describe("ordered event backpressure", () => {
     expect(released).toBe(true);
 
     const live = runtime.threadState.get("thread-1");
-    const assistantMessage = h.runtime.getRegistry().getThread("thread-1")!
+    const assistantMessage = h.runtime
+      .getRegistry()
+      .getThread("thread-1")!
       .messages.find((message) => message.role === "assistant");
     expect(assistantMessage).toBeDefined();
     expect(live?.assistantMessageId).toBe(assistantMessage!.id);
     expect(live?.publishedMessageId).toBe(assistantMessage!.id);
   });
 });
-
-
 
 describe("notifications that race the turn/start response", () => {
   /**
@@ -415,8 +425,6 @@ describe("notifications that race the turn/start response", () => {
   });
 });
 
-
-
 describe("history", () => {
   test("native threads and rollout threads are merged", async () => {
     const h = await harness({
@@ -461,12 +469,9 @@ describe("history", () => {
     });
 
     const { sessions } = await h.runtime.listSessions();
-    expect(sessions.find((session) => session.id === "native-titled")!.title)
-      .toBe("Bridge title");
+    expect(sessions.find((session) => session.id === "native-titled")!.title).toBe("Bridge title");
   });
 });
-
-
 
 describe("usage and account rate limits", () => {
   async function usageSession() {
@@ -502,9 +507,7 @@ describe("usage and account rate limits", () => {
       totalTokens: 100_000,
       percentUsed: 25,
     });
-    expect(
-      h.events.some((event) => event.data?.contextUsage !== undefined),
-    ).toBe(true);
+    expect(h.events.some((event) => event.data?.contextUsage !== undefined)).toBe(true);
   });
 
   test("getStatus reports no usage before any has been observed", async () => {
@@ -630,9 +633,11 @@ describe("usage and account rate limits", () => {
     });
     await h.drain();
 
-    const usageByThread = (h.runtime as unknown as {
-      usageByThread: Map<string, unknown>;
-    }).usageByThread;
+    const usageByThread = (
+      h.runtime as unknown as {
+        usageByThread: Map<string, unknown>;
+      }
+    ).usageByThread;
     expect(usageByThread.size).toBe(1);
 
     await h.runtime.deleteSession(sessionId);
@@ -662,18 +667,16 @@ describe("usage and account rate limits", () => {
     await h.drain();
 
     const notified = h.events
-      .filter(
-        (event) =>
-          event.type === "session.updated"
-          && event.data?.contextUsage !== undefined,
-      )
+      .filter((event) => event.type === "session.updated" && event.data?.contextUsage !== undefined)
       .map((event) => event.sessionId)
       .sort();
     expect(notified).toEqual([first!.sessionId, second!.sessionId].sort());
-    expect(h.runtime.getStatus(first!.sessionId)?.contextUsage?.rateLimits)
-      .toEqual([{ slot: "primary", label: "Primary", usedPercent: 60 }]);
-    expect(h.runtime.getStatus(second!.sessionId)?.contextUsage?.rateLimits)
-      .toEqual([{ slot: "primary", label: "Primary", usedPercent: 60 }]);
+    expect(h.runtime.getStatus(first!.sessionId)?.contextUsage?.rateLimits).toEqual([
+      { slot: "primary", label: "Primary", usedPercent: 60 },
+    ]);
+    expect(h.runtime.getStatus(second!.sessionId)?.contextUsage?.rateLimits).toEqual([
+      { slot: "primary", label: "Primary", usedPercent: 60 },
+    ]);
   });
 
   test("a thread with no live sessions is skipped by the rate-limit fan-out", async () => {

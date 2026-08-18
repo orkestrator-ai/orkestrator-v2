@@ -24,11 +24,13 @@ describe("environmentDiffStore", () => {
   });
 
   test("applies an incremental change", () => {
-    useEnvironmentDiffStore.getState().applyChange(change("env-1", {
-      additions: 3,
-      deletions: 1,
-      filesChanged: 2,
-    }));
+    useEnvironmentDiffStore.getState().applyChange(
+      change("env-1", {
+        additions: 3,
+        deletions: 1,
+        filesChanged: 2,
+      }),
+    );
 
     expect(useEnvironmentDiffStore.getState().stats.get("env-1")).toEqual({
       additions: 3,
@@ -139,10 +141,9 @@ describe("environmentDiffStore", () => {
   });
 
   test("the last entry wins when a snapshot repeats an environment", () => {
-    useEnvironmentDiffStore.getState().applySnapshot([
-      change("env-1", { additions: 1 }),
-      change("env-1", { additions: 7 }),
-    ]);
+    useEnvironmentDiffStore
+      .getState()
+      .applySnapshot([change("env-1", { additions: 1 }), change("env-1", { additions: 7 })]);
 
     expect(useEnvironmentDiffStore.getState().stats.get("env-1")?.additions).toBe(7);
   });

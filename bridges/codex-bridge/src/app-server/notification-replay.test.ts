@@ -162,9 +162,7 @@ describe("synthetic-full-turn fixture", () => {
       responses: 1,
       serverRequests: 1,
     });
-    expect(summary.serverRequestMethods).toEqual([
-      "item/commandExecution/requestApproval",
-    ]);
+    expect(summary.serverRequestMethods).toEqual(["item/commandExecution/requestApproval"]);
     expect(summary.invalidLines).toBe(1);
     expect(summary.unsupportedItemTypes).toEqual(["futureItemVariant"]);
   });
@@ -202,9 +200,7 @@ describe("synthetic-raw-apply-patch fixture", () => {
 
   test("gives a raw-only patch a per-file diff, not an opaque blob of patch text", async () => {
     const summary = await replayRecording(read());
-    const added = summary.turns[0]?.parts.find(
-      (part) => part.toolTitle === "add: src/b.ts",
-    );
+    const added = summary.turns[0]?.parts.find((part) => part.toolTitle === "add: src/b.ts");
 
     expect(added?.toolDiff).toMatchObject({
       filePath: "/replay/workspace/src/b.ts",
@@ -243,7 +239,9 @@ describe("synthetic-raw-apply-patch fixture", () => {
 });
 
 describe("NotificationRecorder", () => {
-  function makeRecorder(overrides: Partial<ConstructorParameters<typeof NotificationRecorder>[0]> = {}) {
+  function makeRecorder(
+    overrides: Partial<ConstructorParameters<typeof NotificationRecorder>[0]> = {},
+  ) {
     const writes: string[] = [];
     const recorder = new NotificationRecorder({
       directory: "/tmp/does-not-exist",
@@ -264,16 +262,19 @@ describe("NotificationRecorder", () => {
     recorder.record('{"jsonrpc":"2.0","method":"b"}');
     await recorder.close();
 
-    expect(writes.join("")).toBe('{"jsonrpc":"2.0","method":"a"}\n{"jsonrpc":"2.0","method":"b"}\n');
+    expect(writes.join("")).toBe(
+      '{"jsonrpc":"2.0","method":"a"}\n{"jsonrpc":"2.0","method":"b"}\n',
+    );
     expect(recorder.getStats().linesRecorded).toBe(2);
   });
 
   test("record() does not await the write", () => {
     let resolveWrite: (() => void) | undefined;
     const { recorder } = makeRecorder({
-      appendFileImpl: () => new Promise<void>((resolve) => {
-        resolveWrite = resolve;
-      }),
+      appendFileImpl: () =>
+        new Promise<void>((resolve) => {
+          resolveWrite = resolve;
+        }),
     });
 
     // The whole point: a hung disk must not block the read loop.

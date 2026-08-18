@@ -1,4 +1,7 @@
-export interface PaneLayoutTab { id: string; type: string }
+export interface PaneLayoutTab {
+  id: string;
+  type: string;
+}
 export interface PaneLayoutLeaf {
   kind: "leaf";
   id: string;
@@ -64,49 +67,36 @@ function serialized(value: unknown): string {
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return !!value
-    && typeof value === "object"
-    && !Array.isArray(value);
+  return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
 function valuesEqual(left: unknown, right: unknown): boolean {
   if (Object.is(left, right)) return true;
   if (Array.isArray(left) || Array.isArray(right)) {
-    return Array.isArray(left)
-      && Array.isArray(right)
-      && left.length === right.length
-      && left.every((value, index) => valuesEqual(value, right[index]));
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((value, index) => valuesEqual(value, right[index]))
+    );
   }
   if (!isPlainObject(left) || !isPlainObject(right)) return false;
   const leftKeys = Object.keys(left).sort();
   const rightKeys = Object.keys(right).sort();
-  return leftKeys.length === rightKeys.length
-    && leftKeys.every((key, index) =>
-      key === rightKeys[index]
-      && valuesEqual(left[key], right[key])
-    );
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every((key, index) => key === rightKeys[index] && valuesEqual(left[key], right[key]))
+  );
 }
 
-function mergeChangedFields(
-  base: unknown,
-  local: unknown,
-  remote: unknown,
-): unknown {
+function mergeChangedFields(base: unknown, local: unknown, remote: unknown): unknown {
   if (valuesEqual(local, base)) return clone(remote);
   if (valuesEqual(remote, base) || valuesEqual(local, remote)) {
     return clone(local);
   }
-  if (
-    isPlainObject(base)
-    && isPlainObject(local)
-    && isPlainObject(remote)
-  ) {
+  if (isPlainObject(base) && isPlainObject(local) && isPlainObject(remote)) {
     const merged: Record<string, unknown> = {};
-    const keys = new Set([
-      ...Object.keys(base),
-      ...Object.keys(local),
-      ...Object.keys(remote),
-    ]);
+    const keys = new Set([...Object.keys(base), ...Object.keys(local), ...Object.keys(remote)]);
     for (const key of keys) {
       const value = mergeChangedFields(base[key], local[key], remote[key]);
       if (value !== undefined) merged[key] = value;
@@ -118,14 +108,10 @@ function mergeChangedFields(
   return clone(local);
 }
 
-function nativeAgentIdentity(
-  tab: TabInfo,
-): NativeAgentTabIdentity | null {
+function nativeAgentIdentity(tab: TabInfo): NativeAgentTabIdentity | null {
   if (tab.type !== "agent-native") return null;
   const record = tab as unknown as Record<string, unknown>;
-  const candidate = isPlainObject(record.nativeAgentData)
-    ? record.nativeAgentData
-    : null;
+  const candidate = isPlainObject(record.nativeAgentData) ? record.nativeAgentData : null;
   if (!candidate) return null;
 
   const identity: NativeAgentTabIdentity = {};
@@ -142,7 +128,11 @@ function selectNativeAgentIdentity(
   remote: NativeAgentTabIdentity | null,
 ): NativeAgentTabIdentity | null {
   if (!base && !local && !remote) return null;
-  const merged = mergeChangedFields(base ?? {}, local ?? {}, remote ?? {}) as NativeAgentTabIdentity;
+  const merged = mergeChangedFields(
+    base ?? {},
+    local ?? {},
+    remote ?? {},
+  ) as NativeAgentTabIdentity;
   const basePlatform = base?.platform;
   const localPlatform = local?.platform;
   const remotePlatform = remote?.platform;
@@ -180,11 +170,7 @@ function mergeNativeAgentIdentity(
   const remoteIdentity = nativeAgentIdentity(remote);
   if (!baseIdentity && !localIdentity && !remoteIdentity) return merged;
 
-  const selected = selectNativeAgentIdentity(
-    baseIdentity,
-    localIdentity,
-    remoteIdentity,
-  );
+  const selected = selectNativeAgentIdentity(baseIdentity, localIdentity, remoteIdentity);
   const synchronized = { ...merged } as Record<string, unknown>;
   delete synchronized.nativeAgentData;
   if (!selected) return synchronized as unknown as TabInfo;
@@ -242,7 +228,7 @@ function stableSequenceIds(left: string[], right: string[]): Set<string> {
     return index === undefined ? [] : [{ id, index }];
   });
   const tails: number[] = [];
-  const previous = new Array<number>(sequence.length).fill(-1);
+  const previous = Array.from({ length: sequence.length }, () => -1);
   for (let index = 0; index < sequence.length; index += 1) {
     let low = 0;
     let high = tails.length;
@@ -266,10 +252,7 @@ function stableSequenceIds(left: string[], right: string[]): Set<string> {
   return stable;
 }
 
-function explicitlyMovedTabIds(
-  base: PaneNode,
-  local: PaneNode,
-): Set<string> {
+function explicitlyMovedTabIds(base: PaneNode, local: PaneNode): Set<string> {
   const baseState = collectTabs(base);
   const localState = collectTabs(local);
   const moved = new Set<string>();
@@ -283,12 +266,8 @@ function explicitlyMovedTabIds(
       paneIds.add(baseLocation.paneId);
     }
   }
-  const baseLeaves = new Map(
-    collectLeaves(base).map((leaf) => [leaf.id, leaf]),
-  );
-  const localLeaves = new Map(
-    collectLeaves(local).map((leaf) => [leaf.id, leaf]),
-  );
+  const baseLeaves = new Map(collectLeaves(base).map((leaf) => [leaf.id, leaf]));
+  const localLeaves = new Map(collectLeaves(local).map((leaf) => [leaf.id, leaf]));
   for (const paneId of paneIds) {
     const baseOrder = (baseLeaves.get(paneId)?.tabs ?? [])
       .map(({ id }) => id)
@@ -320,9 +299,7 @@ function insertUsingLocalAnchors(
   for (let index = 0; index < localOrder.length; index += 1) {
     const id = localOrder[index]!;
     if (!idsToPlace.has(id)) continue;
-    const nextAnchor = localOrder
-      .slice(index + 1)
-      .find((candidate) => order.includes(candidate));
+    const nextAnchor = localOrder.slice(index + 1).find((candidate) => order.includes(candidate));
     if (nextAnchor) {
       order.splice(order.indexOf(nextAnchor), 0, id);
     } else {
@@ -338,12 +315,7 @@ function isTab(value: unknown): value is TabInfo {
 }
 
 export function isPaneNode(value: unknown, depth = 0): value is PaneNode {
-  if (
-    !value
-    || typeof value !== "object"
-    || Array.isArray(value)
-    || depth > 10
-  ) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || depth > 10) {
     return false;
   }
   const node = value as {
@@ -358,19 +330,23 @@ export function isPaneNode(value: unknown, depth = 0): value is PaneNode {
   };
   if (typeof node.id !== "string" || node.id.length === 0) return false;
   if (node.kind === "leaf") {
-    return Array.isArray(node.tabs)
-      && node.tabs.every(isTab)
-      && (node.activeTabId === null || typeof node.activeTabId === "string");
+    return (
+      Array.isArray(node.tabs) &&
+      node.tabs.every(isTab) &&
+      (node.activeTabId === null || typeof node.activeTabId === "string")
+    );
   }
-  return node.kind === "split"
-    && (node.direction === "horizontal" || node.direction === "vertical")
-    && Array.isArray(node.children)
-    && node.children.length === 2
-    && isPaneNode(node.children[0], depth + 1)
-    && isPaneNode(node.children[1], depth + 1)
-    && Array.isArray(node.sizes)
-    && node.sizes.length === 2
-    && node.sizes.every((size) => typeof size === "number" && Number.isFinite(size));
+  return (
+    node.kind === "split" &&
+    (node.direction === "horizontal" || node.direction === "vertical") &&
+    Array.isArray(node.children) &&
+    node.children.length === 2 &&
+    isPaneNode(node.children[0], depth + 1) &&
+    isPaneNode(node.children[1], depth + 1) &&
+    Array.isArray(node.sizes) &&
+    node.sizes.length === 2 &&
+    node.sizes.every((size) => typeof size === "number" && Number.isFinite(size))
+  );
 }
 
 /**
@@ -399,23 +375,14 @@ export function mergePersistedPaneLayouts<T extends PersistedPaneLayoutInput>(
   const baseState = collectTabs(base.root);
   const localState = collectTabs(local.root);
   const remoteState = collectTabs(remote.root);
-  const baseLeaves = new Map(
-    collectLeaves(base.root).map((leaf) => [leaf.id, leaf]),
-  );
-  const localLeaves = new Map(
-    collectLeaves(local.root).map((leaf) => [leaf.id, leaf]),
-  );
-  const remoteLeaves = new Map(
-    collectLeaves(remote.root).map((leaf) => [leaf.id, leaf]),
-  );
+  const baseLeaves = new Map(collectLeaves(base.root).map((leaf) => [leaf.id, leaf]));
+  const localLeaves = new Map(collectLeaves(local.root).map((leaf) => [leaf.id, leaf]));
+  const remoteLeaves = new Map(collectLeaves(remote.root).map((leaf) => [leaf.id, leaf]));
   const localMovedTabIds = explicitlyMovedTabIds(base.root, local.root);
-  const localTopologyChanged =
-    serialized(topology(local.root)) !== serialized(topology(base.root));
+  const localTopologyChanged = serialized(topology(local.root)) !== serialized(topology(base.root));
   const remoteTopologyChanged =
     serialized(topology(remote.root)) !== serialized(topology(base.root));
-  const root = clone(
-    !localTopologyChanged && remoteTopologyChanged ? remote.root : local.root,
-  );
+  const root = clone(!localTopologyChanged && remoteTopologyChanged ? remote.root : local.root);
 
   const finalTabs = new Map<string, TabInfo>();
   const allIds = new Set([
@@ -434,15 +401,8 @@ export function mergePersistedPaneLayouts<T extends PersistedPaneLayoutInput>(
       continue;
     }
     if (!localTab || !remoteTab) continue;
-    const mergedTab = mergeChangedFields(
-      baseTab,
-      localTab,
-      remoteTab,
-    ) as TabInfo;
-    finalTabs.set(
-      id,
-      mergeNativeAgentIdentity(baseTab, localTab, remoteTab, mergedTab),
-    );
+    const mergedTab = mergeChangedFields(baseTab, localTab, remoteTab) as TabInfo;
+    finalTabs.set(id, mergeNativeAgentIdentity(baseTab, localTab, remoteTab, mergedTab));
   }
 
   const leaves = collectLeaves(root);
@@ -454,9 +414,7 @@ export function mergePersistedPaneLayouts<T extends PersistedPaneLayoutInput>(
     const localLocation = localState.locations.get(id);
     const remoteLocation = remoteState.locations.get(id);
     const preferredLocation =
-      baseLocation && localMovedTabIds.has(id)
-        ? localLocation
-        : remoteLocation ?? localLocation;
+      baseLocation && localMovedTabIds.has(id) ? localLocation : (remoteLocation ?? localLocation);
     targetPaneIds.set(
       id,
       preferredLocation && leafIds.has(preferredLocation.paneId)
@@ -477,11 +435,8 @@ export function mergePersistedPaneLayouts<T extends PersistedPaneLayoutInput>(
   const localPlacementIds = new Set<string>();
   for (const id of finalTabs.keys()) {
     if (
-      localState.locations.has(id)
-      && (
-        localMovedTabIds.has(id)
-        || !remoteState.locations.has(id)
-      )
+      localState.locations.has(id) &&
+      (localMovedTabIds.has(id) || !remoteState.locations.has(id))
     ) {
       localPlacementIds.add(id);
     }
@@ -501,11 +456,7 @@ export function mergePersistedPaneLayouts<T extends PersistedPaneLayoutInput>(
     const idsToPlace = new Set(
       [...localPlacementIds].filter((id) => targetPaneIds.get(id) === leaf.id),
     );
-    insertUsingLocalAnchors(
-      order,
-      localOrdersByTarget.get(leaf.id) ?? [],
-      idsToPlace,
-    );
+    insertUsingLocalAnchors(order, localOrdersByTarget.get(leaf.id) ?? [], idsToPlace);
   }
 
   const placedIds = new Set([...orders.values()].flat());
@@ -521,31 +472,26 @@ export function mergePersistedPaneLayouts<T extends PersistedPaneLayoutInput>(
   for (const localLeaf of localLeaves.values()) {
     const activeTabId = localLeaf.activeTabId;
     if (
-      typeof activeTabId !== "string"
-      || activeTabId === baseLeaves.get(localLeaf.id)?.activeTabId
+      typeof activeTabId !== "string" ||
+      activeTabId === baseLeaves.get(localLeaf.id)?.activeTabId
     ) {
       continue;
     }
     const targetPaneId = targetPaneIds.get(activeTabId);
-    if (
-      targetPaneId
-      && (targetPaneId === localLeaf.id || !leafIds.has(localLeaf.id))
-    ) {
+    if (targetPaneId && (targetPaneId === localLeaf.id || !leafIds.has(localLeaf.id))) {
       localActiveTabsByTargetPane.set(targetPaneId, activeTabId);
     }
   }
-  for (const [paneId, activeTabId] of Object.entries(
-    options.selectionIntent?.activeTabIds ?? {},
-  )) {
+  for (const [paneId, activeTabId] of Object.entries(options.selectionIntent?.activeTabIds ?? {})) {
     // A stale intent for a pane that this local snapshot already removed must
     // not select a tab in whichever surviving pane now owns that id.
     const sourcePaneSurvives = leafIds.has(paneId);
     if (typeof activeTabId === "string") {
       const targetPaneId = targetPaneIds.get(activeTabId);
       if (
-        targetPaneId
-        && (targetPaneId === paneId || !sourcePaneSurvives)
-        && (sourcePaneSurvives || localLeaves.has(paneId))
+        targetPaneId &&
+        (targetPaneId === paneId || !sourcePaneSurvives) &&
+        (sourcePaneSurvives || localLeaves.has(paneId))
       ) {
         localActiveTabsByTargetPane.set(targetPaneId, activeTabId);
       }
@@ -566,18 +512,15 @@ export function mergePersistedPaneLayouts<T extends PersistedPaneLayoutInput>(
     leaf.activeTabId =
       mappedLocalActiveTabId && validTabIds.has(mappedLocalActiveTabId)
         ? mappedLocalActiveTabId
-        : hasMappedLocalActiveTab
-          && mappedLocalActiveTabId === null
-          && leaf.tabs.length === 0
+        : hasMappedLocalActiveTab && mappedLocalActiveTabId === null && leaf.tabs.length === 0
           ? null
-        : typeof mergedActiveTabId === "string" && validTabIds.has(mergedActiveTabId)
-        ? mergedActiveTabId
-        : [
-          remoteLeaves.get(leaf.id)?.activeTabId,
-          localLeaves.get(leaf.id)?.activeTabId,
-        ].find((id): id is string => typeof id === "string" && validTabIds.has(id))
-          ?? leaf.tabs[0]?.id
-          ?? null;
+          : typeof mergedActiveTabId === "string" && validTabIds.has(mergedActiveTabId)
+            ? mergedActiveTabId
+            : ([remoteLeaves.get(leaf.id)?.activeTabId, localLeaves.get(leaf.id)?.activeTabId].find(
+                (id): id is string => typeof id === "string" && validTabIds.has(id),
+              ) ??
+              leaf.tabs[0]?.id ??
+              null);
   }
 
   const validPaneIds = new Set(leaves.map(({ id }) => id));
@@ -588,38 +531,34 @@ export function mergePersistedPaneLayouts<T extends PersistedPaneLayoutInput>(
   );
   const baseFocusedTabId = baseLeaves.get(base.activePaneId)?.activeTabId;
   const localFocusedTabId = localLeaves.get(local.activePaneId)?.activeTabId;
-  const intendedActivePaneId =
-    options.selectionIntent?.activePaneId ?? local.activePaneId;
+  const intendedActivePaneId = options.selectionIntent?.activePaneId ?? local.activePaneId;
   const hasFocusedPaneTabIntent = Object.prototype.hasOwnProperty.call(
     options.selectionIntent?.activeTabIds ?? {},
     intendedActivePaneId,
   );
   const localFocusChanged =
-    options.selectionIntent?.activePaneId !== undefined
-    || hasFocusedPaneTabIntent
-    || local.activePaneId !== base.activePaneId
-    || localFocusedTabId !== baseFocusedTabId;
+    options.selectionIntent?.activePaneId !== undefined ||
+    hasFocusedPaneTabIntent ||
+    local.activePaneId !== base.activePaneId ||
+    localFocusedTabId !== baseFocusedTabId;
   const intendedFocusedTabId =
-    options.selectionIntent?.activeTabIds?.[intendedActivePaneId]
-    ?? localLeaves.get(intendedActivePaneId)?.activeTabId
-    ?? localFocusedTabId;
+    options.selectionIntent?.activeTabIds?.[intendedActivePaneId] ??
+    localLeaves.get(intendedActivePaneId)?.activeTabId ??
+    localFocusedTabId;
   const mappedLocalActivePaneId = localFocusChanged
-    ? (
-      validPaneIds.has(intendedActivePaneId)
-        ? intendedActivePaneId
-        : typeof intendedFocusedTabId === "string"
-          ? targetPaneIds.get(intendedFocusedTabId)
-          : undefined
-    )
+    ? validPaneIds.has(intendedActivePaneId)
+      ? intendedActivePaneId
+      : typeof intendedFocusedTabId === "string"
+        ? targetPaneIds.get(intendedFocusedTabId)
+        : undefined
     : undefined;
   const activePaneId =
     mappedLocalActivePaneId && validPaneIds.has(mappedLocalActivePaneId)
       ? mappedLocalActivePaneId
       : typeof mergedActivePaneId === "string" && validPaneIds.has(mergedActivePaneId)
-      ? mergedActivePaneId
-      : [remote.activePaneId, local.activePaneId]
-        .find((id) => validPaneIds.has(id))
-        ?? firstLeaf(root).id;
+        ? mergedActivePaneId
+        : ([remote.activePaneId, local.activePaneId].find((id) => validPaneIds.has(id)) ??
+          firstLeaf(root).id);
 
   return {
     version: local.version,

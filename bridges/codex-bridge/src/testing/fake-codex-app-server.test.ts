@@ -26,10 +26,7 @@ async function runOnce(args: string[]): Promise<{
   };
 }
 
-function waitFor(
-  predicate: () => boolean,
-  timeoutMs = 2_000,
-): Promise<void> {
+function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
   const startedAt = Date.now();
   return new Promise((resolve, reject) => {
     const check = () => {
@@ -104,20 +101,18 @@ describe("fake Codex app-server process", () => {
 
       await waitFor(() => {
         const responseIds = new Set(
-          messages
-            .filter((message) => "id" in message)
-            .map((message) => message.id),
+          messages.filter((message) => "id" in message).map((message) => message.id),
         );
-        const interrupted = messages.some((message) =>
-          message.method === "turn/completed"
-          && (message.params as { turn?: { status?: string } } | undefined)
-            ?.turn?.status === "interrupted"
+        const interrupted = messages.some(
+          (message) =>
+            message.method === "turn/completed" &&
+            (message.params as { turn?: { status?: string } } | undefined)?.turn?.status ===
+              "interrupted",
         );
         return responseIds.size === 12 && interrupted;
       });
 
-      const response = (id: number) =>
-        messages.find((message) => message.id === id)!;
+      const response = (id: number) => messages.find((message) => message.id === id)!;
       expect(response(1).error).toMatchObject({
         code: -32600,
         message: "initialize/initialized handshake not complete",

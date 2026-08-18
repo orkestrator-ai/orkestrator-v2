@@ -15,8 +15,9 @@ const SelectTestContext = createContext<{
 mock.module("@/components/ui/dialog", () => ({
   Dialog: ({ open, children }: { open: boolean; children: React.ReactNode }) =>
     open ? <div>{children}</div> : null,
-  DialogContent: ({ children }: { children: React.ReactNode }) =>
-    <div role="dialog">{children}</div>,
+  DialogContent: ({ children }: { children: React.ReactNode }) => (
+    <div role="dialog">{children}</div>
+  ),
   DialogDescription: ({ children }: { children: React.ReactNode }) => <p>{children}</p>,
   DialogFooter: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   DialogHeader: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
@@ -86,14 +87,10 @@ const catalog: AgentModelCatalog = {
     { id: "claude-b", name: "Claude B", reasoningEfforts: ["xhigh"] },
   ],
   codex: [{ id: "codex-a", name: "Codex A", reasoningEfforts: ["medium", "high"] }],
-  opencode: [
-    { id: "provider/model-a", name: "OpenCode A", reasoningEfforts: [] },
-  ],
+  opencode: [{ id: "provider/model-a", name: "OpenCode A", reasoningEfforts: [] }],
 };
 
-function renderDialog(
-  overrides: Partial<Parameters<typeof BuildLaunchDialog>[0]> = {},
-) {
+function renderDialog(overrides: Partial<Parameters<typeof BuildLaunchDialog>[0]> = {}) {
   const onConfirm = mock((_selection: BuildLaunchSelection) => undefined);
   const props = {
     open: true,
@@ -146,9 +143,7 @@ function environmentSummary() {
 
 /** Unticks "use one configuration for every step" to reveal the step sections. */
 function separateSteps() {
-  fireEvent.click(
-    screen.getByRole("checkbox", { name: /Use one configuration for every step/ }),
-  );
+  fireEvent.click(screen.getByRole("checkbox", { name: /Use one configuration for every step/ }));
 }
 
 function submit() {
@@ -200,22 +195,20 @@ describe("BuildLaunchDialog", () => {
       />
     );
     const view = render(
-      <DockerAvailabilityProvider available>
-        {dialog}
-      </DockerAvailabilityProvider>,
+      <DockerAvailabilityProvider available>{dialog}</DockerAvailabilityProvider>,
     );
     const environment = screen.getByRole("radiogroup", { name: "Build environment" });
-    expect((within(environment).getByRole("radio", { name: /^Container/ }) as HTMLInputElement).checked)
-      .toBe(true);
+    expect(
+      (within(environment).getByRole("radio", { name: /^Container/ }) as HTMLInputElement).checked,
+    ).toBe(true);
 
     view.rerender(
-      <DockerAvailabilityProvider available={false}>
-        {dialog}
-      </DockerAvailabilityProvider>,
+      <DockerAvailabilityProvider available={false}>{dialog}</DockerAvailabilityProvider>,
     );
     await waitFor(() => {
-      expect((within(environment).getByRole("radio", { name: /^Local/ }) as HTMLInputElement).checked)
-        .toBe(true);
+      expect(
+        (within(environment).getByRole("radio", { name: /^Local/ }) as HTMLInputElement).checked,
+      ).toBe(true);
     });
 
     submit();
@@ -243,7 +236,8 @@ describe("BuildLaunchDialog", () => {
     await waitFor(() => {
       const environment = screen.getByRole("radiogroup", { name: "Build environment" });
       expect(
-        (within(environment).getByRole("radio", { name: /^Container/ }) as HTMLInputElement).checked,
+        (within(environment).getByRole("radio", { name: /^Container/ }) as HTMLInputElement)
+          .checked,
       ).toBe(true);
     });
 
@@ -277,10 +271,12 @@ describe("BuildLaunchDialog", () => {
     );
 
     const environment = screen.getByRole("radiogroup", { name: "Build environment" });
-    expect((within(environment).getByRole("radio", { name: /^Container/ }) as HTMLInputElement).disabled)
-      .toBe(true);
-    expect((within(environment).getByRole("radio", { name: /^Local/ }) as HTMLInputElement).disabled)
-      .toBe(true);
+    expect(
+      (within(environment).getByRole("radio", { name: /^Container/ }) as HTMLInputElement).disabled,
+    ).toBe(true);
+    expect(
+      (within(environment).getByRole("radio", { name: /^Local/ }) as HTMLInputElement).disabled,
+    ).toBe(true);
     const start = screen.getByRole("button", { name: "Start build" });
     expect((start as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(start);
@@ -374,9 +370,7 @@ describe("BuildLaunchDialog", () => {
     chooseAgent("Build", "Codex");
     chooseAgent("Verify", "OpenCode");
     // Ticking again adopts the build step, not whichever step was edited last.
-    fireEvent.click(
-      screen.getByRole("checkbox", { name: /Use one configuration for every step/ }),
-    );
+    fireEvent.click(screen.getByRole("checkbox", { name: /Use one configuration for every step/ }));
     submit();
 
     const shared = {
@@ -413,14 +407,13 @@ describe("BuildLaunchDialog", () => {
     renderDialog();
 
     separateSteps();
-    expect(screen.getByRole("combobox", { name: "Build model" }).textContent)
-      .toContain("Claude A");
+    expect(screen.getByRole("combobox", { name: "Build model" }).textContent).toContain("Claude A");
     chooseAgent("Build", "Codex");
-    expect(screen.getByRole("combobox", { name: "Build model" }).textContent)
-      .toContain("Codex A");
+    expect(screen.getByRole("combobox", { name: "Build model" }).textContent).toContain("Codex A");
     // The other steps are untouched by a build-step change.
-    expect(screen.getByRole("combobox", { name: "Review model" }).textContent)
-      .toContain("Claude A");
+    expect(screen.getByRole("combobox", { name: "Review model" }).textContent).toContain(
+      "Claude A",
+    );
   });
 
   test("uses the searchable favorite-aware model picker for OpenCode", () => {
@@ -524,9 +517,9 @@ describe("BuildLaunchDialog", () => {
 
     // Initial value, not the result of a click: every other test starts
     // containerized and clicks its way to local.
-    expect((
-      within(environment).getByRole("radio", { name: /^Local/ }) as HTMLInputElement
-    ).checked).toBe(true);
+    expect(
+      (within(environment).getByRole("radio", { name: /^Local/ }) as HTMLInputElement).checked,
+    ).toBe(true);
     expect(environmentSummary()).toBe("Environment: Local worktree");
     submit();
 
@@ -553,9 +546,9 @@ describe("BuildLaunchDialog", () => {
   test("disables the submit button only while a start request is in flight", () => {
     const { onConfirm, rerender } = renderDialog({ busy: true });
 
-    expect((
-      screen.getByRole("button", { name: "Start build" }) as HTMLButtonElement
-    ).disabled).toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "Start build" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
 
     rerender(
       <BuildLaunchDialog
@@ -569,9 +562,9 @@ describe("BuildLaunchDialog", () => {
       />,
     );
 
-    expect((
-      screen.getByRole("button", { name: "Start build" }) as HTMLButtonElement
-    ).disabled).toBe(false);
+    expect(
+      (screen.getByRole("button", { name: "Start build" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
     submit();
     expect(onConfirm).toHaveBeenCalledTimes(1);
   });
@@ -588,9 +581,11 @@ describe("BuildLaunchDialog", () => {
     // Claude B offers "xhigh" only, so "high" cannot survive the switch.
     expect(effortValue("All steps")).toBe("default");
     // effortLabel spells this one out rather than capitalising it.
-    expect(within(
-      screen.getByRole("combobox", { name: "All steps reasoning effort" }).parentElement!,
-    ).getByRole("option", { name: "Extra high" })).toBeTruthy();
+    expect(
+      within(
+        screen.getByRole("combobox", { name: "All steps reasoning effort" }).parentElement!,
+      ).getByRole("option", { name: "Extra high" }),
+    ).toBeTruthy();
     submit();
 
     expect(onConfirm.mock.calls[0]![0].steps.build).toEqual({
@@ -641,9 +636,10 @@ describe("BuildLaunchDialog", () => {
     const { onConfirm } = renderDialog({ catalog: { ...catalog, claude: [] } });
 
     expect(modelValue("All steps")).toContain("Choose a model");
-    expect((
-      screen.getByRole("combobox", { name: "All steps reasoning effort" }) as HTMLButtonElement
-    ).disabled).toBe(true);
+    expect(
+      (screen.getByRole("combobox", { name: "All steps reasoning effort" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
     expect(screen.getByText("All steps: default · default effort")).toBeTruthy();
     submit();
 
@@ -720,9 +716,7 @@ describe("BuildLaunchDialog", () => {
     chooseEffort("Review", "High");
     chooseModel("Build", "Claude B");
     chooseEffort("Build", "Extra high");
-    fireEvent.click(
-      screen.getByRole("checkbox", { name: /Use one configuration for every step/ }),
-    );
+    fireEvent.click(screen.getByRole("checkbox", { name: /Use one configuration for every step/ }));
     submit();
 
     const shared = {

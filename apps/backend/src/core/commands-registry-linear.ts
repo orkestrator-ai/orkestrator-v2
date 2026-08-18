@@ -1,6 +1,17 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
-import { getLinearIssue, listLinearIssues, postLinearIssueComment, postLinearCompletionComment, sanitizeLinearError, verifyLinearConnection } from "./commands-dependencies.js";
-import { asString, requireLinearApiKey, withLinearCompletionCommentLock } from "./commands-helpers.js";
+import {
+  getLinearIssue,
+  listLinearIssues,
+  postLinearIssueComment,
+  postLinearCompletionComment,
+  sanitizeLinearError,
+  verifyLinearConnection,
+} from "./commands-dependencies.js";
+import {
+  asString,
+  requireLinearApiKey,
+  withLinearCompletionCommentLock,
+} from "./commands-helpers.js";
 
 export function registerLinearCommands(
   register: CommandRegistrar,
@@ -73,7 +84,11 @@ export function registerLinearCommands(
     return withLinearCompletionCommentLock(runId, async () => {
       const existing = await context.storage.getLinearCompletionComment(runId);
       if (existing?.status === "posted" && existing.commentId) {
-        return { status: "already-posted", commentId: existing.commentId, postedAt: existing.postedAt };
+        return {
+          status: "already-posted",
+          commentId: existing.commentId,
+          postedAt: existing.postedAt,
+        };
       }
 
       const apiKey = await requireLinearApiKey(context);
@@ -103,5 +118,4 @@ export function registerLinearCommands(
       }
     });
   });
-
 }

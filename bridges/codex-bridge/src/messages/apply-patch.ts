@@ -125,13 +125,14 @@ function parseControlLines(input: string): RawApplyPatchChange[] {
       finishCurrent();
       if (changes.length >= MAX_RAW_APPLY_PATCH_CHANGES) break;
       const path = header[2]!.trim();
-      current = path.length > 0
-        ? {
-            path,
-            kind: header[1]!.toLowerCase() as Exclude<RawApplyPatchKind, "move">,
-            body: [],
-          }
-        : undefined;
+      current =
+        path.length > 0
+          ? {
+              path,
+              kind: header[1]!.toLowerCase() as Exclude<RawApplyPatchKind, "move">,
+              body: [],
+            }
+          : undefined;
       continue;
     }
 
@@ -181,9 +182,7 @@ export function rawApplyPatchParts(
       toolArgs: {
         path: change.path,
         kind: change.kind,
-        ...(change.targetPath !== change.path
-          ? { move_path: change.targetPath }
-          : {}),
+        ...(change.targetPath !== change.path ? { move_path: change.targetPath } : {}),
       },
       toolState: state,
       toolTitle: rawPatchTitle(change),

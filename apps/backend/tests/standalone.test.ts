@@ -15,7 +15,9 @@ jest.setTimeout(30_000);
 
 afterAll(async () => {
   for (const process of processes) process.kill("SIGTERM");
-  await Promise.all(temporaryDirectories.map((directory) => rm(directory, { recursive: true, force: true })));
+  await Promise.all(
+    temporaryDirectories.map((directory) => rm(directory, { recursive: true, force: true })),
+  );
 });
 
 async function startBackend(
@@ -33,24 +35,36 @@ async function startBackend(
   temporaryDirectories.push(dataDir);
   const rendererRoot = path.join(dataDir, "renderer");
   await mkdir(rendererRoot);
-  await writeFile(path.join(rendererRoot, "index.html"), "<!doctype html><title>Orkestrator</title>");
+  await writeFile(
+    path.join(rendererRoot, "index.html"),
+    "<!doctype html><title>Orkestrator</title>",
+  );
   await prepare?.({ dataDir, rendererRoot });
-  const child = Bun.spawn([
-    process.execPath,
-    path.join(root, "apps/backend/dist/main.js"),
-    "--host", "127.0.0.1",
-    "--port", "0",
-    "--allow-non-tailscale-bind",
-    "--data-dir", dataDir,
-    "--app-root", root,
-    "--resource-root", root,
-    "--renderer-root", rendererRoot,
-    ...extraArgs,
-  ], {
-    stdout: "pipe",
-    stderr: "pipe",
-    env: { ...process.env, ...extraEnv },
-  });
+  const child = Bun.spawn(
+    [
+      process.execPath,
+      path.join(root, "apps/backend/dist/main.js"),
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "0",
+      "--allow-non-tailscale-bind",
+      "--data-dir",
+      dataDir,
+      "--app-root",
+      root,
+      "--resource-root",
+      root,
+      "--renderer-root",
+      rendererRoot,
+      ...extraArgs,
+    ],
+    {
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, ...extraEnv },
+    },
+  );
   processes.push(child);
 
   const ready = await waitForStandaloneBackendReady(child);
@@ -71,7 +85,7 @@ async function invokeBackend(
     },
     body: JSON.stringify({ command, args }),
   });
-  const payload = await response.json() as { result?: unknown; error?: string };
+  const payload = (await response.json()) as { result?: unknown; error?: string };
   if (!response.ok) throw new Error(payload.error ?? `Backend command failed: ${response.status}`);
   return payload.result;
 }
@@ -116,22 +130,19 @@ describe("standalone backend service", () => {
 
   test("passes CLI compression through to gateway metrics for each listener", async () => {
     const { url, token, readyMessage } = await startBackend(
-      [
-        "--control-host", "127.0.0.1",
-        "--control-port", "0",
-        "--compression", "on",
-      ],
+      ["--control-host", "127.0.0.1", "--control-port", "0", "--compression", "on"],
       { ORKESTRATOR_GATEWAY_COMPRESSION: "body" },
     );
     const browserUrl = readyMessage.browserUrl;
     expect(browserUrl).toBeString();
     const authorization = { authorization: `Bearer ${token}` };
 
-    const controlStatus = await Bun.fetch(new URL("/__orkestrator/status", url), { headers: authorization });
-    const browserStatus = await Bun.fetch(
-      new URL("/__orkestrator/status", browserUrl as string),
-      { headers: authorization },
-    );
+    const controlStatus = await Bun.fetch(new URL("/__orkestrator/status", url), {
+      headers: authorization,
+    });
+    const browserStatus = await Bun.fetch(new URL("/__orkestrator/status", browserUrl as string), {
+      headers: authorization,
+    });
     expect(controlStatus.status).toBe(200);
     expect(browserStatus.status).toBe(200);
 
@@ -139,7 +150,7 @@ describe("standalone backend service", () => {
       headers: authorization,
     });
     expect(metricsResponse.status).toBe(200);
-    const metrics = await metricsResponse.json() as {
+    const metrics = (await metricsResponse.json()) as {
       compression: { configuredMode: string };
       recentRouteSamples: Array<{
         route: string;
@@ -149,14 +160,18 @@ describe("standalone backend service", () => {
     };
     expect(metrics.compression.configuredMode).toBe("on");
     const statusSamples = metrics.recentRouteSamples.filter((sample) => sample.route === "status");
-    expect(statusSamples).toContainEqual(expect.objectContaining({
-      listenerKind: "control",
-      effectiveCompressionMode: "off",
-    }));
-    expect(statusSamples).toContainEqual(expect.objectContaining({
-      listenerKind: "browser",
-      effectiveCompressionMode: "on",
-    }));
+    expect(statusSamples).toContainEqual(
+      expect.objectContaining({
+        listenerKind: "control",
+        effectiveCompressionMode: "off",
+      }),
+    );
+    expect(statusSamples).toContainEqual(
+      expect.objectContaining({
+        listenerKind: "browser",
+        effectiveCompressionMode: "on",
+      }),
+    );
   });
 
   test("stops cleanly when a service manager sends SIGTERM", async () => {
@@ -235,31 +250,37 @@ exec ${JSON.stringify(process.execPath)} ${JSON.stringify(fakeServerPath)} "$POR
       await chmod(executable, 0o755);
       await writeFile(
         path.join(dataDir, "environments.json"),
-        `${JSON.stringify([{
-          id: "env-local-server",
-          projectId: "project-1",
-          name: "Local",
-          branch: "feature/local",
-          containerId: null,
-          status: "running",
-          prUrl: null,
-          prState: null,
-          hasMergeConflicts: null,
-          createdAt: new Date(0).toISOString(),
-          networkAccessMode: "restricted",
-          order: 0,
-          environmentType: "local",
-          worktreePath,
-        }], null, 2)}\n`,
+        `${JSON.stringify(
+          [
+            {
+              id: "env-local-server",
+              projectId: "project-1",
+              name: "Local",
+              branch: "feature/local",
+              containerId: null,
+              status: "running",
+              prUrl: null,
+              prState: null,
+              hasMergeConflicts: null,
+              createdAt: new Date(0).toISOString(),
+              networkAccessMode: "restricted",
+              order: 0,
+              environmentType: "local",
+              worktreePath,
+            },
+          ],
+          null,
+          2,
+        )}\n`,
       );
     });
 
-    const result = await invokeBackend(
+    const result = (await invokeBackend(
       started.url,
       started.token,
       "start_local_opencode_server_cmd",
       { environmentId: "env-local-server" },
-    ) as { pid: number };
+    )) as { pid: number };
     const processIds = JSON.parse(await readFile(processMarkerPath, "utf8")) as {
       serverPid: number;
       descendantPid: number;
@@ -269,9 +290,7 @@ exec ${JSON.stringify(process.execPath)} ${JSON.stringify(fakeServerPath)} "$POR
     expect(result.pid).toBe(processIds.serverPid);
     expect(isProcessRunning(processIds.serverPid)).toBe(true);
     expect(isProcessRunning(processIds.descendantPid)).toBe(true);
-    expect(processIds.agentToolsUrl).toMatch(
-      /^http:\/\/127\.0\.0\.1:\d+\/mcp$/,
-    );
+    expect(processIds.agentToolsUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
     expect(processIds.agentToolsToken).toMatch(/^[A-Za-z0-9_-]{32,128}$/);
 
     started.child.kill("SIGTERM");
@@ -291,7 +310,9 @@ exec ${JSON.stringify(process.execPath)} ${JSON.stringify(fakeServerPath)} "$POR
     // scoped teardown cannot masquerade as a full-listener removal. `/api` also
     // keeps the TCP entry alive after shutdown, which is the state a restart has
     // to tolerate.
-    await writeFile(executable, `#!/bin/sh
+    await writeFile(
+      executable,
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$TAILSCALE_TEST_LOG"
 case " $* " in
   *" --set-path=/ off "*) rm -f "$TAILSCALE_TEST_LOG.root"; exit 0 ;;
@@ -310,7 +331,8 @@ for arg in "$@"; do last_arg="$arg"; done
 printf '%s' "\${last_arg##*:}" > "$TAILSCALE_TEST_LOG.port"
 touch "$TAILSCALE_TEST_LOG.root"
 printf 'Available within your tailnet:\\nhttps://workstation.example.ts.net\\n'
-`);
+`,
+    );
     await chmod(executable, 0o755);
 
     const { child, readyMessage } = await startBackend(
@@ -331,10 +353,9 @@ printf 'Available within your tailnet:\\nhttps://workstation.example.ts.net\\n'
 
     // A second backend must be able to claim the port again even though `/api`
     // is still holding it open.
-    const restarted = await startBackend(
-      ["--tailscale-serve", "--tailscale-bin", executable],
-      { TAILSCALE_TEST_LOG: logFile },
-    );
+    const restarted = await startBackend(["--tailscale-serve", "--tailscale-bin", executable], {
+      TAILSCALE_TEST_LOG: logFile,
+    });
     expect(restarted.readyMessage.browserUrl).toBe("https://workstation.example.ts.net/");
     restarted.child.kill("SIGTERM");
     await expect(restarted.child.exited).resolves.toBe(0);
@@ -345,7 +366,9 @@ printf 'Available within your tailnet:\\nhttps://workstation.example.ts.net\\n'
     temporaryDirectories.push(testDir);
     const executable = path.join(testDir, "tailscale");
     const logFile = path.join(testDir, "calls.log");
-    await writeFile(executable, `#!/bin/sh
+    await writeFile(
+      executable,
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$TAILSCALE_TEST_LOG"
 if [ "$*" = "serve status --json" ]; then
   printf '{}\\n'
@@ -353,33 +376,45 @@ if [ "$*" = "serve status --json" ]; then
 fi
 echo 'Tailscale HTTPS is not enabled for this tailnet' >&2
 exit 1
-`);
+`,
+    );
     await chmod(executable, 0o755);
 
     const dataDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-standalone-test-"));
     temporaryDirectories.push(dataDir);
     const rendererRoot = path.join(dataDir, "renderer");
     await mkdir(rendererRoot);
-    await writeFile(path.join(rendererRoot, "index.html"), "<!doctype html><title>Orkestrator</title>");
+    await writeFile(
+      path.join(rendererRoot, "index.html"),
+      "<!doctype html><title>Orkestrator</title>",
+    );
 
-    const child = Bun.spawn([
-      process.execPath,
-      path.join(root, "apps/backend/dist/main.js"),
-      "--port", "0",
-      "--data-dir", dataDir,
-      "--app-root", root,
-      "--resource-root", root,
-      "--renderer-root", rendererRoot,
-    ], {
-      stdout: "pipe",
-      stderr: "pipe",
-      env: {
-        ...process.env,
-        ORKESTRATOR_TAILSCALE_SERVE: "1",
-        ORKESTRATOR_TAILSCALE_BIN: executable,
-        TAILSCALE_TEST_LOG: logFile,
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        path.join(root, "apps/backend/dist/main.js"),
+        "--port",
+        "0",
+        "--data-dir",
+        dataDir,
+        "--app-root",
+        root,
+        "--resource-root",
+        root,
+        "--renderer-root",
+        rendererRoot,
+      ],
+      {
+        stdout: "pipe",
+        stderr: "pipe",
+        env: {
+          ...process.env,
+          ORKESTRATOR_TAILSCALE_SERVE: "1",
+          ORKESTRATOR_TAILSCALE_BIN: executable,
+          TAILSCALE_TEST_LOG: logFile,
+        },
       },
-    });
+    );
     processes.push(child);
 
     await expect(child.exited).resolves.not.toBe(0);
@@ -394,12 +429,16 @@ exit 1
   });
 
   test("rejects Tailscale Serve with a non-IPv4-loopback listener", async () => {
-    const child = Bun.spawn([
-      process.execPath,
-      path.join(root, "apps/backend/dist/main.js"),
-      "--tailscale-serve",
-      "--host", "::1",
-    ], { stdout: "pipe", stderr: "pipe", env: process.env });
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        path.join(root, "apps/backend/dist/main.js"),
+        "--tailscale-serve",
+        "--host",
+        "::1",
+      ],
+      { stdout: "pipe", stderr: "pipe", env: process.env },
+    );
     processes.push(child);
 
     await expect(child.exited).resolves.not.toBe(0);

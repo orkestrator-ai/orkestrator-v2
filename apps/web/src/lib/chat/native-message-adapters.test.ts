@@ -32,9 +32,7 @@ describe("Claude activity in the shared native transcript", () => {
    * the same agent card every other provider gets, rather than as flat tool
    * rows plus a Claude-only list beside the transcript.
    */
-  const agentLaunch = (
-    toolState: NativeMessage["parts"][number]["toolState"],
-  ): NativeMessage => ({
+  const agentLaunch = (toolState: NativeMessage["parts"][number]["toolState"]): NativeMessage => ({
     id: "assistant-agent",
     role: "assistant",
     content: "",
@@ -90,18 +88,20 @@ describe("Claude activity in the shared native transcript", () => {
     role: "assistant",
     content: "",
     createdAt: "2026-08-16T10:00:00.000Z",
-    parts: [{
-      type: "tool-invocation",
-      content: "Bash",
-      toolName: "Bash",
-      toolUseId: "bash-1",
-      toolState: "success",
-      toolArgs: {
-        command: "bun run dev",
-        description: "Run the dev server",
-        run_in_background: true,
+    parts: [
+      {
+        type: "tool-invocation",
+        content: "Bash",
+        toolName: "Bash",
+        toolUseId: "bash-1",
+        toolState: "success",
+        toolArgs: {
+          command: "bun run dev",
+          description: "Run the dev server",
+          run_in_background: true,
+        },
       },
-    }],
+    ],
   });
 
   test("promotes a running background task into a stoppable task card", () => {
@@ -125,9 +125,7 @@ describe("Claude activity in the shared native transcript", () => {
 
     const [normalized] = normalizeNativeMessages([decorated!]);
     expect(normalized?.parts[0]?.type).toBe("task-group");
-    expect(collectRenderedBackgroundTaskIds([normalized!])).toEqual(
-      new Set(["bg-dev"]),
-    );
+    expect(collectRenderedBackgroundTaskIds([normalized!])).toEqual(new Set(["bg-dev"]));
   });
 
   describe("tasks the transcript cannot show", () => {
@@ -136,13 +134,15 @@ describe("Claude activity in the shared native transcript", () => {
       description: "Watch the server",
       status: "running",
     } as const;
-    const transcript: NativeMessage[] = [{
-      id: "assistant-1",
-      role: "assistant",
-      content: "Working",
-      parts: [],
-      createdAt: "2026-08-16T10:00:00.000Z",
-    }];
+    const transcript: NativeMessage[] = [
+      {
+        id: "assistant-1",
+        role: "assistant",
+        content: "Working",
+        parts: [],
+        createdAt: "2026-08-16T10:00:00.000Z",
+      },
+    ];
 
     test("builds a stoppable card row for a live task with no launch row", () => {
       const rows = rowlessBackgroundTaskMessages([watchTask], transcript);
@@ -219,18 +219,24 @@ describe("Claude activity in the shared native transcript", () => {
       // It stopped somewhere the reader can see, so its card belongs there —
       // and the backend's own stamp is what says so, not anything this render
       // watched happen.
-      const rows = rowlessBackgroundTaskMessages([{
-        ...watchTask,
-        status: "completed",
-        settledAt: "2026-08-16T10:05:00.000Z",
-      }], transcript);
+      const rows = rowlessBackgroundTaskMessages(
+        [
+          {
+            ...watchTask,
+            status: "completed",
+            settledAt: "2026-08-16T10:05:00.000Z",
+          },
+        ],
+        transcript,
+      );
 
       expect(rows).toHaveLength(1);
       const part = rows[0]?.parts[0];
       expect(part?.type === "task-group" && part.task.agentState).toBe("finished");
       // The row carries the settle stamp, which is what places the card.
-      expect(part?.type === "task-group" && part.task.backgroundTask?.settledAt)
-        .toBe("2026-08-16T10:05:00.000Z");
+      expect(part?.type === "task-group" && part.task.backgroundTask?.settledAt).toBe(
+        "2026-08-16T10:05:00.000Z",
+      );
       expect(rows[0]?.createdAt).toBe("2026-08-16T10:05:00.000Z");
     });
 
@@ -238,20 +244,26 @@ describe("Claude activity in the shared native transcript", () => {
       // A snapshot carries the provider's task history. Rendering all of it
       // would drop a pile of finished cards into a conversation that never
       // mentioned them and has no position for them.
-      expect(rowlessBackgroundTaskMessages([{
-        ...watchTask,
-        status: "completed",
-        settledAt: "2026-08-16T09:00:00.000Z",
-      }], transcript)).toHaveLength(0);
+      expect(
+        rowlessBackgroundTaskMessages(
+          [
+            {
+              ...watchTask,
+              status: "completed",
+              settledAt: "2026-08-16T09:00:00.000Z",
+            },
+          ],
+          transcript,
+        ),
+      ).toHaveLength(0);
     });
 
     test("ignores a terminal task the backend never stamped", () => {
       // No recorded edge is no position. A bridge that predates the field
       // leaves its finished tasks out rather than guessing where they go.
-      expect(rowlessBackgroundTaskMessages(
-        [{ ...watchTask, status: "completed" }],
-        transcript,
-      )).toHaveLength(0);
+      expect(
+        rowlessBackgroundTaskMessages([{ ...watchTask, status: "completed" }], transcript),
+      ).toHaveLength(0);
     });
   });
 
@@ -290,21 +302,28 @@ describe("Claude activity in the shared native transcript", () => {
 
   test("reports no rendered task for an action row that only names one", () => {
     const [normalized] = normalizeNativeMessages(
-      applyClaudeBackgroundTaskStates([{
-        id: "assistant-stop",
-        role: "assistant",
-        content: "",
-        createdAt: "2026-08-16T10:00:00.000Z",
-        parts: [{
-          type: "tool-invocation",
-          content: "TaskStop",
-          toolName: "TaskStop",
-          toolState: "success",
-          toolArgs: { task_id: "bg-dev" },
-        }],
-      }], {
-        "bg-dev": { id: "bg-dev", description: "Run the dev server", status: "killed" },
-      }),
+      applyClaudeBackgroundTaskStates(
+        [
+          {
+            id: "assistant-stop",
+            role: "assistant",
+            content: "",
+            createdAt: "2026-08-16T10:00:00.000Z",
+            parts: [
+              {
+                type: "tool-invocation",
+                content: "TaskStop",
+                toolName: "TaskStop",
+                toolState: "success",
+                toolArgs: { task_id: "bg-dev" },
+              },
+            ],
+          },
+        ],
+        {
+          "bg-dev": { id: "bg-dev", description: "Run the dev server", status: "killed" },
+        },
+      ),
     );
 
     // A stop row is not a card and offers nothing to act on, so the tab must
@@ -317,26 +336,27 @@ describe("Claude activity in the shared native transcript", () => {
     role: "assistant",
     content: "",
     createdAt: "2026-08-16T10:00:00.000Z",
-    parts: [{
-      type: "tool-invocation",
-      content: "Bash",
-      toolName: "Bash",
-      toolUseId: "bash-late",
-      toolState: "success",
-      // No `run_in_background`: this command was started in the foreground and
-      // backgrounded afterwards, so only its result names the task.
-      toolArgs: { command: "bun run dev", description: "Run the dev server" },
-      backgroundTaskId,
-    }],
+    parts: [
+      {
+        type: "tool-invocation",
+        content: "Bash",
+        toolName: "Bash",
+        toolUseId: "bash-late",
+        toolState: "success",
+        // No `run_in_background`: this command was started in the foreground and
+        // backgrounded afterwards, so only its result names the task.
+        toolArgs: { command: "bun run dev", description: "Run the dev server" },
+        backgroundTaskId,
+      },
+    ],
   });
 
   test.each(["running", "paused"] as const)(
     "cards a command backgrounded after it started, reported as %s",
     (status) => {
-      const [decorated] = applyClaudeBackgroundTaskStates(
-        [lateBackgroundLaunch("bg-dev")],
-        { "bg-dev": { id: "bg-dev", description: "Run the dev server", status } },
-      );
+      const [decorated] = applyClaudeBackgroundTaskStates([lateBackgroundLaunch("bg-dev")], {
+        "bg-dev": { id: "bg-dev", description: "Run the dev server", status },
+      });
 
       expect(decorated?.parts[0]?.backgroundTask).toEqual({
         id: "bg-dev",
@@ -347,9 +367,7 @@ describe("Claude activity in the shared native transcript", () => {
 
       const [normalized] = normalizeNativeMessages([decorated!]);
       expect(normalized?.parts[0]?.type).toBe("task-group");
-      expect(collectRenderedBackgroundTaskIds([normalized!])).toEqual(
-        new Set(["bg-dev"]),
-      );
+      expect(collectRenderedBackgroundTaskIds([normalized!])).toEqual(new Set(["bg-dev"]));
     },
   );
 
@@ -358,8 +376,7 @@ describe("Claude activity in the shared native transcript", () => {
     // which is the only path on which the output scan can fire.
     const message = lateBackgroundLaunch("");
     delete message.parts[0]!.backgroundTaskId;
-    message.parts[0]!.toolOutput =
-      "Command was manually backgrounded by user with ID: bg-dev";
+    message.parts[0]!.toolOutput = "Command was manually backgrounded by user with ID: bg-dev";
 
     const [decorated] = applyClaudeBackgroundTaskStates([message], {
       "bg-dev": { id: "bg-dev", status: "running" },
@@ -376,15 +393,17 @@ describe("Claude activity in the shared native transcript", () => {
       role: "assistant",
       content: "",
       createdAt: "2026-08-16T10:00:00.000Z",
-      parts: [{
-        type: "tool-invocation",
-        content: "Read",
-        toolName: "Read",
-        toolUseId: "read-1",
-        toolState: "success",
-        toolArgs: { file_path: "/repo/native-message-adapters.ts" },
-        toolOutput: "Command running in background with ID: bg-dev. …",
-      }],
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "Read",
+          toolName: "Read",
+          toolUseId: "read-1",
+          toolState: "success",
+          toolArgs: { file_path: "/repo/native-message-adapters.ts" },
+          toolOutput: "Command running in background with ID: bg-dev. …",
+        },
+      ],
     };
     const [decorated] = applyClaudeBackgroundTaskStates([quotedNote], {
       "bg-dev": { id: "bg-dev", description: "Run the dev server", status: "running" },
@@ -404,13 +423,15 @@ describe("Claude activity in the shared native transcript", () => {
       role: "assistant",
       content: "",
       createdAt: "2026-08-16T10:00:00.000Z",
-      parts: [{
-        type: "tool-invocation",
-        content: "TaskOutput",
-        toolName: "TaskOutput",
-        toolState: "success",
-        toolArgs: { task_id: "bg-dev" },
-      }],
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "TaskOutput",
+          toolName: "TaskOutput",
+          toolState: "success",
+          toolArgs: { task_id: "bg-dev" },
+        },
+      ],
     };
     const [decorated] = applyClaudeBackgroundTaskStates([actionRow], {
       "bg-dev": { id: "bg-dev", description: "Run the dev server", status: "running" },
@@ -430,28 +451,32 @@ describe("native message adapters", () => {
       role: "assistant",
       content: "",
       createdAt: "2026-08-15T10:00:00.000Z",
-      parts: [{
-        type: "tool-invocation",
-        content: "Task: Validate the change",
-        toolName: "task",
-        toolTitle: "Task: Validate the change",
-        toolUseId: "cursor-task-1",
-        toolState: "success",
-        agentState: "active",
-        toolOutput: JSON.stringify({ durationMs: 42, isBackground: true }),
-      }],
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "Task: Validate the change",
+          toolName: "task",
+          toolTitle: "Task: Validate the change",
+          toolUseId: "cursor-task-1",
+          toolState: "success",
+          agentState: "active",
+          toolOutput: JSON.stringify({ durationMs: 42, isBackground: true }),
+        },
+      ],
     });
 
-    expect(normalized.parts).toEqual([{
-      type: "task-group",
-      content: "Task: Validate the change",
-      task: expect.objectContaining({
-        toolUseId: "cursor-task-1",
-        toolState: "success",
-        agentState: "active",
-      }),
-      childTools: [],
-    }]);
+    expect(normalized.parts).toEqual([
+      {
+        type: "task-group",
+        content: "Task: Validate the change",
+        task: expect.objectContaining({
+          toolUseId: "cursor-task-1",
+          toolState: "success",
+          agentState: "active",
+        }),
+        childTools: [],
+      },
+    ]);
   });
 
   test.each(["active", "finished"] as const)(
@@ -481,10 +506,7 @@ describe("native message adapters", () => {
         ],
       });
 
-      expect(normalized.parts.map((part) => part.type)).toEqual([
-        "task-group",
-        "tool-group",
-      ]);
+      expect(normalized.parts.map((part) => part.type)).toEqual(["task-group", "tool-group"]);
       expect(normalized.parts[0]).toMatchObject({
         type: "task-group",
         childTools: [],
@@ -577,33 +599,37 @@ describe("native message adapters", () => {
       role: "assistant",
       content: "",
       createdAt: "2026-08-15T10:00:00.000Z",
-      parts: [{
-        type: "tool-invocation",
-        content: "Launch validation agent",
-        toolName: "spawn_subagent",
-        toolTitle: "Launch validation agent",
-        toolUseId: "grok-task-1",
-        toolState: "success",
-        agentState: "active",
-        toolArgs: {
-          variant: "Task",
-          run_in_background: true,
-          description: "Validate the implementation",
-          subagent_type: "explore",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "Launch validation agent",
+          toolName: "spawn_subagent",
+          toolTitle: "Launch validation agent",
+          toolUseId: "grok-task-1",
+          toolState: "success",
+          agentState: "active",
+          toolArgs: {
+            variant: "Task",
+            run_in_background: true,
+            description: "Validate the implementation",
+            subagent_type: "explore",
+          },
         },
-      }],
+      ],
     });
 
-    expect(normalized.parts).toEqual([{
-      type: "task-group",
-      content: "Launch validation agent",
-      task: expect.objectContaining({
-        toolName: "spawn_subagent",
-        toolUseId: "grok-task-1",
-        agentState: "active",
-      }),
-      childTools: [],
-    }]);
+    expect(normalized.parts).toEqual([
+      {
+        type: "task-group",
+        content: "Launch validation agent",
+        task: expect.objectContaining({
+          toolName: "spawn_subagent",
+          toolUseId: "grok-task-1",
+          agentState: "active",
+        }),
+        childTools: [],
+      },
+    ]);
   });
 
   test("does not infer a sub-agent from an ordinary Task tool name alone", () => {
@@ -612,31 +638,38 @@ describe("native message adapters", () => {
       role: "assistant",
       content: "",
       createdAt: "2026-08-15T10:00:00.000Z",
-      parts: [{
-        type: "tool-invocation",
-        content: "Task",
-        toolName: "task",
-        toolUseId: "task-1",
-        toolState: "success",
-      }],
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "Task",
+          toolName: "task",
+          toolUseId: "task-1",
+          toolState: "success",
+        },
+      ],
     });
 
     expect(normalized.parts[0]?.type).toBe("tool-group");
   });
 
   test("joins authoritative Claude background-agent state by tool use id", () => {
-    const messages: ClaudeMessage[] = [{
-      id: "assistant-background-agent",
-      role: "assistant",
-      content: "",
-      createdAt: "2026-06-18T12:00:00.000Z",
-      parts: [{
-        type: "tool-invocation", content: "Agent",
-        toolName: "Agent",
-        toolUseId: "agent-launch",
-        toolState: "success",
-      }],
-    }];
+    const messages: ClaudeMessage[] = [
+      {
+        id: "assistant-background-agent",
+        role: "assistant",
+        content: "",
+        createdAt: "2026-06-18T12:00:00.000Z",
+        parts: [
+          {
+            type: "tool-invocation",
+            content: "Agent",
+            toolName: "Agent",
+            toolUseId: "agent-launch",
+            toolState: "success",
+          },
+        ],
+      },
+    ];
 
     const active = applyClaudeBackgroundTaskStates(messages, {
       "child-task": {
@@ -675,18 +708,23 @@ describe("native message adapters", () => {
   ] as const)(
     "maps Claude background task status %s to agent state %s",
     (status, expectedAgentState) => {
-      const messages: ClaudeMessage[] = [{
-        id: `assistant-${status}`,
-        role: "assistant",
-        content: "",
-        createdAt: "2026-06-18T12:00:00.000Z",
-        parts: [{
-          type: "tool-invocation", content: "Agent",
-          toolName: "Agent",
-          toolUseId: "agent-launch",
-          toolState: "success",
-        }],
-      }];
+      const messages: ClaudeMessage[] = [
+        {
+          id: `assistant-${status}`,
+          role: "assistant",
+          content: "",
+          createdAt: "2026-06-18T12:00:00.000Z",
+          parts: [
+            {
+              type: "tool-invocation",
+              content: "Agent",
+              toolName: "Agent",
+              toolUseId: "agent-launch",
+              toolState: "success",
+            },
+          ],
+        },
+      ];
 
       const updated = applyClaudeBackgroundTaskStates(messages, {
         task: {
@@ -707,23 +745,27 @@ describe("native message adapters", () => {
       content: "Agent",
     };
     const missingToolUseId: ClaudeMessagePart = {
-      type: "tool-invocation", content: "",
+      type: "tool-invocation",
+      content: "",
       toolName: "Agent",
       toolState: "success",
     };
     const nonAgentTool: ClaudeMessagePart = {
-      type: "tool-invocation", content: "",
+      type: "tool-invocation",
+      content: "",
       toolName: "Read",
       toolUseId: "read-tool",
       toolState: "success",
     };
-    const messages: ClaudeMessage[] = [{
-      id: "assistant-guards",
-      role: "assistant",
-      content: "",
-      createdAt: "2026-06-18T12:00:00.000Z",
-      parts: [nonToolPart, missingToolUseId, nonAgentTool],
-    }];
+    const messages: ClaudeMessage[] = [
+      {
+        id: "assistant-guards",
+        role: "assistant",
+        content: "",
+        createdAt: "2026-06-18T12:00:00.000Z",
+        parts: [nonToolPart, missingToolUseId, nonAgentTool],
+      },
+    ];
 
     const updated = applyClaudeBackgroundTaskStates(messages, {
       missingToolUseId: {
@@ -757,7 +799,8 @@ describe("native message adapters", () => {
 
   test("preserves identity when agent and background-task state are already current", () => {
     const part: ClaudeMessagePart = {
-      type: "tool-invocation", content: "",
+      type: "tool-invocation",
+      content: "",
       toolName: "Task",
       toolUseId: "task-launch",
       toolState: "success",
@@ -787,19 +830,24 @@ describe("native message adapters", () => {
   });
 
   test("never correlates Claude background tasks by description", () => {
-    const messages: ClaudeMessage[] = [{
-      id: "assistant-unmatched-agent",
-      role: "assistant",
-      content: "",
-      createdAt: "2026-06-18T12:00:00.000Z",
-      parts: [{
-        type: "tool-invocation", content: "",
-        toolName: "Task",
-        toolUseId: "different-tool-use",
-        toolState: "success",
-        toolArgs: { description: "Same description" },
-      }],
-    }];
+    const messages: ClaudeMessage[] = [
+      {
+        id: "assistant-unmatched-agent",
+        role: "assistant",
+        content: "",
+        createdAt: "2026-06-18T12:00:00.000Z",
+        parts: [
+          {
+            type: "tool-invocation",
+            content: "",
+            toolName: "Task",
+            toolUseId: "different-tool-use",
+            toolState: "success",
+            toolArgs: { description: "Same description" },
+          },
+        ],
+      },
+    ];
 
     const updated = applyClaudeBackgroundTaskStates(messages, {
       task: {
@@ -823,43 +871,52 @@ describe("native message adapters", () => {
         role: "assistant",
         content: "",
         createdAt: "2026-06-18T12:00:00.000Z",
-        parts: [{
-          type: "tool-invocation", content: "",
-          toolName: "Bash",
-          toolUseId: "bash-launch",
-          toolState: "success",
-          toolArgs: {
-            command: "sleep 300; echo waited",
-            description: "Wait for remaining review thread",
-            run_in_background: true,
+        parts: [
+          {
+            type: "tool-invocation",
+            content: "",
+            toolName: "Bash",
+            toolUseId: "bash-launch",
+            toolState: "success",
+            toolArgs: {
+              command: "sleep 300; echo waited",
+              description: "Wait for remaining review thread",
+              run_in_background: true,
+            },
+            toolOutput:
+              "Command running in background with ID: bg-wait. Output is being written to: /tmp/bg-wait.output.",
           },
-          toolOutput:
-            "Command running in background with ID: bg-wait. Output is being written to: /tmp/bg-wait.output.",
-        }],
+        ],
       },
       {
         id: "assistant-output",
         role: "assistant",
         content: "",
         createdAt: "2026-06-18T12:01:00.000Z",
-        parts: [{
-          type: "tool-invocation", content: "",
-          toolName: "TaskOutput",
-          toolState: "success",
-          toolArgs: { task_id: "bg-wait" },
-        }],
+        parts: [
+          {
+            type: "tool-invocation",
+            content: "",
+            toolName: "TaskOutput",
+            toolState: "success",
+            toolArgs: { task_id: "bg-wait" },
+          },
+        ],
       },
       {
         id: "assistant-stop",
         role: "assistant",
         content: "",
         createdAt: "2026-06-18T12:02:00.000Z",
-        parts: [{
-          type: "tool-invocation", content: "",
-          toolName: "TaskStop",
-          toolState: "success",
-          toolArgs: { task_id: "bg-wait" },
-        }],
+        parts: [
+          {
+            type: "tool-invocation",
+            content: "",
+            toolName: "TaskStop",
+            toolState: "success",
+            toolArgs: { task_id: "bg-wait" },
+          },
+        ],
       },
     ];
 
@@ -882,29 +939,35 @@ describe("native message adapters", () => {
         role: "assistant",
         content: "",
         createdAt: "2026-06-18T12:00:00.000Z",
-        parts: [{
-          type: "tool-invocation", content: "",
-          toolName: "Bash",
-          toolUseId: "bash-launch",
-          toolState: "success",
-          toolArgs: {
-            command: "bun test",
-            description: "Old description",
-            run_in_background: true,
+        parts: [
+          {
+            type: "tool-invocation",
+            content: "",
+            toolName: "Bash",
+            toolUseId: "bash-launch",
+            toolState: "success",
+            toolArgs: {
+              command: "bun test",
+              description: "Old description",
+              run_in_background: true,
+            },
           },
-        }],
+        ],
       },
       {
         id: "assistant-stop",
         role: "assistant",
         content: "",
         createdAt: "2026-06-18T12:01:00.000Z",
-        parts: [{
-          type: "tool-invocation", content: "",
-          toolName: "TaskStop",
-          toolState: "success",
-          toolArgs: { task_id: "bg-suite" },
-        }],
+        parts: [
+          {
+            type: "tool-invocation",
+            content: "",
+            toolName: "TaskStop",
+            toolState: "success",
+            toolArgs: { task_id: "bg-suite" },
+          },
+        ],
       },
     ];
 
@@ -958,29 +1021,35 @@ describe("native message adapters", () => {
           role: "assistant",
           content: "",
           createdAt: "2026-06-18T12:00:00.000Z",
-          parts: [{
-            type: "tool-invocation", content: "",
-            toolName: "Bash",
-            toolState: "success",
-            toolArgs: {
-              command: "sleep 300; echo waited",
-              description: "Wait for remaining review thread",
-              run_in_background: true,
+          parts: [
+            {
+              type: "tool-invocation",
+              content: "",
+              toolName: "Bash",
+              toolState: "success",
+              toolArgs: {
+                command: "sleep 300; echo waited",
+                description: "Wait for remaining review thread",
+                run_in_background: true,
+              },
+              toolOutput,
             },
-            toolOutput,
-          }],
+          ],
         },
         {
           id: "assistant-stop",
           role: "assistant",
           content: "",
           createdAt: "2026-06-18T12:02:00.000Z",
-          parts: [{
-            type: "tool-invocation", content: "",
-            toolName: "TaskStop",
-            toolState: "success",
-            toolArgs: { task_id: "bg-wait" },
-          }],
+          parts: [
+            {
+              type: "tool-invocation",
+              content: "",
+              toolName: "TaskStop",
+              toolState: "success",
+              toolArgs: { task_id: "bg-wait" },
+            },
+          ],
         },
       ];
 
@@ -999,27 +1068,30 @@ describe("native message adapters", () => {
   test.each(["backgroundTaskId", "task_id", "taskId"] as const)(
     "recovers the task id from a structured launch result carrying %s",
     (idField) => {
-      const messages: ClaudeMessage[] = [{
-        id: "assistant-launch",
-        role: "assistant",
-        content: "",
-        createdAt: "2026-06-18T12:00:00.000Z",
-        parts: [{
-          type: "tool-invocation", content: "",
-          toolName: "Bash",
-          toolState: "success",
-          toolArgs: {
-            command: "bun test",
-            description: "Run the full suite",
-            run_in_background: true,
-          },
-          toolOutput: JSON.stringify({ [idField]: "bg-suite" }),
-        }],
-      }];
+      const messages: ClaudeMessage[] = [
+        {
+          id: "assistant-launch",
+          role: "assistant",
+          content: "",
+          createdAt: "2026-06-18T12:00:00.000Z",
+          parts: [
+            {
+              type: "tool-invocation",
+              content: "",
+              toolName: "Bash",
+              toolState: "success",
+              toolArgs: {
+                command: "bun test",
+                description: "Run the full suite",
+                run_in_background: true,
+              },
+              toolOutput: JSON.stringify({ [idField]: "bg-suite" }),
+            },
+          ],
+        },
+      ];
 
-      expect(
-        applyClaudeBackgroundTaskStates(messages, {})[0]?.parts[0]?.backgroundTask,
-      ).toEqual({
+      expect(applyClaudeBackgroundTaskStates(messages, {})[0]?.parts[0]?.backgroundTask).toEqual({
         id: "bg-suite",
         description: "Run the full suite",
         status: undefined,
@@ -1028,32 +1100,35 @@ describe("native message adapters", () => {
   );
 
   test("recovers a launch from projection metadata after heavy output is deferred", () => {
-    const messages: ClaudeMessage[] = [{
-      id: "assistant-launch",
-      role: "assistant",
-      content: "",
-      createdAt: "2026-06-18T12:00:00.000Z",
-      parts: [{
-        type: "tool-invocation",
+    const messages: ClaudeMessage[] = [
+      {
+        id: "assistant-launch",
+        role: "assistant",
         content: "",
-        toolName: "Bash",
-        toolState: "success",
-        toolArgs: {
-          command: "bun test",
-          description: "Run the full suite",
-          run_in_background: true,
-        },
-        backgroundTaskId: "bg-suite",
-        detailRef: "deferred-output",
-      }],
-    }];
+        createdAt: "2026-06-18T12:00:00.000Z",
+        parts: [
+          {
+            type: "tool-invocation",
+            content: "",
+            toolName: "Bash",
+            toolState: "success",
+            toolArgs: {
+              command: "bun test",
+              description: "Run the full suite",
+              run_in_background: true,
+            },
+            backgroundTaskId: "bg-suite",
+            detailRef: "deferred-output",
+          },
+        ],
+      },
+    ];
 
-    expect(applyClaudeBackgroundTaskStates(messages, {})[0]?.parts[0]?.backgroundTask)
-      .toEqual({
-        id: "bg-suite",
-        description: "Run the full suite",
-        status: undefined,
-      });
+    expect(applyClaudeBackgroundTaskStates(messages, {})[0]?.parts[0]?.backgroundTask).toEqual({
+      id: "bg-suite",
+      description: "Run the full suite",
+      status: undefined,
+    });
   });
 
   test("reapplying the same lifecycle leaves every message and part identical", () => {
@@ -1063,29 +1138,35 @@ describe("native message adapters", () => {
         role: "assistant",
         content: "",
         createdAt: "2026-06-18T12:00:00.000Z",
-        parts: [{
-          type: "tool-invocation", content: "",
-          toolName: "Bash",
-          toolUseId: "bash-launch",
-          toolState: "success",
-          toolArgs: {
-            command: "bun test",
-            description: "Run the full suite",
-            run_in_background: true,
+        parts: [
+          {
+            type: "tool-invocation",
+            content: "",
+            toolName: "Bash",
+            toolUseId: "bash-launch",
+            toolState: "success",
+            toolArgs: {
+              command: "bun test",
+              description: "Run the full suite",
+              run_in_background: true,
+            },
           },
-        }],
+        ],
       },
       {
         id: "assistant-stop",
         role: "assistant",
         content: "",
         createdAt: "2026-06-18T12:01:00.000Z",
-        parts: [{
-          type: "tool-invocation", content: "",
-          toolName: "TaskStop",
-          toolState: "success",
-          toolArgs: { task_id: "bg-suite" },
-        }],
+        parts: [
+          {
+            type: "tool-invocation",
+            content: "",
+            toolName: "TaskStop",
+            toolState: "success",
+            toolArgs: { task_id: "bg-suite" },
+          },
+        ],
       },
     ];
     const tasks = {
@@ -1110,41 +1191,46 @@ describe("native message adapters", () => {
   });
 
   test("leaves a transcript untouched when there is no background work to join", () => {
-    const messages: ClaudeMessage[] = [{
-      id: "assistant-plain",
-      role: "assistant",
-      content: "",
-      createdAt: "2026-06-18T12:00:00.000Z",
-      parts: [
-        {
-          type: "tool-invocation", content: "",
-          toolName: "Bash",
-          toolUseId: "bash-foreground",
-          toolState: "success",
-          toolArgs: { command: "bun test", description: "Run the full suite" },
-        },
-        {
-          // A launch whose id was never persisted stays undecorated rather
-          // than inventing an identity from the description.
-          type: "tool-invocation", content: "",
-          toolName: "Bash",
-          toolState: "success",
-          toolArgs: {
-            command: "sleep 300",
-            description: "Wait a while",
-            run_in_background: true,
+    const messages: ClaudeMessage[] = [
+      {
+        id: "assistant-plain",
+        role: "assistant",
+        content: "",
+        createdAt: "2026-06-18T12:00:00.000Z",
+        parts: [
+          {
+            type: "tool-invocation",
+            content: "",
+            toolName: "Bash",
+            toolUseId: "bash-foreground",
+            toolState: "success",
+            toolArgs: { command: "bun test", description: "Run the full suite" },
           },
-          toolOutput: "Command completed with no id in the result.",
-        },
-        {
-          // A stop for a task with no launch and no snapshot behind it.
-          type: "tool-invocation", content: "",
-          toolName: "TaskStop",
-          toolState: "success",
-          toolArgs: { task_id: "bg-unknown" },
-        },
-      ],
-    }];
+          {
+            // A launch whose id was never persisted stays undecorated rather
+            // than inventing an identity from the description.
+            type: "tool-invocation",
+            content: "",
+            toolName: "Bash",
+            toolState: "success",
+            toolArgs: {
+              command: "sleep 300",
+              description: "Wait a while",
+              run_in_background: true,
+            },
+            toolOutput: "Command completed with no id in the result.",
+          },
+          {
+            // A stop for a task with no launch and no snapshot behind it.
+            type: "tool-invocation",
+            content: "",
+            toolName: "TaskStop",
+            toolState: "success",
+            toolArgs: { task_id: "bg-unknown" },
+          },
+        ],
+      },
+    ];
 
     expect(applyClaudeBackgroundTaskStates(messages, {})).toBe(messages);
   });
@@ -1156,29 +1242,35 @@ describe("native message adapters", () => {
         role: "assistant",
         content: "",
         createdAt: "2026-06-18T12:00:00.000Z",
-        parts: [{
-          type: "tool-invocation", content: "",
-          toolName: "Bash",
-          toolState: "success",
-          toolArgs: {
-            command: "bun test",
-            description: "Run the full suite",
-            run_in_background: true,
+        parts: [
+          {
+            type: "tool-invocation",
+            content: "",
+            toolName: "Bash",
+            toolState: "success",
+            toolArgs: {
+              command: "bun test",
+              description: "Run the full suite",
+              run_in_background: true,
+            },
+            toolOutput: "Command running in background with ID: bg-suite.",
           },
-          toolOutput: "Command running in background with ID: bg-suite.",
-        }],
+        ],
       },
       {
         id: "assistant-stop",
         role: "assistant",
         content: "",
         createdAt: "2026-06-18T12:01:00.000Z",
-        parts: [{
-          type: "tool-invocation", content: "",
-          toolName: "TaskStop",
-          toolState: "success",
-          toolArgs: { task_id: "bg-other" },
-        }],
+        parts: [
+          {
+            type: "tool-invocation",
+            content: "",
+            toolName: "TaskStop",
+            toolState: "success",
+            toolArgs: { task_id: "bg-other" },
+          },
+        ],
       },
     ];
 
@@ -1199,55 +1291,62 @@ describe("native message adapters", () => {
     ["task_stop", "task_id"],
     [" TaskOutput ", "taskId"],
     ["task_output", "task_id"],
-  ] as const)(
-    "joins a %s row addressed by %s",
-    (toolName, idKey) => {
-      const messages: ClaudeMessage[] = [{
+  ] as const)("joins a %s row addressed by %s", (toolName, idKey) => {
+    const messages: ClaudeMessage[] = [
+      {
         id: "assistant-action",
         role: "assistant",
         content: "",
         createdAt: "2026-06-18T12:01:00.000Z",
-        parts: [{
-          type: "tool-invocation", content: "",
-          toolName,
-          toolState: "success",
-          toolArgs: { [idKey]: "bg-suite" },
-        }],
-      }];
+        parts: [
+          {
+            type: "tool-invocation",
+            content: "",
+            toolName,
+            toolState: "success",
+            toolArgs: { [idKey]: "bg-suite" },
+          },
+        ],
+      },
+    ];
 
-      const updated = applyClaudeBackgroundTaskStates(messages, {
-        "bg-suite": {
-          id: "bg-suite",
-          description: "Run the full suite",
-          status: "running",
-        },
-      });
-
-      expect(updated[0]?.parts[0]?.backgroundTask).toEqual({
+    const updated = applyClaudeBackgroundTaskStates(messages, {
+      "bg-suite": {
         id: "bg-suite",
         description: "Run the full suite",
         status: "running",
-      });
-    },
-  );
+      },
+    });
+
+    expect(updated[0]?.parts[0]?.backgroundTask).toEqual({
+      id: "bg-suite",
+      description: "Run the full suite",
+      status: "running",
+    });
+  });
 
   test("treats a backgrounded Agent launch as an agent, not a background command", () => {
-    const messages: ClaudeMessage[] = [{
-      id: "assistant-agent-launch",
-      role: "assistant",
-      content: "",
-      createdAt: "2026-06-18T12:00:00.000Z",
-      parts: [{
-        type: "tool-invocation", content: "",
-        toolName: "Agent",
-        toolUseId: "agent-launch",
-        toolState: "success",
-        toolArgs: {
-          description: "Review the diff",
-          run_in_background: true,
-        },
-      }],
-    }];
+    const messages: ClaudeMessage[] = [
+      {
+        id: "assistant-agent-launch",
+        role: "assistant",
+        content: "",
+        createdAt: "2026-06-18T12:00:00.000Z",
+        parts: [
+          {
+            type: "tool-invocation",
+            content: "",
+            toolName: "Agent",
+            toolUseId: "agent-launch",
+            toolState: "success",
+            toolArgs: {
+              description: "Review the diff",
+              run_in_background: true,
+            },
+          },
+        ],
+      },
+    ];
 
     const updated = applyClaudeBackgroundTaskStates(messages, {
       "child-task": {
@@ -1266,9 +1365,7 @@ describe("native message adapters", () => {
     });
     const [normalized] = normalizeNativeMessages(updated);
     expect(normalized?.parts[0]?.type).toBe("task-group");
-    expect(collectRenderedBackgroundTaskIds([normalized!])).toEqual(
-      new Set(["child-task"]),
-    );
+    expect(collectRenderedBackgroundTaskIds([normalized!])).toEqual(new Set(["child-task"]));
   });
 
   test("preserves model attribution through provider-neutral normalization", () => {
@@ -1312,8 +1409,11 @@ describe("native message adapters", () => {
     });
 
     expect(normalized.modelId).toBe("claude-opus-5");
-    expect(splitClaudeAssistantTextBlocks(normalized).map((row) => row.modelId))
-      .toEqual(["claude-opus-5", "claude-opus-5", "claude-opus-5"]);
+    expect(splitClaudeAssistantTextBlocks(normalized).map((row) => row.modelId)).toEqual([
+      "claude-opus-5",
+      "claude-opus-5",
+      "claude-opus-5",
+    ]);
   });
 
   test("groups consecutive native tool activity into a tool group", () => {
@@ -1332,17 +1432,10 @@ describe("native message adapters", () => {
 
     const normalized = normalizeOpenCodeNativeMessage(message);
 
-    expect(normalized.parts.map((part) => part.type)).toEqual([
-      "text",
-      "tool-group",
-      "text",
-    ]);
+    expect(normalized.parts.map((part) => part.type)).toEqual(["text", "tool-group", "text"]);
     expect(normalized.parts[1]?.type).toBe("tool-group");
     if (normalized.parts[1]?.type === "tool-group") {
-      expect(normalized.parts[1].parts.map((part) => part.toolName)).toEqual([
-        "Read",
-        "Grep",
-      ]);
+      expect(normalized.parts[1].parts.map((part) => part.toolName)).toEqual(["Read", "Grep"]);
     }
   });
 
@@ -1361,10 +1454,7 @@ describe("native message adapters", () => {
 
     const normalized = normalizeOpenCodeNativeMessage(message);
 
-    expect(normalized.parts.map((part) => part.type)).toEqual([
-      "tool-group",
-      "text",
-    ]);
+    expect(normalized.parts.map((part) => part.type)).toEqual(["tool-group", "text"]);
     expect(normalized.parts[0]?.type).toBe("tool-group");
     if (normalized.parts[0]?.type === "tool-group") {
       expect(normalized.parts[0].parts.map((part) => part.type)).toEqual([
@@ -1400,9 +1490,9 @@ describe("native message adapters", () => {
       ],
     };
 
-    expect(
-      normalizeOpenCodeNativeMessage(message).parts.map((part) => part.type),
-    ).toEqual(["text"]);
+    expect(normalizeOpenCodeNativeMessage(message).parts.map((part) => part.type)).toEqual([
+      "text",
+    ]);
   });
 
   test("drops empty Claude reasoning parts during normalization", () => {
@@ -1417,9 +1507,7 @@ describe("native message adapters", () => {
       ],
     } as ClaudeMessage;
 
-    expect(
-      normalizeClaudeMessage(message).parts.map((part) => part.type),
-    ).toEqual(["text"]);
+    expect(normalizeClaudeMessage(message).parts.map((part) => part.type)).toEqual(["text"]);
   });
 
   test("collapses adjacent streamed text and thinking prefixes", () => {
@@ -1439,10 +1527,7 @@ describe("native message adapters", () => {
 
     const normalized = normalizeOpenCodeNativeMessage(message);
 
-    expect(normalized.parts.map((part) => part.type)).toEqual([
-      "tool-group",
-      "text",
-    ]);
+    expect(normalized.parts.map((part) => part.type)).toEqual(["tool-group", "text"]);
     expect(normalized.parts[0]?.type).toBe("tool-group");
     if (normalized.parts[0]?.type === "tool-group") {
       expect(normalized.parts[0].parts).toEqual([
@@ -1620,12 +1705,14 @@ describe("native message adapters", () => {
       role: "assistant",
       content: "",
       createdAt: "2026-06-18T12:02:30.000Z",
-      parts: [{
-        type: "tool-result",
-        toolName: "Read",
-        content: "raw provider result",
-        toolState: "success",
-      }],
+      parts: [
+        {
+          type: "tool-result",
+          toolName: "Read",
+          content: "raw provider result",
+          toolState: "success",
+        },
+      ],
     };
 
     expect(normalizeClaudeMessage(message).parts).toEqual([]);
@@ -1687,7 +1774,8 @@ describe("native message adapters", () => {
           parentTaskUseId: "agent-activity-1",
         },
         {
-          type: "tool-invocation", content: "Edit",
+          type: "tool-invocation",
+          content: "Edit",
           parentTaskUseId: "agent-activity-1",
         },
       ]);
@@ -1782,9 +1870,7 @@ describe("native message adapters", () => {
 
     // No task-group should be created; the parts stay as plain grouped tools.
     const taskGroupTypes = normalized.parts.flatMap((part) =>
-      part.type === "tool-group"
-        ? part.parts.map((child) => child.type)
-        : [part.type],
+      part.type === "tool-group" ? part.parts.map((child) => child.type) : [part.type],
     );
     expect(taskGroupTypes).not.toContain("task-group");
   });
@@ -1803,10 +1889,7 @@ describe("native message adapters", () => {
 
     const normalized = normalizeCodexNativeMessage(message);
 
-    expect(normalized.parts.map((part) => part.type)).toEqual([
-      "subagent",
-      "tool-group",
-    ]);
+    expect(normalized.parts.map((part) => part.type)).toEqual(["subagent", "tool-group"]);
     expect(normalized.parts[0]?.type).toBe("subagent");
     expect(normalized.parts[1]?.type).toBe("tool-group");
     if (normalized.parts[1]?.type === "tool-group") {
@@ -1831,11 +1914,7 @@ describe("native message adapters", () => {
 
     const normalized = normalizeCodexNativeMessage(message);
 
-    expect(normalized.parts.map((part) => part.type)).toEqual([
-      "text",
-      "agent-group",
-      "text",
-    ]);
+    expect(normalized.parts.map((part) => part.type)).toEqual(["text", "agent-group", "text"]);
     expect(normalized.parts[1]?.type).toBe("agent-group");
     if (normalized.parts[1]?.type === "agent-group") {
       expect(normalized.parts[1].parts.map((part) => part.subagentId)).toEqual([
@@ -1861,11 +1940,7 @@ describe("native message adapters", () => {
 
     const normalized = normalizeCodexNativeMessage(message);
 
-    expect(normalized.parts.map((part) => part.type)).toEqual([
-      "subagent",
-      "text",
-      "subagent",
-    ]);
+    expect(normalized.parts.map((part) => part.type)).toEqual(["subagent", "text", "subagent"]);
   });
 
   test("parses multiple attachment blocks and ignores malformed attachment entries", () => {
@@ -1952,12 +2027,14 @@ describe("native message adapters", () => {
 
     const normalized = normalizeNativeMessage(message);
 
-    expect(normalized.parts.filter((part) => part.type === "file")).toEqual([{
-      type: "file",
-      content: "/workspace/generated-a.png",
-      fileUrl: "/workspace/generated-a.png",
-      filename: "original-a.png",
-    }]);
+    expect(normalized.parts.filter((part) => part.type === "file")).toEqual([
+      {
+        type: "file",
+        content: "/workspace/generated-a.png",
+        fileUrl: "/workspace/generated-a.png",
+        filename: "original-a.png",
+      },
+    ]);
   });
 
   test("decodes numeric attribute entities and leaves undecodable ones verbatim", () => {
@@ -2012,12 +2089,14 @@ describe("native message adapters", () => {
     // One part, not two: comparing the raw fields would have missed that these
     // are the same file. The XML copy sits earlier in the message, so it is the
     // one kept.
-    expect(normalized.parts.filter((part) => part.type === "file")).toEqual([{
-      type: "file",
-      content: "/workspace/staged a.png",
-      fileUrl: "/workspace/staged a.png",
-      filename: "original-a.png",
-    }]);
+    expect(normalized.parts.filter((part) => part.type === "file")).toEqual([
+      {
+        type: "file",
+        content: "/workspace/staged a.png",
+        fileUrl: "/workspace/staged a.png",
+        filename: "original-a.png",
+      },
+    ]);
   });
 
   test("fills in a file URL the structured copy was missing", () => {
@@ -2039,21 +2118,23 @@ describe("native message adapters", () => {
     const normalized = normalizeNativeMessage(message);
 
     // Without the merged URL the kept copy would never render as an image.
-    expect(normalized.parts.filter((part) => part.type === "file")).toEqual([{
-      type: "file",
-      content: "/workspace/a.png",
-      fileUrl: "/workspace/a.png",
-      filename: "a.png",
-    }]);
+    expect(normalized.parts.filter((part) => part.type === "file")).toEqual([
+      {
+        type: "file",
+        content: "/workspace/a.png",
+        fileUrl: "/workspace/a.png",
+        filename: "a.png",
+      },
+    ]);
   });
 
   test("keeps two attachments that only share a filename apart", () => {
     const rawContent = [
       "Compare",
-      "<attached-files>"
-      + '<attachment type="image" path="/workspace/one/shot.png" filename="shot.png" />'
-      + '<attachment type="image" path="/workspace/two/shot.png" filename="shot.png" />'
-      + "</attached-files>",
+      "<attached-files>" +
+        '<attachment type="image" path="/workspace/one/shot.png" filename="shot.png" />' +
+        '<attachment type="image" path="/workspace/two/shot.png" filename="shot.png" />' +
+        "</attached-files>",
     ].join("\n");
     const message: NativeMessage = {
       id: "native-same-filename",
@@ -2066,15 +2147,12 @@ describe("native message adapters", () => {
     const normalized = normalizeNativeMessage(message);
 
     expect(
-      normalized.parts
-        .filter((part) => part.type === "file")
-        .map((part) => part.content),
+      normalized.parts.filter((part) => part.type === "file").map((part) => part.content),
     ).toEqual(["/workspace/one/shot.png", "/workspace/two/shot.png"]);
   });
 
   test("leaves malformed attachment blocks in message text", () => {
-    const content =
-      'Keep this <attached-files><attachment type="image" path="/workspace/a.png" />';
+    const content = 'Keep this <attached-files><attachment type="image" path="/workspace/a.png" />';
 
     expect(parseNativeAttachmentsFromContent(content)).toEqual({
       cleanContent: content,
@@ -2088,13 +2166,15 @@ describe("native message adapters", () => {
       { type: "thinking", content: "Reason", sourcePartId: "thinking-id" },
       { type: "file", content: "/workspace/a.txt" },
       {
-        type: "tool-invocation", content: "Read",
+        type: "tool-invocation",
+        content: "Read",
         toolName: "Read",
         toolUseId: "tool-1",
         toolState: "pending",
       },
       {
-        type: "tool-result", content: "contents",
+        type: "tool-result",
+        content: "contents",
         toolName: "Read",
         toolState: "success",
         toolOutput: "contents",
@@ -2106,19 +2186,19 @@ describe("native message adapters", () => {
       { type: "thinking", content: "Reason", sourcePartId: "thinking-id" },
       { type: "file", content: "/workspace/a.txt" },
       expect.objectContaining({
-        type: "tool-invocation", content: "Read",
+        type: "tool-invocation",
+        content: "Read",
         toolName: "Read",
         toolUseId: "tool-1",
         toolState: "pending",
       }),
       expect.objectContaining({
-        type: "tool-result", content: "contents",
+        type: "tool-result",
+        content: "contents",
         toolOutput: "contents",
       }),
     ]);
-    expect(
-      normalizeClaudePart({ type: "unknown" } as unknown as ClaudeMessagePart),
-    ).toBeNull();
+    expect(normalizeClaudePart({ type: "unknown" } as unknown as ClaudeMessagePart)).toBeNull();
   });
 
   test("deduplicates only adjacent non-empty streamed prefixes", () => {
@@ -2152,11 +2232,7 @@ describe("native message adapters", () => {
       { type: "tool-invocation", content: "Read", toolName: "Read" },
     ]);
 
-    expect(grouped.map((part) => part.type)).toEqual([
-      "tool-group",
-      "subagent",
-      "tool-group",
-    ]);
+    expect(grouped.map((part) => part.type)).toEqual(["tool-group", "subagent", "tool-group"]);
     expect(groupNativeToolActivity(grouped)).toEqual(grouped);
   });
 
@@ -2193,7 +2269,8 @@ describe("native message adapters", () => {
     // The whole task-list feature is invisible if this one field is dropped in
     // translation, and nothing else in the pipeline would fail.
     const part: ClaudeMessagePart = {
-      type: "tool-invocation", content: "",
+      type: "tool-invocation",
+      content: "",
       toolName: "TaskUpdate",
       toolState: "success",
       toolArgs: { taskId: "2", status: "in_progress" },
@@ -2216,7 +2293,8 @@ describe("native message adapters", () => {
 
   test("leaves the task snapshot absent when the backend supplied none", () => {
     const normalized = normalizeClaudePart({
-      type: "tool-invocation", content: "",
+      type: "tool-invocation",
+      content: "",
       toolName: "TaskCreate",
       toolState: "success",
       toolArgs: { subject: "No snapshot" },
@@ -2263,7 +2341,8 @@ describe("native message adapters", () => {
             createdAt: "2026-06-18T12:00:00.000Z",
           },
           {
-            type: "tool-invocation", content: "Read",
+            type: "tool-invocation",
+            content: "Read",
             toolName: "Read",
             createdAt: "2026-06-18T12:00:20.000Z",
           },
@@ -2273,7 +2352,8 @@ describe("native message adapters", () => {
             createdAt: "2026-06-18T12:01:00.000Z",
           },
           {
-            type: "tool-invocation", content: "Bash",
+            type: "tool-invocation",
+            content: "Bash",
             toolName: "Bash",
             createdAt: "2026-06-18T12:01:10.000Z",
           },
@@ -2288,12 +2368,14 @@ describe("native message adapters", () => {
 
     const displayMessages = normalizeClaudeMessagesForDisplay(messages);
 
-    expect(displayMessages.map((message) => ({
-      id: message.id,
-      content: message.content,
-      createdAt: message.createdAt,
-      partTypes: message.parts.map((part) => part.type),
-    }))).toEqual([
+    expect(
+      displayMessages.map((message) => ({
+        id: message.id,
+        content: message.content,
+        createdAt: message.createdAt,
+        partTypes: message.parts.map((part) => part.type),
+      })),
+    ).toEqual([
       {
         id: "assistant-fast",
         content: "First",
@@ -2354,7 +2436,8 @@ describe("native message adapters", () => {
         parts: [
           ...baseMessage.parts,
           {
-            type: "tool-invocation", content: "Read",
+            type: "tool-invocation",
+            content: "Read",
             toolName: "Read",
             createdAt: toolTimestamp,
           },
@@ -2403,10 +2486,12 @@ describe("native message adapters", () => {
     ]);
 
     expect(displayMessages).toHaveLength(3);
-    expect(displayMessages.map((message) => ({
-      content: message.content,
-      partTypes: message.parts.map((part) => part.type),
-    }))).toEqual([
+    expect(
+      displayMessages.map((message) => ({
+        content: message.content,
+        partTypes: message.parts.map((part) => part.type),
+      })),
+    ).toEqual([
       {
         content: "First",
         partTypes: ["text"],
@@ -2435,7 +2520,8 @@ describe("native message adapters", () => {
             content: "First",
           },
           {
-            type: "tool-invocation", content: "Read",
+            type: "tool-invocation",
+            content: "Read",
             toolName: "Read",
           },
           {
@@ -2446,11 +2532,13 @@ describe("native message adapters", () => {
       },
     ]);
 
-    expect(displayMessages.map((message) => ({
-      id: message.id,
-      content: message.content,
-      partTypes: message.parts.map((part) => part.type),
-    }))).toEqual([
+    expect(
+      displayMessages.map((message) => ({
+        id: message.id,
+        content: message.content,
+        partTypes: message.parts.map((part) => part.type),
+      })),
+    ).toEqual([
       {
         id: "assistant-unusable-timestamp",
         content: "First",
@@ -2483,7 +2571,8 @@ describe("native message adapters", () => {
             createdAt: "2026-06-18T12:00:00.000Z",
           },
           {
-            type: "tool-invocation", content: "Read",
+            type: "tool-invocation",
+            content: "Read",
             toolName: "Read",
             createdAt: "2026-06-18T12:01:00.000Z",
           },
@@ -2493,7 +2582,8 @@ describe("native message adapters", () => {
             createdAt: "2026-06-18T12:02:01.000Z",
           },
           {
-            type: "tool-invocation", content: "Bash",
+            type: "tool-invocation",
+            content: "Bash",
             toolName: "Bash",
             createdAt: "2026-06-18T12:03:00.000Z",
           },
@@ -2506,11 +2596,13 @@ describe("native message adapters", () => {
       },
     ]);
 
-    expect(displayMessages.map((message) => ({
-      id: message.id,
-      content: message.content,
-      createdAt: message.createdAt,
-    }))).toEqual([
+    expect(
+      displayMessages.map((message) => ({
+        id: message.id,
+        content: message.content,
+        createdAt: message.createdAt,
+      })),
+    ).toEqual([
       {
         id: "assistant-three-rows",
         content: "First",
@@ -2618,12 +2710,14 @@ describe("native message adapters", () => {
     };
 
     const rows = normalizeNativeMessages([message]);
-    expect(rows.map((row) => ({
-      id: row.id,
-      content: row.content,
-      createdAt: row.createdAt,
-      partTypes: row.parts.map((part) => part.type),
-    }))).toEqual([
+    expect(
+      rows.map((row) => ({
+        id: row.id,
+        content: row.content,
+        createdAt: row.createdAt,
+        partTypes: row.parts.map((part) => part.type),
+      })),
+    ).toEqual([
       {
         id: "codex-1",
         content: "Before",
@@ -2649,85 +2743,97 @@ describe("native message adapters", () => {
     // A task group's own clock is the launch; its child tools carry the work.
     // Reading only the top-level part would date the section at the launch and
     // report a long agent run as instantaneous.
-    const rows = normalizeNativeMessages([{
-      id: "codex-2",
-      role: "assistant",
-      content: "",
-      createdAt: "2026-06-18T12:00:00.000Z",
-      parts: [{
-        type: "task-group",
+    const rows = normalizeNativeMessages([
+      {
+        id: "codex-2",
+        role: "assistant",
         content: "",
-        task: {
-          type: "tool-invocation",
-          content: "Explore",
-          toolName: "Task",
-          createdAt: "2026-06-18T12:00:10.000Z",
-        },
-        childTools: [
+        createdAt: "2026-06-18T12:00:00.000Z",
+        parts: [
           {
-            type: "tool-invocation",
-            content: "Read",
-            toolName: "Read",
-            createdAt: "2026-06-18T12:02:00.000Z",
-          },
-          {
-            type: "tool-invocation",
-            content: "Grep",
-            toolName: "Grep",
-            createdAt: "2026-06-18T12:05:30.000Z",
+            type: "task-group",
+            content: "",
+            task: {
+              type: "tool-invocation",
+              content: "Explore",
+              toolName: "Task",
+              createdAt: "2026-06-18T12:00:10.000Z",
+            },
+            childTools: [
+              {
+                type: "tool-invocation",
+                content: "Read",
+                toolName: "Read",
+                createdAt: "2026-06-18T12:02:00.000Z",
+              },
+              {
+                type: "tool-invocation",
+                content: "Grep",
+                toolName: "Grep",
+                createdAt: "2026-06-18T12:05:30.000Z",
+              },
+            ],
           },
         ],
-      }],
-    }]);
+      },
+    ]);
 
     expect(rows).toHaveLength(1);
     expect(rows[0]?.createdAt).toBe("2026-06-18T12:05:30.000Z");
   });
 
   test("stamps a section from the newest timestamp nested in a tool group", () => {
-    const rows = normalizeNativeMessages([{
-      id: "codex-3",
-      role: "assistant",
-      content: "",
-      createdAt: "2026-06-18T12:00:00.000Z",
-      parts: [{
-        type: "tool-group",
+    const rows = normalizeNativeMessages([
+      {
+        id: "codex-3",
+        role: "assistant",
         content: "",
+        createdAt: "2026-06-18T12:00:00.000Z",
         parts: [
           {
-            type: "tool-invocation",
-            content: "Read",
-            toolName: "Read",
-            createdAt: "2026-06-18T12:01:00.000Z",
-          },
-          {
-            type: "tool-invocation",
-            content: "Grep",
-            toolName: "Grep",
-            createdAt: "2026-06-18T12:03:00.000Z",
+            type: "tool-group",
+            content: "",
+            parts: [
+              {
+                type: "tool-invocation",
+                content: "Read",
+                toolName: "Read",
+                createdAt: "2026-06-18T12:01:00.000Z",
+              },
+              {
+                type: "tool-invocation",
+                content: "Grep",
+                toolName: "Grep",
+                createdAt: "2026-06-18T12:03:00.000Z",
+              },
+            ],
           },
         ],
-      }],
-    }]);
+      },
+    ]);
 
     expect(rows).toHaveLength(1);
     expect(rows[0]?.createdAt).toBe("2026-06-18T12:03:00.000Z");
   });
 
   test("keeps the message clock when no part carries a usable timestamp", () => {
-    const rows = normalizeNativeMessages([{
-      id: "codex-4",
-      role: "assistant",
-      content: "no clocks",
-      createdAt: "2026-06-18T12:00:00.000Z",
-      parts: [
-        { type: "text", content: "no clocks" },
-        { type: "tool-invocation", content: "Read", toolName: "Read", createdAt: "not-a-date" },
-      ],
-    }]);
+    const rows = normalizeNativeMessages([
+      {
+        id: "codex-4",
+        role: "assistant",
+        content: "no clocks",
+        createdAt: "2026-06-18T12:00:00.000Z",
+        parts: [
+          { type: "text", content: "no clocks" },
+          { type: "tool-invocation", content: "Read", toolName: "Read", createdAt: "not-a-date" },
+        ],
+      },
+    ]);
 
-    expect(rows.map((row) => row.createdAt))
-      .toEqual(["2026-06-18T12:00:00.000Z", "2026-06-18T12:00:00.000Z"]);
+    expect(rows.map((row) => row.createdAt)).toEqual([
+      "2026-06-18T12:00:00.000Z",
+      "2026-06-18T12:00:00.000Z",
+    ]);
   });
 });
 
@@ -2756,7 +2862,8 @@ describe("getClaudeSourceMessageId", () => {
           createdAt: "2026-06-18T12:00:00.000Z",
         },
         {
-          type: "tool-invocation", content: "Bash",
+          type: "tool-invocation",
+          content: "Bash",
           createdAt: "2026-06-18T12:01:00.000Z",
         },
         {
@@ -2774,9 +2881,7 @@ describe("getClaudeSourceMessageId", () => {
   });
 
   test("truncates at the first marker so a nested split cannot leak through", () => {
-    expect(getClaudeSourceMessageId("msg-1:text-block:2:text-block:5")).toBe(
-      "msg-1",
-    );
+    expect(getClaudeSourceMessageId("msg-1:text-block:2:text-block:5")).toBe("msg-1");
   });
 });
 
@@ -2805,11 +2910,7 @@ describe("normalization identity cache", () => {
     // must be shared too.
     expect(third).toBe(first);
     // Normalized content is still correct.
-    expect(first.parts.map((part) => part.type)).toEqual([
-      "text",
-      "tool-group",
-      "text",
-    ]);
+    expect(first.parts.map((part) => part.type)).toEqual(["text", "tool-group", "text"]);
   });
 
   test("returns a new normalized object when the source message object changes", () => {
@@ -2825,12 +2926,7 @@ describe("normalization identity cache", () => {
     const second = normalizeCodexNativeMessage(updated);
 
     expect(second).not.toBe(first);
-    expect(second.parts.map((part) => part.type)).toEqual([
-      "text",
-      "tool-group",
-      "text",
-      "text",
-    ]);
+    expect(second.parts.map((part) => part.type)).toEqual(["text", "tool-group", "text", "text"]);
     expect(second.parts.at(-1)?.content).toBe("More");
   });
 
@@ -2840,14 +2936,10 @@ describe("normalization identity cache", () => {
       role: "assistant",
       content: "Hello",
       createdAt: "2026-06-18T12:00:00.000Z",
-      parts: [
-        { type: "text", content: "Hello", createdAt: "2026-06-18T12:00:00.000Z" },
-      ],
+      parts: [{ type: "text", content: "Hello", createdAt: "2026-06-18T12:00:00.000Z" }],
     };
 
-    expect(normalizeClaudeMessage(claudeMessage)).toBe(
-      normalizeClaudeMessage(claudeMessage),
-    );
+    expect(normalizeClaudeMessage(claudeMessage)).toBe(normalizeClaudeMessage(claudeMessage));
 
     const [firstRows, secondRows] = [
       normalizeClaudeMessagesForDisplay([claudeMessage]),
@@ -2858,10 +2950,7 @@ describe("normalization identity cache", () => {
 });
 
 describe("messageHasVisibleContent", () => {
-  const makeMessage = (
-    parts: NativeMessage["parts"],
-    content = "",
-  ): NativeMessage => ({
+  const makeMessage = (parts: NativeMessage["parts"], content = ""): NativeMessage => ({
     id: "native-content-1",
     role: "assistant",
     content,
@@ -2884,47 +2973,31 @@ describe("messageHasVisibleContent", () => {
   });
 
   test("treats non-empty text and thinking parts as visible", () => {
+    expect(messageHasVisibleContent(makeMessage([{ type: "text", content: "Answer" }]))).toBe(true);
     expect(
-      messageHasVisibleContent(
-        makeMessage([{ type: "text", content: "Answer" }]),
-      ),
-    ).toBe(true);
-    expect(
-      messageHasVisibleContent(
-        makeMessage([{ type: "thinking", content: "Reasoning" }]),
-      ),
+      messageHasVisibleContent(makeMessage([{ type: "thinking", content: "Reasoning" }])),
     ).toBe(true);
   });
 
   test("treats an empty text part as empty until content streams in", () => {
-    expect(
-      messageHasVisibleContent(makeMessage([{ type: "text", content: "" }])),
-    ).toBe(false);
+    expect(messageHasVisibleContent(makeMessage([{ type: "text", content: "" }]))).toBe(false);
   });
 
   test("treats whitespace-only text and thinking parts as empty", () => {
-    expect(
-      messageHasVisibleContent(makeMessage([{ type: "text", content: "   " }])),
-    ).toBe(false);
-    expect(
-      messageHasVisibleContent(
-        makeMessage([{ type: "thinking", content: "\n\t " }]),
-      ),
-    ).toBe(false);
+    expect(messageHasVisibleContent(makeMessage([{ type: "text", content: "   " }]))).toBe(false);
+    expect(messageHasVisibleContent(makeMessage([{ type: "thinking", content: "\n\t " }]))).toBe(
+      false,
+    );
   });
 
   test("treats an empty thinking part as empty", () => {
-    expect(
-      messageHasVisibleContent(makeMessage([{ type: "thinking", content: "" }])),
-    ).toBe(false);
+    expect(messageHasVisibleContent(makeMessage([{ type: "thinking", content: "" }]))).toBe(false);
   });
 
   test("treats a lone tool result as empty since it renders nothing", () => {
-    expect(
-      messageHasVisibleContent(
-        makeMessage([{ type: "tool-result", content: "" }]),
-      ),
-    ).toBe(false);
+    expect(messageHasVisibleContent(makeMessage([{ type: "tool-result", content: "" }]))).toBe(
+      false,
+    );
   });
 
   test("treats a tool result as empty even when it carries output", () => {
@@ -2932,9 +3005,7 @@ describe("messageHasVisibleContent", () => {
     // reaches the transcript on its own — having output changes nothing.
     expect(
       messageHasVisibleContent(
-        makeMessage([
-          { type: "tool-result", content: "exit 0\n42 files changed" },
-        ]),
+        makeMessage([{ type: "tool-result", content: "exit 0\n42 files changed" }]),
       ),
     ).toBe(false);
   });
@@ -2943,14 +3014,10 @@ describe("messageHasVisibleContent", () => {
     // Both group renderers return null at zero children, so classifying them
     // as visible would hang a model label above a row that paints nothing.
     expect(
-      messageHasVisibleContent(
-        makeMessage([{ type: "tool-group", content: "", parts: [] }]),
-      ),
+      messageHasVisibleContent(makeMessage([{ type: "tool-group", content: "", parts: [] }])),
     ).toBe(false);
     expect(
-      messageHasVisibleContent(
-        makeMessage([{ type: "agent-group", content: "", parts: [] }]),
-      ),
+      messageHasVisibleContent(makeMessage([{ type: "agent-group", content: "", parts: [] }])),
     ).toBe(false);
   });
 
@@ -2997,11 +3064,9 @@ describe("messageHasVisibleContent", () => {
         ]),
       ),
     ).toBe(true);
-    expect(
-      messageHasVisibleContent(
-        makeMessage([{ type: "file", content: "/tmp/a.txt" }]),
-      ),
-    ).toBe(true);
+    expect(messageHasVisibleContent(makeMessage([{ type: "file", content: "/tmp/a.txt" }]))).toBe(
+      true,
+    );
     expect(
       messageHasVisibleContent(
         makeMessage([
@@ -3062,11 +3127,7 @@ describe("messageHasVisibleContent", () => {
 });
 
 describe("findPreviousNativeMessage", () => {
-  const assistant = (
-    id: string,
-    parts: NativeMessage["parts"],
-    content = "",
-  ): NativeMessage => ({
+  const assistant = (id: string, parts: NativeMessage["parts"], content = ""): NativeMessage => ({
     id,
     role: "assistant",
     content,
@@ -3096,18 +3157,12 @@ describe("findPreviousNativeMessage", () => {
   });
 
   test("scans back from the end when the index is past the last message", () => {
-    const messages = [
-      user("u"),
-      assistant("content", [{ type: "text", content: "Answer" }]),
-    ];
+    const messages = [user("u"), assistant("content", [{ type: "text", content: "Answer" }])];
     expect(findPreviousNativeMessage(messages, 10)).toBe(messages[1]!);
   });
 
   test("skips holes in a sparse list", () => {
-    const messages = [
-      user("u"),
-      assistant("content", [{ type: "text", content: "Answer" }]),
-    ];
+    const messages = [user("u"), assistant("content", [{ type: "text", content: "Answer" }])];
     // eslint-disable-next-line no-sparse-arrays
     const sparse = [messages[0]!, , messages[1]!] as NativeMessage[];
     expect(findPreviousNativeMessage(sparse, 2)).toBe(messages[0]!);
@@ -3150,10 +3205,7 @@ describe("findPreviousNativeMessage", () => {
   });
 
   test("returns null when only empty assistant messages precede", () => {
-    const messages = [
-      assistant("empty-1", []),
-      assistant("empty-2", []),
-    ];
+    const messages = [assistant("empty-1", []), assistant("empty-2", [])];
     expect(findPreviousNativeMessage(messages, 1)).toBeNull();
   });
 

@@ -83,9 +83,7 @@ describe("container runtime environment wiring", () => {
     expect(dockerfile).toContain(
       "COPY docker/runtime-env.sh /usr/local/bin/orkestrator-runtime-env.sh",
     );
-    expect(dockerfile).toContain(
-      "/usr/local/bin/orkestrator-runtime-env.sh",
-    );
+    expect(dockerfile).toContain("/usr/local/bin/orkestrator-runtime-env.sh");
   });
 
   test("workspace setup captures a whitelisted runtime environment snapshot", () => {
@@ -94,9 +92,7 @@ describe("container runtime environment wiring", () => {
 
     expect(setup).toContain("capture_runtime_env_snapshot");
     expect(setup).toContain("orkestrator_capture_runtime_env");
-    expect(helper).toContain(
-      "for name in PATH BUN_INSTALL CARGO_HOME GOPATH PNPM_HOME",
-    );
+    expect(helper).toContain("for name in PATH BUN_INSTALL CARGO_HOME GOPATH PNPM_HOME");
     expect(helper).not.toContain("env >");
     expect(helper).not.toContain("printenv");
   });
@@ -105,8 +101,8 @@ describe("container runtime environment wiring", () => {
     const setup = read("docker/workspace-setup.sh");
     const entrypoint = read("docker/entrypoint.sh");
 
-    expect(entrypoint).toContain("git config --global --replace-all credential.helper \"\"");
-    expect(setup).toContain("git config --global --replace-all credential.helper \"\"");
+    expect(entrypoint).toContain('git config --global --replace-all credential.helper ""');
+    expect(setup).toContain('git config --global --replace-all credential.helper ""');
     expect(setup).toContain("export GIT_TERMINAL_PROMPT=0");
   });
 
@@ -126,7 +122,10 @@ describe("container runtime environment wiring", () => {
       "cloud-requirements-cache.json",
     ]) {
       expect(entrypoint).toMatch(
-        new RegExp(`^[ \\t]*${allowlistedFile.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*\\\\?$`, "m"),
+        new RegExp(
+          `^[ \\t]*${allowlistedFile.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*\\\\?$`,
+          "m",
+        ),
       );
     }
     for (const allowlistedDirectory of [
@@ -137,7 +136,10 @@ describe("container runtime environment wiring", () => {
       "plugins/cache",
     ]) {
       expect(entrypoint).toMatch(
-        new RegExp(`^[ \\t]*${allowlistedDirectory.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*\\\\?$`, "m"),
+        new RegExp(
+          `^[ \\t]*${allowlistedDirectory.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*\\\\?$`,
+          "m",
+        ),
       );
     }
     expect(entrypoint).toContain("AGENT_COPY_MAX_FILE_BYTES");
@@ -158,7 +160,10 @@ describe("container runtime environment wiring", () => {
       "plugins/.plugin-appserver",
     ]) {
       expect(entrypoint).not.toMatch(
-        new RegExp(`^[ \\t]*${runtimeDirectory.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*\\\\?$`, "m"),
+        new RegExp(
+          `^[ \\t]*${runtimeDirectory.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*\\\\?$`,
+          "m",
+        ),
       );
     }
   });
@@ -211,22 +216,39 @@ describe("container runtime environment wiring", () => {
   test("container startup copies only bounded Claude configuration state", () => {
     const entrypoint = read("docker/entrypoint.sh");
 
-    for (const allowlisted of ["CLAUDE.md", "settings.local.json", "commands", "agents", "ide", "plugins"]) {
+    for (const allowlisted of [
+      "CLAUDE.md",
+      "settings.local.json",
+      "commands",
+      "agents",
+      "ide",
+      "plugins",
+    ]) {
       expect(entrypoint).toMatch(
-        new RegExp(`^[ \\t]*${allowlisted.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*\\\\?$`, "m"),
+        new RegExp(
+          `^[ \\t]*${allowlisted.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*\\\\?$`,
+          "m",
+        ),
       );
     }
     // history.jsonl is the host's rolling prompt history, including pasted
     // content, across every project. The old unbounded top-level file copy swept
     // it into every container; it must never be allowlisted back in.
-    for (const excluded of ["history.jsonl", "daemon.log", "stats-cache.json", "projects", "jobs", "file-history"]) {
+    for (const excluded of [
+      "history.jsonl",
+      "daemon.log",
+      "stats-cache.json",
+      "projects",
+      "jobs",
+      "file-history",
+    ]) {
       expect(entrypoint).not.toMatch(
         new RegExp(`^[ \\t]*${excluded.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*\\\\?$`, "m"),
       );
     }
     // settings.json is rewritten below with the container's bypass-permissions
     // settings, so copying the host copy first was immediately discarded.
-    expect(entrypoint).toContain("cat > \"$HOME/.claude/settings.json\"");
+    expect(entrypoint).toContain('cat > "$HOME/.claude/settings.json"');
     expect(entrypoint).not.toMatch(/^[ \t]*settings\.json[ \t]*\\?$/m);
   });
 
@@ -237,8 +259,8 @@ describe("container runtime environment wiring", () => {
       mkdirSync(join(source, "commands"), { recursive: true });
       mkdirSync(join(source, "projects"), { recursive: true });
       writeFileSync(join(source, "CLAUDE.md"), "global instructions\n");
-      writeFileSync(join(source, "settings.local.json"), "{\"local\":true}\n");
-      writeFileSync(join(source, "history.jsonl"), "{\"display\":\"secret prompt\"}\n");
+      writeFileSync(join(source, "settings.local.json"), '{"local":true}\n');
+      writeFileSync(join(source, "history.jsonl"), '{"display":"secret prompt"}\n');
       writeFileSync(join(source, "daemon.log"), "log\n");
       writeFileSync(join(source, "stats-cache.json"), "{}\n");
       writeFileSync(join(source, "commands", "kept.md"), "kept\n");
@@ -262,7 +284,9 @@ done
 
       expect(result.exitCode).toBe(0);
       expect(readFileSync(join(destination, "CLAUDE.md"), "utf8")).toBe("global instructions\n");
-      expect(readFileSync(join(destination, "settings.local.json"), "utf8")).toBe("{\"local\":true}\n");
+      expect(readFileSync(join(destination, "settings.local.json"), "utf8")).toBe(
+        '{"local":true}\n',
+      );
       expect(readFileSync(join(destination, "commands", "kept.md"), "utf8")).toBe("kept\n");
 
       for (const excluded of ["history.jsonl", "daemon.log", "stats-cache.json", "projects"]) {
@@ -304,7 +328,9 @@ copy_agent_file "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" CLAUDE.md Claude
 
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("Warning: Skipping symlinked Claude directory: commands");
-      expect(result.stdout).toContain("Warning: Skipping Claude file with symlinked destination: CLAUDE.md");
+      expect(result.stdout).toContain(
+        "Warning: Skipping Claude file with symlinked destination: CLAUDE.md",
+      );
       expect(() => statSync(join(destination, "commands", "leaked.txt"))).toThrow();
       expect(readFileSync(plantedTarget, "utf8")).toBe("original\n");
     });
@@ -426,9 +452,7 @@ eval "$block"
           HOME: home,
           PATH: process.env.PATH ?? "/usr/bin:/bin",
           AGENT_TEST_MOUNT: mount,
-          ...(options.envValue === undefined
-            ? {}
-            : { CLAUDE_OAUTH_CREDENTIALS: options.envValue }),
+          ...(options.envValue === undefined ? {} : { CLAUDE_OAUTH_CREDENTIALS: options.envValue }),
         },
       );
 
@@ -522,7 +546,10 @@ eval "$block"
 
     for (const allowlisted of ["auth.json", "account.json", "storage", "snapshot"]) {
       expect(entrypoint).toMatch(
-        new RegExp(`^[ \\t]*${allowlisted.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*\\\\?$`, "m"),
+        new RegExp(
+          `^[ \\t]*${allowlisted.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*\\\\?$`,
+          "m",
+        ),
       );
     }
     for (const excluded of ["opencode.db", "opencode.db-wal", "opencode.db-shm"]) {
@@ -546,7 +573,7 @@ eval "$block"
       mkdirSync(join(source, "plugin"), { recursive: true });
       mkdirSync(join(source, "node_modules", "some-dep"), { recursive: true });
       mkdirSync(destination, { recursive: true });
-      writeFileSync(join(source, "opencode.json"), "{\"config\":true}\n");
+      writeFileSync(join(source, "opencode.json"), '{"config":true}\n');
       writeFileSync(join(source, ".hidden"), "dotfiles are user-authored too\n");
       writeFileSync(join(source, "plugin", "custom.ts"), "export default {}\n");
       writeFileSync(join(source, "node_modules", "some-dep", "binary.node"), "mach-o\n");
@@ -568,14 +595,16 @@ printf 'continued'
 
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("continued");
-      expect(readFileSync(join(destination, "opencode.json"), "utf8")).toBe("{\"config\":true}\n");
+      expect(readFileSync(join(destination, "opencode.json"), "utf8")).toBe('{"config":true}\n');
       // `-mindepth 1` without `-name '.*'` handling would silently drop dotfiles.
-      expect(readFileSync(join(destination, ".hidden"), "utf8"))
-        .toBe("dotfiles are user-authored too\n");
+      expect(readFileSync(join(destination, ".hidden"), "utf8")).toBe(
+        "dotfiles are user-authored too\n",
+      );
       // A second start must merge into the existing directory, not nest a copy
       // inside it or fail outright.
-      expect(readFileSync(join(destination, "plugin", "custom.ts"), "utf8"))
-        .toBe("export default {}\n");
+      expect(readFileSync(join(destination, "plugin", "custom.ts"), "utf8")).toBe(
+        "export default {}\n",
+      );
       expect(() => statSync(join(destination, "plugin", "plugin"))).toThrow();
       // Mach-O dependencies from a macOS host cannot run in the Linux container.
       expect(() => statSync(join(destination, "node_modules"))).toThrow();
@@ -589,8 +618,8 @@ printf 'continued'
       mkdirSync(join(source, "storage"), { recursive: true });
       mkdirSync(join(source, "snapshot"), { recursive: true });
       mkdirSync(join(source, "log"), { recursive: true });
-      writeFileSync(join(source, "auth.json"), "{\"token\":\"opencode\"}\n", { mode: 0o600 });
-      writeFileSync(join(source, "account.json"), "{\"account\":\"test\"}\n");
+      writeFileSync(join(source, "auth.json"), '{"token":"opencode"}\n', { mode: 0o600 });
+      writeFileSync(join(source, "account.json"), '{"account":"test"}\n');
       writeFileSync(join(source, "opencode.db"), "x".repeat(1024 * 1024));
       writeFileSync(join(source, "opencode.db-wal"), "wal");
       writeFileSync(join(source, "opencode.db-shm"), "shm");
@@ -617,8 +646,8 @@ done
       expect(result.exitCode).toBe(0);
       // OpenCode's credential is a plain file, so unlike Claude it rides the
       // existing mount — this is what keeps container OpenCode logged in.
-      expect(readFileSync(join(destination, "auth.json"), "utf8")).toBe("{\"token\":\"opencode\"}\n");
-      expect(readFileSync(join(destination, "account.json"), "utf8")).toBe("{\"account\":\"test\"}\n");
+      expect(readFileSync(join(destination, "auth.json"), "utf8")).toBe('{"token":"opencode"}\n');
+      expect(readFileSync(join(destination, "account.json"), "utf8")).toBe('{"account":"test"}\n');
       expect(readFileSync(join(destination, "storage", "kept.json"), "utf8")).toBe("kept\n");
       expect(readFileSync(join(destination, "snapshot", "kept.json"), "utf8")).toBe("kept\n");
 
@@ -730,7 +759,7 @@ report_agent_copy_skips Codex
       const destination = join(dir, "destination");
       mkdirSync(join(source, "skills", "review"), { recursive: true });
       mkdirSync(join(source, "sessions"), { recursive: true });
-      writeFileSync(join(source, "auth.json"), "{\"token\":\"test\"}\n");
+      writeFileSync(join(source, "auth.json"), '{"token":"test"}\n');
       writeFileSync(join(source, "skills", "review", "SKILL.md"), "first\n");
       writeFileSync(join(source, "sessions", "rollout.jsonl"), "large runtime state\n");
 
@@ -747,12 +776,14 @@ copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" skills Codex
       );
 
       expect(result.exitCode).toBe(0);
-      expect(readFileSync(join(destination, "auth.json"), "utf8")).toBe("{\"token\":\"test\"}\n");
-      expect(readFileSync(join(destination, "skills", "review", "SKILL.md"), "utf8")).toBe("first\n");
+      expect(readFileSync(join(destination, "auth.json"), "utf8")).toBe('{"token":"test"}\n');
+      expect(readFileSync(join(destination, "skills", "review", "SKILL.md"), "utf8")).toBe(
+        "first\n",
+      );
       expect(() => statSync(join(destination, "skills", "skills"))).toThrow();
       expect(() => statSync(join(destination, "sessions"))).toThrow();
 
-      writeFileSync(join(source, "auth.json"), "{\"token\":\"changed\"}\n");
+      writeFileSync(join(source, "auth.json"), '{"token":"changed"}\n');
       writeFileSync(join(source, "skills", "review", "SKILL.md"), "changed\n");
       result = runShell(
         agentCopyHelperHarness(`
@@ -768,8 +799,10 @@ copy_agent_directory "$AGENT_TEST_SOURCE" "$AGENT_TEST_DESTINATION" skills Codex
 
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe("");
-      expect(readFileSync(join(destination, "auth.json"), "utf8")).toBe("{\"token\":\"changed\"}\n");
-      expect(readFileSync(join(destination, "skills", "review", "SKILL.md"), "utf8")).toBe("changed\n");
+      expect(readFileSync(join(destination, "auth.json"), "utf8")).toBe('{"token":"changed"}\n');
+      expect(readFileSync(join(destination, "skills", "review", "SKILL.md"), "utf8")).toBe(
+        "changed\n",
+      );
     });
   });
 
@@ -818,10 +851,7 @@ printf "continued"
       mkdirSync(excludedSessions, { recursive: true });
       writeFileSync(join(source, "skills", "review", "SKILL.md"), "safe skill\n");
       writeFileSync(join(excludedSessions, "rollout.jsonl"), "excluded rollout\n");
-      symlinkSync(
-        excludedSessions,
-        join(source, "skills", "review", "host-sessions"),
-      );
+      symlinkSync(excludedSessions, join(source, "skills", "review", "host-sessions"));
 
       const result = runShell(
         agentCopyHelperHarness(`
@@ -872,9 +902,7 @@ printf "continued"
       );
 
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain(
-        "Warning: Skipping symlinked Codex directory: plugins/cache",
-      );
+      expect(result.stdout).toContain("Warning: Skipping symlinked Codex directory: plugins/cache");
       expect(result.stdout).toContain(
         "Warning: Skipping symlinked Codex file: plugins/config.toml",
       );
@@ -1264,8 +1292,12 @@ printf "continued"
       );
 
       expect(mkdirResult.exitCode).toBe(0);
-      expect(mkdirResult.stdout).toContain("Failed to create destination for Codex file: auth.json");
-      expect(mkdirResult.stdout).toContain("Failed to create destination for Codex directory: skills");
+      expect(mkdirResult.stdout).toContain(
+        "Failed to create destination for Codex file: auth.json",
+      );
+      expect(mkdirResult.stdout).toContain(
+        "Failed to create destination for Codex directory: skills",
+      );
       expect(mkdirResult.stdout).toEndWith("continued");
 
       const fakeBin = join(dir, "fake-bin");
@@ -1422,7 +1454,9 @@ eval "$codex_setup"
         expect(readFileSync(join(destination, file), "utf8")).toBe(`${file}\n`);
       }
       for (const directory of directories) {
-        expect(readFileSync(join(destination, directory, "copied.txt"), "utf8")).toBe(`${directory}\n`);
+        expect(readFileSync(join(destination, directory, "copied.txt"), "utf8")).toBe(
+          `${directory}\n`,
+        );
       }
       expect(statSync(join(destination, "auth.json")).mode & 0o777).toBe(0o600);
       expect(() => statSync(join(destination, "plugins", ".plugin-appserver"))).toThrow();
@@ -1457,13 +1491,13 @@ eval "$codex_setup"
       writeFileSync(join(grokSource, "skills", "skill.md"), "grok skill\n");
       writeFileSync(join(grokSource, "sessions", "host-session.json"), "excluded\n");
       mkdirSync(grokConfig, { recursive: true });
-      writeFileSync(join(grokConfig, "settings.json"), "{\"portable\":true}\n");
+      writeFileSync(join(grokConfig, "settings.json"), '{"portable":true}\n');
 
       const entrypoint = join(repoRoot, "docker", "entrypoint.sh");
       const result = runShell(
         agentCopyHelperHarness(`
-cursor_setup="$(sed -n '/^# Set up Cursor Agent configuration\./,/^log_progress "Cursor Agent configuration ready"$/p' ${shellQuote(entrypoint)} | sed "s#/cursor-config#\\$AGENT_TEST_CURSOR#g")"
-grok_setup="$(sed -n '/^# Set up Grok configuration\./,/^log_progress "Grok configuration ready"$/p' ${shellQuote(entrypoint)} | sed "s#/grok-home#\\$AGENT_TEST_GROK_HOME#g; s#/grok-config#\\$AGENT_TEST_GROK_CONFIG#g")"
+cursor_setup="$(sed -n '/^# Set up Cursor Agent configuration./,/^log_progress "Cursor Agent configuration ready"$/p' ${shellQuote(entrypoint)} | sed "s#/cursor-config#\\$AGENT_TEST_CURSOR#g")"
+grok_setup="$(sed -n '/^# Set up Grok configuration./,/^log_progress "Grok configuration ready"$/p' ${shellQuote(entrypoint)} | sed "s#/grok-home#\\$AGENT_TEST_GROK_HOME#g; s#/grok-config#\\$AGENT_TEST_GROK_CONFIG#g")"
 [ -n "$cursor_setup" ] || { echo "harness failed to extract the Cursor block"; exit 9; }
 [ -n "$grok_setup" ] || { echo "harness failed to extract the Grok block"; exit 9; }
 eval "$cursor_setup"
@@ -1483,10 +1517,12 @@ eval "$grok_setup"
       for (const file of ["cli-config.json", "agent-cli-state.json", "mcp.json", "argv.json"]) {
         expect(readFileSync(join(home, ".cursor", file), "utf8")).toBe(`${file}\n`);
       }
-      expect(readFileSync(join(home, ".cursor", "skills", "personal.md"), "utf8"))
-        .toBe("cursor personal skill\n");
-      expect(readFileSync(join(home, ".cursor", "skills-cursor", "skill.md"), "utf8"))
-        .toBe("cursor skill\n");
+      expect(readFileSync(join(home, ".cursor", "skills", "personal.md"), "utf8")).toBe(
+        "cursor personal skill\n",
+      );
+      expect(readFileSync(join(home, ".cursor", "skills-cursor", "skill.md"), "utf8")).toBe(
+        "cursor skill\n",
+      );
       expect(() => statSync(join(home, ".cursor", "projects"))).toThrow();
 
       for (const file of ["auth.json", "config.toml", "trusted_folders.toml", "agent_id"]) {
@@ -1495,8 +1531,9 @@ eval "$grok_setup"
       expect(statSync(join(home, ".grok", "auth.json")).mode & 0o777).toBe(0o600);
       expect(readFileSync(join(home, ".grok", "hooks", "hook.sh"), "utf8")).toBe("hook\n");
       expect(readFileSync(join(home, ".grok", "skills", "skill.md"), "utf8")).toBe("grok skill\n");
-      expect(readFileSync(join(home, ".config", "grok", "settings.json"), "utf8"))
-        .toBe("{\"portable\":true}\n");
+      expect(readFileSync(join(home, ".config", "grok", "settings.json"), "utf8")).toBe(
+        '{"portable":true}\n',
+      );
       expect(() => statSync(join(home, ".grok", "sessions"))).toThrow();
 
       // These homes are ordinary directories created under HOME, not read-only
@@ -1530,14 +1567,14 @@ eval "$grok_setup"
       writeFileSync(join(grokSource, "auth.json"), "auth.json\n");
       writeFileSync(join(grokSource, "config.toml"), "x".repeat(64), { mode: 0o644 });
       mkdirSync(grokConfig, { recursive: true });
-      writeFileSync(join(grokConfig, "settings.json"), "{\"portable\":true}\n");
+      writeFileSync(join(grokConfig, "settings.json"), '{"portable":true}\n');
       symlinkSync(join(outside, "real"), join(grokConfig, "linked"));
 
       const entrypoint = join(repoRoot, "docker", "entrypoint.sh");
       const result = runShell(
         agentCopyHelperHarness(`
-cursor_setup="$(sed -n '/^# Set up Cursor Agent configuration\./,/^log_progress "Cursor Agent configuration ready"$/p' ${shellQuote(entrypoint)} | sed "s#/cursor-config#\\$AGENT_TEST_CURSOR#g")"
-grok_setup="$(sed -n '/^# Set up Grok configuration\./,/^log_progress "Grok configuration ready"$/p' ${shellQuote(entrypoint)} | sed "s#/grok-home#\\$AGENT_TEST_GROK_HOME#g; s#/grok-config#\\$AGENT_TEST_GROK_CONFIG#g")"
+cursor_setup="$(sed -n '/^# Set up Cursor Agent configuration./,/^log_progress "Cursor Agent configuration ready"$/p' ${shellQuote(entrypoint)} | sed "s#/cursor-config#\\$AGENT_TEST_CURSOR#g")"
+grok_setup="$(sed -n '/^# Set up Grok configuration./,/^log_progress "Grok configuration ready"$/p' ${shellQuote(entrypoint)} | sed "s#/grok-home#\\$AGENT_TEST_GROK_HOME#g; s#/grok-config#\\$AGENT_TEST_GROK_CONFIG#g")"
 eval "$cursor_setup"
 eval "$grok_setup"
 `),
@@ -1571,10 +1608,12 @@ eval "$grok_setup"
       expect(result.stdout).not.toContain("container: .\n");
 
       // Dropping one entry does not cost the others, and no link was followed.
-      expect(readFileSync(join(home, ".cursor", "cli-config.json"), "utf8"))
-        .toBe("cli-config.json\n");
-      expect(readFileSync(join(home, ".cursor", "skills-cursor", "skill.md"), "utf8"))
-        .toBe("cursor skill\n");
+      expect(readFileSync(join(home, ".cursor", "cli-config.json"), "utf8")).toBe(
+        "cli-config.json\n",
+      );
+      expect(readFileSync(join(home, ".cursor", "skills-cursor", "skill.md"), "utf8")).toBe(
+        "cursor skill\n",
+      );
       expect(() => statSync(join(home, ".cursor", "skills-cursor", "linked"))).toThrow();
       expect(readFileSync(join(home, ".grok", "auth.json"), "utf8")).toBe("auth.json\n");
       expect(() => statSync(join(home, ".grok", "config.toml"))).toThrow();
@@ -1594,10 +1633,13 @@ eval "$grok_setup"
       mkdirSync(join(source, "projects"), { recursive: true });
       mkdirSync(outside, { recursive: true });
       writeFileSync(join(source, "CLAUDE.md"), "global instructions\n");
-      writeFileSync(join(source, "settings.local.json"), "{\"local\":true}\n");
-      writeFileSync(join(source, "history.jsonl"), "{\"display\":\"secret prompt\"}\n");
+      writeFileSync(join(source, "settings.local.json"), '{"local":true}\n');
+      writeFileSync(join(source, "history.jsonl"), '{"display":"secret prompt"}\n');
       writeFileSync(join(source, "daemon.log"), "log\n");
-      writeFileSync(join(source, ".credentials.json"), "{\"claudeAiOauth\":{\"accessToken\":\"from-mount\"}}");
+      writeFileSync(
+        join(source, ".credentials.json"),
+        '{"claudeAiOauth":{"accessToken":"from-mount"}}',
+      );
       writeFileSync(join(source, "commands", "kept.md"), "kept\n");
       writeFileSync(join(outside, "secret.md"), "host content outside the tree\n");
       symlinkSync(join(outside, "secret.md"), join(source, "commands", "linked.md"));
@@ -1619,13 +1661,20 @@ eval "$claude_setup"
 
       expect(result.exitCode).toBe(0);
       // The allowlisted config lands in the container home.
-      expect(readFileSync(join(home, ".claude", "CLAUDE.md"), "utf8")).toBe("global instructions\n");
-      expect(readFileSync(join(home, ".claude", "settings.local.json"), "utf8")).toBe("{\"local\":true}\n");
+      expect(readFileSync(join(home, ".claude", "CLAUDE.md"), "utf8")).toBe(
+        "global instructions\n",
+      );
+      expect(readFileSync(join(home, ".claude", "settings.local.json"), "utf8")).toBe(
+        '{"local":true}\n',
+      );
       // settings.json is rewritten by the block with the container's own settings.
-      expect(readFileSync(join(home, ".claude", "settings.json"), "utf8")).toContain("bypassPermissions");
+      expect(readFileSync(join(home, ".claude", "settings.json"), "utf8")).toContain(
+        "bypassPermissions",
+      );
       // No backend sync has run, so the mounted credential is the fallback source.
-      expect(readFileSync(join(home, ".claude", ".credentials.json"), "utf8"))
-        .toContain("from-mount");
+      expect(readFileSync(join(home, ".claude", ".credentials.json"), "utf8")).toContain(
+        "from-mount",
+      );
       expect(statSync(join(home, ".claude", ".credentials.json")).mode & 0o777).toBe(0o600);
       // The real command survives; only the symlinked one is skipped.
       expect(readFileSync(join(home, ".claude", "commands", "kept.md"), "utf8")).toBe("kept\n");
@@ -1657,11 +1706,11 @@ eval "$claude_setup"
       mkdirSync(join(data, "snapshot"), { recursive: true });
       mkdirSync(join(data, "log"), { recursive: true });
       mkdirSync(outside, { recursive: true });
-      writeFileSync(join(config, "opencode.json"), "{\"config\":true}\n");
+      writeFileSync(join(config, "opencode.json"), '{"config":true}\n');
       writeFileSync(join(config, "plugin", "custom.ts"), "export default {}\n");
       writeFileSync(join(config, "node_modules", "some-dep", "binary.node"), "mach-o\n");
-      writeFileSync(join(data, "auth.json"), "{\"token\":\"opencode\"}\n", { mode: 0o600 });
-      writeFileSync(join(data, "account.json"), "{\"account\":\"test\"}\n");
+      writeFileSync(join(data, "auth.json"), '{"token":"opencode"}\n', { mode: 0o600 });
+      writeFileSync(join(data, "account.json"), '{"account":"test"}\n');
       writeFileSync(join(data, "opencode.db"), "x".repeat(1024 * 1024));
       writeFileSync(join(data, "storage", "kept.json"), "kept\n");
       writeFileSync(join(data, "snapshot", "kept.json"), "kept\n");
@@ -1688,24 +1737,32 @@ eval "$opencode_setup"
 
       expect(result.exitCode).toBe(0);
       // User-authored config merges; Mach-O node_modules is the one exclusion.
-      expect(readFileSync(join(home, ".config", "opencode", "opencode.json"), "utf8"))
-        .toBe("{\"config\":true}\n");
-      expect(readFileSync(join(home, ".config", "opencode", "plugin", "custom.ts"), "utf8"))
-        .toBe("export default {}\n");
+      expect(readFileSync(join(home, ".config", "opencode", "opencode.json"), "utf8")).toBe(
+        '{"config":true}\n',
+      );
+      expect(readFileSync(join(home, ".config", "opencode", "plugin", "custom.ts"), "utf8")).toBe(
+        "export default {}\n",
+      );
       expect(() => statSync(join(home, ".config", "opencode", "node_modules"))).toThrow();
       // Credential rides the mount; the multi-GB session database does not.
-      expect(readFileSync(join(home, ".local", "share", "opencode", "auth.json"), "utf8"))
-        .toBe("{\"token\":\"opencode\"}\n");
-      expect(readFileSync(join(home, ".local", "share", "opencode", "account.json"), "utf8"))
-        .toBe("{\"account\":\"test\"}\n");
+      expect(readFileSync(join(home, ".local", "share", "opencode", "auth.json"), "utf8")).toBe(
+        '{"token":"opencode"}\n',
+      );
+      expect(readFileSync(join(home, ".local", "share", "opencode", "account.json"), "utf8")).toBe(
+        '{"account":"test"}\n',
+      );
       expect(() => statSync(join(home, ".local", "share", "opencode", "opencode.db"))).toThrow();
       // Data directories copy per-entry: real records land, the symlinked one
       // is skipped individually, and the excluded runtime dir never appears.
-      expect(readFileSync(join(home, ".local", "share", "opencode", "storage", "kept.json"), "utf8"))
-        .toBe("kept\n");
-      expect(readFileSync(join(home, ".local", "share", "opencode", "snapshot", "kept.json"), "utf8"))
-        .toBe("kept\n");
-      expect(() => statSync(join(home, ".local", "share", "opencode", "storage", "linked.json"))).toThrow();
+      expect(
+        readFileSync(join(home, ".local", "share", "opencode", "storage", "kept.json"), "utf8"),
+      ).toBe("kept\n");
+      expect(
+        readFileSync(join(home, ".local", "share", "opencode", "snapshot", "kept.json"), "utf8"),
+      ).toBe("kept\n");
+      expect(() =>
+        statSync(join(home, ".local", "share", "opencode", "storage", "linked.json")),
+      ).toThrow();
       expect(() => statSync(join(home, ".local", "share", "opencode", "log"))).toThrow();
     });
   });
@@ -1713,7 +1770,7 @@ eval "$opencode_setup"
   test("workspace setup exits early when a prior setup already completed", () => {
     const setup = read("docker/workspace-setup.sh");
     const completionGuard = setup.indexOf("if [ -f /tmp/.workspace-setup-complete ]; then");
-    const cloneBlock = setup.indexOf("if [ -n \"$GIT_URL\" ] && [ ! -d \"/workspace/.git\" ]; then");
+    const cloneBlock = setup.indexOf('if [ -n "$GIT_URL" ] && [ ! -d "/workspace/.git" ]; then');
 
     expect(completionGuard).toBeGreaterThan(0);
     expect(cloneBlock).toBeGreaterThan(completionGuard);
@@ -1758,11 +1815,7 @@ eval "$opencode_setup"
         : backend.slice(start, start + 1 + nextDeclaration);
     }
 
-    const commands = [
-      "start_opencode_server",
-      "start_claude_server",
-      "start_codex_server",
-    ];
+    const commands = ["start_opencode_server", "start_claude_server", "start_codex_server"];
 
     for (const command of commands) {
       const start = backend.indexOf(`register("${command}"`);
@@ -1772,9 +1825,7 @@ eval "$opencode_setup"
       // command's block and never leak into a neighbouring one.
       const nextRegister = backend.slice(start + 1).search(/\n\s*register\(/);
       const registerBlock =
-        nextRegister === -1
-          ? backend.slice(start)
-          : backend.slice(start, start + 1 + nextRegister);
+        nextRegister === -1 ? backend.slice(start) : backend.slice(start, start + 1 + nextRegister);
       // If the block references a shared start-command constant or delegates to
       // a start helper, fold that body into the searchable text.
       const referencedConstant = registerBlock.match(/[A-Z0-9_]+_START_COMMAND/);
@@ -2036,9 +2087,7 @@ eval "$opencode_setup"
 
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe("");
-      expect(result.stdout).toBe(
-        `FOUND\nbun=${overrideBunInstall}\n${overrideBun}\nOVERRIDE_BUN`,
-      );
+      expect(result.stdout).toBe(`FOUND\nbun=${overrideBunInstall}\n${overrideBun}\nOVERRIDE_BUN`);
     });
   });
 

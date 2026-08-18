@@ -1,11 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ContextUsageWheel } from "./ContextUsageWheel";
 
 afterEach(cleanup);
@@ -23,9 +17,7 @@ function renderWheel(percentUsed: number, className?: string) {
   );
 
   const button = screen.getByRole("button");
-  const progress = container.querySelector<SVGCircleElement>(
-    "[data-context-usage-progress]",
-  );
+  const progress = container.querySelector<SVGCircleElement>("[data-context-usage-progress]");
 
   return { button, progress };
 }
@@ -34,9 +26,7 @@ async function openTooltip(button: HTMLElement) {
   fireEvent.focus(button);
 
   const tooltipContent = await waitFor(() => {
-    const content = document.querySelector<HTMLElement>(
-      "[data-slot='tooltip-content']",
-    );
+    const content = document.querySelector<HTMLElement>("[data-slot='tooltip-content']");
     expect(content).not.toBeNull();
     return content!;
   });
@@ -55,10 +45,7 @@ describe("ContextUsageWheel", () => {
 
     expect(button.className).toContain("text-muted-foreground/50");
     expect(container.querySelector("[data-context-usage-progress]") === null).toBe(true);
-    expect(await openTooltip(button)).toEqual([
-      "Context window:",
-      "Usage is not available yet.",
-    ]);
+    expect(await openTooltip(button)).toEqual(["Context window:", "Usage is not available yet."]);
   });
 
   test.each([
@@ -69,9 +56,7 @@ describe("ContextUsageWheel", () => {
     const { button, progress } = renderWheel(percentUsed);
 
     expect(button.className).toContain("text-foreground");
-    expect(button.getAttribute("aria-label")).toBe(
-      `Context window ${percentUsed}% used`,
-    );
+    expect(button.getAttribute("aria-label")).toBe(`Context window ${percentUsed}% used`);
     expect(progress?.getAttribute("stroke")).toBe("currentColor");
     expect(progress?.getAttribute("pathLength")).toBe("100");
     expect(progress?.getAttribute("stroke-dasharray")).toBe(dashArray);
@@ -83,9 +68,7 @@ describe("ContextUsageWheel", () => {
 
     cleanup();
     rendered = renderWheel(-25);
-    expect(rendered.button.getAttribute("aria-label")).toBe(
-      "Context window 0% used",
-    );
+    expect(rendered.button.getAttribute("aria-label")).toBe("Context window 0% used");
     expect(rendered.progress?.getAttribute("stroke-dasharray")).toBe("0 100");
 
     cleanup();

@@ -180,18 +180,19 @@ export function reduceNotification(
 
   switch (notification.method) {
     case "thread/settings/updated": {
-      const settings = isRecord(params) && isRecord(params.threadSettings)
-        ? params.threadSettings
-        : undefined;
+      const settings =
+        isRecord(params) && isRecord(params.threadSettings) ? params.threadSettings : undefined;
       const model = settings ? str(settings.model)?.trim() : undefined;
       if (!threadId || !model) return { events: [] };
       return {
-        events: [{
-          kind: "thread.model.updated",
-          threadId,
-          model,
-          ...base,
-        }],
+        events: [
+          {
+            kind: "thread.model.updated",
+            threadId,
+            model,
+            ...base,
+          },
+        ],
       };
     }
 
@@ -199,13 +200,15 @@ export function reduceNotification(
       const model = isRecord(params) ? str(params.toModel)?.trim() : undefined;
       if (!threadId || !turnId || !model) return { events: [] };
       return {
-        events: [{
-          kind: "turn.model.updated",
-          threadId,
-          turnId,
-          model,
-          ...base,
-        }],
+        events: [
+          {
+            kind: "turn.model.updated",
+            threadId,
+            turnId,
+            model,
+            ...base,
+          },
+        ],
       };
     }
 
@@ -218,29 +221,30 @@ export function reduceNotification(
       const contextWindow = num(params.tokenUsage.modelContextWindow) ?? 0;
       const usedTokens = num(last.totalTokens) ?? 0;
       return {
-        events: [{
-          kind: "thread.usage.updated",
-          threadId,
-          turnId,
-          usage: {
-            usedTokens,
-            totalTokens: contextWindow,
-            percentUsed: contextWindow > 0
-              ? Math.min(100, (usedTokens / contextWindow) * 100)
-              : 0,
-            inputTokens: num(total.inputTokens),
-            outputTokens: num(total.outputTokens),
-            cacheReadTokens: num(total.cachedInputTokens),
-            cacheWriteTokens: num(total.cacheWriteInputTokens),
-            reasoningTokens: num(total.reasoningOutputTokens),
-            lastTurnTokens: usedTokens,
-            sessionTokens: num(total.totalTokens),
-            estimated: false,
-            source: "provider",
-            updatedAt: new Date().toISOString(),
+        events: [
+          {
+            kind: "thread.usage.updated",
+            threadId,
+            turnId,
+            usage: {
+              usedTokens,
+              totalTokens: contextWindow,
+              percentUsed:
+                contextWindow > 0 ? Math.min(100, (usedTokens / contextWindow) * 100) : 0,
+              inputTokens: num(total.inputTokens),
+              outputTokens: num(total.outputTokens),
+              cacheReadTokens: num(total.cachedInputTokens),
+              cacheWriteTokens: num(total.cacheWriteInputTokens),
+              reasoningTokens: num(total.reasoningOutputTokens),
+              lastTurnTokens: usedTokens,
+              sessionTokens: num(total.totalTokens),
+              estimated: false,
+              source: "provider",
+              updatedAt: new Date().toISOString(),
+            },
+            ...base,
           },
-          ...base,
-        }],
+        ],
       };
     }
 
@@ -262,7 +266,10 @@ export function reduceNotification(
       if (!isRecord(snapshot.primary) && limitName !== undefined) {
         windows.push({ slot: "primary", label: limitName });
       }
-      for (const [key, label] of [["primary", "Primary"], ["secondary", "Secondary"]] as const) {
+      for (const [key, label] of [
+        ["primary", "Primary"],
+        ["secondary", "Secondary"],
+      ] as const) {
         const window = isRecord(snapshot[key]) ? snapshot[key] : undefined;
         if (!window) continue;
         const resetsAt = epochSecondsToIso(window.resetsAt);
@@ -273,8 +280,8 @@ export function reduceNotification(
           ...(key === "secondary"
             ? { label }
             : limitName !== undefined
-            ? { label: limitName }
-            : {}),
+              ? { label: limitName }
+              : {}),
           ...(usedPercent !== undefined ? { usedPercent } : {}),
           ...(resetsAt !== undefined ? { resetsAt } : {}),
           ...(windowMinutes !== undefined ? { windowMinutes } : {}),
@@ -283,9 +290,7 @@ export function reduceNotification(
       const rawCredits = isRecord(snapshot.credits) ? snapshot.credits : null;
       const credits = rawCredits
         ? {
-            ...(typeof rawCredits.balance === "string"
-              ? { balance: rawCredits.balance }
-              : {}),
+            ...(typeof rawCredits.balance === "string" ? { balance: rawCredits.balance } : {}),
             ...(typeof rawCredits.hasCredits === "boolean"
               ? { hasCredits: rawCredits.hasCredits }
               : {}),
@@ -295,15 +300,17 @@ export function reduceNotification(
           }
         : undefined;
       return {
-        events: [{
-          kind: "account.rateLimits.updated",
-          rateLimits: windows,
-          // An empty credits object carries no information, and emitting one
-          // would look like an update in a stream whose whole contract is
-          // "present means changed".
-          ...(credits && Object.keys(credits).length > 0 ? { credits } : {}),
-          ...base,
-        }],
+        events: [
+          {
+            kind: "account.rateLimits.updated",
+            rateLimits: windows,
+            // An empty credits object carries no information, and emitting one
+            // would look like an update in a stream whose whole contract is
+            // "present means changed".
+            ...(credits && Object.keys(credits).length > 0 ? { credits } : {}),
+            ...base,
+          },
+        ],
       };
     }
 
@@ -447,9 +454,7 @@ export function reduceNotification(
       const delta = typeof params.delta === "string" ? params.delta : undefined;
       if (!itemId || delta === undefined) return { events: [] };
       return {
-        events: [
-          { kind: "item.command.outputDelta", threadId, turnId, itemId, delta, ...base },
-        ],
+        events: [{ kind: "item.command.outputDelta", threadId, turnId, itemId, delta, ...base }],
       };
     }
 
@@ -465,34 +470,38 @@ export function reduceNotification(
       if (payloadType === "custom_tool_call" && str(rawItem.name) === "apply_patch") {
         const startedAtMs = nonNegativeDateMs(params.startedAtMs);
         return {
-          events: [{
-            kind: "item.dynamic.started",
-            threadId,
-            turnId,
-            item: {
-              id: callId,
-              type: "dynamic_tool_call",
-              tool: "apply_patch",
-              arguments: rawItem.input,
-              content_items: [],
-              status: "in_progress",
+          events: [
+            {
+              kind: "item.dynamic.started",
+              threadId,
+              turnId,
+              item: {
+                id: callId,
+                type: "dynamic_tool_call",
+                tool: "apply_patch",
+                arguments: rawItem.input,
+                content_items: [],
+                status: "in_progress",
+              },
+              ...(startedAtMs === undefined ? {} : { startedAtMs }),
+              ...base,
             },
-            ...(startedAtMs === undefined ? {} : { startedAtMs }),
-            ...base,
-          }],
+          ],
         };
       }
 
       if (payloadType === "custom_tool_call_output") {
         return {
-          events: [{
-            kind: "item.dynamic.output",
-            threadId,
-            turnId,
-            itemId: callId,
-            output: rawItem.output,
-            ...base,
-          }],
+          events: [
+            {
+              kind: "item.dynamic.output",
+              threadId,
+              turnId,
+              itemId: callId,
+              output: rawItem.output,
+              ...base,
+            },
+          ],
         };
       }
 

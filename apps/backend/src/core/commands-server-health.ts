@@ -20,7 +20,10 @@ export async function dockerExecDetached(
   command: string,
   redactValues?: ReadonlyArray<string | null | undefined>,
 ): Promise<void> {
-  await runCommand("docker", ["exec", "-d", containerId, "bash", "-lc", command], { timeoutMs: 30_000, redactValues });
+  await runCommand("docker", ["exec", "-d", containerId, "bash", "-lc", command], {
+    timeoutMs: 30_000,
+    redactValues,
+  });
 }
 
 export async function checkHttpHealth(
@@ -36,16 +39,19 @@ export async function checkHttpHealth(
       settled = true;
       resolve(healthy);
     };
-    const request = http.get({
-      host: "127.0.0.1",
-      port,
-      path: pathName,
-      timeout: 2_000,
-      headers,
-    }, (response) => {
-      response.resume();
-      complete((response.statusCode ?? 0) >= 200 && (response.statusCode ?? 0) < 300);
-    });
+    const request = http.get(
+      {
+        host: "127.0.0.1",
+        port,
+        path: pathName,
+        timeout: 2_000,
+        headers,
+      },
+      (response) => {
+        response.resume();
+        complete((response.statusCode ?? 0) >= 200 && (response.statusCode ?? 0) < 300);
+      },
+    );
     request.once("timeout", () => {
       request.destroy();
       complete(false);
@@ -71,15 +77,18 @@ export async function isHttpServerReachable(
       settled = true;
       resolve(reachable);
     };
-    const request = http.get({
-      host: "127.0.0.1",
-      port,
-      path: pathName,
-      timeout: 2_000,
-    }, (response) => {
-      response.resume();
-      complete(true);
-    });
+    const request = http.get(
+      {
+        host: "127.0.0.1",
+        port,
+        path: pathName,
+        timeout: 2_000,
+      },
+      (response) => {
+        response.resume();
+        complete(true);
+      },
+    );
     request.once("timeout", () => {
       request.destroy();
       complete(false);
@@ -105,8 +114,9 @@ export async function waitForHealth(
   } = {},
 ): Promise<void> {
   const checkHealth = dependencies.checkHealth ?? checkHttpHealth;
-  const delay = dependencies.delay
-    ?? ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
+  const delay =
+    dependencies.delay ??
+    ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     if (await checkHealth(port, pathName, headers)) return;
     await delay(LOCAL_SERVER_HEALTH_INTERVAL_MS);
@@ -131,7 +141,7 @@ export async function waitForLocalServerHealth(
 
 export async function waitForHttpServerExit(port: number, attempts = 50): Promise<void> {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    if (!await isHttpServerReachable(port)) return;
+    if (!(await isHttpServerReachable(port))) return;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error(`Server on port ${port} did not stop`);
@@ -139,7 +149,7 @@ export async function waitForHttpServerExit(port: number, attempts = 50): Promis
 
 export async function waitForUnhealthy(port: number, attempts = 50): Promise<void> {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    if (!await checkHttpHealth(port)) return;
+    if (!(await checkHttpHealth(port))) return;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error(`Server on port ${port} did not stop`);
@@ -159,9 +169,7 @@ export function claudeBridgeAuthHeaders(token: string): Record<string, string> {
   return { "X-Orkestrator-Claude-Token": token };
 }
 
-export function agentToolConnectionFingerprint(
-  connection: AgentToolConnection,
-): string {
+export function agentToolConnectionFingerprint(connection: AgentToolConnection): string {
   return createHash("sha256")
     .update(connection.url)
     .update("\0")

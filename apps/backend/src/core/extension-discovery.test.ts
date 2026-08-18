@@ -39,7 +39,7 @@ const EMPTY_CODEX = {
   "codex plugin list --json": "[]",
 };
 const EMPTY_CURSOR = {
-  "cursor mcp list --format json": "{\"mcpServers\":{}}",
+  "cursor mcp list --format json": '{"mcpServers":{}}',
   "cursor plugin list --format json": "[]",
 };
 const EMPTY_GROK = {
@@ -79,20 +79,28 @@ describe("extension discovery parsers", () => {
   });
 
   test("parses Claude plugin IDs, scopes, and disabled state", () => {
-    expect(parseClaudePlugins(JSON.stringify([
-      { id: "review@official", enabled: true, scope: "user" },
-      { id: "lint@team", enabled: false, scope: "project" },
-    ]))).toEqual([
+    expect(
+      parseClaudePlugins(
+        JSON.stringify([
+          { id: "review@official", enabled: true, scope: "user" },
+          { id: "lint@team", enabled: false, scope: "project" },
+        ]),
+      ),
+    ).toEqual([
       { name: "lint", status: "disabled", source: "project" },
       { name: "review", status: "configured", source: "user" },
     ]);
   });
 
   test("parses Codex MCP JSON", () => {
-    expect(parseCodexMcpList(JSON.stringify([
-      { name: "github", enabled: true },
-      { name: "legacy", enabled: false },
-    ]))).toEqual([
+    expect(
+      parseCodexMcpList(
+        JSON.stringify([
+          { name: "github", enabled: true },
+          { name: "legacy", enabled: false },
+        ]),
+      ),
+    ).toEqual([
       { name: "github", status: "configured" },
       { name: "legacy", status: "disabled" },
     ]);
@@ -129,14 +137,18 @@ describe("extension discovery parsers", () => {
   });
 
   test("supports current and v2 OpenCode config shapes", () => {
-    expect(parseOpenCodeConfig(JSON.stringify({
-      mcp: {
-        docs: { type: "remote", url: "https://example.test/mcp" },
-        local: { type: "local", command: ["bun", "server.ts"], disabled: true },
-      },
-      plugin: ["@team/review", "file:///project/plugin.ts"],
-      plugin_origins: [{ spec: "@team/review" }],
-    }))).toEqual({
+    expect(
+      parseOpenCodeConfig(
+        JSON.stringify({
+          mcp: {
+            docs: { type: "remote", url: "https://example.test/mcp" },
+            local: { type: "local", command: ["bun", "server.ts"], disabled: true },
+          },
+          plugin: ["@team/review", "file:///project/plugin.ts"],
+          plugin_origins: [{ spec: "@team/review" }],
+        }),
+      ),
+    ).toEqual({
       mcpServers: [
         { name: "docs", status: "configured" },
         { name: "local", status: "disabled" },
@@ -147,24 +159,26 @@ describe("extension discovery parsers", () => {
       ],
     });
 
-    expect(parseOpenCodeConfig(JSON.stringify({
-      mcp: {
-        timeout: { startup: 30_000 },
-        servers: {
-          github: { type: "remote", url: "https://example.test/mcp" },
-        },
-      },
-    })).mcpServers).toEqual([
-      { name: "github", status: "configured" },
-    ]);
+    expect(
+      parseOpenCodeConfig(
+        JSON.stringify({
+          mcp: {
+            timeout: { startup: 30_000 },
+            servers: {
+              github: { type: "remote", url: "https://example.test/mcp" },
+            },
+          },
+        }),
+      ).mcpServers,
+    ).toEqual([{ name: "github", status: "configured" }]);
   });
 });
 
 describe("parseClaudeMcpList edge cases", () => {
   test("returns nothing for the no-servers-configured message", () => {
-    expect(parseClaudeMcpList(
-      "No MCP servers configured. Use `claude mcp add` to add a server.",
-    )).toEqual([]);
+    expect(
+      parseClaudeMcpList("No MCP servers configured. Use `claude mcp add` to add a server."),
+    ).toEqual([]);
     expect(parseClaudeMcpList("")).toEqual([]);
   });
 
@@ -179,9 +193,7 @@ describe("parseClaudeMcpList edge cases", () => {
       "",
     ].join("\n");
 
-    expect(parseClaudeMcpList(output)).toEqual([
-      { name: "github", status: "failed" },
-    ]);
+    expect(parseClaudeMcpList(output)).toEqual([{ name: "github", status: "failed" }]);
   });
 
   test("reads status only from the trailing field, never from the command", () => {
@@ -200,54 +212,49 @@ describe("parseClaudeMcpList edge cases", () => {
 
   test("strips ANSI colour sequences before parsing", () => {
     const output = "[1mdocs[0m: npx docs-mcp - [32m✔ Connected[0m";
-    expect(parseClaudeMcpList(output)).toEqual([
-      { name: "docs", status: "connected" },
-    ]);
+    expect(parseClaudeMcpList(output)).toEqual([{ name: "docs", status: "connected" }]);
   });
 
   test("collapses duplicate server names", () => {
-    const output = [
-      "docs: a - ✔ Connected",
-      "docs: b - ✘ Failed",
-    ].join("\n");
+    const output = ["docs: a - ✔ Connected", "docs: b - ✘ Failed"].join("\n");
     expect(parseClaudeMcpList(output)).toEqual([{ name: "docs", status: "failed" }]);
   });
 });
 
 describe("plugin identity", () => {
   test("keeps npm-scoped plugin names instead of dropping them", () => {
-    expect(parseClaudePlugins(JSON.stringify([
-      { id: "@team/review@official" },
-      { id: "@team/lint" },
-    ]))).toEqual([
+    expect(
+      parseClaudePlugins(JSON.stringify([{ id: "@team/review@official" }, { id: "@team/lint" }])),
+    ).toEqual([
       { name: "@team/lint", status: "configured" },
       { name: "@team/review", status: "configured" },
     ]);
   });
 
   test("keeps same-named plugins from different marketplaces apart", () => {
-    expect(parseClaudePlugins(JSON.stringify([
-      { id: "review@official", scope: "user" },
-      { id: "review@internal", scope: "project" },
-    ]))).toEqual([
+    expect(
+      parseClaudePlugins(
+        JSON.stringify([
+          { id: "review@official", scope: "user" },
+          { id: "review@internal", scope: "project" },
+        ]),
+      ),
+    ).toEqual([
       { name: "review", status: "configured", source: "project" },
       { name: "review", status: "configured", source: "user" },
     ]);
   });
 
   test("prefers an explicit name field over the id", () => {
-    expect(parseClaudePlugins(JSON.stringify([
-      { id: "review@official", name: "Review Helper" },
-    ]))).toEqual([{ name: "Review Helper", status: "configured" }]);
+    expect(
+      parseClaudePlugins(JSON.stringify([{ id: "review@official", name: "Review Helper" }])),
+    ).toEqual([{ name: "Review Helper", status: "configured" }]);
   });
 
   test("drops records that carry neither an id nor a name", () => {
-    expect(parseClaudePlugins(JSON.stringify([
-      { enabled: true },
-      { id: "   " },
-      "not-a-record",
-      null,
-    ]))).toEqual([]);
+    expect(
+      parseClaudePlugins(JSON.stringify([{ enabled: true }, { id: "   " }, "not-a-record", null])),
+    ).toEqual([]);
   });
 
   test("returns nothing when the CLI emits a non-array payload", () => {
@@ -265,11 +272,9 @@ describe("plugin identity", () => {
 
 describe("parseCodexMcpList edge cases", () => {
   test("drops entries without a usable name", () => {
-    expect(parseCodexMcpList(JSON.stringify([
-      { enabled: true },
-      { name: "  " },
-      { name: "github" },
-    ]))).toEqual([{ name: "github", status: "configured" }]);
+    expect(
+      parseCodexMcpList(JSON.stringify([{ enabled: true }, { name: "  " }, { name: "github" }])),
+    ).toEqual([{ name: "github", status: "configured" }]);
   });
 });
 
@@ -321,23 +326,31 @@ describe("parseOpenCodeConfig edge cases", () => {
   });
 
   test("ignores mcp entries that are settings rather than servers", () => {
-    expect(parseOpenCodeConfig(JSON.stringify({
-      mcp: {
-        timeout: { startup: 30_000 },
-        enabled: true,
-        docs: { type: "remote", url: "https://example.test/mcp" },
-      },
-    })).mcpServers).toEqual([{ name: "docs", status: "configured" }]);
+    expect(
+      parseOpenCodeConfig(
+        JSON.stringify({
+          mcp: {
+            timeout: { startup: 30_000 },
+            enabled: true,
+            docs: { type: "remote", url: "https://example.test/mcp" },
+          },
+        }),
+      ).mcpServers,
+    ).toEqual([{ name: "docs", status: "configured" }]);
   });
 
   test("treats both disabled and enabled:false as disabled", () => {
-    expect(parseOpenCodeConfig(JSON.stringify({
-      mcp: {
-        a: { type: "local", command: "a", disabled: true },
-        b: { type: "local", command: "b", enabled: false },
-        c: { type: "local", command: "c" },
-      },
-    })).mcpServers).toEqual([
+    expect(
+      parseOpenCodeConfig(
+        JSON.stringify({
+          mcp: {
+            a: { type: "local", command: "a", disabled: true },
+            b: { type: "local", command: "b", enabled: false },
+            c: { type: "local", command: "c" },
+          },
+        }),
+      ).mcpServers,
+    ).toEqual([
       { name: "a", status: "disabled" },
       { name: "b", status: "disabled" },
       { name: "c", status: "configured" },
@@ -355,9 +368,7 @@ describe("parseOpenCodeConfig edge cases", () => {
       mcp: { docs: { type: "local", command: ["docs"] } },
       plugin_origins: "nope",
     });
-    expect(() => parseOpenCodePlugins(brokenPlugins)).toThrow(
-      "unreadable plugin_origins section",
-    );
+    expect(() => parseOpenCodePlugins(brokenPlugins)).toThrow("unreadable plugin_origins section");
     expect(parseOpenCodeMcpServers(brokenPlugins)).toEqual([
       { name: "docs", status: "configured" },
     ]);
@@ -371,9 +382,13 @@ describe("parseOpenCodeConfig edge cases", () => {
   });
 
   test("reads plugin entries given as strings or as objects", () => {
-    expect(parseOpenCodeConfig(JSON.stringify({
-      plugin: ["@team/review", { name: "named" }, { spec: "@team/spec" }, "   ", 7],
-    })).plugins).toEqual([
+    expect(
+      parseOpenCodeConfig(
+        JSON.stringify({
+          plugin: ["@team/review", { name: "named" }, { spec: "@team/spec" }, "   ", 7],
+        }),
+      ).plugins,
+    ).toEqual([
       { name: "@team/review", status: "configured" },
       { name: "@team/spec", status: "configured" },
       { name: "named", status: "configured" },
@@ -381,38 +396,54 @@ describe("parseOpenCodeConfig edge cases", () => {
   });
 
   test("parses Cursor mcp.json maps and plugin arrays", () => {
-    expect(parseCursorMcpList(JSON.stringify({
-      mcpServers: {
-        github: { command: "npx", args: ["-y", "github"] },
-        linear: { url: "https://mcp.linear.app/mcp", disabled: true },
-      },
-    }))).toEqual([
+    expect(
+      parseCursorMcpList(
+        JSON.stringify({
+          mcpServers: {
+            github: { command: "npx", args: ["-y", "github"] },
+            linear: { url: "https://mcp.linear.app/mcp", disabled: true },
+          },
+        }),
+      ),
+    ).toEqual([
       { name: "github", status: "configured" },
       { name: "linear", status: "disabled" },
     ]);
-    expect(parseCursorPlugins(JSON.stringify([
-      { name: "cursor-review", enabled: true, source: "user" },
-      { id: "lint@cursor", enabled: false },
-    ]))).toEqual([
+    expect(
+      parseCursorPlugins(
+        JSON.stringify([
+          { name: "cursor-review", enabled: true, source: "user" },
+          { id: "lint@cursor", enabled: false },
+        ]),
+      ),
+    ).toEqual([
       { name: "cursor-review", status: "configured", source: "user" },
       { name: "lint", status: "disabled" },
     ]);
   });
 
   test("parses Grok MCP and plugin JSON lists", () => {
-    expect(parseGrokMcpList(JSON.stringify([
-      { name: "filesystem", enabled: true },
-      { name: "linear", enabled: false, scope: "project" },
-    ]))).toEqual([
+    expect(
+      parseGrokMcpList(
+        JSON.stringify([
+          { name: "filesystem", enabled: true },
+          { name: "linear", enabled: false, scope: "project" },
+        ]),
+      ),
+    ).toEqual([
       { name: "filesystem", status: "configured" },
       { name: "linear", status: "disabled", source: "project" },
     ]);
-    expect(parseGrokPlugins(JSON.stringify({
-      plugins: [
-        { name: "superpowers", enabled: true },
-        { name: "review", enabled: false },
-      ],
-    }))).toEqual([
+    expect(
+      parseGrokPlugins(
+        JSON.stringify({
+          plugins: [
+            { name: "superpowers", enabled: true },
+            { name: "review", enabled: false },
+          ],
+        }),
+      ),
+    ).toEqual([
       { name: "review", status: "disabled" },
       { name: "superpowers", status: "configured" },
     ]);
@@ -428,12 +459,16 @@ describe("parseOpenCodeConfig edge cases", () => {
   ] as const) {
     test(`reads a ${parse.label} MCP map under any known wrapper key`, () => {
       for (const key of ["mcpServers", "servers", "mcp"]) {
-        expect(parse.run(JSON.stringify({
-          [key]: {
-            github: { command: "npx", args: ["-y", "github"] },
-            linear: { url: "https://mcp.linear.app/mcp", disabled: true },
-          },
-        }))).toEqual([
+        expect(
+          parse.run(
+            JSON.stringify({
+              [key]: {
+                github: { command: "npx", args: ["-y", "github"] },
+                linear: { url: "https://mcp.linear.app/mcp", disabled: true },
+              },
+            }),
+          ),
+        ).toEqual([
           { name: "github", status: "configured" },
           { name: "linear", status: "disabled" },
         ]);
@@ -441,10 +476,14 @@ describe("parseOpenCodeConfig edge cases", () => {
     });
 
     test(`reads an unwrapped ${parse.label} MCP map`, () => {
-      expect(parse.run(JSON.stringify({
-        github: { command: "npx", args: ["-y", "github"] },
-        linear: { url: "https://mcp.linear.app/mcp", enabled: false },
-      }))).toEqual([
+      expect(
+        parse.run(
+          JSON.stringify({
+            github: { command: "npx", args: ["-y", "github"] },
+            linear: { url: "https://mcp.linear.app/mcp", enabled: false },
+          }),
+        ),
+      ).toEqual([
         { name: "github", status: "configured" },
         { name: "linear", status: "disabled" },
       ]);
@@ -453,9 +492,13 @@ describe("parseOpenCodeConfig edge cases", () => {
     test(`still walks a ${parse.label} wrapper whose value is a list`, () => {
       // `{ mcp: { servers: [...] } }` is not a name → config map, so taking the
       // map branch on the `mcp` key would answer with nothing at all.
-      expect(parse.run(JSON.stringify({
-        mcp: { servers: [{ name: "github" }, { name: "linear", enabled: false }] },
-      }))).toEqual([
+      expect(
+        parse.run(
+          JSON.stringify({
+            mcp: { servers: [{ name: "github" }, { name: "linear", enabled: false }] },
+          }),
+        ),
+      ).toEqual([
         { name: "github", status: "configured" },
         { name: "linear", status: "disabled" },
       ]);
@@ -481,7 +524,7 @@ describe("parseOpenCodeConfig edge cases", () => {
   // rather than an error: unlike OpenCode's named `mcp`/`plugin` sections there
   // is no key whose presence proves the surface exists and could not be read.
   test("answers unrecognised Cursor and Grok JSON with an empty list", () => {
-    for (const output of ["{}", "\"a string\"", "42", "null", "[[]]"]) {
+    for (const output of ["{}", '"a string"', "42", "null", "[[]]"]) {
       expect(parseCursorMcpList(output)).toEqual([]);
       expect(parseCursorPlugins(output)).toEqual([]);
       expect(parseGrokMcpList(output)).toEqual([]);
@@ -490,8 +533,15 @@ describe("parseOpenCodeConfig edge cases", () => {
   });
 
   test("reports invalid Cursor and Grok JSON as an error rather than an empty list", () => {
-    for (const parse of [parseCursorMcpList, parseCursorPlugins, parseGrokMcpList, parseGrokPlugins]) {
-      expect(() => parse("cursor-agent: command not found")).toThrow("The CLI returned invalid JSON");
+    for (const parse of [
+      parseCursorMcpList,
+      parseCursorPlugins,
+      parseGrokMcpList,
+      parseGrokPlugins,
+    ]) {
+      expect(() => parse("cursor-agent: command not found")).toThrow(
+        "The CLI returned invalid JSON",
+      );
     }
   });
 });
@@ -600,12 +650,12 @@ describe("discoverAgentExtensions", () => {
         agent,
         mcpServers: [],
         plugins: [],
-        mcpError: agent === "cursor"
-          ? "Could not read Cursor MCP servers."
-          : "Could not read Grok MCP servers.",
-        pluginError: agent === "cursor"
-          ? "Could not read Cursor plugins."
-          : "Could not read Grok plugins.",
+        mcpError:
+          agent === "cursor"
+            ? "Could not read Cursor MCP servers."
+            : "Could not read Grok MCP servers.",
+        pluginError:
+          agent === "cursor" ? "Could not read Cursor plugins." : "Could not read Grok plugins.",
       });
     }
     expect(catalogFor(result, "claude")).toMatchObject({
@@ -618,7 +668,12 @@ describe("discoverAgentExtensions", () => {
   });
 
   test("marks both OpenCode collections unreadable when the config dump fails", async () => {
-    const { run } = fixtureRunner({ ...EMPTY_CLAUDE, ...EMPTY_CODEX, ...EMPTY_CURSOR, ...EMPTY_GROK });
+    const { run } = fixtureRunner({
+      ...EMPTY_CLAUDE,
+      ...EMPTY_CODEX,
+      ...EMPTY_CURSOR,
+      ...EMPTY_GROK,
+    });
 
     expect(catalogFor(await discoverAgentExtensions(run), "opencode")).toEqual({
       agent: "opencode",
@@ -804,11 +859,7 @@ describe("createExtensionDiscoveryCache", () => {
     ]);
     release?.();
 
-    expect(await inFlight).toEqual([
-      catalogs("claude"),
-      catalogs("claude"),
-      catalogs("claude"),
-    ]);
+    expect(await inFlight).toEqual([catalogs("claude"), catalogs("claude"), catalogs("claude")]);
     expect(runs).toBe(1);
   });
 

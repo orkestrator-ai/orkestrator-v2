@@ -1,11 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
-import {
-  findNativeAgentAdapter,
-  getNativeAgentAdapter,
-  nativeAgentAdapters,
-} from "./adapter";
+import { findNativeAgentAdapter, getNativeAgentAdapter, nativeAgentAdapters } from "./adapter";
 
 describe("native agent adapter registry", () => {
   test("registers every supported platform exactly once", () => {
@@ -21,11 +17,7 @@ describe("native agent adapter registry", () => {
   test("keeps every provider registry entry metadata-only", () => {
     for (const platform of AGENT_PLATFORMS) {
       const adapter = getNativeAgentAdapter(platform);
-      expect(Object.keys(adapter).sort()).toEqual([
-        "capabilities",
-        "label",
-        "platform",
-      ]);
+      expect(Object.keys(adapter).sort()).toEqual(["capabilities", "label", "platform"]);
     }
   });
 
@@ -39,8 +31,9 @@ describe("native agent adapter registry", () => {
    */
   test("takes every capability from the shared protocol table", () => {
     for (const platform of AGENT_PLATFORMS) {
-      expect(getNativeAgentAdapter(platform).capabilities)
-        .toEqual(nativeAgentCapabilities(platform));
+      expect(getNativeAgentAdapter(platform).capabilities).toEqual(
+        nativeAgentCapabilities(platform),
+      );
     }
   });
 

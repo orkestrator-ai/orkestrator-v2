@@ -338,7 +338,9 @@ describe("claude-tmux-client invoke wrappers", () => {
 
     const cleanup = await subscribe((payload) => received.push(payload));
     expect(listenMock).toHaveBeenCalledWith(CLAUDE_TMUX_EVENT, expect.any(Function));
-    const listener = listenMock.mock.calls[0]![1] as (nativeEvent: { payload: typeof event }) => void;
+    const listener = listenMock.mock.calls[0]![1] as (nativeEvent: {
+      payload: typeof event;
+    }) => void;
     listener({ payload: event });
 
     expect(received).toEqual([event]);

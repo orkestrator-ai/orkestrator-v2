@@ -187,9 +187,7 @@ describe("canvas utilities", () => {
     const encoded = encodeCanvasAsPngWithinSize(source, 8);
 
     expect(encoded?.canvas).toBe(second.canvas);
-    expect(encoded?.base64Data).toBe(
-      pngDataUrl(8).slice(pngDataUrl(8).indexOf(",") + 1),
-    );
+    expect(encoded?.base64Data).toBe(pngDataUrl(8).slice(pngDataUrl(8).indexOf(",") + 1));
     expect(createElement).toHaveBeenCalledTimes(2);
     expect([source.width, source.height]).toEqual([0, 0]);
     expect([first.canvas.width, first.canvas.height]).toEqual([0, 0]);
@@ -229,9 +227,7 @@ describe("canvas utilities", () => {
 
   test("stops after six oversized encodings and releases every canvas", () => {
     const source = encodedCanvas(10_000, 5000, pngDataUrl(12));
-    const targets = Array.from({ length: 5 }, () =>
-      resizableCanvas(pngDataUrl(12)),
-    );
+    const targets = Array.from({ length: 5 }, () => resizableCanvas(pngDataUrl(12)));
     const createElement = installCanvasFactory(targets.map(({ canvas }) => canvas));
 
     expect(encodeCanvasAsPngWithinSize(source, 8)).toBeNull();

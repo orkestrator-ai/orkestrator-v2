@@ -107,8 +107,6 @@ import type {
   RepositoryConfig,
 } from "./command-fixtures";
 
-
-
 describe("GitHub issue commands", () => {
   test("loads and mutates only the selected project's GitHub issues", async () => {
     const originalFetch = globalThis.fetch;
@@ -215,10 +213,7 @@ describe("GitHub issue commands", () => {
       }
       if (url.pathname === "/repos/acme/repo/issues/42/labels" && method === "POST") {
         const labels = (body as { labels: string[] }).labels;
-        issueLabels = [
-          ...issueLabels,
-          ...labels.map((name) => ({ name, color: "D4C5F9" })),
-        ];
+        issueLabels = [...issueLabels, ...labels.map((name) => ({ name, color: "D4C5F9" }))];
         return Response.json(issueLabels);
       }
       if (url.pathname === "/repos/acme/repo/issues/42" && method === "PATCH") {
@@ -235,59 +230,100 @@ describe("GitHub issue commands", () => {
     }) as unknown as typeof fetch;
 
     try {
-      const snapshot = await commands.get("get_github_issues")?.({ projectId: "project-1" }, context);
+      const snapshot = await commands.get("get_github_issues")?.(
+        { projectId: "project-1" },
+        context,
+      );
       expect(snapshot).toMatchObject({
         repository: { owner: "acme", name: "repo" },
         viewer: { login: "viewer" },
         issues: [{ number: 42, title: "Original issue", status: "backlog" }],
       });
-      await expect(commands.get("get_github_issue")?.({
-        projectId: "project-1",
-        issueNumber: 42,
-      }, context)).resolves.toMatchObject({
+      await expect(
+        commands.get("get_github_issue")?.(
+          {
+            projectId: "project-1",
+            issueNumber: 42,
+          },
+          context,
+        ),
+      ).resolves.toMatchObject({
         number: 42,
         comments: [{ id: 7, body: "Original comment", canEdit: true }],
       });
-      await expect(commands.get("update_github_issue")?.({
-        projectId: "project-1",
-        issueNumber: 42,
-        title: "Updated issue",
-        body: "Updated body",
-      }, context)).resolves.toMatchObject({ title: "Updated issue", body: "Updated body" });
-      const statusIssue = await commands.get("update_github_issue_status")?.({
-        projectId: "project-1",
-        issueNumber: 42,
-        status: "todo",
-      }, context) as { status: string; labels: Array<{ name: string }> };
+      await expect(
+        commands.get("update_github_issue")?.(
+          {
+            projectId: "project-1",
+            issueNumber: 42,
+            title: "Updated issue",
+            body: "Updated body",
+          },
+          context,
+        ),
+      ).resolves.toMatchObject({ title: "Updated issue", body: "Updated body" });
+      const statusIssue = (await commands.get("update_github_issue_status")?.(
+        {
+          projectId: "project-1",
+          issueNumber: 42,
+          status: "todo",
+        },
+        context,
+      )) as { status: string; labels: Array<{ name: string }> };
       expect(statusIssue.status).toBe("todo");
       expect(statusIssue.labels.map((label) => label.name)).toEqual(["bug", "ork:todo"]);
-      await expect(commands.get("add_github_issue_comment")?.({
-        projectId: "project-1",
-        issueNumber: 42,
-        body: "New comment",
-      }, context)).resolves.toMatchObject({ body: "New comment", canEdit: true });
-      await expect(commands.get("update_github_issue_comment")?.({
-        projectId: "project-1",
-        issueNumber: 42,
-        commentId: 7,
-        body: "Edited comment",
-      }, context)).resolves.toMatchObject({ body: "Edited comment", canEdit: true, isEdited: true });
-      await expect(commands.get("close_github_issue")?.({
-        projectId: "project-1",
-        issueNumber: 42,
-      }, context)).resolves.toMatchObject({ state: "closed" });
+      await expect(
+        commands.get("add_github_issue_comment")?.(
+          {
+            projectId: "project-1",
+            issueNumber: 42,
+            body: "New comment",
+          },
+          context,
+        ),
+      ).resolves.toMatchObject({ body: "New comment", canEdit: true });
+      await expect(
+        commands.get("update_github_issue_comment")?.(
+          {
+            projectId: "project-1",
+            issueNumber: 42,
+            commentId: 7,
+            body: "Edited comment",
+          },
+          context,
+        ),
+      ).resolves.toMatchObject({ body: "Edited comment", canEdit: true, isEdited: true });
+      await expect(
+        commands.get("close_github_issue")?.(
+          {
+            projectId: "project-1",
+            issueNumber: 42,
+          },
+          context,
+        ),
+      ).resolves.toMatchObject({ state: "closed" });
 
-      expect(requests.filter((request) =>
-        request.method === "DELETE" && request.pathname.includes("/issues/42/labels/")
-      )).toHaveLength(3);
+      expect(
+        requests.filter(
+          (request) =>
+            request.method === "DELETE" && request.pathname.includes("/issues/42/labels/"),
+        ),
+      ).toHaveLength(3);
       expect(requests).toContainEqual({
         method: "POST",
         pathname: "/repos/acme/repo/issues/42/labels",
         body: { labels: ["ork:todo"] },
       });
-      expect(JSON.stringify(await commands.get("get_github_issues")?.({
-        projectId: "project-1",
-      }, context))).not.toContain("github_secret_token");
+      expect(
+        JSON.stringify(
+          await commands.get("get_github_issues")?.(
+            {
+              projectId: "project-1",
+            },
+            context,
+          ),
+        ),
+      ).not.toContain("github_secret_token");
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -300,8 +336,9 @@ describe("GitHub issue commands", () => {
     Object.assign(context.storage, {
       loadConfig: mock(async () => ({ version: "1.0.0", global: {}, repositories: {} })),
     });
-    await expect(commands.get("get_github_issues")?.({ projectId: "project-1" }, context))
-      .rejects.toThrow("GitHub is not configured");
+    await expect(
+      commands.get("get_github_issues")?.({ projectId: "project-1" }, context),
+    ).rejects.toThrow("GitHub is not configured");
 
     Object.assign(context.storage, {
       getProject: mock(async () => null),
@@ -311,8 +348,9 @@ describe("GitHub issue commands", () => {
         repositories: {},
       })),
     });
-    await expect(commands.get("get_github_issues")?.({ projectId: "missing" }, context))
-      .rejects.toThrow("Project not found: missing");
+    await expect(
+      commands.get("get_github_issues")?.({ projectId: "missing" }, context),
+    ).rejects.toThrow("Project not found: missing");
 
     Object.assign(context.storage, {
       getProject: mock(async () => ({
@@ -321,8 +359,9 @@ describe("GitHub issue commands", () => {
         gitUrl: "https://gitlab.com/acme/repo.git",
       })),
     });
-    await expect(commands.get("get_github_issues")?.({ projectId: "project-1" }, context))
-      .rejects.toThrow(/github\.com HTTPS or SSH URL/i);
+    await expect(
+      commands.get("get_github_issues")?.({ projectId: "project-1" }, context),
+    ).rejects.toThrow(/github\.com HTTPS or SSH URL/i);
 
     const originalFetch = globalThis.fetch;
     Object.assign(context.storage, {
@@ -336,7 +375,7 @@ describe("GitHub issue commands", () => {
       Response.json(
         { message: "Bad credentials github_secret_token" },
         { status: 401, headers: { "x-ratelimit-remaining": "1" } },
-      )
+      ),
     ) as unknown as typeof fetch;
     try {
       let failure: Error | null = null;
@@ -354,9 +393,6 @@ describe("GitHub issue commands", () => {
 });
 
 describe("Electron backend command registry", () => {
-
-
-
   // The `security` stub only takes effect on darwin, where `getHostClaudeCredentials`
   // consults the Keychain; elsewhere resolution starts at the on-disk credential.
   // Seeding both with the same payload keeps these tests asserting the same thing
@@ -372,8 +408,6 @@ if [ "$1" = "exec" ]; then
 fi
 exit 1
 `;
-
-
 
   function claudeCredentialSyncContext(
     globalConfig: Record<string, unknown> = {},
@@ -392,8 +426,6 @@ exit 1
     }));
     return created;
   }
-
-
 
   test("serializes and persists idempotent GitHub completion comments", async () => {
     const originalFetch = globalThis.fetch;
@@ -436,14 +468,17 @@ exit 1
       const payload = JSON.parse(String(init?.body)) as { body: string };
       expect(payload.body).toContain("<!-- orkestrator-github-run:pipeline-github -->");
       await new Promise((resolve) => setTimeout(resolve, 25));
-      return new Response(JSON.stringify({
-        id: 9001,
-        body: payload.body,
-        html_url: "https://github.com/acme/widget/issues/42#issuecomment-9001",
-        created_at: "2026-07-24T12:00:00.000Z",
-        updated_at: "2026-07-24T12:00:00.000Z",
-        user: { login: "ork-user" },
-      }), { status: 201, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          id: 9001,
+          body: payload.body,
+          html_url: "https://github.com/acme/widget/issues/42#issuecomment-9001",
+          created_at: "2026-07-24T12:00:00.000Z",
+          updated_at: "2026-07-24T12:00:00.000Z",
+          user: { login: "ork-user" },
+        }),
+        { status: 201, headers: { "content-type": "application/json" } },
+      );
     }) as unknown as typeof fetch;
 
     const args = {
@@ -484,8 +519,6 @@ exit 1
     }
   });
 
-
-
   test("recovers a GitHub completion comment accepted before local persistence", async () => {
     const originalFetch = globalThis.fetch;
     const { context } = createContext(createEnvironment());
@@ -514,25 +547,35 @@ exit 1
     });
     globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
       if ((init?.method ?? "GET") !== "GET") commentCreateCalls += 1;
-      return new Response(JSON.stringify([{
-        id: 9002,
-        body: "Done\n\n<!-- orkestrator-github-run:pipeline-retry -->",
-        html_url: "https://github.com/acme/widget/issues/42#issuecomment-9002",
-        created_at: "2026-07-24T12:05:00.000Z",
-        updated_at: "2026-07-24T12:05:00.000Z",
-        user: { login: "ork-user" },
-      }]), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify([
+          {
+            id: 9002,
+            body: "Done\n\n<!-- orkestrator-github-run:pipeline-retry -->",
+            html_url: "https://github.com/acme/widget/issues/42#issuecomment-9002",
+            created_at: "2026-07-24T12:05:00.000Z",
+            updated_at: "2026-07-24T12:05:00.000Z",
+            user: { login: "ork-user" },
+          },
+        ]),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }) as unknown as typeof fetch;
 
     try {
-      await expect(commands.get("post_github_completion_comment")?.({
-        pipelineId: "pipeline-retry",
-        projectId: "project-1",
-        repositoryOwner: "acme",
-        repositoryName: "project",
-        issueNumber: 42,
-        body: "Result: Complete",
-      }, context)).resolves.toEqual({
+      await expect(
+        commands.get("post_github_completion_comment")?.(
+          {
+            pipelineId: "pipeline-retry",
+            projectId: "project-1",
+            repositoryOwner: "acme",
+            repositoryName: "project",
+            issueNumber: 42,
+            body: "Result: Complete",
+          },
+          context,
+        ),
+      ).resolves.toEqual({
         status: "already-posted",
         commentId: "9002",
         postedAt: "2026-07-24T12:05:00.000Z",
@@ -546,8 +589,6 @@ exit 1
       globalThis.fetch = originalFetch;
     }
   });
-
-
 
   test("persists a sanitized GitHub completion API failure for retry", async () => {
     const originalFetch = globalThis.fetch;
@@ -568,33 +609,38 @@ exit 1
         return record;
       }),
     });
-    globalThis.fetch = mock(async (
-      _url: string | URL | Request,
-      init?: RequestInit,
-    ) => {
+    globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
       if ((init?.method ?? "GET") === "GET") {
         return new Response(JSON.stringify([]), {
           status: 200,
           headers: { "content-type": "application/json" },
         });
       }
-      return new Response(JSON.stringify({
-        message: `Forbidden for Bearer ${secret}`,
-      }), {
-        status: 403,
-        headers: { "content-type": "application/json" },
-      });
+      return new Response(
+        JSON.stringify({
+          message: `Forbidden for Bearer ${secret}`,
+        }),
+        {
+          status: 403,
+          headers: { "content-type": "application/json" },
+        },
+      );
     }) as unknown as typeof fetch;
 
     try {
-      await expect(commands.get("post_github_completion_comment")?.({
-        pipelineId: "pipeline-failed",
-        projectId: "project-1",
-        repositoryOwner: "acme",
-        repositoryName: "project",
-        issueNumber: 42,
-        body: "Result: Failed",
-      }, context)).rejects.toThrow("GitHub denied permission");
+      await expect(
+        commands.get("post_github_completion_comment")?.(
+          {
+            pipelineId: "pipeline-failed",
+            projectId: "project-1",
+            repositoryOwner: "acme",
+            repositoryName: "project",
+            issueNumber: 42,
+            body: "Result: Failed",
+          },
+          context,
+        ),
+      ).rejects.toThrow("GitHub denied permission");
       expect(completionRecord).toMatchObject({
         pipelineId: "pipeline-failed",
         repositoryOwner: "acme",
@@ -609,8 +655,6 @@ exit 1
     }
   });
 
-
-
   test("rejects a GitHub completion target outside the selected project repository", async () => {
     const { context } = createContext(createEnvironment());
     const commands = createCommandRegistry();
@@ -624,15 +668,19 @@ exit 1
       getGitHubCompletionComment: getCompletion,
     });
 
-    await expect(commands.get("post_github_completion_comment")?.({
-      pipelineId: "pipeline-out-of-scope",
-      projectId: "project-1",
-      repositoryOwner: "other",
-      repositoryName: "repository",
-      issueNumber: 1,
-      body: "Result: Complete",
-    }, context)).rejects.toThrow("does not match the selected project");
+    await expect(
+      commands.get("post_github_completion_comment")?.(
+        {
+          pipelineId: "pipeline-out-of-scope",
+          projectId: "project-1",
+          repositoryOwner: "other",
+          repositoryName: "repository",
+          issueNumber: 1,
+          body: "Result: Complete",
+        },
+        context,
+      ),
+    ).rejects.toThrow("does not match the selected project");
     expect(getCompletion).not.toHaveBeenCalled();
   });
-
 });

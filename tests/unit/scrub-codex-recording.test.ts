@@ -59,7 +59,7 @@ describe("scrub-codex-recording", () => {
 
   test("redacts bearer tokens and JWTs", () => {
     const { output } = scrub(
-      'Authorization: Bearer abcdefghijklmnopqrstuvwxyz123456\ntoken eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk',
+      "Authorization: Bearer abcdefghijklmnopqrstuvwxyz123456\ntoken eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk",
     );
     expect(output).not.toContain("abcdefghijklmnopqrstuvwxyz123456");
     expect(output).not.toContain("eyJhbGciOiJIUzI1NiJ9");
@@ -136,11 +136,13 @@ describe("scrub-codex-recording", () => {
   });
 
   test("validation detects a custom redaction that breaks JSON framing", () => {
-    const result = scrub('{"value":"safe"}', [{
-      name: "unsafe-custom-redaction",
-      pattern: /safe/g,
-      replacement: '"',
-    }]);
+    const result = scrub('{"value":"safe"}', [
+      {
+        name: "unsafe-custom-redaction",
+        pattern: /safe/g,
+        replacement: '"',
+      },
+    ]);
 
     expect(__testing.validateJsonl(result.output)).toEqual({ lines: 1, invalid: 1 });
   });
@@ -150,7 +152,9 @@ describe("scrub-codex-recording", () => {
       '{"jsonrpc":"2.0","method":"turn/started","params":{"turn":{"id":"turn-1"}}}',
     );
     expect(totalHits).toBe(0);
-    expect(output).toBe('{"jsonrpc":"2.0","method":"turn/started","params":{"turn":{"id":"turn-1"}}}');
+    expect(output).toBe(
+      '{"jsonrpc":"2.0","method":"turn/started","params":{"turn":{"id":"turn-1"}}}',
+    );
   });
 
   test("every committed replay fixture is scrubbed", async () => {
@@ -158,7 +162,16 @@ describe("scrub-codex-recording", () => {
     // recording in is a one-file change that would otherwise commit real
     // prompts, file contents and absolute paths. This is the enforcement the
     // script's `--check` header promises: nothing else runs it.
-    const fixtureDir = join(import.meta.dir, "..", "..", "bridges", "codex-bridge", "src", "testing", "fixtures");
+    const fixtureDir = join(
+      import.meta.dir,
+      "..",
+      "..",
+      "bridges",
+      "codex-bridge",
+      "src",
+      "testing",
+      "fixtures",
+    );
     const fixtures = readdirSync(fixtureDir).filter((name) => name.endsWith(".jsonl"));
     expect(fixtures.length).toBeGreaterThan(0);
 
@@ -246,7 +259,10 @@ describe("scrub-codex-recording", () => {
           },
         },
       }),
-      JSON.stringify({ method: "turn/diff/updated", params: { diff: { "a.ts": "-secret\n+also secret" } } }),
+      JSON.stringify({
+        method: "turn/diff/updated",
+        params: { diff: { "a.ts": "-secret\n+also secret" } },
+      }),
       "not json at all",
     ].join("\n");
 
@@ -273,14 +289,16 @@ describe("scrub-codex-recording", () => {
       stripContent: false,
       identity: {},
     });
-    expect(parseArguments([
-      "--home=/h",
-      "in.jsonl",
-      "--check",
-      "out.jsonl",
-      "--user=u",
-      "--strip-content",
-    ])).toEqual({
+    expect(
+      parseArguments([
+        "--home=/h",
+        "in.jsonl",
+        "--check",
+        "out.jsonl",
+        "--user=u",
+        "--strip-content",
+      ]),
+    ).toEqual({
       inputPath: "in.jsonl",
       outputPath: "out.jsonl",
       check: true,

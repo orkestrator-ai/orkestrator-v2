@@ -375,11 +375,7 @@ export const IDLE_WAIT_POLL_MS = 100;
 export const AMBIGUOUS_DISPATCH_FAILURE_MESSAGE =
   "Codex never confirmed this turn. Check the conversation before sending it again.";
 
-export type AmbiguousDispatchResolution =
-  | "attached"
-  | "recovering"
-  | "terminal"
-  | "absent";
+export type AmbiguousDispatchResolution = "attached" | "recovering" | "terminal" | "absent";
 
 /**
  * Merges a sparse rate-limit update into the retained snapshot.
@@ -400,8 +396,8 @@ export function mergeRateLimitWindows(
     bySlot.set(window.slot, {
       ...current,
       ...window,
-      label: window.label ?? current?.label
-        ?? (window.slot === "primary" ? "Primary" : "Secondary"),
+      label:
+        window.label ?? current?.label ?? (window.slot === "primary" ? "Primary" : "Secondary"),
     });
   }
   // Stable presentation order regardless of which window the update carried.
@@ -427,17 +423,15 @@ export function isJsonObject(value: unknown): value is Record<string, unknown> {
 export const DEFAULT_COMPACTION_TIMEOUT_MS = 5 * 60_000;
 export const MAX_STEER_REQUESTS = 500;
 
-export function codexStructuredOutputFailure(
-  turn: TurnAccumulator,
-): StructuredOutputResult<never> {
+export function codexStructuredOutputFailure(turn: TurnAccumulator): StructuredOutputResult<never> {
   const message = turn.error?.message ?? "Codex failed to produce structured output.";
   const marker = `${turn.error?.code ?? ""} ${message}`.toLowerCase();
   const compactMarker = marker.replace(/[^a-z0-9]/g, "");
   const schemaRetriesExhausted =
-    marker.includes("structured_output_retry")
-    || marker.includes("structured output retr")
-    || marker.includes("schema retr")
-    || compactMarker.includes("structuredoutputretry");
+    marker.includes("structured_output_retry") ||
+    marker.includes("structured output retr") ||
+    marker.includes("schema retr") ||
+    compactMarker.includes("structuredoutputretry");
   return structuredOutputFailure(
     "codex",
     turn.phase === "interrupted"
@@ -503,8 +497,7 @@ export function buildRecoveredContextPrompt(
           .filter((part) => part.type === "text")
           .map((part) => part.content)
           .join("\n")
-          .trim()
-        || message.content.trim();
+          .trim() || message.content.trim();
       return content ? `${message.role.toUpperCase()}:\n${content}` : "";
     })
     .filter(Boolean)
@@ -606,14 +599,8 @@ export abstract class AppServerRuntimeBase {
    * router has no way to compute, and is what `/session/:id/approvals` reads so a
    * remounting tab rehydrates rather than depending on having seen the SSE frame.
    */
-  protected readonly pendingApprovals = new Map<
-    string,
-    { request: ApprovalRequest }
-  >();
-  protected readonly pendingInteractions = new Map<
-    string,
-    { request: InteractionRequest }
-  >();
+  protected readonly pendingApprovals = new Map<string, { request: ApprovalRequest }>();
+  protected readonly pendingInteractions = new Map<string, { request: InteractionRequest }>();
   protected readonly usageByThread = new Map<string, EngineUsageSnapshot>();
   /**
    * Bounded, process-local steering idempotency state.
@@ -711,17 +698,13 @@ export abstract class AppServerRuntimeBase {
    * Must stay synchronous: this runs on the path from the RPC read loop.
    */
   protected presentApproval(request: ApprovalRequest): boolean {
-    const context = request.threadId
-      ? this.registry.getThread(request.threadId)
-      : undefined;
-    const item = request.itemId
-      ? context?.activeTurn?.items.get(request.itemId)?.item
-      : undefined;
+    const context = request.threadId ? this.registry.getThread(request.threadId) : undefined;
+    const item = request.itemId ? context?.activeTurn?.items.get(request.itemId)?.item : undefined;
     const enriched =
-      request.kind === "file-change"
-      && !request.changes?.length
-      && item?.type === "file_change"
-      && item.changes.length > 0
+      request.kind === "file-change" &&
+      !request.changes?.length &&
+      item?.type === "file_change" &&
+      item.changes.length > 0
         ? {
             ...request,
             changes: item.changes.map((change) => ({
@@ -823,8 +806,8 @@ export abstract class AppServerRuntimeBase {
      * action no human was ever shown.
      */
     if (
-      !entry.request.actionable
-      && (decision === "approve" || decision === "approve-for-session")
+      !entry.request.actionable &&
+      (decision === "approve" || decision === "approve-for-session")
     ) {
       return "not-actionable";
     }
@@ -832,10 +815,7 @@ export abstract class AppServerRuntimeBase {
     if (this.options.engine.resolveApproval(approvalId, decision)) {
       if (decision === "cancel") {
         void this.abort(sessionId).catch((error: unknown) => {
-          console.error(
-            "[codex-bridge] Failed to cancel turn after approval response:",
-            error,
-          );
+          console.error("[codex-bridge] Failed to cancel turn after approval response:", error);
         });
       }
       return "applied";
@@ -852,15 +832,19 @@ export abstract class AppServerRuntimeBase {
     const sessionIds = this.sessionIdsForThread(request.threadId);
     if (sessionIds.length === 0) return false;
     this.pendingInteractions.set(request.interactionId, { request });
-    this.enqueueAfterMessageFlush(request.threadId, () => {
-      for (const sessionId of sessionIds) {
-        this.options.emit({
-          type: "session.interaction-requested",
-          sessionId,
-          data: { interaction: request },
-        });
-      }
-    }, { bytes: estimateOrderedEventBytes(request) });
+    this.enqueueAfterMessageFlush(
+      request.threadId,
+      () => {
+        for (const sessionId of sessionIds) {
+          this.options.emit({
+            type: "session.interaction-requested",
+            sessionId,
+            data: { interaction: request },
+          });
+        }
+      },
+      { bytes: estimateOrderedEventBytes(request) },
+    );
     return true;
   }
 
@@ -870,15 +854,19 @@ export abstract class AppServerRuntimeBase {
     resolution: InteractionResolution,
   ): void {
     this.pendingInteractions.delete(request.interactionId);
-    this.enqueueAfterMessageFlush(request.threadId, () => {
-      for (const sessionId of this.sessionIdsForThread(request.threadId)) {
-        this.options.emit({
-          type: "session.interaction-resolved",
-          sessionId,
-          data: { interactionId: request.interactionId, action: answer.action, resolution },
-        });
-      }
-    }, { bytes: estimateOrderedEventBytes(request) });
+    this.enqueueAfterMessageFlush(
+      request.threadId,
+      () => {
+        for (const sessionId of this.sessionIdsForThread(request.threadId)) {
+          this.options.emit({
+            type: "session.interaction-resolved",
+            sessionId,
+            data: { interactionId: request.interactionId, action: answer.action, resolution },
+          });
+        }
+      },
+      { bytes: estimateOrderedEventBytes(request) },
+    );
   }
 
   protected sessionIdsForThread(threadId: string): string[] {
@@ -913,9 +901,9 @@ export abstract class AppServerRuntimeBase {
      * parked until its auto-cancel.
      */
     if (
-      answer.action === "accept"
-      && answer.answers !== undefined
-      && !isInteractionAnswerMap(answer.answers)
+      answer.action === "accept" &&
+      answer.answers !== undefined &&
+      !isInteractionAnswerMap(answer.answers)
     ) {
       return "invalid";
     }
@@ -924,9 +912,9 @@ export abstract class AppServerRuntimeBase {
       const expectedIds = new Set(entry.request.questions?.map((question) => question.id));
       const provided = answer.answers;
       if (
-        !provided
-        || [...expectedIds].some((id) => provided[id] === undefined)
-        || Object.keys(provided).some((id) => !expectedIds.has(id))
+        !provided ||
+        [...expectedIds].some((id) => provided[id] === undefined) ||
+        Object.keys(provided).some((id) => !expectedIds.has(id))
       ) {
         return "invalid";
       }
@@ -945,9 +933,9 @@ export abstract class AppServerRuntimeBase {
     }
     if (answer.action === "accept" && entry.request.kind === "mcp-url") {
       if (
-        answer.content !== undefined
-        && answer.content !== null
-        && !isJsonObject(answer.content)
+        answer.content !== undefined &&
+        answer.content !== null &&
+        !isJsonObject(answer.content)
       ) {
         return "invalid";
       }
@@ -968,5 +956,4 @@ export abstract class AppServerRuntimeBase {
    * The journal must be read before any prompt is accepted, or a request that was
    * in flight when the bridge died could be dispatched a second time.
    */
-
 }

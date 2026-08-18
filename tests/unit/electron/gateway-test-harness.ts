@@ -17,9 +17,7 @@
  */
 import { chmod, mkdtemp, mkdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 
-
 import { EventEmitter } from "node:events";
-
 
 import {
   createServer,
@@ -31,21 +29,15 @@ import {
   type ServerResponse,
 } from "node:http";
 
-
 import { connect as netConnect } from "node:net";
-
 
 import type { Duplex } from "node:stream";
 
-
 import os from "node:os";
-
 
 import path from "node:path";
 
-
 import { randomBytes } from "node:crypto";
-
 
 import {
   brotliCompressSync,
@@ -56,12 +48,9 @@ import {
   gzipSync,
 } from "node:zlib";
 
-
 import { afterEach, describe, expect, mock, test } from "bun:test";
 
-
 import { WebSocket } from "ws";
-
 
 import {
   decodeTerminalBinaryFrame,
@@ -76,7 +65,6 @@ import {
   TERMINAL_WEBSOCKET_SUBPROTOCOL,
   type TerminalWebSocketServerControlFrame,
 } from "@orkestrator/protocol/terminal-websocket";
-
 
 import {
   activeDynamicCompressionCount,
@@ -145,30 +133,21 @@ import {
   truncateUtf8,
 } from "../../../apps/backend/src/gateway";
 
-
 import {
   DEFAULT_GATEWAY_REPLAY_MAX_BYTES,
   GatewayEventReplay,
   parseGatewayCursor,
 } from "../../../apps/backend/src/gateway-event-replay";
 
-
 import { createCommandRegistry } from "../../../apps/backend/src/core/commands";
-
 
 import { TerminalWebSocketGateway } from "../../../apps/backend/src/terminal-websocket-server";
 
-
-
 export const tempDirs: string[] = [];
-
 
 export const gateways: OrkestratorGateway[] = [];
 
-
 export const auxiliaryServers: Server[] = [];
-
-
 
 export async function requestUrl(
   url: string,
@@ -182,36 +161,39 @@ export async function requestUrl(
 }> {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
-    const request = httpRequest({
-      hostname: parsed.hostname,
-      port: parsed.port,
-      path: `${parsed.pathname}${parsed.search}`,
-      method: options.method ?? "GET",
-      headers: options.headers,
-    }, (response) => {
-      const chunks: Buffer[] = [];
-      response.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
-      response.on("aborted", () => reject(new Error("Response aborted")));
-      response.on("error", reject);
-      response.on("end", () => {
-        const rawBody = Buffer.concat(chunks);
-        const body = rawBody.toString("utf8");
-        resolve({
-          status: response.statusCode ?? 0,
-          body,
-          rawBody,
-          headers: response.headers,
-          json: () => JSON.parse(body) as unknown,
+    const request = httpRequest(
+      {
+        hostname: parsed.hostname,
+        port: parsed.port,
+        path: `${parsed.pathname}${parsed.search}`,
+        method: options.method ?? "GET",
+        headers: options.headers,
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk) =>
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)),
+        );
+        response.on("aborted", () => reject(new Error("Response aborted")));
+        response.on("error", reject);
+        response.on("end", () => {
+          const rawBody = Buffer.concat(chunks);
+          const body = rawBody.toString("utf8");
+          resolve({
+            status: response.statusCode ?? 0,
+            body,
+            rawBody,
+            headers: response.headers,
+            json: () => JSON.parse(body) as unknown,
+          });
         });
-      });
-    });
+      },
+    );
     request.on("error", reject);
     if (options.body) request.write(options.body);
     request.end();
   });
 }
-
-
 
 export function decodeResponseBody(response: {
   headers: IncomingHttpHeaders;
@@ -224,28 +206,35 @@ export function decodeResponseBody(response: {
   return response.body;
 }
 
-
-
 export type GatewayMetricsSnapshot = {
-  routes: Record<string, {
-    requests: number;
-    requestBytes: number;
-    responseBytes: number;
-    statusCodes: Record<string, number>;
-    encodings: Record<string, number>;
-  }>;
-  commands: Record<string, {
-    count: number;
-    requestBytes: number;
-    responseBytes: number;
-    failures: number;
-  }>;
-  events: Record<string, {
-    frames: number;
-    wireBytes: number;
-    droppedFrames: number;
-    droppedClients: number;
-  }>;
+  routes: Record<
+    string,
+    {
+      requests: number;
+      requestBytes: number;
+      responseBytes: number;
+      statusCodes: Record<string, number>;
+      encodings: Record<string, number>;
+    }
+  >;
+  commands: Record<
+    string,
+    {
+      count: number;
+      requestBytes: number;
+      responseBytes: number;
+      failures: number;
+    }
+  >;
+  events: Record<
+    string,
+    {
+      frames: number;
+      wireBytes: number;
+      droppedFrames: number;
+      droppedClients: number;
+    }
+  >;
   stream: {
     open: number;
     connecting: number;
@@ -279,17 +268,16 @@ export type GatewayMetricsSnapshot = {
   }>;
 };
 
-
-
-export async function readGatewayMetrics(info: { url: string; token: string }): Promise<GatewayMetricsSnapshot> {
+export async function readGatewayMetrics(info: {
+  url: string;
+  token: string;
+}): Promise<GatewayMetricsSnapshot> {
   const response = await requestUrl(`${info.url}__orkestrator/metrics`, {
     headers: { authorization: `Bearer ${info.token}` },
   });
   expect(response.status).toBe(200);
   return response.json() as GatewayMetricsSnapshot;
 }
-
-
 
 export function createLogger() {
   return {
@@ -300,24 +288,21 @@ export function createLogger() {
   };
 }
 
-
-
 export async function createTempDir(prefix: string): Promise<string> {
   const dir = await mkdtemp(path.join(os.tmpdir(), prefix));
   tempDirs.push(dir);
   return dir;
 }
 
-
-
-export async function createRendererRoot(dataDir: string, index = "<div id=\"root\"></div>"): Promise<string> {
+export async function createRendererRoot(
+  dataDir: string,
+  index = '<div id="root"></div>',
+): Promise<string> {
   const rendererRoot = path.join(dataDir, "dist");
   await mkdir(rendererRoot);
   await writeFile(path.join(rendererRoot, "index.html"), index);
   return rendererRoot;
 }
-
-
 
 export async function writeRendererAsset(
   rendererRoot: string,
@@ -330,8 +315,6 @@ export async function writeRendererAsset(
   return filePath;
 }
 
-
-
 export async function writeCompressedSibling(
   filePath: string,
   encoding: "br" | "gzip",
@@ -339,22 +322,17 @@ export async function writeCompressedSibling(
 ): Promise<string> {
   const buffer = Buffer.from(body, "utf8");
   const siblingPath = `${filePath}.${encoding === "br" ? "br" : "gz"}`;
-  await writeFile(
-    siblingPath,
-    encoding === "br" ? brotliCompressSync(buffer) : gzipSync(buffer),
-  );
+  await writeFile(siblingPath, encoding === "br" ? brotliCompressSync(buffer) : gzipSync(buffer));
   return siblingPath;
 }
-
-
 
 export async function closeServer(server: Server): Promise<void> {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
-
-
-export async function occupyContiguousPorts(count: number): Promise<{ start: number; servers: Server[] }> {
+export async function occupyContiguousPorts(
+  count: number,
+): Promise<{ start: number; servers: Server[] }> {
   for (let start = 42_000; start <= 62_000 - count; start += count) {
     const servers: Server[] = [];
     try {
@@ -377,11 +355,11 @@ export async function occupyContiguousPorts(count: number): Promise<{ start: num
   throw new Error(`Unable to reserve ${count} contiguous test ports`);
 }
 
-
-
-export async function startGateway(options: Partial<ConstructorParameters<typeof OrkestratorGateway>[0]> = {}) {
-  const dataDir = options.dataDir ?? await createTempDir("ork-gateway-");
-  const rendererRoot = options.rendererRoot ?? await createRendererRoot(dataDir);
+export async function startGateway(
+  options: Partial<ConstructorParameters<typeof OrkestratorGateway>[0]> = {},
+) {
+  const dataDir = options.dataDir ?? (await createTempDir("ork-gateway-"));
+  const rendererRoot = options.rendererRoot ?? (await createRendererRoot(dataDir));
   const gateway = new OrkestratorGateway({
     backend: { invoke: mock(async () => null) },
     dataDir,
@@ -399,9 +377,11 @@ export async function startGateway(options: Partial<ConstructorParameters<typeof
   return { gateway, info, dataDir, rendererRoot };
 }
 
-
-
-export async function waitUntil(predicate: () => boolean, message: string, timeoutMs = 2000): Promise<void> {
+export async function waitUntil(
+  predicate: () => boolean,
+  message: string,
+  timeoutMs = 2000,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
     if (Date.now() > deadline) throw new Error(message);
@@ -409,13 +389,9 @@ export async function waitUntil(predicate: () => boolean, message: string, timeo
   }
 }
 
-
-
 export function eventClients(gateway: OrkestratorGateway): Map<ServerResponse, unknown> {
   return (gateway as unknown as { clients: Map<ServerResponse, unknown> }).clients;
 }
-
-
 
 export type GatewayEventStream = {
   /** Everything this browser-side client has received so far. */
@@ -426,8 +402,6 @@ export type GatewayEventStream = {
   aborted: () => boolean;
   close: () => void;
 };
-
-
 
 /** Opens a real `/__orkestrator/events` stream and pairs it with its server response. */
 export async function openEventStream(
@@ -440,18 +414,25 @@ export async function openEventStream(
   const known = new Set(eventClients(gateway).keys());
   let received = "";
   let aborted = false;
-  const request = httpRequest({
-    hostname: parsed.hostname,
-    port: parsed.port,
-    path: `${parsed.pathname}${parsed.search}`,
-    headers: { authorization: `Bearer ${info.token}`, ...headers },
-  }, (response) => {
-    response.on("data", (chunk) => {
-      received += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
-    });
-    response.on("aborted", () => { aborted = true; });
+  const request = httpRequest(
+    {
+      hostname: parsed.hostname,
+      port: parsed.port,
+      path: `${parsed.pathname}${parsed.search}`,
+      headers: { authorization: `Bearer ${info.token}`, ...headers },
+    },
+    (response) => {
+      response.on("data", (chunk) => {
+        received += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
+      });
+      response.on("aborted", () => {
+        aborted = true;
+      });
+    },
+  );
+  request.on("error", () => {
+    aborted = true;
   });
-  request.on("error", () => { aborted = true; });
   request.end();
   await waitUntil(() => received.includes(": connected"), "Event stream never connected");
 
@@ -465,8 +446,6 @@ export async function openEventStream(
   };
 }
 
-
-
 export function eventFrames(body: string, event: string): string[] {
   return body
     .split(/\r?\n\r?\n/)
@@ -474,13 +453,9 @@ export function eventFrames(body: string, event: string): string[] {
     .map((block) => `${block}\n\n`);
 }
 
-
-
 export function frameId(frame: string): string | null {
   return /^id: (.+)$/m.exec(frame)?.[1] ?? null;
 }
-
-
 
 export async function openCompressedEventStream(
   gateway: OrkestratorGateway,
@@ -492,22 +467,29 @@ export async function openCompressedEventStream(
   const chunks: Buffer[] = [];
   let responseHeaders: IncomingHttpHeaders = {};
   let aborted = false;
-  const request = httpRequest({
-    hostname: parsed.hostname,
-    port: parsed.port,
-    path: `${parsed.pathname}${parsed.search}`,
-    headers: {
-      authorization: `Bearer ${info.token}`,
-      "accept-encoding": "gzip",
+  const request = httpRequest(
+    {
+      hostname: parsed.hostname,
+      port: parsed.port,
+      path: `${parsed.pathname}${parsed.search}`,
+      headers: {
+        authorization: `Bearer ${info.token}`,
+        "accept-encoding": "gzip",
+      },
     },
-  }, (response) => {
-    responseHeaders = response.headers;
-    response.on("data", (chunk) => {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    });
-    response.on("aborted", () => { aborted = true; });
+    (response) => {
+      responseHeaders = response.headers;
+      response.on("data", (chunk) => {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      });
+      response.on("aborted", () => {
+        aborted = true;
+      });
+    },
+  );
+  request.on("error", () => {
+    aborted = true;
   });
-  request.on("error", () => { aborted = true; });
   request.end();
 
   const received = () => {
@@ -521,7 +503,10 @@ export async function openCompressedEventStream(
       return "";
     }
   };
-  await waitUntil(() => received().includes(": connected"), "Compressed event stream never connected");
+  await waitUntil(
+    () => received().includes(": connected"),
+    "Compressed event stream never connected",
+  );
   const writer = [...eventClients(gateway).keys()].find((client) => !known.has(client));
   if (!writer) throw new Error("Gateway did not register the compressed event-stream client");
   return {
@@ -533,8 +518,6 @@ export async function openCompressedEventStream(
   };
 }
 
-
-
 /**
  * Pins the buffered byte count the gateway sees for a live response.
  *
@@ -543,40 +526,43 @@ export async function openCompressedEventStream(
  * parked client is not reproducible here. Pinning the value puts a real
  * response into the state the limits exist for.
  */
-export function pinBufferedBytes(response: ServerResponse | EventClientWriter, bytes: number): void {
+export function pinBufferedBytes(
+  response: ServerResponse | EventClientWriter,
+  bytes: number,
+): void {
   Object.defineProperty(response, "writableLength", { value: bytes, configurable: true });
 }
-
-
 
 export function releaseBufferedBytes(response: ServerResponse | EventClientWriter): void {
   Reflect.deleteProperty(response, "writableLength");
 }
 
-
-
 afterEach(async () => {
   await Promise.all(gateways.splice(0).map((gateway) => gateway.stop().catch(() => undefined)));
-  await Promise.all(auxiliaryServers.splice(0).map((server) => new Promise<void>((resolve) => {
-    server.closeAllConnections();
-    server.close(() => resolve());
-  })));
+  await Promise.all(
+    auxiliaryServers.splice(0).map(
+      (server) =>
+        new Promise<void>((resolve) => {
+          server.closeAllConnections();
+          server.close(() => resolve());
+        }),
+    ),
+  );
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
-
-
 
 export type WebSocketInbox = {
   next(): Promise<{ data: Buffer; binary: boolean }>;
 };
 
-
-
 export function websocketInbox(socket: WebSocket): WebSocketInbox {
   const queued: Array<{ data: Buffer; binary: boolean }> = [];
   const waiting: Array<(message: { data: Buffer; binary: boolean }) => void> = [];
   socket.on("message", (data, binary) => {
-    const message = { data: Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer), binary };
+    const message = {
+      data: Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer),
+      binary,
+    };
     const resolve = waiting.shift();
     if (resolve) resolve(message);
     else queued.push(message);
@@ -588,8 +574,6 @@ export function websocketInbox(socket: WebSocket): WebSocketInbox {
     },
   };
 }
-
-
 
 export async function openTerminalSocket(
   info: { url: string; token: string },
@@ -611,8 +595,6 @@ export async function openTerminalSocket(
   }
   return { socket, inbox };
 }
-
-
 
 export async function nextTerminalControl(
   inbox: WebSocketInbox,

@@ -55,9 +55,7 @@ export interface EnvironmentDiffStatsRemoval {
   removed: true;
 }
 
-export type EnvironmentDiffStatsEvent =
-  | EnvironmentDiffStatsChange
-  | EnvironmentDiffStatsRemoval;
+export type EnvironmentDiffStatsEvent = EnvironmentDiffStatsChange | EnvironmentDiffStatsRemoval;
 
 /** Full snapshot returned by the `get_environment_diff_stats` command. */
 export interface EnvironmentDiffStatsSnapshot {
@@ -74,28 +72,36 @@ export const EMPTY_DIFF_STATS: EnvironmentDiffStats = {
 export function isEnvironmentDiffStats(value: unknown): value is EnvironmentDiffStats {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Record<string, unknown>;
-  return isCount(candidate.additions)
-    && isCount(candidate.deletions)
-    && isCount(candidate.filesChanged)
-    && typeof candidate.truncated === "boolean";
+  return (
+    isCount(candidate.additions) &&
+    isCount(candidate.deletions) &&
+    isCount(candidate.filesChanged) &&
+    typeof candidate.truncated === "boolean"
+  );
 }
 
 export function isEnvironmentDiffStatsChange(value: unknown): value is EnvironmentDiffStatsChange {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Record<string, unknown>;
-  return isNonBlankString(candidate.environmentId)
-    && isNonBlankString(candidate.comparisonRef)
-    && isIsoTimestamp(candidate.computedAt)
-    && isEnvironmentDiffStats(candidate.stats);
+  return (
+    isNonBlankString(candidate.environmentId) &&
+    isNonBlankString(candidate.comparisonRef) &&
+    isIsoTimestamp(candidate.computedAt) &&
+    isEnvironmentDiffStats(candidate.stats)
+  );
 }
 
-export function isEnvironmentDiffStatsRemoval(value: unknown): value is EnvironmentDiffStatsRemoval {
+export function isEnvironmentDiffStatsRemoval(
+  value: unknown,
+): value is EnvironmentDiffStatsRemoval {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Record<string, unknown>;
-  return candidate.removed === true
-    && isNonBlankString(candidate.environmentId)
-    && isNonBlankString(candidate.comparisonRef)
-    && isIsoTimestamp(candidate.computedAt);
+  return (
+    candidate.removed === true &&
+    isNonBlankString(candidate.environmentId) &&
+    isNonBlankString(candidate.comparisonRef) &&
+    isIsoTimestamp(candidate.computedAt)
+  );
 }
 
 export function isEnvironmentDiffStatsEvent(value: unknown): value is EnvironmentDiffStatsEvent {
@@ -151,10 +157,12 @@ export function resolveComparisonRef(
   createdFromCommit: string | undefined | null,
   repositoryConfig: BaselineRepositoryConfig | undefined | null,
 ): string {
-  return normaliseRef(createdFromCommit)
-    || normaliseRef(repositoryConfig?.prBaseBranch)
-    || normaliseRef(repositoryConfig?.defaultBranch)
-    || FALLBACK_COMPARISON_REF;
+  return (
+    normaliseRef(createdFromCommit) ||
+    normaliseRef(repositoryConfig?.prBaseBranch) ||
+    normaliseRef(repositoryConfig?.defaultBranch) ||
+    FALLBACK_COMPARISON_REF
+  );
 }
 
 function normaliseRef(value: string | undefined | null): string | undefined {

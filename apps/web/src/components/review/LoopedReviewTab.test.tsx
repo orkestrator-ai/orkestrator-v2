@@ -10,9 +10,7 @@ import {
   type LoopedReviewWorkflow,
 } from "@/stores/loopedReviewStore";
 import { loopedReviewFixture } from "@/test/looped-review-fixture";
-import {
-  LoopedReviewTab,
-} from "./LoopedReviewTab";
+import { LoopedReviewTab } from "./LoopedReviewTab";
 
 const data = {
   environmentId: "env-1",
@@ -26,7 +24,9 @@ function commands(result: LoopedReviewWorkflow) {
     resume: mock(async () => result),
     retry: mock(async () => result),
     cancel: mock(async () => result),
-    providerSession: mock(async (): Promise<{ providerSessionId: string } | null> => ({ providerSessionId: "provider-1" })),
+    providerSession: mock(async (): Promise<{ providerSessionId: string } | null> => ({
+      providerSessionId: "provider-1",
+    })),
   };
 }
 
@@ -99,7 +99,9 @@ describe("LoopedReviewTab backend snapshot viewer", () => {
     const deferred = new Promise<LoopedReviewWorkflow | null>((resolve) => {
       resolveRestore = resolve;
     });
-    const second = render(<LoopedReviewTab data={data} isActive hydrateWorkflow={() => deferred} />);
+    const second = render(
+      <LoopedReviewTab data={data} isActive hydrateWorkflow={() => deferred} />,
+    );
     second.unmount();
     resolveRestore(null);
     await deferred;
@@ -117,31 +119,35 @@ describe("LoopedReviewTab backend snapshot viewer", () => {
         occurredAt: "2026-08-02T00:00:00.000Z",
       },
       autoDeclineCount: 1,
-      sessions: [{
-        id: "session-1",
-        phase: "discovery",
-        round: 1,
-        pass: 1,
-        sessionKey: "looped-review:workflow-view:discovery:1:1",
-        providerSessionId: "provider-1",
-        requestIds: ["request-1"],
-        origin: "looped-review",
-        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-        autoDeclineCount: 1,
-        interactionTranscript: [{
-          id: "question-1",
-          provider: "opencode",
-          kind: "question",
+      sessions: [
+        {
+          id: "session-1",
           phase: "discovery",
-          requestedAt: 1,
-          resolvedAt: 2,
-          outcome: "auto-declined-headless",
-          title: "Choose a safe default",
-          questions: [],
-        }],
-        status: "error",
-        startedAt: "2026-08-02T00:00:00.000Z",
-      }],
+          round: 1,
+          pass: 1,
+          sessionKey: "looped-review:workflow-view:discovery:1:1",
+          providerSessionId: "provider-1",
+          requestIds: ["request-1"],
+          origin: "looped-review",
+          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+          autoDeclineCount: 1,
+          interactionTranscript: [
+            {
+              id: "question-1",
+              provider: "opencode",
+              kind: "question",
+              phase: "discovery",
+              requestedAt: 1,
+              resolvedAt: 2,
+              outcome: "auto-declined-headless",
+              title: "Choose a safe default",
+              questions: [],
+            },
+          ],
+          status: "error",
+          startedAt: "2026-08-02T00:00:00.000Z",
+        },
+      ],
       activeSessionId: "session-1",
     });
     useLoopedReviewStore.getState().replaceWorkflow(workflow);
@@ -156,8 +162,17 @@ describe("LoopedReviewTab backend snapshot viewer", () => {
   });
 
   test("pause is a backend command and installs only its returned snapshot", async () => {
-    const running = loopedReviewFixture({ id: data.workflowId, phase: "discovering", backendRevision: 2 });
-    const paused = { ...running, phase: "paused" as const, pausedFromPhase: "discovering" as const, backendRevision: 3 };
+    const running = loopedReviewFixture({
+      id: data.workflowId,
+      phase: "discovering",
+      backendRevision: 2,
+    });
+    const paused = {
+      ...running,
+      phase: "paused" as const,
+      pausedFromPhase: "discovering" as const,
+      backendRevision: 3,
+    };
     const api = commands(paused);
     useLoopedReviewStore.getState().replaceWorkflow(running);
 
@@ -171,9 +186,24 @@ describe("LoopedReviewTab backend snapshot viewer", () => {
 
   test("resume, retry, and cancel install only authoritative command results", async () => {
     for (const scenario of [
-      { phase: "paused" as const, pausedFromPhase: "fixing" as const, label: "Resume", command: "resume" as const },
-      { phase: "failed" as const, pausedFromPhase: undefined, label: "Retry phase", command: "retry" as const },
-      { phase: "discovering" as const, pausedFromPhase: undefined, label: "Cancel", command: "cancel" as const },
+      {
+        phase: "paused" as const,
+        pausedFromPhase: "fixing" as const,
+        label: "Resume",
+        command: "resume" as const,
+      },
+      {
+        phase: "failed" as const,
+        pausedFromPhase: undefined,
+        label: "Retry phase",
+        command: "retry" as const,
+      },
+      {
+        phase: "discovering" as const,
+        pausedFromPhase: undefined,
+        label: "Cancel",
+        command: "cancel" as const,
+      },
     ]) {
       cleanup();
       useLoopedReviewStore.setState({ workflows: new Map() });
@@ -182,7 +212,11 @@ describe("LoopedReviewTab backend snapshot viewer", () => {
         phase: scenario.phase,
         pausedFromPhase: scenario.pausedFromPhase,
       });
-      const next = loopedReviewFixture({ id: data.workflowId, phase: "cancelled", backendRevision: 20 });
+      const next = loopedReviewFixture({
+        id: data.workflowId,
+        phase: "cancelled",
+        backendRevision: 20,
+      });
       const api = commands(next);
       useLoopedReviewStore.getState().replaceWorkflow(current);
       render(<LoopedReviewTab data={data} isActive commands={api} />);
@@ -196,7 +230,9 @@ describe("LoopedReviewTab backend snapshot viewer", () => {
   test("surfaces lifecycle command failures without replacing the snapshot", async () => {
     const running = loopedReviewFixture({ id: data.workflowId, phase: "discovering" });
     const api = commands(running);
-    api.pause.mockImplementationOnce(async () => { throw new Error("pause refused"); });
+    api.pause.mockImplementationOnce(async () => {
+      throw new Error("pause refused");
+    });
     useLoopedReviewStore.getState().replaceWorkflow(running);
 
     render(<LoopedReviewTab data={data} isActive commands={api} />);
@@ -211,18 +247,20 @@ describe("LoopedReviewTab backend snapshot viewer", () => {
       id: data.workflowId,
       agent: "opencode",
       activeSessionId: "session-1",
-      sessions: [{
-        id: "session-1",
-        phase: "preparation",
-        round: 1,
-        sessionKey: "fence",
-        providerSessionId: "provider-1",
-        requestIds: [],
-        origin: "looped-review",
-        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-        status: "running",
-        startedAt: "2026-08-02T00:00:00.000Z",
-      }],
+      sessions: [
+        {
+          id: "session-1",
+          phase: "preparation",
+          round: 1,
+          sessionKey: "fence",
+          providerSessionId: "provider-1",
+          requestIds: [],
+          origin: "looped-review",
+          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+          status: "running",
+          startedAt: "2026-08-02T00:00:00.000Z",
+        },
+      ],
     });
     const api = commands(workflow);
     const createTab = mock(() => true);
@@ -236,11 +274,16 @@ describe("LoopedReviewTab backend snapshot viewer", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Provider session" }));
 
-    await waitFor(() => expect(createTab).toHaveBeenCalledWith("opencode", expect.objectContaining({
-      agentLaunchMode: "native",
-      resumeSessionId: "provider-1",
-      isReviewTab: true,
-    })));
+    await waitFor(() =>
+      expect(createTab).toHaveBeenCalledWith(
+        "opencode",
+        expect.objectContaining({
+          agentLaunchMode: "native",
+          resumeSessionId: "provider-1",
+          isReviewTab: true,
+        }),
+      ),
+    );
     expect(api.providerSession).toHaveBeenCalledWith(data.workflowId, "session-1");
   });
 
@@ -248,26 +291,33 @@ describe("LoopedReviewTab backend snapshot viewer", () => {
     const workflow = loopedReviewFixture({
       id: data.workflowId,
       activeSessionId: "session-1",
-      sessions: [{
-        id: "session-1",
-        phase: "discovery",
-        round: 1,
-        pass: 1,
-        sessionKey: "session-key",
-        providerSessionId: "provider-1",
-        requestIds: [],
-        origin: "looped-review",
-        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-        status: "running",
-        startedAt: "2026-08-02T00:00:00.000Z",
-      }],
+      sessions: [
+        {
+          id: "session-1",
+          phase: "discovery",
+          round: 1,
+          pass: 1,
+          sessionKey: "session-key",
+          providerSessionId: "provider-1",
+          requestIds: [],
+          origin: "looped-review",
+          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+          status: "running",
+          startedAt: "2026-08-02T00:00:00.000Z",
+        },
+      ],
     });
     const api = commands(workflow);
     api.providerSession.mockImplementationOnce(async () => null);
     useLoopedReviewStore.getState().replaceWorkflow(workflow);
     const createTab = mock(() => false);
 
-    render(<TerminalProvider><TabRegistrar createTab={createTab} /><LoopedReviewTab data={data} isActive commands={api} /></TerminalProvider>);
+    render(
+      <TerminalProvider>
+        <TabRegistrar createTab={createTab} />
+        <LoopedReviewTab data={data} isActive commands={api} />
+      </TerminalProvider>,
+    );
     fireEvent.click(screen.getByRole("button", { name: "Provider session" }));
     expect((await screen.findByRole("alert")).textContent).toContain("no longer available");
 
@@ -299,39 +349,63 @@ describe("LoopedReviewTab backend snapshot viewer", () => {
     useLoopedReviewStore.getState().replaceWorkflow(workflow);
     render(<LoopedReviewTab data={data} isActive commands={commands(workflow)} />);
     expect(screen.getByText("Review complete")).toBeTruthy();
-    expect(screen.getByRole("link").getAttribute("href")).toBe("https://github.com/acme/repo/pull/42");
+    expect(screen.getByRole("link").getAttribute("href")).toBe(
+      "https://github.com/acme/repo/pull/42",
+    );
   });
 });
 
 const poolIssue = {
-  poolId: "issue-1", severity: "P1" as const, confidence: 92,
-  category: "correctness" as const, title: "Lost transition",
-  file: "src/controller.ts", line: 42, symbol: "advance",
-  description: "The phase advances twice.", evidence: "Two callers pass the guard.",
-  suggestion: "Persist a dispatch lease.", verification: "Reconnect mid-dispatch.",
+  poolId: "issue-1",
+  severity: "P1" as const,
+  confidence: 92,
+  category: "correctness" as const,
+  title: "Lost transition",
+  file: "src/controller.ts",
+  line: 42,
+  symbol: "advance",
+  description: "The phase advances twice.",
+  evidence: "Two callers pass the guard.",
+  suggestion: "Persist a dispatch lease.",
+  verification: "Reconnect mid-dispatch.",
   alternativeFixes: ["Serialize on a queue", "Serialize on a queue"],
 };
 
 const poolGap = {
-  poolId: "gap-1", file: "src/controller.ts", untestedBehavior: "restart mid-dispatch",
+  poolId: "gap-1",
+  file: "src/controller.ts",
+  untestedBehavior: "restart mid-dispatch",
 };
 
 const stageReport: StructuredReviewReport = {
   reviewScope: {
-    targetBranch: "main", baseRef: "origin/main...HEAD", commit: null,
-    filesReviewed: ["src/controller.ts"], filesSkipped: [], filesLeftUncommitted: [],
-    commandsRun: [], commandsNotRun: [], limitations: [],
+    targetBranch: "main",
+    baseRef: "origin/main...HEAD",
+    commit: null,
+    filesReviewed: ["src/controller.ts"],
+    filesSkipped: [],
+    filesLeftUncommitted: [],
+    commandsRun: [],
+    commandsNotRun: [],
+    limitations: [],
   },
   whatChanged: {
-    overview: "Reviewed the transition.", before: "The transition was unchecked.",
-    after: "The transition is checked.", keyCodeChanges: [], userImpact: "Safer retries.",
+    overview: "Reviewed the transition.",
+    before: "The transition was unchecked.",
+    after: "The transition is checked.",
+    keyCodeChanges: [],
+    userImpact: "Safer retries.",
   },
   riskProfile: {
-    changeTypes: ["bugfix"], riskAreas: ["workflow"], overallRisk: "medium",
+    changeTypes: ["bugfix"],
+    riskAreas: ["workflow"],
+    overallRisk: "medium",
     reasoning: "The workflow state changes asynchronously.",
   },
   testResults: { total: 1, passed: 1, failed: 0, notRun: 0, failures: [] },
-  strengths: [], issues: [], testCoverageGaps: [],
+  strengths: [],
+  issues: [],
+  testCoverageGaps: [],
   verdict: { ready: "yes", reasoning: "No issues remain." },
   summaryOfChange: "Checks the transition.",
   reviewSummary: "No high-confidence issues were found in the reviewed scope.",
@@ -343,11 +417,17 @@ function discoverySession(
   status: LoopedReviewSession["status"] = "running",
 ): LoopedReviewSession {
   return {
-    id, phase: "discovery", round: 1, pass,
-    sessionKey: `session-key-${pass}`, providerSessionId: `provider-${pass}`,
-    requestIds: [], origin: "looped-review",
+    id,
+    phase: "discovery",
+    round: 1,
+    pass,
+    sessionKey: `session-key-${pass}`,
+    providerSessionId: `provider-${pass}`,
+    requestIds: [],
+    origin: "looped-review",
     interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-    status, startedAt: "2026-08-03T00:00:00.000Z",
+    status,
+    startedAt: "2026-08-03T00:00:00.000Z",
   };
 }
 
@@ -355,25 +435,46 @@ describe("LoopedReviewTab content rendering", () => {
   test("builds every stage, follows active work, and pins keyboard navigation", async () => {
     const firstSession = discoverySession("session-1", 1, "idle");
     const activeSession = discoverySession("session-2", 2);
-    const passes = [{
-      pass: 1, sessionId: firstSession.id, status: "completed" as const,
-      report: stageReport, startedAt: "2026-08-03T00:00:00.000Z",
-      completedAt: "2026-08-03T00:01:00.000Z",
-    }, {
-      pass: 2, sessionId: activeSession.id, status: "reconciling" as const,
-      report: stageReport, startedAt: "2026-08-03T00:02:00.000Z",
-    }];
+    const passes = [
+      {
+        pass: 1,
+        sessionId: firstSession.id,
+        status: "completed" as const,
+        report: stageReport,
+        startedAt: "2026-08-03T00:00:00.000Z",
+        completedAt: "2026-08-03T00:01:00.000Z",
+      },
+      {
+        pass: 2,
+        sessionId: activeSession.id,
+        status: "reconciling" as const,
+        report: stageReport,
+        startedAt: "2026-08-03T00:02:00.000Z",
+      },
+    ];
     const workflow = loopedReviewFixture({
-      id: data.workflowId, phase: "reconciling", currentPass: 2,
-      activeSessionId: activeSession.id, sessions: [firstSession, activeSession],
-      rounds: [{
-        round: 1, allowance: 6, status: "reviewing",
-        passes, startedAt: "2026-08-03T00:00:00.000Z",
-      }],
-      archivedPools: [{
-        round: 1, fixedAt: "2026-08-03T00:03:00.000Z", fixSessionId: "fix-session-1",
-        pool: { issues: [], coverageGaps: [] },
-      }],
+      id: data.workflowId,
+      phase: "reconciling",
+      currentPass: 2,
+      activeSessionId: activeSession.id,
+      sessions: [firstSession, activeSession],
+      rounds: [
+        {
+          round: 1,
+          allowance: 6,
+          status: "reviewing",
+          passes,
+          startedAt: "2026-08-03T00:00:00.000Z",
+        },
+      ],
+      archivedPools: [
+        {
+          round: 1,
+          fixedAt: "2026-08-03T00:03:00.000Z",
+          fixSessionId: "fix-session-1",
+          pool: { issues: [], coverageGaps: [] },
+        },
+      ],
     });
     useLoopedReviewStore.getState().replaceWorkflow(workflow);
     render(<LoopedReviewTab data={data} isActive hydrateWorkflow={mock(async () => workflow)} />);
@@ -414,16 +515,27 @@ describe("LoopedReviewTab content rendering", () => {
   test("renders paused, failed, and cancelled active passes without a running spinner", async () => {
     const activeSession = discoverySession("session-1", 1);
     const pass = {
-      pass: 1, sessionId: activeSession.id, status: "discovering" as const,
+      pass: 1,
+      sessionId: activeSession.id,
+      status: "discovering" as const,
       startedAt: "2026-08-03T00:00:00.000Z",
     };
     const paused = loopedReviewFixture({
-      id: data.workflowId, phase: "paused", pausedFromPhase: "discovering",
-      currentPass: 1, activeSessionId: activeSession.id, sessions: [activeSession],
-      rounds: [{
-        round: 1, allowance: 6, status: "reviewing", passes: [pass],
-        startedAt: "2026-08-03T00:00:00.000Z",
-      }],
+      id: data.workflowId,
+      phase: "paused",
+      pausedFromPhase: "discovering",
+      currentPass: 1,
+      activeSessionId: activeSession.id,
+      sessions: [activeSession],
+      rounds: [
+        {
+          round: 1,
+          allowance: 6,
+          status: "reviewing",
+          passes: [pass],
+          startedAt: "2026-08-03T00:00:00.000Z",
+        },
+      ],
     });
     useLoopedReviewStore.getState().replaceWorkflow(paused);
     render(<LoopedReviewTab data={data} isActive hydrateWorkflow={mock(async () => paused)} />);
@@ -440,7 +552,9 @@ describe("LoopedReviewTab content rendering", () => {
         phase: "failed",
         pausedFromPhase: undefined,
         failure: {
-          code: "provider", message: "provider disconnected", retryPhase: "discovering",
+          code: "provider",
+          message: "provider disconnected",
+          retryPhase: "discovering",
           occurredAt: "2026-08-03T00:01:00.000Z",
         },
         sessions: [{ ...activeSession, status: "error" }],
@@ -466,7 +580,8 @@ describe("LoopedReviewTab content rendering", () => {
 
   test("renders pooled issues with their category, symbol and alternatives", () => {
     const workflow = loopedReviewFixture({
-      id: data.workflowId, phase: "fixing",
+      id: data.workflowId,
+      phase: "fixing",
       activePool: { issues: [poolIssue], coverageGaps: [poolGap] },
     });
     useLoopedReviewStore.getState().replaceWorkflow(workflow);
@@ -497,22 +612,40 @@ describe("LoopedReviewTab content rendering", () => {
     // Without these the user cannot tell that the review ran against a
     // truncated package — files omitted, validation skipped.
     const workflow = loopedReviewFixture({
-      id: data.workflowId, phase: "discovering",
-      rounds: [{
-        round: 1, allowance: 6, status: "reviewing", startedAt: "2026-08-03T00:00:00.000Z",
-        passes: [],
-        package: {
-          id: "package-1", round: 1, preparedAt: "2026-08-03T00:00:00.000Z",
-          targetBranch: "main", baseRef: "a".repeat(40), headRef: "b".repeat(40),
-          commit: null, completeDiff: "diff --git a/a.ts b/a.ts",
-          changedFiles: [{
-            path: "src/a.ts", status: "M", content: "x",
-            contentSha256: "sha", omittedReason: null,
-          }],
-          validation: [], skippedFiles: [], uncommittedFiles: [],
-          limitations: ["Skipped the integration suite: no database available"],
+      id: data.workflowId,
+      phase: "discovering",
+      rounds: [
+        {
+          round: 1,
+          allowance: 6,
+          status: "reviewing",
+          startedAt: "2026-08-03T00:00:00.000Z",
+          passes: [],
+          package: {
+            id: "package-1",
+            round: 1,
+            preparedAt: "2026-08-03T00:00:00.000Z",
+            targetBranch: "main",
+            baseRef: "a".repeat(40),
+            headRef: "b".repeat(40),
+            commit: null,
+            completeDiff: "diff --git a/a.ts b/a.ts",
+            changedFiles: [
+              {
+                path: "src/a.ts",
+                status: "M",
+                content: "x",
+                contentSha256: "sha",
+                omittedReason: null,
+              },
+            ],
+            validation: [],
+            skippedFiles: [],
+            uncommittedFiles: [],
+            limitations: ["Skipped the integration suite: no database available"],
+          },
         },
-      }],
+      ],
     });
     useLoopedReviewStore.getState().replaceWorkflow(workflow);
     render(<LoopedReviewTab data={data} isActive hydrateWorkflow={mock(async () => workflow)} />);
@@ -526,19 +659,30 @@ describe("LoopedReviewTab content rendering", () => {
 
   test("renders archived pools with duplicate fix notes and their fix session", () => {
     const workflow = loopedReviewFixture({
-      id: data.workflowId, phase: "preparing", currentRound: 2,
-      rounds: [{
-        round: 2, allowance: 3, status: "preparing", passes: [],
-        startedAt: "2026-08-03T00:04:00.000Z",
-      }],
-      archivedPools: [{
-        round: 1, fixedAt: "2026-08-03T00:00:00.000Z", fixSessionId: "fix-session-1",
-        pool: { issues: [poolIssue], coverageGaps: [] },
-        fixSummary: "Serialized the transition.",
-        // A model can legitimately repeat itself; the position is the only
-        // stable key.
-        fixNotes: ["Rewrote the guard", "Rewrote the guard"],
-      }],
+      id: data.workflowId,
+      phase: "preparing",
+      currentRound: 2,
+      rounds: [
+        {
+          round: 2,
+          allowance: 3,
+          status: "preparing",
+          passes: [],
+          startedAt: "2026-08-03T00:04:00.000Z",
+        },
+      ],
+      archivedPools: [
+        {
+          round: 1,
+          fixedAt: "2026-08-03T00:00:00.000Z",
+          fixSessionId: "fix-session-1",
+          pool: { issues: [poolIssue], coverageGaps: [] },
+          fixSummary: "Serialized the transition.",
+          // A model can legitimately repeat itself; the position is the only
+          // stable key.
+          fixNotes: ["Rewrote the guard", "Rewrote the guard"],
+        },
+      ],
     });
     useLoopedReviewStore.getState().replaceWorkflow(workflow);
     render(<LoopedReviewTab data={data} isActive hydrateWorkflow={mock(async () => workflow)} />);
@@ -552,10 +696,13 @@ describe("LoopedReviewTab content rendering", () => {
 
   test("labels the failure with its code and the phase a retry would restart", () => {
     const workflow = loopedReviewFixture({
-      id: data.workflowId, phase: "failed",
+      id: data.workflowId,
+      phase: "failed",
       failure: {
-        code: "structured-output", message: "The provider returned no report",
-        retryPhase: "discovering", occurredAt: "2026-08-03T00:00:00.000Z",
+        code: "structured-output",
+        message: "The provider returned no report",
+        retryPhase: "discovering",
+        occurredAt: "2026-08-03T00:00:00.000Z",
       },
     });
     useLoopedReviewStore.getState().replaceWorkflow(workflow);
@@ -567,7 +714,8 @@ describe("LoopedReviewTab content rendering", () => {
 
   test("reports a pull request that never completed", () => {
     const workflow = loopedReviewFixture({
-      id: data.workflowId, phase: "cancelled",
+      id: data.workflowId,
+      phase: "cancelled",
       pr: { status: "failed", error: "Cancelled before the pull request was created" },
     });
     useLoopedReviewStore.getState().replaceWorkflow(workflow);
@@ -578,7 +726,8 @@ describe("LoopedReviewTab content rendering", () => {
 
   test("renders only https pull-request links", () => {
     const hostile = loopedReviewFixture({
-      id: data.workflowId, phase: "completed",
+      id: data.workflowId,
+      phase: "completed",
       // eslint-disable-next-line no-script-url
       pr: { status: "created", url: "javascript:alert(1)" },
     });
@@ -592,7 +741,8 @@ describe("LoopedReviewTab content rendering", () => {
     view.unmount();
 
     const safe = loopedReviewFixture({
-      id: data.workflowId, phase: "completed",
+      id: data.workflowId,
+      phase: "completed",
       pr: { status: "created", url: "https://github.com/acme/repo/pull/7" },
     });
     useLoopedReviewStore.getState().replaceWorkflow(safe);
@@ -602,8 +752,11 @@ describe("LoopedReviewTab content rendering", () => {
 
   test("names the agent, model and target branch in the header", () => {
     const workflow = loopedReviewFixture({
-      id: data.workflowId, agent: "claude", model: "opus-5",
-      reasoningEffort: "high", targetBranch: "release/v2",
+      id: data.workflowId,
+      agent: "claude",
+      model: "opus-5",
+      reasoningEffort: "high",
+      targetBranch: "release/v2",
     });
     useLoopedReviewStore.getState().replaceWorkflow(workflow);
     render(<LoopedReviewTab data={data} isActive hydrateWorkflow={mock(async () => workflow)} />);
@@ -635,11 +788,16 @@ describe("LoopedReviewTab command guards", () => {
     useLoopedReviewStore.getState().replaceWorkflow(running);
     const failing = {
       ...commands(running),
-      pause: mock(async () => { throw new Error("lease lost"); }),
+      pause: mock(async () => {
+        throw new Error("lease lost");
+      }),
     };
     render(
       <LoopedReviewTab
-        data={data} isActive hydrateWorkflow={mock(async () => running)} commands={failing}
+        data={data}
+        isActive
+        hydrateWorkflow={mock(async () => running)}
+        commands={failing}
       />,
     );
 
@@ -659,13 +817,24 @@ describe("LoopedReviewTab command guards", () => {
 
   test("a double click runs one command and opens one provider tab", async () => {
     const workflow = loopedReviewFixture({
-      id: data.workflowId, phase: "discovering", activeSessionId: "session-1",
-      sessions: [{
-        id: "session-1", phase: "discovery", round: 1, pass: 1,
-        sessionKey: "key-1", providerSessionId: "provider-1", requestIds: [],
-        origin: "looped-review", interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-        status: "running", startedAt: "2026-08-03T00:00:00.000Z",
-      }],
+      id: data.workflowId,
+      phase: "discovering",
+      activeSessionId: "session-1",
+      sessions: [
+        {
+          id: "session-1",
+          phase: "discovery",
+          round: 1,
+          pass: 1,
+          sessionKey: "key-1",
+          providerSessionId: "provider-1",
+          requestIds: [],
+          origin: "looped-review",
+          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+          status: "running",
+          startedAt: "2026-08-03T00:00:00.000Z",
+        },
+      ],
     });
     useLoopedReviewStore.getState().replaceWorkflow(workflow);
     const createTab = mock(() => true);
@@ -674,7 +843,9 @@ describe("LoopedReviewTab command guards", () => {
       <TerminalProvider>
         <TabRegistrar createTab={createTab} />
         <LoopedReviewTab
-          data={data} isActive hydrateWorkflow={mock(async () => workflow)}
+          data={data}
+          isActive
+          hydrateWorkflow={mock(async () => workflow)}
           commands={workflowCommands}
         />
       </TerminalProvider>,
@@ -695,9 +866,7 @@ describe("LoopedReviewTab command guards", () => {
     const workflow = loopedReviewFixture({ id: data.workflowId, phase: "discovering" });
     useLoopedReviewStore.getState().replaceWorkflow(workflow);
     const hydrate = mock(async () => workflow);
-    const view = render(
-      <LoopedReviewTab data={data} isActive={false} hydrateWorkflow={hydrate} />,
-    );
+    const view = render(<LoopedReviewTab data={data} isActive={false} hydrateWorkflow={hydrate} />);
     // Present in the store, so the mount path does not fetch.
     expect(hydrate).toHaveBeenCalledTimes(0);
 

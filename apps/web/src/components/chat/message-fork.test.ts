@@ -1,9 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { pinNativeAgentParts } from "@/lib/chat/native-agent-pinning";
-import type {
-  NativeMessage,
-  NativeMessagePart,
-} from "@/lib/chat/native-message-types";
+import type { NativeMessage, NativeMessagePart } from "@/lib/chat/native-message-types";
 import {
   buildMessageForkActionKinds,
   buildMessageForkPlan,
@@ -62,9 +59,7 @@ describe("message fork placement", () => {
       message("assistant-2", "assistant"),
     ];
 
-    expect(
-      Array.from(buildMessageForkActionKinds(messages, false)),
-    ).toEqual([
+    expect(Array.from(buildMessageForkActionKinds(messages, false))).toEqual([
       ["user-1", "prompt"],
       ["assistant-1a", "response"],
       ["assistant-1b", "response"],
@@ -80,20 +75,13 @@ describe("message fork placement", () => {
       message("optimistic-user-2", "user"),
     ];
 
-    expect(
-      Array.from(buildMessageForkActionKinds(messages, true)),
-    ).toEqual([["user-1", "prompt"]]);
+    expect(Array.from(buildMessageForkActionKinds(messages, true))).toEqual([["user-1", "prompt"]]);
   });
 
   test("exposes the trailing response once the turn has finished", () => {
-    const messages = [
-      message("user-1", "user"),
-      message("assistant-1", "assistant"),
-    ];
+    const messages = [message("user-1", "user"), message("assistant-1", "assistant")];
 
-    expect(
-      Array.from(buildMessageForkActionKinds(messages, false)),
-    ).toEqual([
+    expect(Array.from(buildMessageForkActionKinds(messages, false))).toEqual([
       ["user-1", "prompt"],
       ["assistant-1", "response"],
     ]);
@@ -104,10 +92,7 @@ describe("message fork placement", () => {
     expect(
       Array.from(
         buildMessageForkActionKinds(
-          [
-            message("system-local", "system"),
-            message("optimistic-user-1", "user"),
-          ],
+          [message("system-local", "system"), message("optimistic-user-1", "user")],
           false,
         ),
       ),
@@ -121,9 +106,7 @@ describe("message fork placement", () => {
       message("assistant-1b", "assistant"),
     ];
 
-    expect(
-      Array.from(buildMessageForkActionKinds(messages, true)),
-    ).toEqual([
+    expect(Array.from(buildMessageForkActionKinds(messages, true))).toEqual([
       ["user-1", "prompt"],
       ["assistant-1a", "response"],
     ]);
@@ -137,9 +120,7 @@ describe("message fork placement", () => {
       message("assistant-1b", "assistant"),
     ];
 
-    expect(
-      Array.from(buildMessageForkActionKinds(messages, false)),
-    ).toEqual([
+    expect(Array.from(buildMessageForkActionKinds(messages, false))).toEqual([
       ["user-1", "prompt"],
       ["assistant-1a", "response"],
       ["assistant-1b", "response"],
@@ -153,9 +134,7 @@ describe("message fork placement", () => {
     const messages = [
       message("user-1", "user"),
       withParts("assistant-empty-parts", "assistant", []),
-      withParts("assistant-blank-text", "assistant", [
-        { type: "text", content: "   " },
-      ]),
+      withParts("assistant-blank-text", "assistant", [{ type: "text", content: "   " }]),
       withParts("assistant-results-only", "assistant", [
         { type: "tool-result", content: "exit 0" },
       ]),
@@ -171,9 +150,7 @@ describe("message fork placement", () => {
       ]),
     ];
 
-    expect(
-      Array.from(buildMessageForkActionKinds(messages, false)),
-    ).toEqual([
+    expect(Array.from(buildMessageForkActionKinds(messages, false))).toEqual([
       ["user-1", "prompt"],
       ["assistant-tools", "response"],
     ]);
@@ -191,13 +168,15 @@ describe("message fork placement", () => {
       withParts(
         "assistant-1",
         "assistant",
-        [{
-          type: "subagent",
-          content: "Explore",
-          agentState: "active",
-          subagentActions: [],
-          subagentActionCount: 0,
-        }],
+        [
+          {
+            type: "subagent",
+            content: "Explore",
+            agentState: "active",
+            subagentActions: [],
+            subagentActionCount: 0,
+          },
+        ],
         "Delegating to Explore",
       ),
     ];
@@ -221,9 +200,7 @@ describe("message fork placement", () => {
       withParts("assistant-trailing-empty", "assistant", []),
     ];
 
-    expect(
-      Array.from(buildMessageForkActionKinds(messages, false)),
-    ).toEqual([
+    expect(Array.from(buildMessageForkActionKinds(messages, false))).toEqual([
       ["user-1", "prompt"],
       ["assistant-answer", "response"],
     ]);
@@ -289,12 +266,7 @@ describe("message fork boundaries", () => {
 
     expect(
       getForkPromptText(
-        withParts(
-          "user-2",
-          "user",
-          [{ type: "file", content: "/tmp/a.png" }],
-          "only content",
-        ),
+        withParts("user-2", "user", [{ type: "file", content: "/tmp/a.png" }], "only content"),
       ),
     ).toBe("only content");
   });
@@ -325,14 +297,10 @@ describe("fork attachment accounting", () => {
 describe("message fork plan", () => {
   test("carries the draft and dropped-attachment count on prompts only", () => {
     const messages = [
-      withParts(
-        "user-1",
-        "user",
-        [
-          { type: "text", content: "Add pagination" },
-          { type: "file", content: "/tmp/mock.png" },
-        ],
-      ),
+      withParts("user-1", "user", [
+        { type: "text", content: "Add pagination" },
+        { type: "file", content: "/tmp/mock.png" },
+      ]),
       message("assistant-1", "assistant", "Done"),
     ];
 
@@ -365,14 +333,9 @@ describe("message fork plan", () => {
 
     const plan = buildMessageForkPlan(messages, {
       responseInProgress: false,
-      resolvePromptBoundary: (m) => (
-        m.id === "user-2" ? null : { type: "session-start" }
-      ),
-      resolveResponseBoundary: (m) => (
-        m.id === "assistant-2"
-          ? null
-          : { type: "message", messageId: m.id }
-      ),
+      resolvePromptBoundary: (m) => (m.id === "user-2" ? null : { type: "session-start" }),
+      resolveResponseBoundary: (m) =>
+        m.id === "assistant-2" ? null : { type: "message", messageId: m.id },
     });
 
     expect(Array.from(plan.keys())).toEqual(["user-1", "assistant-1"]);
@@ -390,15 +353,11 @@ describe("message fork plan", () => {
       responseInProgress: false,
       resolvePromptBoundary: (m, all) => {
         const previous = findPreviousForkMessage(all, m.id);
-        return previous
-          ? { type: "message", messageId: previous.id }
-          : { type: "session-start" };
+        return previous ? { type: "message", messageId: previous.id } : { type: "session-start" };
       },
       resolveResponseBoundary: (m, all) => {
         const next = findNextForkMessage(all, m.id);
-        return next
-          ? { type: "message", messageId: next.id }
-          : { type: "whole-session" };
+        return next ? { type: "message", messageId: next.id } : { type: "whole-session" };
       },
     });
 
@@ -415,14 +374,12 @@ describe("message fork plan", () => {
   });
 
   test("plans nothing for a transcript with no forkable rows", () => {
+    expect(buildMessageForkPlan([], { responseInProgress: false, ...acceptAll }).size).toBe(0);
     expect(
-      buildMessageForkPlan([], { responseInProgress: false, ...acceptAll }).size,
-    ).toBe(0);
-    expect(
-      buildMessageForkPlan(
-        [message("user-1", "user"), message("assistant-1", "assistant")],
-        { responseInProgress: true, ...acceptAll },
-      ).size,
+      buildMessageForkPlan([message("user-1", "user"), message("assistant-1", "assistant")], {
+        responseInProgress: true,
+        ...acceptAll,
+      }).size,
     ).toBe(1);
   });
 });

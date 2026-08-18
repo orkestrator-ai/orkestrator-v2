@@ -47,8 +47,8 @@ export function parseFilters(args: string[]): Filters {
       filters.architecture = value as ToolchainArchitecture;
     } else {
       throw new Error(
-        `Unknown filter ${argument}. Use --tool=claude|codex|opencode, `
-        + "--platform=darwin|linux, or --arch=arm64|x64.",
+        `Unknown filter ${argument}. Use --tool=claude|codex|opencode, ` +
+          "--platform=darwin|linux, or --arch=arm64|x64.",
       );
     }
   }
@@ -96,9 +96,7 @@ export async function fetchArchive(
     });
     if (response.status < 300 || response.status >= 400) {
       if (!response.ok || !response.body) {
-        throw new Error(
-          `Artifact request failed with HTTP ${response.status}: ${current.href}`,
-        );
+        throw new Error(`Artifact request failed with HTTP ${response.status}: ${current.href}`);
       }
       return response;
     }
@@ -140,15 +138,9 @@ async function hashStream(stream: ReadableStream<Uint8Array>): Promise<Digest> {
   return { size, sha256: hash.digest("hex") };
 }
 
-export function expectDigest(
-  label: string,
-  actual: Digest,
-  expected: Digest,
-): void {
+export function expectDigest(label: string, actual: Digest, expected: Digest): void {
   if (actual.size !== expected.size) {
-    throw new Error(
-      `${label} size mismatch: expected ${expected.size}, received ${actual.size}`,
-    );
+    throw new Error(`${label} size mismatch: expected ${expected.size}, received ${actual.size}`);
   }
   if (actual.sha256 !== expected.sha256) {
     throw new Error(
@@ -161,9 +153,10 @@ export async function hashArchiveEntry(
   archive: ToolchainArchive,
   archivePath: string,
 ): Promise<Digest> {
-  const command = archive.format === "zip"
-    ? ["unzip", "-p", archivePath, archive.entryPath]
-    : ["tar", "-xOzf", archivePath, archive.entryPath];
+  const command =
+    archive.format === "zip"
+      ? ["unzip", "-p", archivePath, archive.entryPath]
+      : ["tar", "-xOzf", archivePath, archive.entryPath];
   const extractor = Bun.spawn(command, {
     stdout: "pipe",
     stderr: "pipe",
@@ -174,17 +167,12 @@ export async function hashArchiveEntry(
     extractor.exited,
   ]);
   if (exitCode !== 0) {
-    throw new Error(
-      `Could not extract ${archive.entryPath}: ${stderr.slice(0, 2_000)}`,
-    );
+    throw new Error(`Could not extract ${archive.entryPath}: ${stderr.slice(0, 2_000)}`);
   }
   return digest;
 }
 
-export function hashExecutable(
-  artifact: ToolchainArtifact,
-  archivePath: string,
-): Promise<Digest> {
+export function hashExecutable(artifact: ToolchainArtifact, archivePath: string): Promise<Digest> {
   return hashArchiveEntry(artifact.archive, archivePath);
 }
 
@@ -276,10 +264,11 @@ export function selectArtifacts(
   filters: Filters,
   artifacts: readonly ToolchainArtifact[] = PINNED_TOOLCHAIN_ARTIFACTS,
 ): ToolchainArtifact[] {
-  return artifacts.filter((artifact) =>
-    (!filters.tool || artifact.name === filters.tool)
-    && (!filters.platform || artifact.platform === filters.platform)
-    && (!filters.architecture || artifact.architecture === filters.architecture)
+  return artifacts.filter(
+    (artifact) =>
+      (!filters.tool || artifact.name === filters.tool) &&
+      (!filters.platform || artifact.platform === filters.platform) &&
+      (!filters.architecture || artifact.architecture === filters.architecture),
   );
 }
 
@@ -307,8 +296,8 @@ export async function run(options: RunOptions = {}): Promise<void> {
 
   if (env.RUN_LIVE_TOOLCHAIN_ARTIFACTS !== "1") {
     throw new Error(
-      "This downloads every selected release artifact. Re-run with "
-      + "RUN_LIVE_TOOLCHAIN_ARTIFACTS=1 after reviewing the optional filters.",
+      "This downloads every selected release artifact. Re-run with " +
+        "RUN_LIVE_TOOLCHAIN_ARTIFACTS=1 after reviewing the optional filters.",
     );
   }
 

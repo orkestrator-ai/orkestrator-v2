@@ -1,5 +1,9 @@
 import { type OpencodeClient } from "@opencode-ai/sdk/v2/client";
-import type { NativeMessage, NativeMessagePart, NativeToolDiffMetadata } from "./chat/native-message-types";
+import type {
+  NativeMessage,
+  NativeMessagePart,
+  NativeToolDiffMetadata,
+} from "./chat/native-message-types";
 
 export { type OpencodeClient };
 
@@ -13,11 +17,7 @@ export const INTERACTION_RECONCILIATION_TIMEOUT_MS = 5_000;
  * `gone` deliberately does not mean `applied`: an interaction can disappear
  * because it expired, another window answered it, or the server restarted.
  */
-export type OpenCodeInteractionResponseResult =
-  | "applied"
-  | "pending"
-  | "gone"
-  | "unknown";
+export type OpenCodeInteractionResponseResult = "applied" | "pending" | "gone" | "unknown";
 
 export interface OpenCodeModel {
   id: string;
@@ -325,9 +325,7 @@ function normalizeKey(key: string): string {
 function isSensitiveKey(key: string): boolean {
   const normalized = normalizeKey(key);
   if (!normalized) return false;
-  return SENSITIVE_KEY_FRAGMENTS.some((fragment) =>
-    normalized.includes(fragment),
-  );
+  return SENSITIVE_KEY_FRAGMENTS.some((fragment) => normalized.includes(fragment));
 }
 
 function redactSensitiveText(text: string): string {
@@ -392,9 +390,8 @@ export function formatOpenCodeError(error: unknown): string {
     return redactSensitiveText(error);
   }
 
-  const fallbackFromError = error instanceof Error
-    ? firstNonEmptyString([error.message, error.name])
-    : undefined;
+  const fallbackFromError =
+    error instanceof Error ? firstNonEmptyString([error.message, error.name]) : undefined;
 
   if (!isRecord(error)) {
     return fallbackFromError || "An unknown error occurred";
@@ -425,7 +422,9 @@ export function formatOpenCodeError(error: unknown): string {
 
   const detailLines: string[] = [];
   const code = toDisplayString(data?.code ?? error.code);
-  const status = toDisplayString(data?.status ?? data?.statusCode ?? error.status ?? error.statusCode);
+  const status = toDisplayString(
+    data?.status ?? data?.statusCode ?? error.status ?? error.statusCode,
+  );
   const requestId = firstNonEmptyString([
     data?.requestID,
     data?.requestId,

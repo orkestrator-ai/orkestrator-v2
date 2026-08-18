@@ -74,9 +74,7 @@ export function ErrorDetailsDialog() {
                   </pre>
                 </div>
               )}
-              <p className="text-xs text-muted-foreground">
-                {error?.timestamp.toLocaleString()}
-              </p>
+              <p className="text-xs text-muted-foreground">{error?.timestamp.toLocaleString()}</p>
             </div>
           </AlertDialogDescription>
         </AlertDialogHeader>

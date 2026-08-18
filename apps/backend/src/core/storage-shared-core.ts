@@ -173,8 +173,8 @@ export function assertPaneLayoutSelectionIntentWithinBounds(
     throw new Error("Pane layout selection intent must be JSON serializable");
   }
   if (
-    serialized === undefined
-    || Buffer.byteLength(serialized, "utf8") > MAX_PANE_LAYOUT_SELECTION_INTENT_BYTES
+    serialized === undefined ||
+    Buffer.byteLength(serialized, "utf8") > MAX_PANE_LAYOUT_SELECTION_INTENT_BYTES
   ) {
     throw new Error("Pane layout selection intent exceeds the 64 KB limit");
   }
@@ -191,9 +191,8 @@ export function assertPaneLayoutGeneration(
   containerId: string | null,
   source: "write" | "intent",
 ): void {
-  const currentContainerId = environment.environmentType === "local"
-    ? null
-    : environment.containerId;
+  const currentContainerId =
+    environment.environmentType === "local" ? null : environment.containerId;
   if (containerId !== currentContainerId) {
     throw new Error(
       `Pane layout ${source} targets stale environment generation: expected ${currentContainerId ?? "local"}, received ${containerId ?? "local"}`,
@@ -213,11 +212,11 @@ export function paneLayoutLeaves(root: unknown): MutablePaneLayoutLeaf[] {
   const visit = (node: unknown): void => {
     if (!isRecord(node)) return;
     if (
-      node.kind === "leaf"
-      && typeof node.id === "string"
-      && Array.isArray(node.tabs)
-      && node.tabs.every(isRecord)
-      && (node.activeTabId === null || typeof node.activeTabId === "string")
+      node.kind === "leaf" &&
+      typeof node.id === "string" &&
+      Array.isArray(node.tabs) &&
+      node.tabs.every(isRecord) &&
+      (node.activeTabId === null || typeof node.activeTabId === "string")
     ) {
       leaves.push(node as MutablePaneLayoutLeaf);
       return;
@@ -231,9 +230,11 @@ export function paneLayoutLeaves(root: unknown): MutablePaneLayoutLeaf[] {
 }
 
 export function environmentIsReadyForSetupHandoff(environment: Environment): boolean {
-  return environment.setupPhase === "ready"
-    || environment.setupScriptsComplete === true
-    || environment.setupOverride === true;
+  return (
+    environment.setupPhase === "ready" ||
+    environment.setupScriptsComplete === true ||
+    environment.setupOverride === true
+  );
 }
 
 /**
@@ -277,17 +278,19 @@ export function suppressLateSetupTabAdditions(
   const previousLeaves = paneLayoutLeaves(previous?.root);
   const baseLeavesById = new Map(paneLayoutLeaves(base.root).map((leaf) => [leaf.id, leaf]));
   const durableSetupTabIds = new Set(
-    previousLeaves.flatMap((leaf) => leaf.tabs.flatMap((tab) =>
-      tab.isSetupTab === true && typeof tab.id === "string" ? [tab.id] : []
-    )),
+    previousLeaves.flatMap((leaf) =>
+      leaf.tabs.flatMap((tab) =>
+        tab.isSetupTab === true && typeof tab.id === "string" ? [tab.id] : [],
+      ),
+    ),
   );
   const root = JSON.parse(JSON.stringify(layout.root)) as PaneLayoutMergeInput["root"];
   const nextLeaves = paneLayoutLeaves(root);
   const previousLeavesById = new Map(previousLeaves.map((leaf) => [leaf.id, leaf]));
   const previousTabsById = new Map(
-    previousLeaves.flatMap((leaf) => leaf.tabs.flatMap((tab) =>
-      typeof tab.id === "string" ? [[tab.id, tab] as const] : []
-    )),
+    previousLeaves.flatMap((leaf) =>
+      leaf.tabs.flatMap((tab) => (typeof tab.id === "string" ? [[tab.id, tab] as const] : [])),
+    ),
   );
   let changed = false;
   let removedGlobalFocus = false;
@@ -295,11 +298,9 @@ export function suppressLateSetupTabAdditions(
   for (const leaf of nextLeaves) {
     const removedIds = new Set(
       leaf.tabs.flatMap((tab) =>
-        tab.isSetupTab === true
-          && typeof tab.id === "string"
-          && !durableSetupTabIds.has(tab.id)
+        tab.isSetupTab === true && typeof tab.id === "string" && !durableSetupTabIds.has(tab.id)
           ? [tab.id]
-          : []
+          : [],
       ),
     );
     if (removedIds.size === 0) continue;
@@ -308,26 +309,29 @@ export function suppressLateSetupTabAdditions(
     leaf.tabs = leaf.tabs.flatMap((tab) => {
       if (typeof tab.id !== "string" || !removedIds.has(tab.id)) return [tab];
       const previousTab = previousTabsById.get(tab.id);
-      return previousTab ? [JSON.parse(JSON.stringify(previousTab)) as Record<string, unknown>] : [];
+      return previousTab
+        ? [JSON.parse(JSON.stringify(previousTab)) as Record<string, unknown>]
+        : [];
     });
     if (!removedActiveTab) continue;
 
     removedGlobalFocus ||= layout.activePaneId === leaf.id;
     const remainingIds = new Set(
-      leaf.tabs.flatMap((tab) => typeof tab.id === "string" ? [tab.id] : []),
+      leaf.tabs.flatMap((tab) => (typeof tab.id === "string" ? [tab.id] : [])),
     );
     const previousActiveTabId = previousLeavesById.get(leaf.id)?.activeTabId;
-    const buildTabId = leaf.tabs.find((tab) =>
-      tab.type === "claude-build" && typeof tab.id === "string"
+    const buildTabId = leaf.tabs.find(
+      (tab) => tab.type === "claude-build" && typeof tab.id === "string",
     )?.id;
     const firstTabId = leaf.tabs.find((tab) => typeof tab.id === "string")?.id;
-    leaf.activeTabId = previousActiveTabId && remainingIds.has(previousActiveTabId)
-      ? previousActiveTabId
-      : typeof buildTabId === "string"
-        ? buildTabId
-        : typeof firstTabId === "string"
-          ? firstTabId
-          : null;
+    leaf.activeTabId =
+      previousActiveTabId && remainingIds.has(previousActiveTabId)
+        ? previousActiveTabId
+        : typeof buildTabId === "string"
+          ? buildTabId
+          : typeof firstTabId === "string"
+            ? firstTabId
+            : null;
   }
 
   const nextLeavesById = new Map(nextLeaves.map((leaf) => [leaf.id, leaf]));
@@ -355,11 +359,10 @@ export function suppressLateSetupTabAdditions(
   return {
     ...layout,
     root,
-    activePaneId: removedGlobalFocus
-        && previous
-        && remainingPaneIds.has(previous.activePaneId)
-      ? previous.activePaneId
-      : layout.activePaneId,
+    activePaneId:
+      removedGlobalFocus && previous && remainingPaneIds.has(previous.activePaneId)
+        ? previous.activePaneId
+        : layout.activePaneId,
   };
 }
 
@@ -467,7 +470,10 @@ export type GitHubCompletionComment = {
 
 export async function resizeKanbanImage(rawBytes: Buffer): Promise<Buffer> {
   const { default: sharp } = await import("sharp");
-  return sharp(rawBytes).resize({ width: 2000, height: 2000, fit: "inside", withoutEnlargement: true }).webp().toBuffer();
+  return sharp(rawBytes)
+    .resize({ width: 2000, height: 2000, fit: "inside", withoutEnlargement: true })
+    .webp()
+    .toBuffer();
 }
 
 export const MAX_JSON_BACKUPS = 5;
@@ -516,38 +522,31 @@ export function isRecord(value: unknown): value is JsonRecord {
 export function isInitialPromptImageAttachment(
   value: unknown,
 ): value is NonNullable<Environment["initialPromptAttachments"]>[number] {
-  return isRecord(value)
-    && isNonBlankString(value.id)
-    && isNonBlankString(value.name)
-    && (value.previewUrl === undefined || typeof value.previewUrl === "string")
-    && isNonBlankString(value.base64Data);
+  return (
+    isRecord(value) &&
+    isNonBlankString(value.id) &&
+    isNonBlankString(value.name) &&
+    (value.previewUrl === undefined || typeof value.previewUrl === "string") &&
+    isNonBlankString(value.base64Data)
+  );
 }
 
 export function isStartupAgentSession(
   value: unknown,
 ): value is NonNullable<Environment["startupAgentSession"]> {
-  return isRecord(value)
-    && value.tabId === "startup-agent"
-    && isAgentPlatform(value.agent)
-    && isOneOf(value.style, ["terminal", "native"])
-    && isOneOf(value.status, ["starting", "running", "error"])
-    && (value.model === undefined || typeof value.model === "string")
-    && (
-      value.reasoningEffort === undefined
-      || typeof value.reasoningEffort === "string"
-    )
-    && (
-      value.providerSessionId === undefined
-      || isNonBlankString(value.providerSessionId)
-    )
-    && (
-      value.startedAt === undefined
-      || (
-        typeof value.startedAt === "string"
-        && Number.isFinite(Date.parse(value.startedAt))
-      )
-    )
-    && (value.error === undefined || typeof value.error === "string");
+  return (
+    isRecord(value) &&
+    value.tabId === "startup-agent" &&
+    isAgentPlatform(value.agent) &&
+    isOneOf(value.style, ["terminal", "native"]) &&
+    isOneOf(value.status, ["starting", "running", "error"]) &&
+    (value.model === undefined || typeof value.model === "string") &&
+    (value.reasoningEffort === undefined || typeof value.reasoningEffort === "string") &&
+    (value.providerSessionId === undefined || isNonBlankString(value.providerSessionId)) &&
+    (value.startedAt === undefined ||
+      (typeof value.startedAt === "string" && Number.isFinite(Date.parse(value.startedAt)))) &&
+    (value.error === undefined || typeof value.error === "string")
+  );
 }
 
 export function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
@@ -571,10 +570,7 @@ export function readAgentActivitySources(
   for (const candidateSource of AGENT_ACTIVITY_SOURCES) {
     const snapshot = environment.agentActivitySources?.[candidateSource];
     if (!snapshot || !isOneOf(snapshot.state, AGENT_ACTIVITY_STATES)) continue;
-    const snapshotTime = parseUsableAgentActivityTime(
-      snapshot.updatedAt,
-      referenceTime,
-    );
+    const snapshotTime = parseUsableAgentActivityTime(snapshot.updatedAt, referenceTime);
     if (!Number.isFinite(snapshotTime)) continue;
     sources[candidateSource] = {
       state: snapshot.state,
@@ -604,7 +600,9 @@ export function agentActivityStructureFingerprint(environment: Environment): str
     Object.entries(record ?? {})
       .map(([key, snapshot]): [string, unknown] => [
         key,
-        snapshot ? [snapshot.state, "stale" in snapshot ? snapshot.stale === true : false] : undefined,
+        snapshot
+          ? [snapshot.state, "stale" in snapshot ? snapshot.stale === true : false]
+          : undefined,
       ])
       .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   return JSON.stringify({
@@ -618,24 +616,19 @@ export function readFrontendAgentActivityObservers(
   environment: Environment,
   referenceTime: number,
 ): NonNullable<Environment["frontendAgentActivityObservers"]> {
-  const observers: NonNullable<
-    Environment["frontendAgentActivityObservers"]
-  > = {};
+  const observers: NonNullable<Environment["frontendAgentActivityObservers"]> = {};
   const stored = environment.frontendAgentActivityObservers;
   if (!isRecord(stored)) return observers;
 
   for (const [observerKey, candidate] of Object.entries(stored)) {
     if (!isRecord(candidate)) continue;
     if (!isOneOf(candidate.state, AGENT_ACTIVITY_STATES)) continue;
-    const updatedTime = parseUsableAgentActivityTime(
-      candidate.updatedAt,
-      referenceTime,
-    );
+    const updatedTime = parseUsableAgentActivityTime(candidate.updatedAt, referenceTime);
     const leaseExpiresAt = candidate.leaseExpiresAt;
     if (
-      !Number.isFinite(updatedTime)
-      || !isAgentActivityTimestamp(leaseExpiresAt)
-      || Date.parse(leaseExpiresAt) <= referenceTime
+      !Number.isFinite(updatedTime) ||
+      !isAgentActivityTimestamp(leaseExpiresAt) ||
+      Date.parse(leaseExpiresAt) <= referenceTime
     ) {
       continue;
     }
@@ -659,16 +652,13 @@ export function nextAgentActivityTimestamp(
   previousValue: unknown,
   referenceTime = Date.now(),
 ): string {
-  const previousTime = parseUsableAgentActivityTime(
-    previousValue,
-    referenceTime,
-  );
-  return new Date(Math.max(
-    referenceTime,
-    Number.isFinite(previousTime)
-      ? previousTime + 1
-      : Number.NEGATIVE_INFINITY,
-  )).toISOString();
+  const previousTime = parseUsableAgentActivityTime(previousValue, referenceTime);
+  return new Date(
+    Math.max(
+      referenceTime,
+      Number.isFinite(previousTime) ? previousTime + 1 : Number.NEGATIVE_INFINITY,
+    ),
+  ).toISOString();
 }
 
 export function isPositiveInteger(value: unknown): value is number {
@@ -680,8 +670,10 @@ export function isNonNegativeInteger(value: unknown): value is number {
 }
 
 export function isCanonicalUuid(value: unknown): value is string {
-  return typeof value === "string"
-    && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
+  return (
+    typeof value === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value)
+  );
 }
 
 export function isPortNumber(value: unknown): value is number {
@@ -689,151 +681,123 @@ export function isPortNumber(value: unknown): value is number {
 }
 
 export function isPortMapping(value: unknown): value is PortMapping {
-  return isRecord(value)
-    && isPortNumber(value.containerPort)
-    && isPortNumber(value.hostPort)
-    && (value.protocol === "tcp" || value.protocol === "udp");
+  return (
+    isRecord(value) &&
+    isPortNumber(value.containerPort) &&
+    isPortNumber(value.hostPort) &&
+    (value.protocol === "tcp" || value.protocol === "udp")
+  );
 }
 
 export function isPersistedLoopedReviewWorkflow(
   value: unknown,
   expectedId?: string,
 ): value is PersistedLoopedReviewWorkflow {
-  return isRecord(value)
-    && isPositiveInteger(value.version)
-    && isNonBlankString(value.id)
-    && (expectedId === undefined || value.id === expectedId)
-    && isNonBlankString(value.environmentId)
-    && isRecord(value.snapshot)
-    && typeof value.updatedAt === "string"
-    && Number.isFinite(Date.parse(value.updatedAt))
-    && isPositiveInteger(value.revision)
-    && (
-      value.controllerLease === undefined
-      || (
-        isRecord(value.controllerLease)
-        && isNonBlankString(value.controllerLease.ownerId)
-        && (
-          value.controllerLease.token === undefined
-          || isNonBlankString(value.controllerLease.token)
-        )
-        && typeof value.controllerLease.expiresAt === "string"
-        && Number.isFinite(Date.parse(value.controllerLease.expiresAt))
-      )
-    );
+  return (
+    isRecord(value) &&
+    isPositiveInteger(value.version) &&
+    isNonBlankString(value.id) &&
+    (expectedId === undefined || value.id === expectedId) &&
+    isNonBlankString(value.environmentId) &&
+    isRecord(value.snapshot) &&
+    typeof value.updatedAt === "string" &&
+    Number.isFinite(Date.parse(value.updatedAt)) &&
+    isPositiveInteger(value.revision) &&
+    (value.controllerLease === undefined ||
+      (isRecord(value.controllerLease) &&
+        isNonBlankString(value.controllerLease.ownerId) &&
+        (value.controllerLease.token === undefined ||
+          isNonBlankString(value.controllerLease.token)) &&
+        typeof value.controllerLease.expiresAt === "string" &&
+        Number.isFinite(Date.parse(value.controllerLease.expiresAt))))
+  );
 }
 
 export function isPersistedMultiReviewWorkflow(
   value: unknown,
   expectedId?: string,
 ): value is PersistedMultiReviewWorkflow {
-  return isRecord(value)
-    && isPositiveInteger(value.version)
-    && isNonBlankString(value.id)
-    && (expectedId === undefined || value.id === expectedId)
-    && isNonBlankString(value.environmentId)
-    && isRecord(value.snapshot)
-    && typeof value.updatedAt === "string"
-    && Number.isFinite(Date.parse(value.updatedAt))
-    && isPositiveInteger(value.revision)
-    && (value.controllerLease === undefined || (
-      isRecord(value.controllerLease)
-      && isNonBlankString(value.controllerLease.ownerId)
-      && isNonBlankString(value.controllerLease.token)
-      && typeof value.controllerLease.expiresAt === "string"
-      && Number.isFinite(Date.parse(value.controllerLease.expiresAt))
-    ));
+  return (
+    isRecord(value) &&
+    isPositiveInteger(value.version) &&
+    isNonBlankString(value.id) &&
+    (expectedId === undefined || value.id === expectedId) &&
+    isNonBlankString(value.environmentId) &&
+    isRecord(value.snapshot) &&
+    typeof value.updatedAt === "string" &&
+    Number.isFinite(Date.parse(value.updatedAt)) &&
+    isPositiveInteger(value.revision) &&
+    (value.controllerLease === undefined ||
+      (isRecord(value.controllerLease) &&
+        isNonBlankString(value.controllerLease.ownerId) &&
+        isNonBlankString(value.controllerLease.token) &&
+        typeof value.controllerLease.expiresAt === "string" &&
+        Number.isFinite(Date.parse(value.controllerLease.expiresAt))))
+  );
 }
 
 export function isPersistedPromptQueueClaim(
   value: unknown,
 ): value is NonNullable<PersistedPromptQueue["outstandingClaim"]> {
-  return isRecord(value)
-    && isNonBlankString(value.token)
-    && Object.hasOwn(value, "message")
-    && typeof value.claimedAt === "string"
-    && Number.isFinite(Date.parse(value.claimedAt))
-    && typeof value.expiresAt === "string"
-    && Number.isFinite(Date.parse(value.expiresAt));
+  return (
+    isRecord(value) &&
+    isNonBlankString(value.token) &&
+    Object.hasOwn(value, "message") &&
+    typeof value.claimedAt === "string" &&
+    Number.isFinite(Date.parse(value.claimedAt)) &&
+    typeof value.expiresAt === "string" &&
+    Number.isFinite(Date.parse(value.expiresAt))
+  );
 }
 
 export function isPersistedPromptQueue(
   value: unknown,
   expectedKey?: string,
 ): value is PersistedPromptQueue {
-  return isRecord(value)
-    && isNonBlankString(value.queueKey)
-    && (expectedKey === undefined || value.queueKey === expectedKey)
-    && isNonBlankString(value.environmentId)
-    && promptQueueKeyMatchesEnvironment(value.queueKey, value.environmentId)
-    && Array.isArray(value.messages)
-    && (
-      value.inFlight === undefined
-      || (
-        isRecord(value.inFlight)
-        && Object.hasOwn(value.inFlight, "message")
-        && isNonBlankString(value.inFlight.requestId)
-        && typeof value.inFlight.reservedAt === "string"
-        && Number.isFinite(Date.parse(value.inFlight.reservedAt))
-        && (
-          value.inFlight.submittingAt === undefined
-          || (
-            typeof value.inFlight.submittingAt === "string"
-            && Number.isFinite(Date.parse(value.inFlight.submittingAt))
-          )
-        )
-        && (
-          value.inFlight.submittedAt === undefined
-          || (
-            typeof value.inFlight.submittedAt === "string"
-            && Number.isFinite(Date.parse(value.inFlight.submittedAt))
-            && typeof value.inFlight.submittingAt === "string"
-            && Date.parse(value.inFlight.submittedAt)
-              >= Date.parse(value.inFlight.submittingAt)
-          )
-        )
-      )
-    )
-    && (
-      value.dispatchError === undefined
-      || (
-        isRecord(value.dispatchError)
-        && isNonBlankString(value.dispatchError.requestId)
-        && (
-          (
-            isNonBlankString(value.dispatchError.messageId)
-            && isNonBlankString(value.dispatchError.messageFingerprint)
-            && /^[a-f0-9]{64}$/.test(value.dispatchError.messageFingerprint)
-          )
-          || (
-            value.dispatchError.messageId === undefined
-            && value.dispatchError.messageFingerprint === undefined
-          )
-        )
-        && isNonBlankString(value.dispatchError.message)
-        && typeof value.dispatchError.failedAt === "string"
-        && Number.isFinite(Date.parse(value.dispatchError.failedAt))
-      )
-    )
-    && (
-      value.outstandingClaim === undefined
-      || isPersistedPromptQueueClaim(value.outstandingClaim)
-    )
-    && typeof value.updatedAt === "string"
-    && Number.isFinite(Date.parse(value.updatedAt))
-    && isPositiveInteger(value.revision);
+  return (
+    isRecord(value) &&
+    isNonBlankString(value.queueKey) &&
+    (expectedKey === undefined || value.queueKey === expectedKey) &&
+    isNonBlankString(value.environmentId) &&
+    promptQueueKeyMatchesEnvironment(value.queueKey, value.environmentId) &&
+    Array.isArray(value.messages) &&
+    (value.inFlight === undefined ||
+      (isRecord(value.inFlight) &&
+        Object.hasOwn(value.inFlight, "message") &&
+        isNonBlankString(value.inFlight.requestId) &&
+        typeof value.inFlight.reservedAt === "string" &&
+        Number.isFinite(Date.parse(value.inFlight.reservedAt)) &&
+        (value.inFlight.submittingAt === undefined ||
+          (typeof value.inFlight.submittingAt === "string" &&
+            Number.isFinite(Date.parse(value.inFlight.submittingAt)))) &&
+        (value.inFlight.submittedAt === undefined ||
+          (typeof value.inFlight.submittedAt === "string" &&
+            Number.isFinite(Date.parse(value.inFlight.submittedAt)) &&
+            typeof value.inFlight.submittingAt === "string" &&
+            Date.parse(value.inFlight.submittedAt) >= Date.parse(value.inFlight.submittingAt))))) &&
+    (value.dispatchError === undefined ||
+      (isRecord(value.dispatchError) &&
+        isNonBlankString(value.dispatchError.requestId) &&
+        ((isNonBlankString(value.dispatchError.messageId) &&
+          isNonBlankString(value.dispatchError.messageFingerprint) &&
+          /^[a-f0-9]{64}$/.test(value.dispatchError.messageFingerprint)) ||
+          (value.dispatchError.messageId === undefined &&
+            value.dispatchError.messageFingerprint === undefined)) &&
+        isNonBlankString(value.dispatchError.message) &&
+        typeof value.dispatchError.failedAt === "string" &&
+        Number.isFinite(Date.parse(value.dispatchError.failedAt)))) &&
+    (value.outstandingClaim === undefined || isPersistedPromptQueueClaim(value.outstandingClaim)) &&
+    typeof value.updatedAt === "string" &&
+    Number.isFinite(Date.parse(value.updatedAt)) &&
+    isPositiveInteger(value.revision)
+  );
 }
 
 export const CLAUDE_TMUX_QUEUE_PREFIX = "claude-tmux\0";
 
-export function promptQueueKeyMatchesEnvironment(
-  queueKey: string,
-  environmentId: string,
-): boolean {
+export function promptQueueKeyMatchesEnvironment(queueKey: string, environmentId: string): boolean {
   if (!queueKey.startsWith(CLAUDE_TMUX_QUEUE_PREFIX)) return true;
-  const target = parseClaudeTmuxStateKey(
-    queueKey.slice(CLAUDE_TMUX_QUEUE_PREFIX.length),
-  );
+  const target = parseClaudeTmuxStateKey(queueKey.slice(CLAUDE_TMUX_QUEUE_PREFIX.length));
   return target?.environmentId === environmentId;
 }
 
@@ -847,127 +811,114 @@ export function isPersistedNativeAgentSession(
   value: unknown,
   expectedKey?: string,
 ): value is PersistedNativeAgentSession {
-  return isRecord(value)
-    && value.version === NATIVE_AGENT_SESSION_VERSION
-    && isNonBlankString(value.key)
-    && (expectedKey === undefined || value.key === expectedKey)
-    && isNonBlankString(value.environmentId)
-    && isAgentPlatform(value.agent)
-    && isNonBlankString(value.logicalSessionKey)
-    && isNonBlankString(value.providerSessionId)
-    && (
-      value.origin === "interactive-native"
-      || value.origin === "interactive-tmux"
-      || value.origin === "build-pipeline"
-      || value.origin === "looped-review"
-    )
-    && isAgentInteractionPolicy(value.interactionPolicy)
-    && (
-      value.controls === undefined
-      || (
-        isRecord(value.controls)
-        && Object.keys(value.controls).every((key) =>
-          key === "modelId"
-          || key === "reasoningId"
-          || key === "fastMode"
-          || key === "mode"
-          || key === "executionProfileId"
-          || key === "includeLocalSettings"
-          || key === "promptSuggestions"
-        )
-        && (value.controls.modelId === undefined || isNonBlankString(value.controls.modelId))
-        && (value.controls.reasoningId === undefined || isNonBlankString(value.controls.reasoningId))
-        && (value.controls.fastMode === undefined || typeof value.controls.fastMode === "boolean")
-        && (value.controls.executionProfileId === undefined || value.controls.executionProfileId === null || isNonBlankString(value.controls.executionProfileId))
-        && (value.controls.includeLocalSettings === undefined || typeof value.controls.includeLocalSettings === "boolean")
-        && (value.controls.promptSuggestions === undefined || typeof value.controls.promptSuggestions === "boolean")
-        && (
-          value.controls.mode === undefined
-          || value.controls.mode === "build"
-          || value.controls.mode === "plan"
-        )
-      )
-    )
-    && (
-      value.dispatchedRequestIds === undefined
-      || (
-        Array.isArray(value.dispatchedRequestIds)
-        && value.dispatchedRequestIds.length <= 1_000
-        && value.dispatchedRequestIds.every(isNonBlankString)
-      )
-    )
-    && (
-      value.pendingDispatch === undefined
-      || (
-        isRecord(value.pendingDispatch)
-        && isNonBlankString(value.pendingDispatch.requestId)
-        && isNonBlankString(value.pendingDispatch.prompt)
-        && typeof value.pendingDispatch.createdAt === "string"
-        && Number.isFinite(Date.parse(value.pendingDispatch.createdAt))
-        && (value.pendingDispatch.model === undefined || isNonBlankString(value.pendingDispatch.model))
-        && (value.pendingDispatch.reasoningEffort === undefined || isNonBlankString(value.pendingDispatch.reasoningEffort))
-        && (value.pendingDispatch.mode === undefined || value.pendingDispatch.mode === "plan" || value.pendingDispatch.mode === "build")
-        && (value.pendingDispatch.fastMode === undefined || typeof value.pendingDispatch.fastMode === "boolean")
-        && (value.pendingDispatch.subAgent === undefined || isNonBlankString(value.pendingDispatch.subAgent))
-        && (value.pendingDispatch.executionAgent === undefined || isNonBlankString(value.pendingDispatch.executionAgent))
-        && (value.pendingDispatch.includeLocalSettings === undefined || typeof value.pendingDispatch.includeLocalSettings === "boolean")
-        && (value.pendingDispatch.promptSuggestions === undefined || typeof value.pendingDispatch.promptSuggestions === "boolean")
-        && (value.pendingDispatch.schema === undefined || isRecord(value.pendingDispatch.schema))
-        && (
-          value.pendingDispatch.images === undefined
-          || (
-            Array.isArray(value.pendingDispatch.images)
-            && value.pendingDispatch.images.length <= 64
-            && value.pendingDispatch.images.every((image) =>
-              isRecord(image)
-              && isNonBlankString(image.filename)
-              && isNonBlankString(image.data)
-            )
-          )
-        )
-        && (
-          value.pendingDispatch.attachments === undefined
-          || (
-            Array.isArray(value.pendingDispatch.attachments)
-            && value.pendingDispatch.attachments.length <= 64
-            && value.pendingDispatch.attachments.every((attachment) =>
-              isRecord(attachment)
-              && (attachment.type === "image" || attachment.type === "file")
-              && isNonBlankString(attachment.path)
-              && (attachment.dataUrl === undefined || typeof attachment.dataUrl === "string")
-              && (attachment.filename === undefined || typeof attachment.filename === "string")
-            )
-          )
-        )
-        && (() => {
+  return (
+    isRecord(value) &&
+    value.version === NATIVE_AGENT_SESSION_VERSION &&
+    isNonBlankString(value.key) &&
+    (expectedKey === undefined || value.key === expectedKey) &&
+    isNonBlankString(value.environmentId) &&
+    isAgentPlatform(value.agent) &&
+    isNonBlankString(value.logicalSessionKey) &&
+    isNonBlankString(value.providerSessionId) &&
+    (value.origin === "interactive-native" ||
+      value.origin === "interactive-tmux" ||
+      value.origin === "build-pipeline" ||
+      value.origin === "looped-review") &&
+    isAgentInteractionPolicy(value.interactionPolicy) &&
+    (value.controls === undefined ||
+      (isRecord(value.controls) &&
+        Object.keys(value.controls).every(
+          (key) =>
+            key === "modelId" ||
+            key === "reasoningId" ||
+            key === "fastMode" ||
+            key === "mode" ||
+            key === "executionProfileId" ||
+            key === "includeLocalSettings" ||
+            key === "promptSuggestions",
+        ) &&
+        (value.controls.modelId === undefined || isNonBlankString(value.controls.modelId)) &&
+        (value.controls.reasoningId === undefined ||
+          isNonBlankString(value.controls.reasoningId)) &&
+        (value.controls.fastMode === undefined || typeof value.controls.fastMode === "boolean") &&
+        (value.controls.executionProfileId === undefined ||
+          value.controls.executionProfileId === null ||
+          isNonBlankString(value.controls.executionProfileId)) &&
+        (value.controls.includeLocalSettings === undefined ||
+          typeof value.controls.includeLocalSettings === "boolean") &&
+        (value.controls.promptSuggestions === undefined ||
+          typeof value.controls.promptSuggestions === "boolean") &&
+        (value.controls.mode === undefined ||
+          value.controls.mode === "build" ||
+          value.controls.mode === "plan"))) &&
+    (value.dispatchedRequestIds === undefined ||
+      (Array.isArray(value.dispatchedRequestIds) &&
+        value.dispatchedRequestIds.length <= 1_000 &&
+        value.dispatchedRequestIds.every(isNonBlankString))) &&
+    (value.pendingDispatch === undefined ||
+      (isRecord(value.pendingDispatch) &&
+        isNonBlankString(value.pendingDispatch.requestId) &&
+        isNonBlankString(value.pendingDispatch.prompt) &&
+        typeof value.pendingDispatch.createdAt === "string" &&
+        Number.isFinite(Date.parse(value.pendingDispatch.createdAt)) &&
+        (value.pendingDispatch.model === undefined ||
+          isNonBlankString(value.pendingDispatch.model)) &&
+        (value.pendingDispatch.reasoningEffort === undefined ||
+          isNonBlankString(value.pendingDispatch.reasoningEffort)) &&
+        (value.pendingDispatch.mode === undefined ||
+          value.pendingDispatch.mode === "plan" ||
+          value.pendingDispatch.mode === "build") &&
+        (value.pendingDispatch.fastMode === undefined ||
+          typeof value.pendingDispatch.fastMode === "boolean") &&
+        (value.pendingDispatch.subAgent === undefined ||
+          isNonBlankString(value.pendingDispatch.subAgent)) &&
+        (value.pendingDispatch.executionAgent === undefined ||
+          isNonBlankString(value.pendingDispatch.executionAgent)) &&
+        (value.pendingDispatch.includeLocalSettings === undefined ||
+          typeof value.pendingDispatch.includeLocalSettings === "boolean") &&
+        (value.pendingDispatch.promptSuggestions === undefined ||
+          typeof value.pendingDispatch.promptSuggestions === "boolean") &&
+        (value.pendingDispatch.schema === undefined || isRecord(value.pendingDispatch.schema)) &&
+        (value.pendingDispatch.images === undefined ||
+          (Array.isArray(value.pendingDispatch.images) &&
+            value.pendingDispatch.images.length <= 64 &&
+            value.pendingDispatch.images.every(
+              (image) =>
+                isRecord(image) && isNonBlankString(image.filename) && isNonBlankString(image.data),
+            ))) &&
+        (value.pendingDispatch.attachments === undefined ||
+          (Array.isArray(value.pendingDispatch.attachments) &&
+            value.pendingDispatch.attachments.length <= 64 &&
+            value.pendingDispatch.attachments.every(
+              (attachment) =>
+                isRecord(attachment) &&
+                (attachment.type === "image" || attachment.type === "file") &&
+                isNonBlankString(attachment.path) &&
+                (attachment.dataUrl === undefined || typeof attachment.dataUrl === "string") &&
+                (attachment.filename === undefined || typeof attachment.filename === "string"),
+            ))) &&
+        (() => {
           try {
-            return Buffer.byteLength(JSON.stringify(value.pendingDispatch), "utf8")
-              <= MAX_PERSISTED_NATIVE_AGENT_PENDING_DISPATCH_BYTES;
+            return (
+              Buffer.byteLength(JSON.stringify(value.pendingDispatch), "utf8") <=
+              MAX_PERSISTED_NATIVE_AGENT_PENDING_DISPATCH_BYTES
+            );
           } catch {
             return false;
           }
-        })()
-      )
-    )
-    && (
-      value.openCodeIncompleteTurnNotice === undefined
-      || (
-        isRecord(value.openCodeIncompleteTurnNotice)
-        && (
-          value.openCodeIncompleteTurnNotice.kind === "failed"
-          || value.openCodeIncompleteTurnNotice.kind === "exhausted"
-        )
-        && isNonBlankString(
-          value.openCodeIncompleteTurnNotice.assistantMessageId,
-        )
-        && typeof value.openCodeIncompleteTurnNotice.updatedAt === "string"
-        && Number.isFinite(Date.parse(value.openCodeIncompleteTurnNotice.updatedAt))
-      )
-    )
-    && typeof value.createdAt === "string"
-    && Number.isFinite(Date.parse(value.createdAt))
-    && typeof value.updatedAt === "string"
-    && Number.isFinite(Date.parse(value.updatedAt));
+        })())) &&
+    (value.openCodeIncompleteTurnNotice === undefined ||
+      (isRecord(value.openCodeIncompleteTurnNotice) &&
+        (value.openCodeIncompleteTurnNotice.kind === "failed" ||
+          value.openCodeIncompleteTurnNotice.kind === "exhausted") &&
+        isNonBlankString(value.openCodeIncompleteTurnNotice.assistantMessageId) &&
+        typeof value.openCodeIncompleteTurnNotice.updatedAt === "string" &&
+        Number.isFinite(Date.parse(value.openCodeIncompleteTurnNotice.updatedAt)))) &&
+    typeof value.createdAt === "string" &&
+    Number.isFinite(Date.parse(value.createdAt)) &&
+    typeof value.updatedAt === "string" &&
+    Number.isFinite(Date.parse(value.updatedAt))
+  );
 }
 
 /** Restores pre-policy records without changing provider or dispatch identity. */
@@ -978,14 +929,15 @@ export function migratePersistedNativeAgentSession(
   if (isPersistedNativeAgentSession(value, expectedKey)) return value;
   if (!isRecord(value)) return null;
   if (
-    value.version !== undefined
-    || value.origin !== undefined
-    || value.interactionPolicy !== undefined
+    value.version !== undefined ||
+    value.origin !== undefined ||
+    value.interactionPolicy !== undefined
   ) {
     return null;
   }
-  const legacyLoopedReview = typeof value.logicalSessionKey === "string"
-    && value.logicalSessionKey.startsWith("looped-review:");
+  const legacyLoopedReview =
+    typeof value.logicalSessionKey === "string" &&
+    value.logicalSessionKey.startsWith("looped-review:");
   const migrated = {
     ...value,
     version: NATIVE_AGENT_SESSION_VERSION,
@@ -994,9 +946,7 @@ export function migratePersistedNativeAgentSession(
       ? UNATTENDED_AGENT_INTERACTION_POLICY
       : INTERACTIVE_AGENT_INTERACTION_POLICY,
   };
-  return isPersistedNativeAgentSession(migrated, expectedKey)
-    ? migrated
-    : null;
+  return isPersistedNativeAgentSession(migrated, expectedKey) ? migrated : null;
 }
 
 export interface LoadedNativeAgentSessions {
@@ -1013,22 +963,18 @@ export function resolveNativeAgentInteractionMetadata(input: {
   interactionPolicy?: AgentInteractionPolicy;
 }): Pick<PersistedNativeAgentSession, "origin" | "interactionPolicy"> | null {
   const origin = input.origin ?? "interactive-native";
-  const interactionPolicy = input.interactionPolicy
-    ?? (origin === "build-pipeline" || origin === "looped-review"
+  const interactionPolicy =
+    input.interactionPolicy ??
+    (origin === "build-pipeline" || origin === "looped-review"
       ? UNATTENDED_AGENT_INTERACTION_POLICY
       : INTERACTIVE_AGENT_INTERACTION_POLICY);
   if (
-    ![
-      "interactive-native",
-      "interactive-tmux",
-      "build-pipeline",
-      "looped-review",
-    ].includes(origin)
-    || !isAgentInteractionPolicy(interactionPolicy)
-    || (
-      (origin === "build-pipeline" || origin === "looped-review")
-        !== (interactionPolicy.mode === "unattended")
-    )
+    !["interactive-native", "interactive-tmux", "build-pipeline", "looped-review"].includes(
+      origin,
+    ) ||
+    !isAgentInteractionPolicy(interactionPolicy) ||
+    (origin === "build-pipeline" || origin === "looped-review") !==
+      (interactionPolicy.mode === "unattended")
   ) {
     return null;
   }
@@ -1040,74 +986,76 @@ export function isPersistedComposeDraft(
   expectedKey?: string,
 ): value is PersistedComposeDraft {
   const source = isRecord(value) ? value.sourcePromptQueue : undefined;
-  return isRecord(value)
-    && isNonBlankString(value.draftKey)
-    && (expectedKey === undefined || value.draftKey === expectedKey)
-    && (value.ownerType === "environment" || value.ownerType === "project")
-    && isNonBlankString(value.ownerId)
-    && Object.hasOwn(value, "value")
-    && (
-      source === undefined
-      || (
-        isRecord(source)
-        && isNonBlankString(source.queueKey)
-        && Buffer.byteLength(source.queueKey, "utf8")
-          <= MAX_PROMPT_QUEUE_SOURCE_KEY_BYTES
-        && isNonBlankString(source.messageId)
-        && Buffer.byteLength(source.messageId, "utf8")
-          <= MAX_PROMPT_QUEUE_SOURCE_MESSAGE_ID_BYTES
-      )
-    )
-    && typeof value.updatedAt === "string"
-    && Number.isFinite(Date.parse(value.updatedAt))
-    && isPositiveInteger(value.revision);
+  return (
+    isRecord(value) &&
+    isNonBlankString(value.draftKey) &&
+    (expectedKey === undefined || value.draftKey === expectedKey) &&
+    (value.ownerType === "environment" || value.ownerType === "project") &&
+    isNonBlankString(value.ownerId) &&
+    Object.hasOwn(value, "value") &&
+    (source === undefined ||
+      (isRecord(source) &&
+        isNonBlankString(source.queueKey) &&
+        Buffer.byteLength(source.queueKey, "utf8") <= MAX_PROMPT_QUEUE_SOURCE_KEY_BYTES &&
+        isNonBlankString(source.messageId) &&
+        Buffer.byteLength(source.messageId, "utf8") <= MAX_PROMPT_QUEUE_SOURCE_MESSAGE_ID_BYTES)) &&
+    typeof value.updatedAt === "string" &&
+    Number.isFinite(Date.parse(value.updatedAt)) &&
+    isPositiveInteger(value.revision)
+  );
 }
 
 export function isPersistedFileDraft(
   value: unknown,
   expectedKey?: string,
 ): value is PersistedFileDraft {
-  return isRecord(value)
-    && isNonBlankString(value.draftKey)
-    && (expectedKey === undefined || value.draftKey === expectedKey)
-    && isNonBlankString(value.environmentId)
-    && isNonBlankString(value.filePath)
-    && typeof value.content === "string"
-    && typeof value.originalContent === "string"
-    && typeof value.updatedAt === "string"
-    && Number.isFinite(Date.parse(value.updatedAt))
-    && isPositiveInteger(value.revision);
+  return (
+    isRecord(value) &&
+    isNonBlankString(value.draftKey) &&
+    (expectedKey === undefined || value.draftKey === expectedKey) &&
+    isNonBlankString(value.environmentId) &&
+    isNonBlankString(value.filePath) &&
+    typeof value.content === "string" &&
+    typeof value.originalContent === "string" &&
+    typeof value.updatedAt === "string" &&
+    Number.isFinite(Date.parse(value.updatedAt)) &&
+    isPositiveInteger(value.revision)
+  );
 }
 
 export function isPersistedAgentHandoff(
   value: unknown,
   expectedId?: string,
 ): value is PersistedAgentHandoff {
-  return isRecord(value)
-    && isPositiveInteger(value.version)
-    && isNonBlankString(value.id)
-    && (expectedId === undefined || value.id === expectedId)
-    && isNonBlankString(value.environmentId)
-    && isRecord(value.snapshot)
-    && typeof value.createdAt === "string"
-    && Number.isFinite(Date.parse(value.createdAt));
+  return (
+    isRecord(value) &&
+    isPositiveInteger(value.version) &&
+    isNonBlankString(value.id) &&
+    (expectedId === undefined || value.id === expectedId) &&
+    isNonBlankString(value.environmentId) &&
+    isRecord(value.snapshot) &&
+    typeof value.createdAt === "string" &&
+    Number.isFinite(Date.parse(value.createdAt))
+  );
 }
 
 export function isPersistedBuildPipeline(
   value: unknown,
   expectedId?: string,
 ): value is PersistedBuildPipeline {
-  return isRecord(value)
-    && isPositiveInteger(value.version)
-    && isNonBlankString(value.id)
-    && (expectedId === undefined || value.id === expectedId)
-    && isNonBlankString(value.projectId)
+  return (
+    isRecord(value) &&
+    isPositiveInteger(value.version) &&
+    isNonBlankString(value.id) &&
+    (expectedId === undefined || value.id === expectedId) &&
+    isNonBlankString(value.projectId) &&
     // Blank until the pipeline's environment exists; see PersistedBuildPipeline.
-    && typeof value.environmentId === "string"
-    && isRecord(value.snapshot)
-    && typeof value.updatedAt === "string"
-    && Number.isFinite(Date.parse(value.updatedAt))
-    && isPositiveInteger(value.revision);
+    typeof value.environmentId === "string" &&
+    isRecord(value.snapshot) &&
+    typeof value.updatedAt === "string" &&
+    Number.isFinite(Date.parse(value.updatedAt)) &&
+    isPositiveInteger(value.revision)
+  );
 }
 
 export function activeGitHubBuildReservation(snapshot: unknown): string | null {
@@ -1115,11 +1063,11 @@ export function activeGitHubBuildReservation(snapshot: unknown): string | null {
   if (snapshot.phase === "complete" || snapshot.phase === "failed") return null;
   const source = snapshot.source;
   if (
-    !isRecord(source)
-    || source.type !== "github"
-    || !isNonBlankString(source.repositoryOwner)
-    || !isNonBlankString(source.repositoryName)
-    || !isPositiveInteger(source.issueNumber)
+    !isRecord(source) ||
+    source.type !== "github" ||
+    !isNonBlankString(source.repositoryOwner) ||
+    !isNonBlankString(source.repositoryName) ||
+    !isPositiveInteger(source.issueNumber)
   ) {
     return null;
   }
@@ -1129,9 +1077,7 @@ export function activeGitHubBuildReservation(snapshot: unknown): string | null {
 export function activeBuildAdmissionKey(snapshot: unknown): string | null {
   if (!isRecord(snapshot)) return null;
   if (snapshot.phase === "complete" || snapshot.phase === "failed") return null;
-  return isNonBlankString(snapshot.admissionKey)
-    ? snapshot.admissionKey
-    : null;
+  return isNonBlankString(snapshot.admissionKey) ? snapshot.admissionKey : null;
 }
 
 export function isClaudeModelCatalogSnapshot(
@@ -1139,45 +1085,55 @@ export function isClaudeModelCatalogSnapshot(
   environmentId: string,
 ): value is ClaudeModelCatalogSnapshot {
   if (
-    !isRecord(value)
-    || value.environmentId !== environmentId
-    || !Array.isArray(value.models)
-    || !isOneOf(value.source, ["sdk", "last-known-good", "fallback"])
-    || typeof value.fetchedAt !== "string"
-    || !Number.isFinite(Date.parse(value.fetchedAt))
-    || typeof value.stale !== "boolean"
+    !isRecord(value) ||
+    value.environmentId !== environmentId ||
+    !Array.isArray(value.models) ||
+    !isOneOf(value.source, ["sdk", "last-known-good", "fallback"]) ||
+    typeof value.fetchedAt !== "string" ||
+    !Number.isFinite(Date.parse(value.fetchedAt)) ||
+    typeof value.stale !== "boolean"
   ) {
     return false;
   }
 
   const effortLevels = ["low", "medium", "high", "xhigh", "max"] as const;
-  return value.models.every((model) => {
-    if (!isRecord(model) || !isNonBlankString(model.id) || !isNonBlankString(model.name)) {
-      return false;
-    }
-    const optionalStrings = ["resolvedModel", "description"] as const;
-    if (optionalStrings.some((field) => field in model && model[field] != null && typeof model[field] !== "string")) {
-      return false;
-    }
-    const optionalBooleans = [
-      "supportsFastMode",
-      "supportsEffort",
-      "supportsAdaptiveThinking",
-      "supportsAutoMode",
-    ] as const;
-    if (optionalBooleans.some((field) => field in model && model[field] != null && typeof model[field] !== "boolean")) {
-      return false;
-    }
-    return !("supportedEffortLevels" in model)
-      || model.supportedEffortLevels == null
-      || (
-        Array.isArray(model.supportedEffortLevels)
-        && model.supportedEffortLevels.every((level) => isOneOf(level, effortLevels))
+  return (
+    value.models.every((model) => {
+      if (!isRecord(model) || !isNonBlankString(model.id) || !isNonBlankString(model.name)) {
+        return false;
+      }
+      const optionalStrings = ["resolvedModel", "description"] as const;
+      if (
+        optionalStrings.some(
+          (field) => field in model && model[field] != null && typeof model[field] !== "string",
+        )
+      ) {
+        return false;
+      }
+      const optionalBooleans = [
+        "supportsFastMode",
+        "supportsEffort",
+        "supportsAdaptiveThinking",
+        "supportsAutoMode",
+      ] as const;
+      if (
+        optionalBooleans.some(
+          (field) => field in model && model[field] != null && typeof model[field] !== "boolean",
+        )
+      ) {
+        return false;
+      }
+      return (
+        !("supportedEffortLevels" in model) ||
+        model.supportedEffortLevels == null ||
+        (Array.isArray(model.supportedEffortLevels) &&
+          model.supportedEffortLevels.every((level) => isOneOf(level, effortLevels)))
       );
-  })
-    && (value.sdkVersion == null || typeof value.sdkVersion === "string")
-    && (value.cliVersion == null || typeof value.cliVersion === "string")
-    && (value.error == null || typeof value.error === "string");
+    }) &&
+    (value.sdkVersion == null || typeof value.sdkVersion === "string") &&
+    (value.cliVersion == null || typeof value.cliVersion === "string") &&
+    (value.error == null || typeof value.error === "string")
+  );
 }
 
 export const CODEX_REASONING_EFFORTS = [
@@ -1190,9 +1146,7 @@ export const CODEX_REASONING_EFFORTS = [
   "ultra",
 ] as const satisfies readonly CodexReasoningEffort[];
 
-export function normalizeClaudeModelCatalogEntries(
-  value: unknown,
-): ClaudeModelCatalogEntry[] {
+export function normalizeClaudeModelCatalogEntries(value: unknown): ClaudeModelCatalogEntry[] {
   if (!Array.isArray(value)) return [];
   const normalized: ClaudeModelCatalogEntry[] = [];
   const seen = new Set<string>();
@@ -1206,9 +1160,7 @@ export function normalizeClaudeModelCatalogEntries(
     if (
       optionalStrings.some(
         (field) =>
-          field in candidate
-          && candidate[field] != null
-          && typeof candidate[field] !== "string",
+          field in candidate && candidate[field] != null && typeof candidate[field] !== "string",
       )
     ) {
       continue;
@@ -1222,22 +1174,18 @@ export function normalizeClaudeModelCatalogEntries(
     if (
       optionalBooleans.some(
         (field) =>
-          field in candidate
-          && candidate[field] != null
-          && typeof candidate[field] !== "boolean",
+          field in candidate && candidate[field] != null && typeof candidate[field] !== "boolean",
       )
     ) {
       continue;
     }
     const supportedEffortLevels = candidate.supportedEffortLevels;
     if (
-      supportedEffortLevels != null
-      && (
-        !Array.isArray(supportedEffortLevels)
-        || !supportedEffortLevels.every((level) =>
-          isOneOf(level, ["low", "medium", "high", "xhigh", "max"] as const)
-        )
-      )
+      supportedEffortLevels != null &&
+      (!Array.isArray(supportedEffortLevels) ||
+        !supportedEffortLevels.every((level) =>
+          isOneOf(level, ["low", "medium", "high", "xhigh", "max"] as const),
+        ))
     ) {
       continue;
     }
@@ -1272,9 +1220,7 @@ export function normalizeClaudeModelCatalogEntries(
   return normalized;
 }
 
-export function normalizeCodexModelCatalogEntries(
-  value: unknown,
-): CodexModelCatalogEntry[] {
+export function normalizeCodexModelCatalogEntries(value: unknown): CodexModelCatalogEntry[] {
   if (!Array.isArray(value)) return [];
   const normalized: CodexModelCatalogEntry[] = [];
   const seen = new Set<string>();
@@ -1284,25 +1230,22 @@ export function normalizeCodexModelCatalogEntries(
     const name = isNonBlankString(candidate.name) ? candidate.name.trim() : "";
     if (!id || !name || seen.has(id)) continue;
     if (
-      "description" in candidate
-      && candidate.description != null
-      && typeof candidate.description !== "string"
+      "description" in candidate &&
+      candidate.description != null &&
+      typeof candidate.description !== "string"
     ) {
       continue;
     }
 
     const reasoningEfforts = Array.isArray(candidate.reasoningEfforts)
-      ? candidate.reasoningEfforts.filter(
-          (effort): effort is CodexReasoningEffort =>
-            isOneOf(effort, CODEX_REASONING_EFFORTS),
+      ? candidate.reasoningEfforts.filter((effort): effort is CodexReasoningEffort =>
+          isOneOf(effort, CODEX_REASONING_EFFORTS),
         )
       : undefined;
     if (
-      candidate.reasoningEfforts != null
-      && (
-        !Array.isArray(candidate.reasoningEfforts)
-        || reasoningEfforts!.length !== candidate.reasoningEfforts.length
-      )
+      candidate.reasoningEfforts != null &&
+      (!Array.isArray(candidate.reasoningEfforts) ||
+        reasoningEfforts!.length !== candidate.reasoningEfforts.length)
     ) {
       continue;
     }
@@ -1321,13 +1264,10 @@ export function normalizeCodexModelCatalogEntries(
       let invalid = false;
       for (const option of candidate.reasoningOptions) {
         if (
-          !isRecord(option)
-          || !isOneOf(option.effort, CODEX_REASONING_EFFORTS)
-          || !isNonBlankString(option.label)
-          || (
-            option.description != null
-            && typeof option.description !== "string"
-          )
+          !isRecord(option) ||
+          !isOneOf(option.effort, CODEX_REASONING_EFFORTS) ||
+          !isNonBlankString(option.label) ||
+          (option.description != null && typeof option.description !== "string")
         ) {
           invalid = true;
           break;
@@ -1352,9 +1292,7 @@ export function normalizeCodexModelCatalogEntries(
         : {}),
       ...(reasoningEfforts ? { reasoningEfforts: [...reasoningEfforts] } : {}),
       ...(reasoningOptions ? { reasoningOptions } : {}),
-      ...(defaultReasoningEffort
-        ? { defaultReasoningEffort }
-        : {}),
+      ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
     });
   }
   return normalized;
@@ -1373,11 +1311,11 @@ export function normalizeAcpModelCatalogEntries(
     const label = isNonBlankString(candidate.label) ? candidate.label.trim() : "";
     if (!id || !label || seen.has(id)) continue;
     if (
-      (candidate.providerLabel != null && typeof candidate.providerLabel !== "string")
-      || (candidate.description != null && typeof candidate.description !== "string")
-      || (candidate.defaultReasoningId != null && typeof candidate.defaultReasoningId !== "string")
-      || (candidate.supportsSpeed != null && typeof candidate.supportsSpeed !== "boolean")
-      || (candidate.supportsMode != null && typeof candidate.supportsMode !== "boolean")
+      (candidate.providerLabel != null && typeof candidate.providerLabel !== "string") ||
+      (candidate.description != null && typeof candidate.description !== "string") ||
+      (candidate.defaultReasoningId != null && typeof candidate.defaultReasoningId !== "string") ||
+      (candidate.supportsSpeed != null && typeof candidate.supportsSpeed !== "boolean") ||
+      (candidate.supportsMode != null && typeof candidate.supportsMode !== "boolean")
     ) {
       continue;
     }
@@ -1395,11 +1333,11 @@ export function normalizeAcpModelCatalogEntries(
         const optionId = isNonBlankString(option.id) ? option.id.trim() : "";
         const optionLabel = isNonBlankString(option.label) ? option.label.trim() : "";
         if (
-          !optionId
-          || !optionLabel
-          || reasoningIds.has(optionId)
-          || (option.description != null && typeof option.description !== "string")
-          || (option.annotation != null && typeof option.annotation !== "string")
+          !optionId ||
+          !optionLabel ||
+          reasoningIds.has(optionId) ||
+          (option.description != null && typeof option.description !== "string") ||
+          (option.annotation != null && typeof option.annotation !== "string")
         ) {
           invalid = true;
           break;
@@ -1411,9 +1349,7 @@ export function normalizeAcpModelCatalogEntries(
           ...(isNonBlankString(option.description)
             ? { description: option.description.trim() }
             : {}),
-          ...(isNonBlankString(option.annotation)
-            ? { annotation: option.annotation.trim() }
-            : {}),
+          ...(isNonBlankString(option.annotation) ? { annotation: option.annotation.trim() } : {}),
         });
       }
       if (invalid) continue;
@@ -1445,22 +1381,16 @@ export function normalizeAcpModelCatalogEntries(
   return normalized;
 }
 
-export function parsePersistedAgentModelCatalogCache(
-  value: unknown,
-): AgentModelCatalogCache {
+export function parsePersistedAgentModelCatalogCache(value: unknown): AgentModelCatalogCache {
   const empty: AgentModelCatalogCache = { schemaVersion: 1 };
   if (!isRecord(value) || value.schemaVersion !== 1) return empty;
 
-  const parseCatalog = <T>(
-    candidate: unknown,
-    normalize: (models: unknown) => T[],
-  ) => {
+  const parseCatalog = <T>(candidate: unknown, normalize: (models: unknown) => T[]) => {
     if (!isRecord(candidate)) return undefined;
     const models = normalize(candidate.models);
     if (models.length === 0) return undefined;
     const updatedAt =
-      typeof candidate.updatedAt === "string"
-      && Number.isFinite(Date.parse(candidate.updatedAt))
+      typeof candidate.updatedAt === "string" && Number.isFinite(Date.parse(candidate.updatedAt))
         ? candidate.updatedAt
         : new Date(0).toISOString();
     return { updatedAt, models };
@@ -1468,13 +1398,11 @@ export function parsePersistedAgentModelCatalogCache(
 
   const claude = parseCatalog(value.claude, normalizeClaudeModelCatalogEntries);
   const codex = parseCatalog(value.codex, normalizeCodexModelCatalogEntries);
-  const cursor = parseCatalog(
-    value.cursor,
-    (models) => normalizeAcpModelCatalogEntries(models, "cursor"),
+  const cursor = parseCatalog(value.cursor, (models) =>
+    normalizeAcpModelCatalogEntries(models, "cursor"),
   );
-  const grok = parseCatalog(
-    value.grok,
-    (models) => normalizeAcpModelCatalogEntries(models, "grok"),
+  const grok = parseCatalog(value.grok, (models) =>
+    normalizeAcpModelCatalogEntries(models, "grok"),
   );
   return {
     schemaVersion: 1,
@@ -1496,9 +1424,9 @@ export function validateCodexMaxConcurrentThreads(value: unknown): number {
 
 export function migrateLegacyReviewInstruction(global: JsonRecord): JsonRecord {
   if (
-    global.reviewInstruction === undefined
-    && typeof global.reviewPrompt === "string"
-    && getReviewInstructionValidationError(global.reviewPrompt) === null
+    global.reviewInstruction === undefined &&
+    typeof global.reviewPrompt === "string" &&
+    getReviewInstructionValidationError(global.reviewPrompt) === null
   ) {
     const { reviewPrompt, ...rest } = global;
     return {
@@ -1538,31 +1466,22 @@ export function validateGlobalReviewInstruction(value: unknown): AppConfig["glob
 }
 
 export function sanitizePersistedReviewInstruction(config: AppConfig): AppConfig {
-  const global = config && isRecord(config.global)
-    ? config.global as unknown as JsonRecord
-    : null;
+  const global =
+    config && isRecord(config.global) ? (config.global as unknown as JsonRecord) : null;
   if (!global) {
     return config;
   }
 
   const migratedGlobal = migrateLegacyReviewInstruction(global);
-  const instructionError = getReviewInstructionValidationError(
-    migratedGlobal.reviewInstruction,
-  );
-  if (
-    instructionError === null
-    && migratedGlobal === global
-  ) {
+  const instructionError = getReviewInstructionValidationError(migratedGlobal.reviewInstruction);
+  if (instructionError === null && migratedGlobal === global) {
     return config;
   }
 
-  const {
-    reviewInstruction: _invalidReviewInstruction,
-    ...globalWithoutInvalidInstruction
-  } = migratedGlobal;
-  const sanitizedGlobal = instructionError === null
-    ? migratedGlobal
-    : globalWithoutInvalidInstruction;
+  const { reviewInstruction: _invalidReviewInstruction, ...globalWithoutInvalidInstruction } =
+    migratedGlobal;
+  const sanitizedGlobal =
+    instructionError === null ? migratedGlobal : globalWithoutInvalidInstruction;
 
   return {
     ...config,
@@ -1582,16 +1501,16 @@ export {
 
 export function normalizePersistedConfig(config: AppConfig): AppConfig {
   const reviewInstructionSanitized = sanitizePersistedReviewInstruction(config);
-  const global = reviewInstructionSanitized && isRecord(reviewInstructionSanitized.global)
-    ? reviewInstructionSanitized.global as unknown as JsonRecord
-    : null;
+  const global =
+    reviewInstructionSanitized && isRecord(reviewInstructionSanitized.global)
+      ? (reviewInstructionSanitized.global as unknown as JsonRecord)
+      : null;
   if (!global) return reviewInstructionSanitized;
 
   const codexMaxConcurrentThreads = resolveCodexMaxConcurrentThreads(
     global.codexMaxConcurrentThreads,
   );
-  const hasExplicitGitHubCredentialSource =
-    typeof global.useHostGitHubCredentials === "boolean";
+  const hasExplicitGitHubCredentialSource = typeof global.useHostGitHubCredentials === "boolean";
   const hasLegacyGitHubToken =
     typeof global.githubToken === "string" && global.githubToken.trim().length > 0;
   // Before the source selector existed, a stored PAT was the user's explicit
@@ -1604,9 +1523,10 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     global.enabledAgentPlatforms,
     LEGACY_ENABLED_AGENT_PLATFORMS,
   );
-  const enabledAgentPlatforms = normalizedEnabledAgentPlatforms.length > 0
-    ? normalizedEnabledAgentPlatforms
-    : [...LEGACY_ENABLED_AGENT_PLATFORMS];
+  const enabledAgentPlatforms =
+    normalizedEnabledAgentPlatforms.length > 0
+      ? normalizedEnabledAgentPlatforms
+      : [...LEGACY_ENABLED_AGENT_PLATFORMS];
   const defaultAgent = firstEnabledAgentPlatform(
     enabledAgentPlatforms,
     isAgentPlatform(global.defaultAgent) ? global.defaultAgent : undefined,
@@ -1615,15 +1535,19 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     ? global.claudeMode
     : DEFAULT_CLAUDE_MODE;
   const favoriteModels = Array.isArray(global.favoriteModels)
-    ? global.favoriteModels.flatMap((value) => {
-        if (!isRecord(value) || !isAgentPlatform(value.platform)) return [];
-        const modelId = typeof value.modelId === "string" ? value.modelId.trim() : "";
-        return modelId ? [{ platform: value.platform, modelId }] : [];
-      }).filter((value, index, values) =>
-        values.findIndex((candidate) =>
-          candidate.platform === value.platform && candidate.modelId === value.modelId
-        ) === index
-      )
+    ? global.favoriteModels
+        .flatMap((value) => {
+          if (!isRecord(value) || !isAgentPlatform(value.platform)) return [];
+          const modelId = typeof value.modelId === "string" ? value.modelId.trim() : "";
+          return modelId ? [{ platform: value.platform, modelId }] : [];
+        })
+        .filter(
+          (value, index, values) =>
+            values.findIndex(
+              (candidate) =>
+                candidate.platform === value.platform && candidate.modelId === value.modelId,
+            ) === index,
+        )
     : [];
   // An explicitly stored list is the user's own; an explicitly empty one is
   // them opting into every provider and must survive normalization. Anything
@@ -1649,16 +1573,15 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     openCodeModelProviders,
   );
   if (
-    repositories === reviewInstructionSanitized.repositories
-    && global.codexMaxConcurrentThreads === codexMaxConcurrentThreads
-    && global.useHostGitHubCredentials === useHostGitHubCredentials
-    && JSON.stringify(global.enabledAgentPlatforms) === JSON.stringify(enabledAgentPlatforms)
-    && global.defaultAgent === defaultAgent
-    && global.claudeMode === claudeMode
-    && JSON.stringify(global.favoriteModels ?? []) === JSON.stringify(favoriteModels)
-    && JSON.stringify(global.openCodeModelProviders)
-      === JSON.stringify(openCodeModelProviders)
-    && global.opencodeModel === opencodeModel
+    repositories === reviewInstructionSanitized.repositories &&
+    global.codexMaxConcurrentThreads === codexMaxConcurrentThreads &&
+    global.useHostGitHubCredentials === useHostGitHubCredentials &&
+    JSON.stringify(global.enabledAgentPlatforms) === JSON.stringify(enabledAgentPlatforms) &&
+    global.defaultAgent === defaultAgent &&
+    global.claudeMode === claudeMode &&
+    JSON.stringify(global.favoriteModels ?? []) === JSON.stringify(favoriteModels) &&
+    JSON.stringify(global.openCodeModelProviders) === JSON.stringify(openCodeModelProviders) &&
+    global.opencodeModel === opencodeModel
   ) {
     return reviewInstructionSanitized;
   }
@@ -1793,8 +1716,7 @@ export function createEnvironment(
     pendingRenamePrompt?: string;
   } = {},
 ): Environment {
-  const rawName =
-    options.name?.trim() || defaultEnvironmentName();
+  const rawName = options.name?.trim() || defaultEnvironmentName();
   const name = sanitizeEnvironmentName(rawName);
   const environmentType = options.environmentType ?? "containerized";
   const createdAt = nowIso();
@@ -1817,7 +1739,8 @@ export function createEnvironment(
     agentActivityState: "idle",
     agentActivityUpdatedAt: createdAt,
     createdFromCommit: undefined,
-    networkAccessMode: options.networkAccessMode ?? (environmentType === "local" ? "full" : "restricted"),
+    networkAccessMode:
+      options.networkAccessMode ?? (environmentType === "local" ? "full" : "restricted"),
     allowedDomains: undefined,
     order: 0,
     portMappings: options.portMappings,
@@ -1885,13 +1808,12 @@ export async function exists(filePath: string): Promise<boolean> {
  * very different thing from an empty store.
  */
 export function isMissingFileError(error: unknown): boolean {
-  const code = error && typeof error === "object" && "code" in error
-    ? (error as { code?: unknown }).code
-    : undefined;
+  const code =
+    error && typeof error === "object" && "code" in error
+      ? (error as { code?: unknown }).code
+      : undefined;
   return code === "ENOENT" || code === "ENOTDIR";
 }
-
-
 
 export {
   fs,

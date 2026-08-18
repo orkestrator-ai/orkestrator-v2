@@ -19,10 +19,13 @@ export const OPEN_CODE_MESSAGE_ID_MAX_RESERVATIONS_PER_SESSION = 64;
 interface OpenCodeMessageIdSessionState {
   tail: Promise<void>;
   pending: number;
-  reservations: Map<string, {
-    messageId: string;
-    accepted: boolean;
-  }>;
+  reservations: Map<
+    string,
+    {
+      messageId: string;
+      accepted: boolean;
+    }
+  >;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -75,9 +78,7 @@ function laterTimeHex(current: string, candidate: string): string {
   // OpenCode stores only 48 bits of its ascending millisecond/counter value,
   // which wraps roughly every 795 days. Modular comparison keeps IDs on the
   // new side of that boundary newer than prefixes just before the wrap.
-  return forwardDistance > 0n && forwardDistance < TIME_HALF_RANGE
-    ? candidate
-    : current;
+  return forwardDistance > 0n && forwardDistance < TIME_HALF_RANGE ? candidate : current;
 }
 
 /** Find a previously materialized user-message ID for one durable request. */
@@ -90,10 +91,10 @@ export function findOpenCodeMessageId(
     const info = messageInfo(entries[index]);
     if (!info) continue;
     if (
-      info.role === "user"
-      && typeof info.id === "string"
-      && info.id.startsWith("msg_")
-      && info.id.endsWith(marker)
+      info.role === "user" &&
+      typeof info.id === "string" &&
+      info.id.startsWith("msg_") &&
+      info.id.endsWith(marker)
     ) {
       return info.id;
     }
@@ -101,10 +102,10 @@ export function findOpenCodeMessageId(
     // This keeps reconciliation robust when a compacted transcript omits the
     // original user entry but retains the assistant's parent relationship.
     if (
-      info.role === "assistant"
-      && typeof info.parentID === "string"
-      && info.parentID.startsWith("msg_")
-      && info.parentID.endsWith(marker)
+      info.role === "assistant" &&
+      typeof info.parentID === "string" &&
+      info.parentID.startsWith("msg_") &&
+      info.parentID.endsWith(marker)
     ) {
       return info.parentID;
     }
@@ -201,10 +202,10 @@ export function boundedOpenCodeMessageHistory(
   const maximumCount = limits.count ?? OPEN_CODE_MESSAGE_HISTORY_LIMIT;
   const maximumBytes = limits.bytes ?? OPEN_CODE_MESSAGE_HISTORY_MAX_BYTES;
   if (
-    !Number.isSafeInteger(maximumCount)
-    || maximumCount < 0
-    || !Number.isSafeInteger(maximumBytes)
-    || maximumBytes < 0
+    !Number.isSafeInteger(maximumCount) ||
+    maximumCount < 0 ||
+    !Number.isSafeInteger(maximumBytes) ||
+    maximumBytes < 0
   ) {
     throw new RangeError("OpenCode message history bounds must be non-negative integers");
   }
@@ -246,9 +247,7 @@ export function resolveOpenCodeMessageId(
   }
 
   const prefixes = ids.map(timeHex).filter((value): value is string => value !== undefined);
-  const anchor = prefixes.length > 0
-    ? prefixes.reduce(laterTimeHex)
-    : fallbackTimeHex(now);
+  const anchor = prefixes.length > 0 ? prefixes.reduce(laterTimeHex) : fallbackTimeHex(now);
 
   const customPrefix = `msg_${anchor}${"z".repeat(OPEN_CODE_RANDOM_LENGTH)}`;
   let sequence = 0n;
@@ -265,9 +264,7 @@ export function resolveOpenCodeMessageId(
   if (sequence >= MAX_ORKESTRATOR_SEQUENCE) {
     throw new RangeError("OpenCode caller-owned message sequence is exhausted");
   }
-  const nextSequence = (sequence + 1n)
-    .toString(16)
-    .padStart(ORKESTRATOR_SEQUENCE_HEX_LENGTH, "0");
+  const nextSequence = (sequence + 1n).toString(16).padStart(ORKESTRATOR_SEQUENCE_HEX_LENGTH, "0");
   return `${customPrefix}${nextSequence}${marker}`;
 }
 
@@ -301,9 +298,10 @@ export class OpenCodeMessageIdCoordinator {
       return existing;
     }
     if (this.sessions.size >= this.maximumSessions) {
-      const evictable = [...this.sessions].find(([, state]) =>
-        state.pending === 0
-        && [...state.reservations.values()].every((reservation) => reservation.accepted)
+      const evictable = [...this.sessions].find(
+        ([, state]) =>
+          state.pending === 0 &&
+          [...state.reservations.values()].every((reservation) => reservation.accepted),
       );
       if (!evictable) {
         throw new RangeError("OpenCode message-ID session capacity is exhausted");
@@ -343,7 +341,7 @@ export class OpenCodeMessageIdCoordinator {
     now: number = Date.now(),
   ): string {
     const state = this.state(sessionId);
-    for (const reservedRequestId of [...state.reservations.keys()]) {
+    for (const reservedRequestId of Array.from(state.reservations.keys())) {
       if (findOpenCodeMessageId(entries, reservedRequestId)) {
         state.reservations.delete(reservedRequestId);
       }

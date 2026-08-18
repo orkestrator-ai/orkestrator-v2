@@ -13,7 +13,9 @@ import * as realNativeMessage from "@/components/chat/NativeMessage";
 const realNativeMessageSnapshot = { ...realNativeMessage };
 mock.module("@/components/chat/NativeMessage", () => ({
   ...realNativeMessageSnapshot,
-  NativeMessage: ({ message }: {
+  NativeMessage: ({
+    message,
+  }: {
     message: {
       id: string;
       content: string;
@@ -61,7 +63,9 @@ mock.module("@/components/chat/VirtualizedMessageList", () => ({
               message,
               resolvePreviousMessage
                 ? resolvePreviousMessage(messages, index)
-                : index > 0 ? messages[index - 1] : null,
+                : index > 0
+                  ? messages[index - 1]
+                  : null,
             )}
           </div>
         ))}
@@ -71,10 +75,7 @@ mock.module("@/components/chat/VirtualizedMessageList", () => ({
   },
 }));
 afterAll(() => {
-  mock.module(
-    "@/components/chat/VirtualizedMessageList",
-    () => realVirtualizedMessageListSnapshot,
-  );
+  mock.module("@/components/chat/VirtualizedMessageList", () => realVirtualizedMessageListSnapshot);
 });
 
 const { MultiReviewReviewerTab, toMultiReviewReviewerMessages } =
@@ -102,25 +103,29 @@ describe("MultiReviewReviewerTab message containment", () => {
       model: "default",
       status: "running" as const,
       startedAt: "2026-08-17T00:00:00.000Z",
-      messages: [{
-        id: "healthy-before",
-        role: "assistant",
-        content: "Inspecting the changed files",
-        createdAt: "2026-08-17T00:00:01.000Z",
-        parts: [{ type: "text", content: "Inspecting the changed files" }],
-      }, {
-        id: "poisoned",
-        role: "assistant",
-        content: "poison frame",
-        createdAt: "2026-08-17T00:00:02.000Z",
-        parts: [{ type: "text", content: "poison frame" }],
-      }, {
-        id: "healthy-after",
-        role: "assistant",
-        content: "Running the validation suite",
-        createdAt: "2026-08-17T00:00:03.000Z",
-        parts: [{ type: "text", content: "Running the validation suite" }],
-      }],
+      messages: [
+        {
+          id: "healthy-before",
+          role: "assistant",
+          content: "Inspecting the changed files",
+          createdAt: "2026-08-17T00:00:01.000Z",
+          parts: [{ type: "text", content: "Inspecting the changed files" }],
+        },
+        {
+          id: "poisoned",
+          role: "assistant",
+          content: "poison frame",
+          createdAt: "2026-08-17T00:00:02.000Z",
+          parts: [{ type: "text", content: "poison frame" }],
+        },
+        {
+          id: "healthy-after",
+          role: "assistant",
+          content: "Running the validation suite",
+          createdAt: "2026-08-17T00:00:03.000Z",
+          parts: [{ type: "text", content: "Running the validation suite" }],
+        },
+      ],
     }));
 
     await withSilencedReactErrors(async () => {
@@ -140,9 +145,7 @@ describe("MultiReviewReviewerTab message containment", () => {
       await waitFor(() => expect(loadTranscript).toHaveBeenCalled());
       expect(await screen.findByText("Inspecting the changed files")).toBeTruthy();
       expect(await screen.findByText("Running the validation suite")).toBeTruthy();
-      expect(
-        await screen.findByText(/One message could not be displayed/),
-      ).toBeTruthy();
+      expect(await screen.findByText(/One message could not be displayed/)).toBeTruthy();
       // The header and read-only status line stay up: the view survived.
       expect(screen.getByText("Claude review")).toBeTruthy();
       expect(screen.queryByText("poison frame") === null).toBe(true);
@@ -156,9 +159,7 @@ describe("MultiReviewReviewerTab message containment", () => {
     let loads = 0;
     const loadTranscript = mock(async () => {
       loads += 1;
-      const midContent = loads === 1
-        ? "poison frame"
-        : "Captured the worktree snapshot";
+      const midContent = loads === 1 ? "poison frame" : "Captured the worktree snapshot";
       return {
         workflowId: "multi-1",
         reviewerId: "reviewer-1",
@@ -166,25 +167,29 @@ describe("MultiReviewReviewerTab message containment", () => {
         model: "default",
         status: "running" as const,
         startedAt: "2026-08-17T00:00:00.000Z",
-        messages: [{
-          id: "healthy-before",
-          role: "assistant" as const,
-          content: "Inspecting the changed files",
-          createdAt: "2026-08-17T00:00:01.000Z",
-          parts: [{ type: "text" as const, content: "Inspecting the changed files" }],
-        }, {
-          id: "row-mid",
-          role: "assistant" as const,
-          content: midContent,
-          createdAt: "2026-08-17T00:00:02.000Z",
-          parts: [{ type: "text" as const, content: midContent }],
-        }, {
-          id: "healthy-after",
-          role: "assistant" as const,
-          content: "Running the validation suite",
-          createdAt: "2026-08-17T00:00:03.000Z",
-          parts: [{ type: "text" as const, content: "Running the validation suite" }],
-        }],
+        messages: [
+          {
+            id: "healthy-before",
+            role: "assistant" as const,
+            content: "Inspecting the changed files",
+            createdAt: "2026-08-17T00:00:01.000Z",
+            parts: [{ type: "text" as const, content: "Inspecting the changed files" }],
+          },
+          {
+            id: "row-mid",
+            role: "assistant" as const,
+            content: midContent,
+            createdAt: "2026-08-17T00:00:02.000Z",
+            parts: [{ type: "text" as const, content: midContent }],
+          },
+          {
+            id: "healthy-after",
+            role: "assistant" as const,
+            content: "Running the validation suite",
+            createdAt: "2026-08-17T00:00:03.000Z",
+            parts: [{ type: "text" as const, content: "Running the validation suite" }],
+          },
+        ],
       };
     });
 
@@ -202,9 +207,7 @@ describe("MultiReviewReviewerTab message containment", () => {
         />,
       );
 
-      expect(
-        await screen.findByText(/One message could not be displayed/),
-      ).toBeTruthy();
+      expect(await screen.findByText(/One message could not be displayed/)).toBeTruthy();
       expect(screen.getByText("Inspecting the changed files")).toBeTruthy();
       expect(screen.getByText("Running the validation suite")).toBeTruthy();
 
@@ -233,13 +236,15 @@ describe("toMultiReviewReviewerMessages machine output", () => {
     model: "gpt-5.6-sol",
     status: "running" as const,
     startedAt: "2026-08-17T13:21:09.717Z",
-    messages: [{
-      id: "assistant",
-      role: "assistant",
-      content: parts.at(-1)?.content ?? "",
-      createdAt: "2026-08-17T13:21:10.000Z",
-      parts,
-    }],
+    messages: [
+      {
+        id: "assistant",
+        role: "assistant",
+        content: parts.at(-1)?.content ?? "",
+        createdAt: "2026-08-17T13:21:10.000Z",
+        parts,
+      },
+    ],
   });
 
   test("withholds progressively longer report drafts", () => {
@@ -251,20 +256,25 @@ describe("toMultiReviewReviewerMessages machine output", () => {
     const messages = toMultiReviewReviewerMessages(
       snapshot(drafts.map((content) => ({ type: "text", content }))),
     );
-    const rendered = messages.flatMap((message) =>
-      [message.content, ...message.parts.map((part) => part.content)]);
+    const rendered = messages.flatMap((message) => [
+      message.content,
+      ...message.parts.map((part) => part.content),
+    ]);
     for (const draft of drafts) expect(rendered).not.toContain(draft);
   });
 
   test("keeps the prose commentary the prompt now asks for", () => {
-    const messages = toMultiReviewReviewerMessages(snapshot([
-      { type: "text", content: "Captured the worktree snapshot; reviewing the diff." },
-      { type: "text", content: '{"reviewScope":{"targetBranch":"main"' },
-      { type: "text", content: "Validation passed; compiling the final report." },
-    ]));
+    const messages = toMultiReviewReviewerMessages(
+      snapshot([
+        { type: "text", content: "Captured the worktree snapshot; reviewing the diff." },
+        { type: "text", content: '{"reviewScope":{"targetBranch":"main"' },
+        { type: "text", content: "Validation passed; compiling the final report." },
+      ]),
+    );
 
     const text = messages.flatMap((message) =>
-      message.parts.filter((part) => part.type === "text").map((part) => part.content));
+      message.parts.filter((part) => part.type === "text").map((part) => part.content),
+    );
     expect(text).toEqual([
       "Captured the worktree snapshot; reviewing the diff.",
       "Validation passed; compiling the final report.",
@@ -272,18 +282,20 @@ describe("toMultiReviewReviewerMessages machine output", () => {
   });
 
   test("drops a message whose only content was a draft", () => {
-    const messages = toMultiReviewReviewerMessages(snapshot([
-      { type: "text", content: '{"reviewScope":{"targetBranch":"main"}}' },
-    ]));
+    const messages = toMultiReviewReviewerMessages(
+      snapshot([{ type: "text", content: '{"reviewScope":{"targetBranch":"main"}}' }]),
+    );
     expect(messages).toHaveLength(0);
   });
 
   test("renders no raw JSON in the transcript body", async () => {
     const draft = '{"reviewScope":{"targetBranch":"main","baseRef":"origin/main';
-    const loadTranscript = mock(async () => snapshot([
-      { type: "text", content: "Reading the review skill." },
-      { type: "text", content: draft },
-    ]));
+    const loadTranscript = mock(async () =>
+      snapshot([
+        { type: "text", content: "Reading the review skill." },
+        { type: "text", content: draft },
+      ]),
+    );
 
     render(
       <MultiReviewReviewerTab

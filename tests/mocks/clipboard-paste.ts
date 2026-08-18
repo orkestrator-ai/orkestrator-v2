@@ -7,16 +7,20 @@
  */
 import { mock } from "bun:test";
 
-export const mockProcessClipboardPaste = mock(async (
-  _containerId: string,
-  _onImageSaved?: (filePath: string) => void | Promise<void>,
-  _onTextPaste?: (text: string) => void | Promise<void>,
-  _onError?: (error: string) => void,
-) => false as boolean);
+export const mockProcessClipboardPaste = mock(
+  async (
+    _containerId: string,
+    _onImageSaved?: (filePath: string) => void | Promise<void>,
+    _onTextPaste?: (text: string) => void | Promise<void>,
+    _onError?: (error: string) => void,
+  ) => false as boolean,
+);
 
-export const mockProcessLocalClipboardPaste = mock(async (
-  _worktreePath: string,
-  _onImageSaved?: (filePath: string) => void | Promise<void>,
-  _onTextPaste?: (text: string) => void | Promise<void>,
-  _onError?: (error: string) => void,
-) => false as boolean);
+export const mockProcessLocalClipboardPaste = mock(
+  async (
+    _worktreePath: string,
+    _onImageSaved?: (filePath: string) => void | Promise<void>,
+    _onTextPaste?: (text: string) => void | Promise<void>,
+    _onError?: (error: string) => void,
+  ) => false as boolean,
+);

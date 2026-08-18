@@ -62,9 +62,9 @@ export function useEnvironmentListSync(
             );
           }
         } while (
-          !disposed
-          && projectIdsRef.current.includes(projectId)
-          && rerunProjectIdsRef.current.has(projectId)
+          !disposed &&
+          projectIdsRef.current.includes(projectId) &&
+          rerunProjectIdsRef.current.has(projectId)
         );
       } finally {
         inFlightProjectIdsRef.current.delete(projectId);

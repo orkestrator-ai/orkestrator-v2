@@ -111,11 +111,16 @@ function executionMode(phase: LoopedReviewSessionPhase): "plan" | "build" {
 
 function dispatchKind(phase: ActiveLoopedReviewPhase): LoopedReviewDispatch["kind"] {
   switch (phase) {
-    case "preparing": return "prepare";
-    case "discovering": return "discover";
-    case "reconciling": return "reconcile";
-    case "fixing": return "fix";
-    case "creating-pr": return "pr";
+    case "preparing":
+      return "prepare";
+    case "discovering":
+      return "discover";
+    case "reconciling":
+      return "reconcile";
+    case "fixing":
+      return "fix";
+    case "creating-pr":
+      return "pr";
   }
 }
 
@@ -137,46 +142,60 @@ function failureKind(kind: LoopedReviewDispatch["kind"] | undefined): LoopedRevi
  */
 function quarantineLegacyTurn(adopted: Record<string, unknown>): void {
   const existingRetryPhase = (adopted.failure as { retryPhase?: unknown } | undefined)?.retryPhase;
-  const candidate = typeof adopted.phase === "string" && isLoopedReviewActivePhase(
-    adopted.phase as LoopedReviewWorkflow["phase"],
-  ) ? adopted.phase
-    // An already-failed legacy record keeps the phase it should retry from
-    // rather than restarting the whole review from preparation.
-    : typeof existingRetryPhase === "string" ? existingRetryPhase : "preparing";
-  const retryPhase = (isLoopedReviewActivePhase(candidate as LoopedReviewWorkflow["phase"])
-    ? candidate : "preparing") as ActiveLoopedReviewPhase;
+  const candidate =
+    typeof adopted.phase === "string" &&
+    isLoopedReviewActivePhase(adopted.phase as LoopedReviewWorkflow["phase"])
+      ? adopted.phase
+      : // An already-failed legacy record keeps the phase it should retry from
+        // rather than restarting the whole review from preparation.
+        typeof existingRetryPhase === "string"
+        ? existingRetryPhase
+        : "preparing";
+  const retryPhase = (
+    isLoopedReviewActivePhase(candidate as LoopedReviewWorkflow["phase"]) ? candidate : "preparing"
+  ) as ActiveLoopedReviewPhase;
   delete adopted.dispatch;
   delete adopted.structuredWait;
   delete adopted.pausedFromPhase;
   adopted.phase = "failed";
   adopted.failure = {
     code: "dispatch" as const,
-    message: "This review was interrupted by an upgrade while a turn was in flight. "
-      + "Retry to run the phase again, or cancel it.",
+    message:
+      "This review was interrupted by an upgrade while a turn was in flight. " +
+      "Retry to run the phase again, or cancel it.",
     retryPhase,
     preserveDispatch: false,
     occurredAt: nowIso(),
   };
 }
 
-function reviewPackage(value: unknown, expected: {
-  id: string;
-  round: number;
-  targetBranch: string;
-  context?: LoopedReviewWorkflow["context"];
-}): ReviewPackage {
+function reviewPackage(
+  value: unknown,
+  expected: {
+    id: string;
+    round: number;
+    targetBranch: string;
+    context?: LoopedReviewWorkflow["context"];
+  },
+): ReviewPackage {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Review package failed runtime validation");
   }
   const candidate = value as Partial<ReviewPackage>;
-  if (candidate.id !== expected.id || candidate.round !== expected.round
-    || candidate.targetBranch !== expected.targetBranch
-    || typeof candidate.preparedAt !== "string"
-    || typeof candidate.baseRef !== "string" || typeof candidate.headRef !== "string"
-    || typeof candidate.completeDiff !== "string"
-    || !Array.isArray(candidate.changedFiles) || !Array.isArray(candidate.validation)
-    || !Array.isArray(candidate.skippedFiles) || !Array.isArray(candidate.uncommittedFiles)
-    || !Array.isArray(candidate.limitations)) {
+  if (
+    candidate.id !== expected.id ||
+    candidate.round !== expected.round ||
+    candidate.targetBranch !== expected.targetBranch ||
+    typeof candidate.preparedAt !== "string" ||
+    typeof candidate.baseRef !== "string" ||
+    typeof candidate.headRef !== "string" ||
+    typeof candidate.completeDiff !== "string" ||
+    !Array.isArray(candidate.changedFiles) ||
+    !Array.isArray(candidate.validation) ||
+    !Array.isArray(candidate.skippedFiles) ||
+    !Array.isArray(candidate.uncommittedFiles) ||
+    !Array.isArray(candidate.limitations)
+  ) {
     throw new Error("Prepared package does not match the active review round");
   }
   // The package generator returns `context: null` for a review with no ticket
@@ -197,13 +216,20 @@ function parseReconciliation(value: unknown): LoopedReviewReconciliation {
   const outcome = (entry: unknown): boolean => {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
     const item = entry as Record<string, unknown>;
-    return Number.isInteger(item.reportIndex) && (item.reportIndex as number) >= 0
-      && (item.outcome === "new" || item.outcome === "updated" || item.outcome === "existing")
-      && (item.outcome === "new" ? item.poolId === null : typeof item.poolId === "string");
+    return (
+      Number.isInteger(item.reportIndex) &&
+      (item.reportIndex as number) >= 0 &&
+      (item.outcome === "new" || item.outcome === "updated" || item.outcome === "existing") &&
+      (item.outcome === "new" ? item.poolId === null : typeof item.poolId === "string")
+    );
   };
-  if (!isReviewReconciliation(shared) || !Array.isArray(issueOutcomes)
-    || !issueOutcomes.every(outcome) || !Array.isArray(coverageGapOutcomes)
-    || !coverageGapOutcomes.every(outcome)) {
+  if (
+    !isReviewReconciliation(shared) ||
+    !Array.isArray(issueOutcomes) ||
+    !issueOutcomes.every(outcome) ||
+    !Array.isArray(coverageGapOutcomes) ||
+    !coverageGapOutcomes.every(outcome)
+  ) {
     throw new Error("Looped review reconciliation failed runtime validation");
   }
   return { ...shared, issueOutcomes, coverageGapOutcomes } as LoopedReviewReconciliation;
@@ -242,9 +268,11 @@ function applyReconciliation(
     ids: Set<string>,
     label: string,
   ) => {
-    if (outcomes.length !== findings.length) throw new Error(`Reconciliation omitted ${label} findings`);
+    if (outcomes.length !== findings.length)
+      throw new Error(`Reconciliation omitted ${label} findings`);
     const byIndex = new Map(outcomes.map((entry) => [entry.reportIndex, entry]));
-    if (byIndex.size !== outcomes.length) throw new Error(`Reconciliation duplicated a ${label} index`);
+    if (byIndex.size !== outcomes.length)
+      throw new Error(`Reconciliation duplicated a ${label} index`);
     let addition = 0;
     const usedUpdates = new Set<string>();
     const updateById = new Map(updates.map((entry) => [entry.poolId, entry.finding]));
@@ -252,7 +280,8 @@ function applyReconciliation(
       const result = byIndex.get(index);
       if (!result) throw new Error(`Reconciliation omitted ${label} index ${index}`);
       if (result.outcome === "new") {
-        if (!same(additions[addition++], finding)) throw new Error(`Reconciliation ${label} addition mismatch`);
+        if (!same(additions[addition++], finding))
+          throw new Error(`Reconciliation ${label} addition mismatch`);
       } else {
         const poolId = result.poolId!;
         if (!ids.has(poolId)) throw new Error(`Reconciliation referenced unknown ${label} pool ID`);
@@ -271,17 +300,40 @@ function applyReconciliation(
   };
   const issueIds = new Set(current.issues.map((entry) => entry.poolId));
   const gapIds = new Set(current.coverageGaps.map((entry) => entry.poolId));
-  validate(report.issues, reconciliation.issueOutcomes, reconciliation.newIssues,
-    reconciliation.issueUpdates, issueIds, "issue");
-  validate(report.testCoverageGaps, reconciliation.coverageGapOutcomes,
-    reconciliation.newCoverageGaps, reconciliation.coverageGapUpdates, gapIds, "coverage gap");
-  const issueUpdates = new Map(reconciliation.issueUpdates.map((entry) => [entry.poolId, entry.finding]));
-  const gapUpdates = new Map(reconciliation.coverageGapUpdates.map((entry) => [entry.poolId, entry.finding]));
-  const issues = current.issues.map((entry) => issueUpdates.has(entry.poolId)
-    ? { poolId: entry.poolId, ...issueUpdates.get(entry.poolId)! } : entry);
-  const coverageGaps = current.coverageGaps.map((entry) => gapUpdates.has(entry.poolId)
-    ? { poolId: entry.poolId, ...gapUpdates.get(entry.poolId)! } : entry);
-  for (const finding of reconciliation.newIssues) issues.push({ poolId: `issue-${randomUUID()}`, ...finding });
+  validate(
+    report.issues,
+    reconciliation.issueOutcomes,
+    reconciliation.newIssues,
+    reconciliation.issueUpdates,
+    issueIds,
+    "issue",
+  );
+  validate(
+    report.testCoverageGaps,
+    reconciliation.coverageGapOutcomes,
+    reconciliation.newCoverageGaps,
+    reconciliation.coverageGapUpdates,
+    gapIds,
+    "coverage gap",
+  );
+  const issueUpdates = new Map(
+    reconciliation.issueUpdates.map((entry) => [entry.poolId, entry.finding]),
+  );
+  const gapUpdates = new Map(
+    reconciliation.coverageGapUpdates.map((entry) => [entry.poolId, entry.finding]),
+  );
+  const issues = current.issues.map((entry) =>
+    issueUpdates.has(entry.poolId)
+      ? { poolId: entry.poolId, ...issueUpdates.get(entry.poolId)! }
+      : entry,
+  );
+  const coverageGaps = current.coverageGaps.map((entry) =>
+    gapUpdates.has(entry.poolId)
+      ? { poolId: entry.poolId, ...gapUpdates.get(entry.poolId)! }
+      : entry,
+  );
+  for (const finding of reconciliation.newIssues)
+    issues.push({ poolId: `issue-${randomUUID()}`, ...finding });
   for (const finding of reconciliation.newCoverageGaps) {
     coverageGaps.push({ poolId: `gap-${randomUUID()}`, ...finding });
   }
@@ -350,7 +402,10 @@ export class LoopedReviewService {
       }
     }
     if (this.options.autoAdvance !== false) {
-      this.timer = setInterval(() => void this.requestTick(), this.options.pollIntervalMs ?? DEFAULT_POLL_MS);
+      this.timer = setInterval(
+        () => void this.requestTick(),
+        this.options.pollIntervalMs ?? DEFAULT_POLL_MS,
+      );
       this.timer.unref?.();
       this.renewTimer = setInterval(
         () => void this.renewLeases(),
@@ -383,15 +438,22 @@ export class LoopedReviewService {
     this.providers.clear();
     this.providerUsers.clear();
     this.validatedRevisions.clear();
-    await Promise.allSettled([...this.leases].map(([workflowId, lease]) =>
-      this.storage.releaseLoopedReviewController(workflowId, this.ownerId, lease.token)));
+    await Promise.allSettled(
+      [...this.leases].map(([workflowId, lease]) =>
+        this.storage.releaseLoopedReviewController(workflowId, this.ownerId, lease.token),
+      ),
+    );
     this.leases.clear();
   }
 
   async start(input: StartLoopedReviewInput): Promise<LoopedReviewWorkflow> {
     if (!isStartLoopedReviewInput(input)) throw new Error("Invalid looped review start request");
     const environment = await this.storage.getEnvironment(input.environmentId);
-    if (!environment || environment.projectId !== input.projectId || environment.deletionRequestedAt) {
+    if (
+      !environment ||
+      environment.projectId !== input.projectId ||
+      environment.deletionRequestedAt
+    ) {
       throw new Error("The review environment is unavailable");
     }
     // Two reviews on one environment drive two agent sessions against the same
@@ -400,8 +462,13 @@ export class LoopedReviewService {
     // guards double-clicks, but that does not survive a second window or a
     // direct command invocation.
     const existing = await this.storage.listLoopedReviewWorkflows(input.environmentId);
-    if (existing.some((record) => isLoopedReviewWorkflow(record.snapshot)
-      && !isLoopedReviewTerminalPhase(record.snapshot.phase))) {
+    if (
+      existing.some(
+        (record) =>
+          isLoopedReviewWorkflow(record.snapshot) &&
+          !isLoopedReviewTerminalPhase(record.snapshot.phase),
+      )
+    ) {
       throw new Error("A looped review is already running for this environment");
     }
     const allowance = normalizeReviewAllowance(input.allowance);
@@ -434,7 +501,11 @@ export class LoopedReviewService {
       backendRevision: 0,
     };
     const saved = await this.storage.saveLoopedReviewWorkflow(
-      workflow.id, workflow.environmentId, LOOPED_REVIEW_WORKFLOW_VERSION, workflow, 0,
+      workflow.id,
+      workflow.environmentId,
+      LOOPED_REVIEW_WORKFLOW_VERSION,
+      workflow,
+      0,
     );
     workflow.backendRevision = saved.revision;
     void this.advanceNow(workflow.id);
@@ -473,8 +544,9 @@ export class LoopedReviewService {
       if (!preserve && failure.retryPhase === "discovering") {
         const round = current.rounds.find((entry) => entry.round === current.currentRound);
         if (round?.passes.some((entry) => entry.pass === current.currentPass && !entry.report)) {
-          round.passes = round.passes.filter((entry) =>
-            entry.pass !== current.currentPass || entry.report !== undefined);
+          round.passes = round.passes.filter(
+            (entry) => entry.pass !== current.currentPass || entry.report !== undefined,
+          );
           current.currentPass = Math.max(0, current.currentPass - 1);
         }
       }
@@ -482,14 +554,23 @@ export class LoopedReviewService {
       delete current.failure;
       delete current.structuredWait;
       if (!preserve) delete current.dispatch;
-      if (failure.code === "pr") current.pr = { ...current.pr, status: "pending", error: undefined };
+      if (failure.code === "pr")
+        current.pr = { ...current.pr, status: "pending", error: undefined };
       const round = current.rounds.find((entry) => entry.round === current.currentRound);
-      if (round) round.status = current.phase === "preparing" ? "preparing"
-        : current.phase === "fixing" ? "fixing" : current.phase === "creating-pr" ? "completed" : "reviewing";
+      if (round)
+        round.status =
+          current.phase === "preparing"
+            ? "preparing"
+            : current.phase === "fixing"
+              ? "fixing"
+              : current.phase === "creating-pr"
+                ? "completed"
+                : "reviewing";
       const activeSession = current.sessions.find((entry) => entry.id === current.activeSessionId);
-      const activePass = activeSession?.phase === "discovery"
-        ? round?.passes.find((entry) => entry.sessionId === activeSession.id)
-        : undefined;
+      const activePass =
+        activeSession?.phase === "discovery"
+          ? round?.passes.find((entry) => entry.sessionId === activeSession.id)
+          : undefined;
       // `fail()` persists a failed pass so every renderer can rehydrate the same
       // authoritative state. A retry that keeps that pass must restore the phase
       // it is about to resume instead of leaving the rail permanently failed.
@@ -512,8 +593,8 @@ export class LoopedReviewService {
       current.cancellingFromPhase = isLoopedReviewActivePhase(current.phase)
         ? current.phase
         : current.phase === "paused"
-          ? current.pausedFromPhase ?? "preparing"
-          : current.failure?.retryPhase ?? "preparing";
+          ? (current.pausedFromPhase ?? "preparing")
+          : (current.failure?.retryPhase ?? "preparing");
       current.phase = "cancelling";
       current.cancellingSince = nowIso();
       delete current.pausedFromPhase;
@@ -521,10 +602,13 @@ export class LoopedReviewService {
     });
     if (workflow.phase !== "cancelling") return workflow;
     await this.advanceNow(workflowId);
-    return await this.readWorkflow(workflowId) ?? workflow;
+    return (await this.readWorkflow(workflowId)) ?? workflow;
   }
 
-  async providerSession(workflowId: string, sessionId?: string): Promise<{ providerSessionId: string } | null> {
+  async providerSession(
+    workflowId: string,
+    sessionId?: string,
+  ): Promise<{ providerSessionId: string } | null> {
     const record = await this.storage.getLoopedReviewWorkflow(workflowId);
     if (!record || !isLoopedReviewWorkflow(record.snapshot)) return null;
     const workflow = record.snapshot;
@@ -573,24 +657,27 @@ export class LoopedReviewService {
     // for every workflow is the dominant cost of an otherwise idle tick. The
     // revision changes on every write, so an unchanged revision is decisive.
     const validated = new Map<string, number>();
-    await Promise.all(records.map(async (record) => {
-      const known = this.validatedRevisions.get(record.id) === record.revision
-        || isLoopedReviewWorkflow(record.snapshot);
-      if (!known) {
-        if (legacyLoopedReviewAdoption(record.snapshot)) {
-          await this.adoptLegacy(record).catch(() => undefined);
+    await Promise.all(
+      records.map(async (record) => {
+        const known =
+          this.validatedRevisions.get(record.id) === record.revision ||
+          isLoopedReviewWorkflow(record.snapshot);
+        if (!known) {
+          if (legacyLoopedReviewAdoption(record.snapshot)) {
+            await this.adoptLegacy(record).catch(() => undefined);
+          }
+          return;
         }
-        return;
-      }
-      validated.set(record.id, record.revision);
-      const phase = (record.snapshot as LoopedReviewWorkflow).phase;
-      // `paused` and `failed` cannot progress without a user command, and
-      // resume/retry/cancel each advance explicitly. Polling them would claim a
-      // lease and re-read the store every second for nothing.
-      if (isLoopedReviewActivePhase(phase) || phase === "cancelling") {
-        await this.runLocked(record.id);
-      }
-    }));
+        validated.set(record.id, record.revision);
+        const phase = (record.snapshot as LoopedReviewWorkflow).phase;
+        // `paused` and `failed` cannot progress without a user command, and
+        // resume/retry/cancel each advance explicitly. Polling them would claim a
+        // lease and re-read the store every second for nothing.
+        if (isLoopedReviewActivePhase(phase) || phase === "cancelling") {
+          await this.runLocked(record.id);
+        }
+      }),
+    );
     // Rebuilt rather than mutated so entries for deleted workflows cannot
     // accumulate for the lifetime of the process.
     this.validatedRevisions = validated;
@@ -643,8 +730,12 @@ export class LoopedReviewService {
     // for the rest of the process. The tick already skips terminal workflows;
     // this covers direct advanceNow callers.
     const existing = await this.storage.getLoopedReviewWorkflow(workflowId);
-    if (existing && isLoopedReviewWorkflow(existing.snapshot)
-      && isLoopedReviewTerminalPhase(existing.snapshot.phase)) return;
+    if (
+      existing &&
+      isLoopedReviewWorkflow(existing.snapshot) &&
+      isLoopedReviewTerminalPhase(existing.snapshot.phase)
+    )
+      return;
     const { workflow, lease } = await this.loadControlled(workflowId);
     if (workflow.phase === "cancelling") {
       await this.reconcileCancellation(workflow, lease.token);
@@ -654,7 +745,7 @@ export class LoopedReviewService {
     const provider = await this.provider(workflow);
     this.registerSessions(workflow, provider);
     const active = workflow.sessions.find((entry) => entry.id === workflow.activeSessionId);
-    if (active && await this.enforceInteraction(workflow, active, provider, lease.token)) return;
+    if (active && (await this.enforceInteraction(workflow, active, provider, lease.token))) return;
     if (!workflow.dispatch) {
       await this.startCurrentPhase(workflow, provider, lease.token);
       return;
@@ -664,22 +755,28 @@ export class LoopedReviewService {
     if (!session) throw new Error("Active dispatch lost its provider session");
     // The dispatch session is almost always the active one, and enforcing twice
     // costs two bridge round-trips and two journal reads per tick for nothing.
-    if (session.id !== active?.id
-      && await this.enforceInteraction(workflow, session, provider, lease.token)) return;
+    if (
+      session.id !== active?.id &&
+      (await this.enforceInteraction(workflow, session, provider, lease.token))
+    )
+      return;
     if (dispatch.state === "prepared") {
       dispatch.state = "dispatching";
       await this.save(workflow, lease.token);
       await this.assertFence(workflow.id, lease.token);
       const material = this.dispatchMaterial(workflow, dispatch);
       try {
-        await provider.send(session.providerSessionId,
-          `${material.prompt}\n\n${UNATTENDED_POLICY_INSTRUCTION}`, {
+        await provider.send(
+          session.providerSessionId,
+          `${material.prompt}\n\n${UNATTENDED_POLICY_INSTRUCTION}`,
+          {
             requestId: dispatch.requestId,
             schema: material.schema,
             mode: executionMode(session.phase),
             model: workflow.model === "default" ? undefined : workflow.model,
             effort: workflow.reasoningEffort,
-          });
+          },
+        );
       } catch (error) {
         if (error instanceof AmbiguousPromptDispatchError) return;
         throw new DefiniteDispatchError(message(error));
@@ -726,9 +823,10 @@ export class LoopedReviewService {
     }
     if (status === "missing") throw new MissingProviderSessionError();
     if (status === "idle") {
-      const wait = workflow.structuredWait?.dispatchId === dispatch.id
-        ? workflow.structuredWait
-        : { dispatchId: dispatch.id, startedAt: nowIso(), idlePolls: 0 };
+      const wait =
+        workflow.structuredWait?.dispatchId === dispatch.id
+          ? workflow.structuredWait
+          : { dispatchId: dispatch.id, startedAt: nowIso(), idlePolls: 0 };
       wait.idlePolls += 1;
       workflow.structuredWait = wait;
       if (wait.idlePolls >= (this.options.missingResultPollLimit ?? DEFAULT_MISSING_RESULT_POLLS)) {
@@ -738,7 +836,10 @@ export class LoopedReviewService {
     }
   }
 
-  private async reconcileCancellation(workflow: LoopedReviewWorkflow, token: string): Promise<void> {
+  private async reconcileCancellation(
+    workflow: LoopedReviewWorkflow,
+    token: string,
+  ): Promise<void> {
     const session = workflow.sessions.find((entry) => entry.id === workflow.activeSessionId);
     if (!session) {
       await this.finalizeCancellation(workflow, token);
@@ -748,8 +849,10 @@ export class LoopedReviewService {
     // in cancelling forever. After the deadline, finalize with an explicit note
     // so the record becomes terminal and deletable again.
     const since = workflow.cancellingSince ? Date.parse(workflow.cancellingSince) : Number.NaN;
-    if (Number.isFinite(since)
-      && Date.now() - since >= (this.options.cancellationDeadlineMs ?? CANCELLATION_DEADLINE_MS)) {
+    if (
+      Number.isFinite(since) &&
+      Date.now() - since >= (this.options.cancellationDeadlineMs ?? CANCELLATION_DEADLINE_MS)
+    ) {
       session.error = "Cancellation timed out; the provider did not confirm the abort in time";
       await this.finalizeCancellation(workflow, token);
       return;
@@ -793,7 +896,11 @@ export class LoopedReviewService {
     // A cancelled workflow never finished creating its PR, so leaving the block
     // at `running` would report work that stopped as still in progress.
     if (workflow.pr.status === "running") {
-      workflow.pr = { ...workflow.pr, status: "failed", error: "Cancelled before the pull request was created" };
+      workflow.pr = {
+        ...workflow.pr,
+        status: "failed",
+        error: "Cancelled before the pull request was created",
+      };
     }
     for (const session of workflow.sessions) {
       if (session.status === "running") session.status = "cancelled";
@@ -817,10 +924,13 @@ export class LoopedReviewService {
     let pass: number | undefined;
     let replacingReconciliationSession = false;
     if (workflow.phase === "preparing") phase = "preparation";
-    else if (workflow.phase === "discovering") { phase = "discovery"; pass = workflow.currentPass + 1; }
-    else if (workflow.phase === "reconciling") {
+    else if (workflow.phase === "discovering") {
+      phase = "discovery";
+      pass = workflow.currentPass + 1;
+    } else if (workflow.phase === "reconciling") {
       const current = workflow.sessions.find((entry) => entry.id === workflow.activeSessionId);
-      if (!current || current.phase !== "discovery") throw new Error("Reconciliation lost its discovery session");
+      if (!current || current.phase !== "discovery")
+        throw new Error("Reconciliation lost its discovery session");
       if (current.error !== MISSING_PROVIDER_SESSION_MESSAGE) {
         await this.prepareDispatch(workflow, current, token);
         return;
@@ -829,25 +939,32 @@ export class LoopedReviewService {
       pass = workflow.currentPass;
       replacingReconciliationSession = true;
     } else if (workflow.phase === "fixing") {
-      if (!hasReviewFindings(workflow.activePool)) throw new Error("Fixing phase has no active findings");
+      if (!hasReviewFindings(workflow.activePool))
+        throw new Error("Fixing phase has no active findings");
       phase = "fix";
     } else {
-      if (hasReviewFindings(workflow.activePool)) throw new Error("PR creation is blocked by active findings");
+      if (hasReviewFindings(workflow.activePool))
+        throw new Error("PR creation is blocked by active findings");
       phase = "pr";
     }
-    const sessionKeyBase =
-      `looped-review:${workflow.id}:${phase}:round-${workflow.currentRound}:pass-${pass ?? 0}`;
-    const matchingSessions = workflow.sessions.filter((entry) =>
-      entry.sessionKey === sessionKeyBase
-      || entry.sessionKey.startsWith(`${sessionKeyBase}:replacement-`));
-    let session = [...matchingSessions].reverse().find((entry) =>
-      entry.error !== MISSING_PROVIDER_SESSION_MESSAGE);
+    const sessionKeyBase = `looped-review:${workflow.id}:${phase}:round-${workflow.currentRound}:pass-${pass ?? 0}`;
+    const matchingSessions = workflow.sessions.filter(
+      (entry) =>
+        entry.sessionKey === sessionKeyBase ||
+        entry.sessionKey.startsWith(`${sessionKeyBase}:replacement-`),
+    );
+    let session = [...matchingSessions]
+      .reverse()
+      .find((entry) => entry.error !== MISSING_PROVIDER_SESSION_MESSAGE);
     if (!session) {
-      const sessionKey = matchingSessions.length === 0
-        ? sessionKeyBase
-        : `${sessionKeyBase}:replacement-${matchingSessions.length}`;
-      const providerSessionId = await provider.createSession(providerPhase(phase),
-        sessionLabel(phase, workflow.currentRound, pass), {
+      const sessionKey =
+        matchingSessions.length === 0
+          ? sessionKeyBase
+          : `${sessionKeyBase}:replacement-${matchingSessions.length}`;
+      const providerSessionId = await provider.createSession(
+        providerPhase(phase),
+        sessionLabel(phase, workflow.currentRound, pass),
+        {
           clientSessionKey: sessionKey,
           mode: executionMode(phase),
           model: workflow.model === "default" ? undefined : workflow.model,
@@ -860,12 +977,21 @@ export class LoopedReviewService {
             provider: workflow.agent,
             fence: token,
           },
-        });
+        },
+      );
       await this.assertFence(workflow.id, token);
       session = {
-        id: randomUUID(), phase, round: workflow.currentRound, ...(pass ? { pass } : {}),
-        sessionKey, providerSessionId, requestIds: [], origin: "looped-review",
-        interactionPolicy: workflow.interactionPolicy, status: "running", startedAt: nowIso(),
+        id: randomUUID(),
+        phase,
+        round: workflow.currentRound,
+        ...(pass ? { pass } : {}),
+        sessionKey,
+        providerSessionId,
+        requestIds: [],
+        origin: "looped-review",
+        interactionPolicy: workflow.interactionPolicy,
+        status: "running",
+        startedAt: nowIso(),
       };
       workflow.sessions.push(session);
     } else {
@@ -882,7 +1008,10 @@ export class LoopedReviewService {
         existingPass.sessionId = session.id;
       } else if (!existingPass) {
         round?.passes.push({
-          pass: pass!, sessionId: session.id, status: "discovering", startedAt: nowIso(),
+          pass: pass!,
+          sessionId: session.id,
+          status: "discovering",
+          startedAt: nowIso(),
         });
       }
     }
@@ -900,8 +1029,13 @@ export class LoopedReviewService {
     if (!isLoopedReviewActivePhase(phase)) return;
     const requestId = randomUUID();
     workflow.dispatch = {
-      id: randomUUID(), requestId, sessionId: session.id, phase,
-      kind: dispatchKind(phase), state: "prepared", createdAt: nowIso(),
+      id: randomUUID(),
+      requestId,
+      sessionId: session.id,
+      phase,
+      kind: dispatchKind(phase),
+      state: "prepared",
+      createdAt: nowIso(),
     };
     if (!session.requestIds.includes(requestId)) session.requestIds.push(requestId);
     session.status = "running";
@@ -916,32 +1050,44 @@ export class LoopedReviewService {
     dispatch: LoopedReviewDispatch,
   ): { prompt: string; schema: JsonSchema } {
     const round = workflow.rounds.find((entry) => entry.round === workflow.currentRound);
-    if (dispatch.kind === "prepare") return {
-      prompt: createReviewPreparationPrompt({
-        round: workflow.currentRound,
-        packageId: `review-package-${workflow.id}-r${workflow.currentRound}`,
-        targetBranch: workflow.targetBranch,
-        context: workflow.context,
-      }),
-      schema: REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
-    };
+    if (dispatch.kind === "prepare")
+      return {
+        prompt: createReviewPreparationPrompt({
+          round: workflow.currentRound,
+          packageId: `review-package-${workflow.id}-r${workflow.currentRound}`,
+          targetBranch: workflow.targetBranch,
+          context: workflow.context,
+        }),
+        schema: REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
+      };
     if (dispatch.kind === "discover") {
       if (!round?.package) throw new Error("Current round has no review package");
-      return { prompt: createDiscoveryPrompt({ reviewPackage: round.package,
-        reviewInstruction: workflow.reviewInstruction }),
-        schema: STRUCTURED_REVIEW_REPORT_JSON_SCHEMA as JsonSchema };
+      return {
+        prompt: createDiscoveryPrompt({
+          reviewPackage: round.package,
+          reviewInstruction: workflow.reviewInstruction,
+        }),
+        schema: STRUCTURED_REVIEW_REPORT_JSON_SCHEMA as JsonSchema,
+      };
     }
     if (dispatch.kind === "reconcile") {
-      const pass = round?.passes.find((entry) => entry.pass === workflow.currentPass
-        && entry.sessionId === dispatch.sessionId);
+      const pass = round?.passes.find(
+        (entry) => entry.pass === workflow.currentPass && entry.sessionId === dispatch.sessionId,
+      );
       if (!pass?.report) throw new Error("Current pass has no validated report");
-      return { prompt: createReconciliationPrompt({ report: pass.report, pool: workflow.activePool }),
-        schema: LOOPED_REVIEW_RECONCILIATION_JSON_SCHEMA };
+      return {
+        prompt: createReconciliationPrompt({ report: pass.report, pool: workflow.activePool }),
+        schema: LOOPED_REVIEW_RECONCILIATION_JSON_SCHEMA,
+      };
     }
-    if (dispatch.kind === "fix") return {
-      prompt: createFixPoolPrompt({ pool: workflow.activePool, targetBranch: workflow.targetBranch }),
-      schema: REVIEW_FIX_RESULT_JSON_SCHEMA,
-    };
+    if (dispatch.kind === "fix")
+      return {
+        prompt: createFixPoolPrompt({
+          pool: workflow.activePool,
+          targetBranch: workflow.targetBranch,
+        }),
+        schema: REVIEW_FIX_RESULT_JSON_SCHEMA,
+      };
     return {
       prompt: `${prPrompt(workflow.targetBranch)}\n\nReturn the PR URL using the enforced structured result.`,
       schema: REVIEW_PR_RESULT_JSON_SCHEMA,
@@ -964,12 +1110,17 @@ export class LoopedReviewService {
       const preparation = definiteResult(() => parseReviewPreparationResult(result.value));
       const packageId = `review-package-${workflow.id}-r${workflow.currentRound}`;
       const generated = await this.invoke<unknown>("generate_looped_review_package", {
-        environmentId: workflow.environmentId, packageId, round: workflow.currentRound,
-        targetBranch: workflow.targetBranch, preparation,
+        environmentId: workflow.environmentId,
+        packageId,
+        round: workflow.currentRound,
+        targetBranch: workflow.targetBranch,
+        preparation,
       });
       await this.assertFence(workflow.id, token);
       const prepared = reviewPackage(generated, {
-        id: packageId, round: workflow.currentRound, targetBranch: workflow.targetBranch,
+        id: packageId,
+        round: workflow.currentRound,
+        targetBranch: workflow.targetBranch,
         context: workflow.context,
       });
       const round = workflow.rounds.find((entry) => entry.round === workflow.currentRound)!;
@@ -980,8 +1131,11 @@ export class LoopedReviewService {
       delete workflow.dispatch;
     } else if (dispatch.kind === "discover") {
       const report = definiteResult(() => parseStructuredReviewReport(result.value));
-      const pass = workflow.rounds.find((entry) => entry.round === workflow.currentRound)?.passes
-        .find((entry) => entry.pass === workflow.currentPass && entry.sessionId === session.id);
+      const pass = workflow.rounds
+        .find((entry) => entry.round === workflow.currentRound)
+        ?.passes.find(
+          (entry) => entry.pass === workflow.currentPass && entry.sessionId === session.id,
+        );
       if (!pass) throw new Error("Discovery result lost its active pass");
       pass.report = report;
       pass.status = "reconciling";
@@ -989,17 +1143,21 @@ export class LoopedReviewService {
       delete workflow.dispatch;
     } else if (dispatch.kind === "reconcile") {
       const reconciliation = definiteResult(() => parseReconciliation(result.value));
-      const pass = workflow.rounds.find((entry) => entry.round === workflow.currentRound)?.passes
-        .find((entry) => entry.pass === workflow.currentPass && entry.sessionId === session.id);
+      const pass = workflow.rounds
+        .find((entry) => entry.round === workflow.currentRound)
+        ?.passes.find(
+          (entry) => entry.pass === workflow.currentPass && entry.sessionId === session.id,
+        );
       if (!pass?.report) throw new Error("Reconciliation lost its validated report");
       const applied = definiteResult(() =>
-        applyReconciliation(workflow.activePool, pass.report!, reconciliation));
+        applyReconciliation(workflow.activePool, pass.report!, reconciliation),
+      );
       workflow.activePool = applied.pool;
       pass.reconciliation = reconciliation;
       pass.status = "completed";
       pass.completedAt = timestamp;
-      const stop = applied.added + applied.updated === 0
-        || workflow.currentPass >= workflow.currentAllowance;
+      const stop =
+        applied.added + applied.updated === 0 || workflow.currentPass >= workflow.currentAllowance;
       const round = workflow.rounds.find((entry) => entry.round === workflow.currentRound)!;
       if (stop) {
         workflow.phase = hasReviewFindings(applied.pool) ? "fixing" : "creating-pr";
@@ -1015,8 +1173,12 @@ export class LoopedReviewService {
         );
       }
       workflow.archivedPools.push({
-        round: workflow.currentRound, fixedAt: timestamp, fixSessionId: session.id,
-        pool: workflow.activePool, fixSummary: fixed.summary, fixNotes: fixed.notes,
+        round: workflow.currentRound,
+        fixedAt: timestamp,
+        fixSessionId: session.id,
+        pool: workflow.activePool,
+        fixSummary: fixed.summary,
+        fixNotes: fixed.notes,
       });
       const round = workflow.rounds.find((entry) => entry.round === workflow.currentRound)!;
       round.status = "completed";
@@ -1030,15 +1192,20 @@ export class LoopedReviewService {
         workflow.currentPass = 0;
         workflow.phase = "preparing";
         workflow.rounds.push({
-          round: workflow.currentRound, allowance: workflow.currentAllowance,
-          status: "preparing", passes: [], startedAt: timestamp,
+          round: workflow.currentRound,
+          allowance: workflow.currentAllowance,
+          status: "preparing",
+          passes: [],
+          startedAt: timestamp,
         });
         delete workflow.activeSessionId;
       }
     } else {
       const pr = definiteResult(() => parsePrResult(result.value));
       const verified = await this.invoke<{ url: string }>("verify_environment_pr", {
-        environmentId: workflow.environmentId, prUrl: pr.url, targetBranch: workflow.targetBranch,
+        environmentId: workflow.environmentId,
+        prUrl: pr.url,
+        targetBranch: workflow.targetBranch,
       });
       await this.assertFence(workflow.id, token);
       workflow.phase = "completed";
@@ -1064,21 +1231,28 @@ export class LoopedReviewService {
     const environment = await this.storage.getEnvironment(workflow.environmentId);
     if (!environment) throw new Error("Review environment no longer exists");
     const connection = await this.bridgeConnection(workflow.agent, environment);
-    const provider = createBuildPipelineProvider({
-      ...connection,
-      model: workflow.model === "default" ? undefined : workflow.model,
-      effort: workflow.reasoningEffort,
-    }, {
-      ...this.options.providerDependencies,
-      autoAnswerRequests: false,
-      onInteractionObservation: async (event) => {
-        try {
-          await this.options.onInteractionObservation?.({
-            ...event, environmentId: workflow.environmentId, provider: workflow.agent,
-          });
-        } catch { /* diagnostics never control the workflow */ }
+    const provider = createBuildPipelineProvider(
+      {
+        ...connection,
+        model: workflow.model === "default" ? undefined : workflow.model,
+        effort: workflow.reasoningEffort,
       },
-    });
+      {
+        ...this.options.providerDependencies,
+        autoAnswerRequests: false,
+        onInteractionObservation: async (event) => {
+          try {
+            await this.options.onInteractionObservation?.({
+              ...event,
+              environmentId: workflow.environmentId,
+              provider: workflow.agent,
+            });
+          } catch {
+            /* diagnostics never control the workflow */
+          }
+        },
+      },
+    );
     this.providers.set(key, provider);
     return provider;
   }
@@ -1086,11 +1260,17 @@ export class LoopedReviewService {
   private registerSessions(workflow: LoopedReviewWorkflow, provider: BuildPipelineProvider): void {
     for (const session of workflow.sessions) {
       provider.registerSession?.(session.providerSessionId, {
-        origin: "looped-review", interactionPolicy: workflow.interactionPolicy,
-        phase: session.phase, workflowId: workflow.id, provider: workflow.agent,
+        origin: "looped-review",
+        interactionPolicy: workflow.interactionPolicy,
+        phase: session.phase,
+        workflowId: workflow.id,
+        provider: workflow.agent,
         fence: workflow.controllerFence ?? session.sessionKey,
       });
-      if (!this.interactionWatches.has(session.sessionKey) && provider.interactions?.watchInteractions) {
+      if (
+        !this.interactionWatches.has(session.sessionKey) &&
+        provider.interactions?.watchInteractions
+      ) {
         // Subscribe before the first recovery snapshot so an update between
         // registration and calculation is followed by another supervisor pass.
         const stop = provider.interactions.watchInteractions(session.providerSessionId, () => {
@@ -1141,14 +1321,22 @@ export class LoopedReviewService {
     const suffix = agent === "opencode" ? "opencode" : agent;
     if (environment.environmentType === "local") {
       const result = await this.invoke<{ port: number; authToken?: string }>(
-        `start_local_${suffix}_server_cmd`, { environmentId: environment.id });
+        `start_local_${suffix}_server_cmd`,
+        { environmentId: environment.id },
+      );
       if (!result.authToken) throw new Error(`${agent} bridge authentication is unavailable`);
-      return { agent, baseUrl: `http://127.0.0.1:${result.port}`,
-        authToken: result.authToken, directory: environment.worktreePath };
+      return {
+        agent,
+        baseUrl: `http://127.0.0.1:${result.port}`,
+        authToken: result.authToken,
+        directory: environment.worktreePath,
+      };
     }
     if (!environment.containerId) throw new Error("Review container is unavailable");
     const result = await this.invoke<{ hostPort: number; authToken?: string }>(
-      `start_${suffix}_server`, { containerId: environment.containerId });
+      `start_${suffix}_server`,
+      { containerId: environment.containerId },
+    );
     if (!result.authToken) throw new Error(`${agent} bridge authentication is unavailable`);
     return { agent, baseUrl: `http://127.0.0.1:${result.hostPort}`, authToken: result.authToken };
   }
@@ -1161,21 +1349,31 @@ export class LoopedReviewService {
     action: PendingLoopedReviewInteractionResolution["action"],
   ): PendingLoopedReviewInteractionResolution {
     const visible = action === "decline-and-continue";
-    const truncate = (text: string, limit: number) => text.length <= limit
-      ? text : `${text.slice(0, limit - 1)}…`;
+    const truncate = (text: string, limit: number) =>
+      text.length <= limit ? text : `${text.slice(0, limit - 1)}…`;
     return {
-      journalId, sessionKey: session.sessionKey, sessionId: session.providerSessionId,
-      interactionId: request.id, provider: request.provider, kind: request.kind,
-      phase: session.phase, requestedAt: Math.min(request.createdAt, claimedAt), claimedAt,
+      journalId,
+      sessionKey: session.sessionKey,
+      sessionId: session.providerSessionId,
+      interactionId: request.id,
+      provider: request.provider,
+      kind: request.kind,
+      phase: session.phase,
+      requestedAt: Math.min(request.createdAt, claimedAt),
+      claimedAt,
       action,
-      title: visible ? truncate(request.presentation.title, 512)
+      title: visible
+        ? truncate(request.presentation.title, 512)
         : `Unexpected ${request.provider} ${request.kind} authorization`,
       ...(visible && request.presentation.body
-        ? { body: truncate(request.presentation.body, 1_024) } : {}),
-      questions: visible ? request.presentation.questions.slice(0, 4).map((question) => ({
-        prompt: truncate(question.prompt, 512),
-        options: question.options.slice(0, 8).map((option) => truncate(option.label, 128)),
-      })) : [],
+        ? { body: truncate(request.presentation.body, 1_024) }
+        : {}),
+      questions: visible
+        ? request.presentation.questions.slice(0, 4).map((question) => ({
+            prompt: truncate(question.prompt, 512),
+            options: question.options.slice(0, 8).map((option) => truncate(option.label, 128)),
+          }))
+        : [],
     };
   }
 
@@ -1193,16 +1391,25 @@ export class LoopedReviewService {
     // record a terminal outcome for an interaction that is still parked at the
     // provider, and abort an unrelated session on the way out.
     const session = pendingResolution
-      ? workflow.sessions.find((entry) => entry.sessionKey === pendingResolution.sessionKey) ?? requested
+      ? (workflow.sessions.find((entry) => entry.sessionKey === pendingResolution.sessionKey) ??
+        requested)
       : requested;
     let pending = pendingResolution;
     let journal = await this.storage.getAgentInteractionResolutionJournal();
-    let entry = pending ? journal.entries.find((item) => item.id === pending!.journalId) : undefined;
+    let entry = pending
+      ? journal.entries.find((item) => item.id === pending!.journalId)
+      : undefined;
     if (!pending) {
-      const snapshot = await provider.interactions.listPendingInteractions(session.providerSessionId);
-      entry = journal.entries.find((item) => item.claim.workflowType === "looped-review"
-        && item.claim.workflowId === workflow.id && item.claim.fence === session.sessionKey
-        && item.state !== "workflow-recorded");
+      const snapshot = await provider.interactions.listPendingInteractions(
+        session.providerSessionId,
+      );
+      entry = journal.entries.find(
+        (item) =>
+          item.claim.workflowType === "looped-review" &&
+          item.claim.workflowId === workflow.id &&
+          item.claim.fence === session.sessionKey &&
+          item.state !== "workflow-recorded",
+      );
       const request = entry
         ? snapshot.requests.find((item) => item.id === entry!.interactionId)
         : snapshot.requests[0];
@@ -1213,29 +1420,58 @@ export class LoopedReviewService {
         const claimedAt = Date.now();
         let claimed!: AgentInteractionResolutionJournalEntry;
         await this.storage.updateAgentInteractionResolutionJournal((current) => {
-          const existing = current.entries.find((item) => item.sessionId === session.providerSessionId
-            && item.interactionId === request!.id);
-          if (existing) { claimed = existing; return current; }
+          const existing = current.entries.find(
+            (item) =>
+              item.sessionId === session.providerSessionId && item.interactionId === request!.id,
+          );
+          if (existing) {
+            claimed = existing;
+            return current;
+          }
           claimed = {
-            id: randomUUID(), interactionId: request!.id, provider: request!.provider,
-            kind: request!.kind, sessionId: session.providerSessionId, state: "claimed",
-            claim: { workflowType: "looped-review", workflowId: workflow.id,
-              phase: session.phase, fence: session.sessionKey, claimedAt },
+            id: randomUUID(),
+            interactionId: request!.id,
+            provider: request!.provider,
+            kind: request!.kind,
+            sessionId: session.providerSessionId,
+            state: "claimed",
+            claim: {
+              workflowType: "looped-review",
+              workflowId: workflow.id,
+              phase: session.phase,
+              fence: session.sessionKey,
+              claimedAt,
+            },
           };
-          return { version: AGENT_INTERACTION_JOURNAL_VERSION, entries: [...current.entries, claimed] };
+          return {
+            version: AGENT_INTERACTION_JOURNAL_VERSION,
+            entries: [...current.entries, claimed],
+          };
         });
         entry = claimed;
       }
       const action = agentInteractionPolicyAction(workflow.interactionPolicy, entry.kind);
       pending = request
-        ? this.interactionPresentation(request, session, entry.id, entry.claim.claimedAt,
-          action === "decline-and-continue" ? "decline-and-continue" : "deny-and-fail")
+        ? this.interactionPresentation(
+            request,
+            session,
+            entry.id,
+            entry.claim.claimedAt,
+            action === "decline-and-continue" ? "decline-and-continue" : "deny-and-fail",
+          )
         : {
-            journalId: entry.id, sessionKey: session.sessionKey, sessionId: session.providerSessionId,
-            interactionId: entry.interactionId, provider: entry.provider, kind: entry.kind,
-            phase: session.phase, requestedAt: entry.claim.claimedAt, claimedAt: entry.claim.claimedAt,
+            journalId: entry.id,
+            sessionKey: session.sessionKey,
+            sessionId: session.providerSessionId,
+            interactionId: entry.interactionId,
+            provider: entry.provider,
+            kind: entry.kind,
+            phase: session.phase,
+            requestedAt: entry.claim.claimedAt,
+            claimedAt: entry.claim.claimedAt,
             action: action === "decline-and-continue" ? "decline-and-continue" : "deny-and-fail",
-            title: "Provider interaction recovered after restart", questions: [],
+            title: "Provider interaction recovered after restart",
+            questions: [],
           };
       workflow.pendingInteractionResolution = pending;
       await this.save(workflow, token);
@@ -1258,37 +1494,55 @@ export class LoopedReviewService {
     let outcome: AgentInteractionOutcome;
     if (!live) outcome = pending.action === "decline-and-continue" ? "auto-declined" : "denied";
     else {
-      const applied = await provider.interactions.resolveInteraction(session.providerSessionId,
-        pending.interactionId, {
+      const applied = await provider.interactions.resolveInteraction(
+        session.providerSessionId,
+        pending.interactionId,
+        {
           version: AGENT_INTERACTION_CONTRACT_VERSION,
           interactionId: pending.interactionId,
           sessionId: session.providerSessionId,
           action: pending.action === "decline-and-continue" ? "decline" : "deny",
           resolvedAt,
-        });
+        },
+      );
       let terminal = applied.result === "applied";
       if (applied.result === "already-resolved" || applied.result === "stale") {
-        const reconciled = await provider.interactions.listPendingInteractions(session.providerSessionId);
+        const reconciled = await provider.interactions.listPendingInteractions(
+          session.providerSessionId,
+        );
         terminal = !reconciled.requests.some((item) => item.id === pending!.interactionId);
       }
-      outcome = terminal ? (pending.action === "decline-and-continue" ? "auto-declined" : "denied") : "failed";
+      outcome = terminal
+        ? pending.action === "decline-and-continue"
+          ? "auto-declined"
+          : "denied"
+        : "failed";
     }
     let recorded = false;
     await this.storage.updateAgentInteractionResolutionJournal((current) => ({
       ...current,
       entries: current.entries.map((item) => {
-        if (item.id !== entry!.id || item.state !== "claimed"
-          || item.processing?.ownerId !== this.interactionOwnerId
-          || item.processing.token !== processingToken) return item;
+        if (
+          item.id !== entry!.id ||
+          item.state !== "claimed" ||
+          item.processing?.ownerId !== this.interactionOwnerId ||
+          item.processing.token !== processingToken
+        )
+          return item;
         recorded = true;
         const { processing: _processing, ...rest } = item;
-        return { ...rest, state: "provider-resolved" as const, outcome,
-          providerResolvedAt: Math.max(resolvedAt, item.claim.claimedAt) };
+        return {
+          ...rest,
+          state: "provider-resolved" as const,
+          outcome,
+          providerResolvedAt: Math.max(resolvedAt, item.claim.claimedAt),
+        };
       }),
     }));
     if (!recorded) return true;
     await this.recordInteraction(workflow, session, pending, outcome, token);
-    if (outcome !== "auto-declined") await provider.abort(session.providerSessionId).catch(() => undefined);
+    if (outcome !== "auto-declined")
+      await provider.abort(session.providerSessionId).catch(() => undefined);
     return true;
   }
 
@@ -1307,8 +1561,15 @@ export class LoopedReviewService {
         if (entry.processing && entry.processing.expiresAt > wallClock) return entry;
         const now = Math.max(wallClock, entry.claim.claimedAt);
         acquired = proposed;
-        return { ...entry, processing: { ownerId: this.interactionOwnerId,
-          token: proposed, acquiredAt: now, expiresAt: now + INTERACTION_PROCESSING_LEASE_MS } };
+        return {
+          ...entry,
+          processing: {
+            ownerId: this.interactionOwnerId,
+            token: proposed,
+            acquiredAt: now,
+            expiresAt: now + INTERACTION_PROCESSING_LEASE_MS,
+          },
+        };
       }),
     }));
     return acquired;
@@ -1321,18 +1582,31 @@ export class LoopedReviewService {
     rawResolvedAt: number,
   ): AgentInteractionWorkflowSummary {
     const resolvedAt = Math.max(rawResolvedAt, pending.requestedAt);
-    const next = summary ? structuredClone(summary)
+    const next = summary
+      ? structuredClone(summary)
       : { version: AGENT_INTERACTION_SUMMARY_VERSION, entries: [] };
-    const existing = next.entries.find((entry) => entry.provider === pending.provider
-      && entry.kind === pending.kind && entry.phase === pending.phase
-      && entry.sessionId === pending.sessionId && entry.outcome === outcome);
+    const existing = next.entries.find(
+      (entry) =>
+        entry.provider === pending.provider &&
+        entry.kind === pending.kind &&
+        entry.phase === pending.phase &&
+        entry.sessionId === pending.sessionId &&
+        entry.outcome === outcome,
+    );
     if (existing) {
       existing.count += 1;
       existing.lastResolvedAt = Math.max(existing.lastResolvedAt ?? 0, resolvedAt);
     } else if (next.entries.length < AGENT_INTERACTION_LIMITS.maxWorkflowSummaries) {
-      next.entries.push({ provider: pending.provider, kind: pending.kind, phase: pending.phase,
-        sessionId: pending.sessionId, firstSeenAt: pending.requestedAt,
-        lastResolvedAt: resolvedAt, outcome, count: 1 });
+      next.entries.push({
+        provider: pending.provider,
+        kind: pending.kind,
+        phase: pending.phase,
+        sessionId: pending.sessionId,
+        firstSeenAt: pending.requestedAt,
+        lastResolvedAt: resolvedAt,
+        outcome,
+        count: 1,
+      });
     }
     return next;
   }
@@ -1350,39 +1624,67 @@ export class LoopedReviewService {
       const history = session.interactionTranscript ?? [];
       if (!history.some((entry) => entry.id === pending.interactionId)) {
         session.interactionSummary = this.appendSummary(
-          session.interactionSummary, pending, outcome, resolvedAt);
+          session.interactionSummary,
+          pending,
+          outcome,
+          resolvedAt,
+        );
         workflow.interactionSummary = this.appendSummary(
-          workflow.interactionSummary, pending, outcome, resolvedAt);
+          workflow.interactionSummary,
+          pending,
+          outcome,
+          resolvedAt,
+        );
         const item: LoopedReviewInteractionTranscriptEntry = {
-          id: pending.interactionId, provider: pending.provider, kind: pending.kind,
-          phase: pending.phase, requestedAt: pending.requestedAt,
+          id: pending.interactionId,
+          provider: pending.provider,
+          kind: pending.kind,
+          phase: pending.phase,
+          requestedAt: pending.requestedAt,
           resolvedAt: Math.max(resolvedAt, pending.requestedAt),
-          outcome: "auto-declined-headless", title: pending.title,
-          ...(pending.body ? { body: pending.body } : {}), questions: pending.questions,
+          outcome: "auto-declined-headless",
+          title: pending.title,
+          ...(pending.body ? { body: pending.body } : {}),
+          questions: pending.questions,
         };
-        session.interactionTranscript = [...history, item]
-          .slice(-AGENT_INTERACTION_LIMITS.maxWorkflowSummaries);
+        session.interactionTranscript = [...history, item].slice(
+          -AGENT_INTERACTION_LIMITS.maxWorkflowSummaries,
+        );
         session.autoDeclineCount = (session.autoDeclineCount ?? 0) + 1;
         workflow.autoDeclineCount = (workflow.autoDeclineCount ?? 0) + 1;
       }
       delete workflow.pendingInteractionResolution;
     } else {
       session.interactionSummary = this.appendSummary(
-        session.interactionSummary, pending, outcome, resolvedAt);
+        session.interactionSummary,
+        pending,
+        outcome,
+        resolvedAt,
+      );
       workflow.interactionSummary = this.appendSummary(
-        workflow.interactionSummary, pending, outcome, resolvedAt);
+        workflow.interactionSummary,
+        pending,
+        outcome,
+        resolvedAt,
+      );
       const retryPhase = isLoopedReviewActivePhase(workflow.phase)
-        ? workflow.phase : workflow.pausedFromPhase ?? "preparing";
+        ? workflow.phase
+        : (workflow.pausedFromPhase ?? "preparing");
       workflow.phase = "failed";
       workflow.failure = {
         code: "interactive-request",
-        message: pending.action === "deny-and-fail" && outcome === "denied"
-          ? `The ${sessionLabel(session.phase, session.round, session.pass)} requested unexpected authorization`
-          : "A provider interaction could not be resolved safely",
+        message:
+          pending.action === "deny-and-fail" && outcome === "denied"
+            ? `The ${sessionLabel(session.phase, session.round, session.pass)} requested unexpected authorization`
+            : "A provider interaction could not be resolved safely",
         retryPhase,
         occurredAt: nowIso(),
-        interaction: { requestId: pending.interactionId, sessionId: session.providerSessionId,
-          provider: pending.provider, kind: pending.kind },
+        interaction: {
+          requestId: pending.interactionId,
+          sessionId: session.providerSessionId,
+          provider: pending.provider,
+          kind: pending.kind,
+        },
       };
       session.status = "error";
       delete workflow.pendingInteractionResolution;
@@ -1390,16 +1692,27 @@ export class LoopedReviewService {
       delete workflow.structuredWait;
     }
     await this.save(workflow, token);
-    await this.storage.updateAgentInteractionResolutionJournal((journal) => ({
-      ...journal,
-      entries: journal.entries.map((entry) => entry.id === pending.journalId
-        && entry.state === "provider-resolved" && entry.providerResolvedAt !== undefined
-        ? { ...entry, state: "workflow-recorded" as const,
-            workflowRecordedAt: Math.max(Date.now(), entry.providerResolvedAt) }
-        : entry),
-    })).catch(() => undefined);
+    await this.storage
+      .updateAgentInteractionResolutionJournal((journal) => ({
+        ...journal,
+        entries: journal.entries.map((entry) =>
+          entry.id === pending.journalId &&
+          entry.state === "provider-resolved" &&
+          entry.providerResolvedAt !== undefined
+            ? {
+                ...entry,
+                state: "workflow-recorded" as const,
+                workflowRecordedAt: Math.max(Date.now(), entry.providerResolvedAt),
+              }
+            : entry,
+        ),
+      }))
+      .catch(() => undefined);
     console.info("[looped-review] interaction resolved", {
-      provider: pending.provider, kind: pending.kind, phase: pending.phase, outcome,
+      provider: pending.provider,
+      kind: pending.kind,
+      phase: pending.phase,
+      outcome,
       latencyMs: Math.max(0, resolvedAt - pending.requestedAt),
       count: workflow.autoDeclineCount ?? 0,
     });
@@ -1414,7 +1727,10 @@ export class LoopedReviewService {
       throw new Error(`Backend-owned looped review not found: ${workflowId}`);
     }
     const claimed = await this.storage.claimLoopedReviewController(
-      workflowId, this.ownerId, this.controllerLeaseMs());
+      workflowId,
+      this.ownerId,
+      this.controllerLeaseMs(),
+    );
     if (!claimed.granted || !claimed.token) throw new ControllerFenceError();
     const lease = { token: claimed.token, expiresAt: claimed.expiresAt };
     this.leases.set(workflowId, lease);
@@ -1439,15 +1755,19 @@ export class LoopedReviewService {
       throw new DefiniteResultError("Refusing to persist an invalid looped review snapshot");
     }
     const saved = await this.storage.saveLoopedReviewWorkflow(
-      workflow.id, workflow.environmentId, LOOPED_REVIEW_WORKFLOW_VERSION,
-      workflow, workflow.backendRevision, { ownerId: this.ownerId, token },
+      workflow.id,
+      workflow.environmentId,
+      LOOPED_REVIEW_WORKFLOW_VERSION,
+      workflow,
+      workflow.backendRevision,
+      { ownerId: this.ownerId, token },
     );
     workflow.backendRevision = saved.revision;
     return workflow;
   }
 
   private async assertFence(workflowId: string, token: string): Promise<void> {
-    if (!await this.storage.validateLoopedReviewController(workflowId, this.ownerId, token)) {
+    if (!(await this.storage.validateLoopedReviewController(workflowId, this.ownerId, token))) {
       throw new ControllerFenceError();
     }
   }
@@ -1455,8 +1775,9 @@ export class LoopedReviewService {
   private async renewLeases(): Promise<void> {
     if (this.stopped) return;
     for (const [workflowId, lease] of this.leases) {
-      const claimed = await this.storage.claimLoopedReviewController(
-        workflowId, this.ownerId, this.controllerLeaseMs()).catch(() => null);
+      const claimed = await this.storage
+        .claimLoopedReviewController(workflowId, this.ownerId, this.controllerLeaseMs())
+        .catch(() => null);
       if (!claimed?.granted || claimed.token !== lease.token) this.leases.delete(workflowId);
       else this.leases.set(workflowId, { token: claimed.token, expiresAt: claimed.expiresAt });
     }
@@ -1465,12 +1786,19 @@ export class LoopedReviewService {
   private async fail(workflowId: string, error: unknown): Promise<void> {
     if (error instanceof ControllerFenceError) return;
     const record = await this.storage.getLoopedReviewWorkflow(workflowId);
-    if (!record || !isLoopedReviewWorkflow(record.snapshot)
-      || !isLoopedReviewActivePhase(record.snapshot.phase)) return;
+    if (
+      !record ||
+      !isLoopedReviewWorkflow(record.snapshot) ||
+      !isLoopedReviewActivePhase(record.snapshot.phase)
+    )
+      return;
     const workflow = structuredClone(record.snapshot);
     workflow.backendRevision = record.revision;
     const claimed = await this.storage.claimLoopedReviewController(
-      workflowId, this.ownerId, this.controllerLeaseMs());
+      workflowId,
+      this.ownerId,
+      this.controllerLeaseMs(),
+    );
     if (!claimed.granted || !claimed.token) return;
     const session = workflow.sessions.find((entry) => entry.id === workflow.activeSessionId);
     if (session) {
@@ -1478,12 +1806,14 @@ export class LoopedReviewService {
       session.error = message(error);
       session.completedAt = nowIso();
     }
-    const preserve = !(error instanceof DefiniteResultError)
-      && !(error instanceof DefiniteDispatchError)
-      && !(error instanceof MissingProviderSessionError)
-      && workflow.dispatch?.state !== "prepared";
+    const preserve =
+      !(error instanceof DefiniteResultError) &&
+      !(error instanceof DefiniteDispatchError) &&
+      !(error instanceof MissingProviderSessionError) &&
+      workflow.dispatch?.state !== "prepared";
     workflow.failure = {
-      code: failureKind(workflow.dispatch?.kind), message: message(error),
+      code: failureKind(workflow.dispatch?.kind),
+      message: message(error),
       retryPhase: workflow.phase as ActiveLoopedReviewPhase,
       preserveDispatch: preserve,
       occurredAt: nowIso(),
@@ -1514,16 +1844,20 @@ export class LoopedReviewService {
     const adoption = legacyLoopedReviewAdoption(record.snapshot);
     if (!adoption) return;
     const source = record.snapshot as Record<string, unknown>;
-    const sessions = Array.isArray(source.sessions) ? source.sessions.map((value) => {
-      const session = value as Record<string, unknown>;
-      return {
-        ...session,
-        sessionKey: typeof session.providerSessionId === "string"
-          ? `legacy:${record.id}:${session.providerSessionId}` : `legacy:${record.id}:${randomUUID()}`,
-        origin: "looped-review" as const,
-        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-      };
-    }) : [];
+    const sessions = Array.isArray(source.sessions)
+      ? source.sessions.map((value) => {
+          const session = value as Record<string, unknown>;
+          return {
+            ...session,
+            sessionKey:
+              typeof session.providerSessionId === "string"
+                ? `legacy:${record.id}:${session.providerSessionId}`
+                : `legacy:${record.id}:${randomUUID()}`,
+            origin: "looped-review" as const,
+            interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+          };
+        })
+      : [];
     const adopted: Record<string, unknown> = {
       ...source,
       version: LOOPED_REVIEW_WORKFLOW_VERSION,
@@ -1535,13 +1869,20 @@ export class LoopedReviewService {
     if (adoption === "quarantine") quarantineLegacyTurn(adopted);
     if (!isLoopedReviewWorkflow(adopted)) return;
     const claimed = await this.storage.claimLoopedReviewController(
-      record.id, this.ownerId, this.controllerLeaseMs(),
+      record.id,
+      this.ownerId,
+      this.controllerLeaseMs(),
     );
     if (!claimed.granted || !claimed.token) return;
     adopted.controllerFence = claimed.token;
-    await this.storage.saveLoopedReviewWorkflow(record.id, record.environmentId,
-      LOOPED_REVIEW_WORKFLOW_VERSION, adopted, record.revision,
-      { ownerId: this.ownerId, token: claimed.token });
+    await this.storage.saveLoopedReviewWorkflow(
+      record.id,
+      record.environmentId,
+      LOOPED_REVIEW_WORKFLOW_VERSION,
+      adopted,
+      record.revision,
+      { ownerId: this.ownerId, token: claimed.token },
+    );
   }
 
   private controllerLeaseMs(): number {
@@ -1559,7 +1900,9 @@ class ControllerFenceError extends Error {
 class DefiniteDispatchError extends Error {}
 class DefiniteResultError extends Error {}
 class MissingProviderSessionError extends ProviderUnavailableError {
-  constructor() { super(MISSING_PROVIDER_SESSION_MESSAGE); }
+  constructor() {
+    super(MISSING_PROVIDER_SESSION_MESSAGE);
+  }
 }
 
 function definiteResult<T>(parse: () => T): T {

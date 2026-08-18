@@ -1,23 +1,6 @@
-import {
-  afterAll,
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  mock,
-  test,
-} from "bun:test";
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
-import {
-  useBuildPipelineStore,
-  type BuildPipelineSource,
-} from "@/stores/buildPipelineStore";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useBuildPipelineStore, type BuildPipelineSource } from "@/stores/buildPipelineStore";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import * as realBackend from "@/lib/backend";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
@@ -59,15 +42,17 @@ function seedFailedPipeline(
   overrides: { completionCommentError?: string; phase?: "complete" | "failed" } = {},
 ): string {
   const id = `${source.type}-pipeline`;
-  useBuildPipelineStore.getState().replacePipeline(buildPipelineFixture({
-    id,
-    taskId: `${source.type}:task`,
-    taskTitle: "Build source issue",
-    source,
-    phase: overrides.phase ?? "complete",
-    completionCommentStatus: "failed",
-    completionCommentError: overrides.completionCommentError ?? "GitHub unavailable",
-  }));
+  useBuildPipelineStore.getState().replacePipeline(
+    buildPipelineFixture({
+      id,
+      taskId: `${source.type}:task`,
+      taskTitle: "Build source issue",
+      source,
+      phase: overrides.phase ?? "complete",
+      completionCommentStatus: "failed",
+      completionCommentError: overrides.completionCommentError ?? "GitHub unavailable",
+    }),
+  );
   return id;
 }
 
@@ -121,8 +106,7 @@ describe("BuildCompletionStatus", () => {
 
     await waitFor(() => {
       expect(retryInteractionFailureMock).toHaveBeenCalledWith(pipeline.id);
-      expect(useBuildPipelineStore.getState().pipelines.get(pipeline.id)?.phase)
-        .toBe("building");
+      expect(useBuildPipelineStore.getState().pipelines.get(pipeline.id)?.phase).toBe("building");
     });
   });
 
@@ -133,8 +117,7 @@ describe("BuildCompletionStatus", () => {
       autoDeclineCount: 3,
     });
     render(<BuildCompletionStatus pipeline={pipeline} />);
-    expect(screen.getByText(/3 unattended input requests were auto-declined/))
-      .toBeTruthy();
+    expect(screen.getByText(/3 unattended input requests were auto-declined/)).toBeTruthy();
   });
 
   test("falls back when an interaction failure has no persisted error", () => {
@@ -152,8 +135,7 @@ describe("BuildCompletionStatus", () => {
     render(<BuildCompletionStatus pipeline={pipeline} />);
 
     expect(screen.getByText(/could not be resolved safely/)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Retry failed build phase" }))
-      .toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry failed build phase" })).toBeTruthy();
   });
 
   test("keeps an interaction retry single-flight and recovers after rejection", async () => {
@@ -170,10 +152,12 @@ describe("BuildCompletionStatus", () => {
     });
     useBuildPipelineStore.getState().replacePipeline(pipeline);
     let rejectRetry!: (reason: Error) => void;
-    retryInteractionFailureMock.mockImplementationOnce(() =>
-      new Promise((_resolve, reject) => {
-        rejectRetry = reject;
-      }));
+    retryInteractionFailureMock.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectRetry = reject;
+        }),
+    );
     render(<BuildCompletionStatus pipeline={pipeline} />);
     const button = screen.getByRole("button", {
       name: "Retry failed build phase",
@@ -222,9 +206,11 @@ describe("BuildCompletionStatus", () => {
 
     expect(screen.getAllByRole("alert")).toHaveLength(2);
     expect(screen.getByRole("button", { name: "Retry failed build phase" })).toBeTruthy();
-    expect(screen.getByRole("button", {
-      name: "Retry GitHub completion comment",
-    })).toBeTruthy();
+    expect(
+      screen.getByRole("button", {
+        name: "Retry GitHub completion comment",
+      }),
+    ).toBeTruthy();
     expect(screen.getByText(/1 unattended input request was auto-declined/)).toBeTruthy();
   });
 
@@ -243,10 +229,12 @@ describe("BuildCompletionStatus", () => {
     useBuildPipelineStore.getState().replacePipeline(pipeline);
     type RetryResult = Awaited<ReturnType<typeof retryInteractionFailureMock>>;
     let resolveRetry!: (value: RetryResult) => void;
-    retryInteractionFailureMock.mockImplementationOnce(() =>
-      new Promise((resolve) => {
-        resolveRetry = resolve;
-      }));
+    retryInteractionFailureMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveRetry = resolve;
+        }),
+    );
     render(<BuildCompletionStatus pipeline={pipeline} />);
     const button = screen.getByRole("button", {
       name: "Retry failed build phase",
@@ -294,10 +282,12 @@ describe("BuildCompletionStatus", () => {
     useBuildPipelineStore.getState().replacePipeline(pipeline);
     type RetryResult = Awaited<ReturnType<typeof retryInteractionFailureMock>>;
     let resolveRetry!: (value: RetryResult) => void;
-    retryInteractionFailureMock.mockImplementationOnce(() =>
-      new Promise((resolve) => {
-        resolveRetry = resolve;
-      }));
+    retryInteractionFailureMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveRetry = resolve;
+        }),
+    );
     render(<BuildCompletionStatus pipeline={pipeline} />);
     const interaction = screen.getByRole("button", {
       name: "Retry failed build phase",
@@ -316,8 +306,7 @@ describe("BuildCompletionStatus", () => {
     expect(completion.querySelector(".animate-spin") === null).toBe(true);
 
     fireEvent.click(completion);
-    await waitFor(() =>
-      expect(retryCompletionCommentMock).toHaveBeenCalledWith(pipeline.id));
+    await waitFor(() => expect(retryCompletionCommentMock).toHaveBeenCalledWith(pipeline.id));
 
     resolveRetry({
       ...pipeline,
@@ -330,17 +319,18 @@ describe("BuildCompletionStatus", () => {
   });
 
   test("does not claim an interaction failure for another kind of failure", () => {
-    useBuildPipelineStore.getState().replacePipeline(buildPipelineFixture({
-      id: "prompt-dispatch-failure",
-      phase: "failed",
-      error: "The prompt was never dispatched",
-      failureContext: { phase: "building", kind: "prompt-dispatch", sessionId: "build-1" },
-      source: { type: "kanban", taskId: "task-1" },
-      completionCommentStatus: "failed",
-      completionCommentError: "The board rejected the move",
-    }));
-    const pipeline = useBuildPipelineStore.getState()
-      .pipelines.get("prompt-dispatch-failure")!;
+    useBuildPipelineStore.getState().replacePipeline(
+      buildPipelineFixture({
+        id: "prompt-dispatch-failure",
+        phase: "failed",
+        error: "The prompt was never dispatched",
+        failureContext: { phase: "building", kind: "prompt-dispatch", sessionId: "build-1" },
+        source: { type: "kanban", taskId: "task-1" },
+        completionCommentStatus: "failed",
+        completionCommentError: "The board rejected the move",
+      }),
+    );
+    const pipeline = useBuildPipelineStore.getState().pipelines.get("prompt-dispatch-failure")!;
 
     render(<BuildCompletionStatus pipeline={pipeline} />);
 
@@ -352,24 +342,25 @@ describe("BuildCompletionStatus", () => {
   });
 
   test("does not claim an interaction failure for a pipeline still running", () => {
-    useBuildPipelineStore.getState().replacePipeline(buildPipelineFixture({
-      id: "running-with-context",
-      phase: "building",
-      error: "Unexpected authorization",
-      // A failure context survives the retry that cleared the phase, so the
-      // banner is gated on the terminal phase and not on the context alone.
-      failureContext: {
+    useBuildPipelineStore.getState().replacePipeline(
+      buildPipelineFixture({
+        id: "running-with-context",
         phase: "building",
-        kind: "interactive-request",
-        sessionId: "build-1",
-        requestId: "permission-1",
-      },
-      source: { type: "kanban", taskId: "task-1" },
-      completionCommentStatus: "failed",
-      completionCommentError: "The board rejected the move",
-    }));
-    const pipeline = useBuildPipelineStore.getState()
-      .pipelines.get("running-with-context")!;
+        error: "Unexpected authorization",
+        // A failure context survives the retry that cleared the phase, so the
+        // banner is gated on the terminal phase and not on the context alone.
+        failureContext: {
+          phase: "building",
+          kind: "interactive-request",
+          sessionId: "build-1",
+          requestId: "permission-1",
+        },
+        source: { type: "kanban", taskId: "task-1" },
+        completionCommentStatus: "failed",
+        completionCommentError: "The board rejected the move",
+      }),
+    );
+    const pipeline = useBuildPipelineStore.getState().pipelines.get("running-with-context")!;
 
     render(<BuildCompletionStatus pipeline={pipeline} />);
 
@@ -381,19 +372,19 @@ describe("BuildCompletionStatus", () => {
   test("summarises auto-declines for a build that has no source at all", () => {
     // The completion banner's copy lookup is non-null-asserted, so a sourceless
     // pipeline reaching this component must not take the tab down with it.
-    useBuildPipelineStore.getState().replacePipeline(buildPipelineFixture({
-      id: "sourceless-auto-declines",
-      phase: "complete",
-      completionCommentStatus: "failed",
-      autoDeclineCount: 2,
-    }));
-    const pipeline = useBuildPipelineStore.getState()
-      .pipelines.get("sourceless-auto-declines")!;
+    useBuildPipelineStore.getState().replacePipeline(
+      buildPipelineFixture({
+        id: "sourceless-auto-declines",
+        phase: "complete",
+        completionCommentStatus: "failed",
+        autoDeclineCount: 2,
+      }),
+    );
+    const pipeline = useBuildPipelineStore.getState().pipelines.get("sourceless-auto-declines")!;
 
     render(<BuildCompletionStatus pipeline={pipeline} />);
 
-    expect(screen.getByText(/2 unattended input requests were auto-declined/))
-      .toBeTruthy();
+    expect(screen.getByText(/2 unattended input requests were auto-declined/)).toBeTruthy();
     expect(screen.queryAllByRole("alert")).toHaveLength(0);
     expect(screen.queryByRole("button") === null).toBe(true);
   });
@@ -412,9 +403,7 @@ describe("BuildCompletionStatus", () => {
     render(<BuildCompletionStatus pipeline={pipeline} />);
 
     expect(screen.getByText(/GitHub completion comment failed/)).toBeTruthy();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Retry GitHub completion comment" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Retry GitHub completion comment" }));
 
     await waitFor(() => {
       const updated = useBuildPipelineStore.getState().pipelines.get(pipelineId)!;
@@ -440,12 +429,7 @@ describe("BuildCompletionStatus", () => {
       /Updating the task board failed/,
       "Retry the task board update",
     ],
-  ])("retries a failed %s hand-off from the build UI", async (
-    _name,
-    source,
-    label,
-    retryLabel,
-  ) => {
+  ])("retries a failed %s hand-off from the build UI", async (_name, source, label, retryLabel) => {
     const pipelineId = seedFailedPipeline(source);
     const pipeline = useBuildPipelineStore.getState().pipelines.get(pipelineId)!;
 
@@ -456,37 +440,36 @@ describe("BuildCompletionStatus", () => {
 
     await waitFor(() => {
       expect(
-        useBuildPipelineStore.getState().pipelines.get(pipelineId)
-          ?.completionCommentStatus,
+        useBuildPipelineStore.getState().pipelines.get(pipelineId)?.completionCommentStatus,
       ).toBeUndefined();
     });
   });
 
   test("renders nothing for a pipeline that has no source", () => {
-    useBuildPipelineStore.getState().replacePipeline(buildPipelineFixture({
-      id: "sourceless",
-      phase: "failed",
-      completionCommentStatus: "failed",
-    }));
-    const pipeline = useBuildPipelineStore.getState().pipelines.get("sourceless")!;
-    const { container } = render(
-      <BuildCompletionStatus pipeline={pipeline} />,
+    useBuildPipelineStore.getState().replacePipeline(
+      buildPipelineFixture({
+        id: "sourceless",
+        phase: "failed",
+        completionCommentStatus: "failed",
+      }),
     );
+    const pipeline = useBuildPipelineStore.getState().pipelines.get("sourceless")!;
+    const { container } = render(<BuildCompletionStatus pipeline={pipeline} />);
 
     expect(container.childElementCount).toBe(0);
   });
 
   test("renders nothing while the hand-off has not failed", () => {
-    useBuildPipelineStore.getState().replacePipeline(buildPipelineFixture({
-      id: "posting",
-      phase: "complete",
-      source: { type: "kanban", taskId: "task-1" },
-      completionCommentStatus: "posting",
-    }));
-    const pipeline = useBuildPipelineStore.getState().pipelines.get("posting")!;
-    const { container } = render(
-      <BuildCompletionStatus pipeline={pipeline} />,
+    useBuildPipelineStore.getState().replacePipeline(
+      buildPipelineFixture({
+        id: "posting",
+        phase: "complete",
+        source: { type: "kanban", taskId: "task-1" },
+        completionCommentStatus: "posting",
+      }),
     );
+    const pipeline = useBuildPipelineStore.getState().pipelines.get("posting")!;
+    const { container } = render(<BuildCompletionStatus pipeline={pipeline} />);
 
     expect(container.childElementCount).toBe(0);
   });
@@ -505,9 +488,7 @@ describe("BuildCompletionStatus", () => {
 
     render(<BuildCompletionStatus pipeline={pipeline} />);
 
-    expect(
-      screen.getByText(/The task could not be moved to its final column\./),
-    ).toBeTruthy();
+    expect(screen.getByText(/The task could not be moved to its final column\./)).toBeTruthy();
   });
 
   test("keeps retry single-flight while the request is pending", async () => {
@@ -522,10 +503,12 @@ describe("BuildCompletionStatus", () => {
     const pipeline = useBuildPipelineStore.getState().pipelines.get(pipelineId)!;
     type RetryResult = Awaited<ReturnType<typeof retryCompletionCommentMock>>;
     let resolveRetry!: (value: RetryResult) => void;
-    retryCompletionCommentMock.mockImplementationOnce(() =>
-      new Promise((resolve) => {
-        resolveRetry = resolve;
-      }));
+    retryCompletionCommentMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveRetry = resolve;
+        }),
+    );
     render(<BuildCompletionStatus pipeline={pipeline} />);
     const button = screen.getByRole("button", {
       name: "Retry GitHub completion comment",
@@ -565,8 +548,7 @@ describe("BuildCompletionStatus", () => {
     fireEvent.click(button);
     await waitFor(() => expect(button.disabled).toBe(false));
     expect(
-      useBuildPipelineStore.getState().pipelines.get(pipelineId)
-        ?.completionCommentStatus,
+      useBuildPipelineStore.getState().pipelines.get(pipelineId)?.completionCommentStatus,
     ).toBe("failed");
 
     fireEvent.click(button);
@@ -579,15 +561,14 @@ describe("BuildCompletionStatus", () => {
     retryCompletionCommentMock.mockRejectedValueOnce("board offline");
     render(<BuildCompletionStatus pipeline={pipeline} />);
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Retry the task board update" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Retry the task board update" }));
 
     // Both kinds report through the one toast; a non-Error rejection is
     // stringified rather than announced as "[object Object]".
     await waitFor(() =>
       expect(mockToastError).toHaveBeenCalledWith("Failed to retry build", {
         description: "board offline",
-      }));
+      }),
+    );
   });
 });

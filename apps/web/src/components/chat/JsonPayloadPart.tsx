@@ -7,24 +7,10 @@
  * report's own renderer; anything else gets the generic labelled tree.
  */
 
-import {
-  Braces,
-  CheckCircle2,
-  ChevronRight,
-  CircleAlert,
-  ClipboardCheck,
-} from "lucide-react";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
+import { Braces, CheckCircle2, ChevronRight, CircleAlert, ClipboardCheck } from "lucide-react";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { StructuredReviewReportView } from "@/components/review/StructuredReviewReportView";
-import {
-  jsonPayloadSummary,
-  jsonPayloadTitle,
-  type JsonPayload,
-} from "@/lib/chat/json-payload";
+import { jsonPayloadSummary, jsonPayloadTitle, type JsonPayload } from "@/lib/chat/json-payload";
 import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
 import { cn } from "@/lib/utils";
 import { JsonTree } from "./JsonTree";
@@ -34,9 +20,11 @@ function PayloadIcon({ payload }: { payload: JsonPayload }) {
     case "structured-review":
       return <ClipboardCheck className="size-3.5 shrink-0 text-cyan-300/90" />;
     case "verification":
-      return payload.verdict.complete
-        ? <CheckCircle2 className="size-3.5 shrink-0 text-emerald-400" />
-        : <CircleAlert className="size-3.5 shrink-0 text-red-400" />;
+      return payload.verdict.complete ? (
+        <CheckCircle2 className="size-3.5 shrink-0 text-emerald-400" />
+      ) : (
+        <CircleAlert className="size-3.5 shrink-0 text-red-400" />
+      );
     default:
       return <Braces className="size-3.5 shrink-0 text-muted-foreground" />;
   }
@@ -47,9 +35,7 @@ function borderClass(payload: JsonPayload): string {
     case "structured-review":
       return "border-cyan-500/25";
     case "verification":
-      return payload.verdict.complete
-        ? "border-emerald-500/25"
-        : "border-red-500/30";
+      return payload.verdict.complete ? "border-emerald-500/25" : "border-red-500/30";
     default:
       return "border-border/50";
   }
@@ -62,23 +48,14 @@ function borderClass(payload: JsonPayload): string {
  * Anything the tree summarizes — a truncated container, a branch past the
  * render depth — has to remain reachable without leaving the transcript.
  */
-function RawJsonDisclosure({
-  source,
-  expansionKey,
-}: {
-  source: string;
-  expansionKey: string;
-}) {
+function RawJsonDisclosure({ source, expansionKey }: { source: string; expansionKey: string }) {
   const [isOpen, setIsOpen] = useMessagePartExpansion(expansionKey);
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen} className="mt-2">
       <CollapsibleTrigger className="flex cursor-pointer items-center gap-1.5 rounded-md py-1 text-xs text-muted-foreground transition-colors hover:text-foreground">
         <ChevronRight
-          className={cn(
-            "size-3 shrink-0 transition-transform",
-            isOpen && "rotate-90",
-          )}
+          className={cn("size-3 shrink-0 transition-transform", isOpen && "rotate-90")}
         />
         Raw JSON
       </CollapsibleTrigger>
@@ -109,10 +86,7 @@ export function JsonPayloadPart({
     <Collapsible
       open={isOpen}
       onOpenChange={setIsOpen}
-      className={cn(
-        "my-1 overflow-hidden rounded-lg border bg-card/30",
-        borderClass(payload),
-      )}
+      className={cn("my-1 overflow-hidden rounded-lg border bg-card/30", borderClass(payload))}
     >
       <CollapsibleTrigger
         data-agent-chat-search-content="true"
@@ -154,14 +128,8 @@ export function JsonPayloadPart({
             </p>
           ) : (
             <>
-              <JsonTree
-                value={payload.value}
-                expansionKey={`${expansionKey}/tree`}
-              />
-              <RawJsonDisclosure
-                source={payload.source}
-                expansionKey={`${expansionKey}/raw`}
-              />
+              <JsonTree value={payload.value} expansionKey={`${expansionKey}/tree`} />
+              <RawJsonDisclosure source={payload.source} expansionKey={`${expansionKey}/raw`} />
             </>
           )}
         </div>

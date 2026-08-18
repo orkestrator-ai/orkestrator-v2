@@ -47,7 +47,8 @@ mock.module("@/lib/native/events", () => ({
   listen: mockListen,
 }));
 
-const { useEnvironmentDiffStats } = await import("../../../apps/web/src/hooks/useEnvironmentDiffStats");
+const { useEnvironmentDiffStats } =
+  await import("../../../apps/web/src/hooks/useEnvironmentDiffStats");
 
 function emitEvent(event: string, payload: unknown) {
   for (const handler of listeners.get(event) ?? []) handler(payload);
@@ -116,9 +117,14 @@ describe("useEnvironmentDiffStats", () => {
   });
 
   test("rehydrates from the authoritative snapshot on mount", async () => {
-    mockGetEnvironmentDiffStats.mockImplementation(() => Promise.resolve({
-      entries: [change("env-1"), change("env-2", { additions: 9, deletions: 0, filesChanged: 1 })],
-    }));
+    mockGetEnvironmentDiffStats.mockImplementation(() =>
+      Promise.resolve({
+        entries: [
+          change("env-1"),
+          change("env-2", { additions: 9, deletions: 0, filesChanged: 1 }),
+        ],
+      }),
+    );
 
     renderHook(() => useEnvironmentDiffStats());
 
@@ -138,7 +144,10 @@ describe("useEnvironmentDiffStats", () => {
     await flush();
 
     act(() => {
-      emitEvent(DIFF_STATS_CHANGED_EVENT, change("env-1", { additions: 12, deletions: 4, filesChanged: 3 }));
+      emitEvent(
+        DIFF_STATS_CHANGED_EVENT,
+        change("env-1", { additions: 12, deletions: 4, filesChanged: 3 }),
+      );
     });
 
     await waitFor(() => {
@@ -165,9 +174,11 @@ describe("useEnvironmentDiffStats", () => {
   });
 
   test("removes counts invalidated by the backend", async () => {
-    mockGetEnvironmentDiffStats.mockImplementation(() => Promise.resolve({
-      entries: [change("env-1")],
-    }));
+    mockGetEnvironmentDiffStats.mockImplementation(() =>
+      Promise.resolve({
+        entries: [change("env-1")],
+      }),
+    );
     renderHook(() => useEnvironmentDiffStats());
     await waitFor(() => expect(useEnvironmentDiffStore.getState().stats.has("env-1")).toBe(true));
 
@@ -182,8 +193,23 @@ describe("useEnvironmentDiffStats", () => {
   // badge, so a malformed frame must be dropped rather than written through.
   test.each([
     ["missing stats", { environmentId: "env-1", comparisonRef: "main", computedAt: "now" }],
-    ["wrong stats shape", { environmentId: "env-1", comparisonRef: "main", computedAt: "now", stats: { additions: "3" } }],
-    ["missing environmentId", { comparisonRef: "main", computedAt: "now", stats: { additions: 1, deletions: 0, filesChanged: 1, truncated: false } }],
+    [
+      "wrong stats shape",
+      {
+        environmentId: "env-1",
+        comparisonRef: "main",
+        computedAt: "now",
+        stats: { additions: "3" },
+      },
+    ],
+    [
+      "missing environmentId",
+      {
+        comparisonRef: "main",
+        computedAt: "now",
+        stats: { additions: 1, deletions: 0, filesChanged: 1, truncated: false },
+      },
+    ],
     ["not an object", "nonsense"],
     ["null", null],
   ])("ignores a malformed change event (%s)", async (_label, payload) => {
@@ -204,9 +230,11 @@ describe("useEnvironmentDiffStats", () => {
     renderHook(() => useEnvironmentDiffStats());
     await waitFor(() => expect(mockGetEnvironmentDiffStats).toHaveBeenCalledTimes(1));
 
-    mockGetEnvironmentDiffStats.mockImplementation(() => Promise.resolve({
-      entries: [change("env-late", { additions: 5, deletions: 5, filesChanged: 2 })],
-    }));
+    mockGetEnvironmentDiffStats.mockImplementation(() =>
+      Promise.resolve({
+        entries: [change("env-late", { additions: 5, deletions: 5, filesChanged: 2 })],
+      }),
+    );
 
     act(() => {
       emitEvent(NATIVE_EVENT_STREAM_CONNECTED_EVENT, undefined);
@@ -288,15 +316,19 @@ describe("useEnvironmentDiffStats", () => {
   });
 
   test("drops environments missing from a later snapshot", async () => {
-    mockGetEnvironmentDiffStats.mockImplementation(() => Promise.resolve({
-      entries: [change("env-1"), change("env-2")],
-    }));
+    mockGetEnvironmentDiffStats.mockImplementation(() =>
+      Promise.resolve({
+        entries: [change("env-1"), change("env-2")],
+      }),
+    );
     renderHook(() => useEnvironmentDiffStats());
     await waitFor(() => expect(useEnvironmentDiffStore.getState().stats.size).toBe(2));
 
-    mockGetEnvironmentDiffStats.mockImplementation(() => Promise.resolve({
-      entries: [change("env-1")],
-    }));
+    mockGetEnvironmentDiffStats.mockImplementation(() =>
+      Promise.resolve({
+        entries: [change("env-1")],
+      }),
+    );
     act(() => {
       emitEvent(NATIVE_EVENT_STREAM_CONNECTED_EVENT, undefined);
     });
@@ -307,7 +339,9 @@ describe("useEnvironmentDiffStats", () => {
   });
 
   test("keeps existing stats when the snapshot request fails", async () => {
-    mockGetEnvironmentDiffStats.mockImplementation(() => Promise.resolve({ entries: [change("env-1")] }));
+    mockGetEnvironmentDiffStats.mockImplementation(() =>
+      Promise.resolve({ entries: [change("env-1")] }),
+    );
     renderHook(() => useEnvironmentDiffStats());
     await waitFor(() => expect(useEnvironmentDiffStore.getState().stats.size).toBe(1));
 
@@ -322,8 +356,8 @@ describe("useEnvironmentDiffStats", () => {
 
   test("ignores a malformed snapshot from the process boundary", async () => {
     useEnvironmentDiffStore.getState().applyChange(change("env-existing"));
-    mockGetEnvironmentDiffStats.mockImplementation(
-      () => Promise.resolve({
+    mockGetEnvironmentDiffStats.mockImplementation(() =>
+      Promise.resolve({
         entries: [change("env-bad", { additions: -1 })],
       }),
     );
@@ -340,9 +374,11 @@ describe("useEnvironmentDiffStats", () => {
       if (event === DIFF_STATS_CHANGED_EVENT) return Promise.reject(new Error("listen failed"));
       return defaultListen(event, handler);
     });
-    mockGetEnvironmentDiffStats.mockImplementation(() => Promise.resolve({
-      entries: [change("env-1")],
-    }));
+    mockGetEnvironmentDiffStats.mockImplementation(() =>
+      Promise.resolve({
+        entries: [change("env-1")],
+      }),
+    );
 
     renderHook(() => useEnvironmentDiffStats());
 
@@ -393,9 +429,12 @@ describe("useEnvironmentDiffStats", () => {
 
   test("does not write a snapshot that resolves after unmount", async () => {
     let resolveSnapshot: (value: { entries: EnvironmentDiffStatsChange[] }) => void = () => {};
-    mockGetEnvironmentDiffStats.mockImplementation(() => new Promise((resolve) => {
-      resolveSnapshot = resolve;
-    }));
+    mockGetEnvironmentDiffStats.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveSnapshot = resolve;
+        }),
+    );
 
     const { unmount } = renderHook(() => useEnvironmentDiffStats());
     await waitFor(() => expect(mockGetEnvironmentDiffStats).toHaveBeenCalledTimes(1));

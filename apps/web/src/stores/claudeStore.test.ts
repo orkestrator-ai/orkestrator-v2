@@ -191,32 +191,22 @@ describe("claudeStore cleanup and queue helpers", () => {
       id: "approval-b",
       sessionId: "session-b",
     } as any);
-    usePromptDraftStore.getState().setDraftValue(
-      claudeQuestionDraftKey("session-a", "question-a"),
-      "answer",
-      "target",
-    );
-    usePromptDraftStore.getState().setDraftValue(
-      claudePlanApprovalDraftKey("session-a", "approval-a"),
-      "feedback",
-      "target",
-    );
-    usePromptDraftStore.getState().setDraftValue(
-      claudeQuestionDraftKey("session-b", "question-b"),
-      "answer",
-      "other",
-    );
+    usePromptDraftStore
+      .getState()
+      .setDraftValue(claudeQuestionDraftKey("session-a", "question-a"), "answer", "target");
+    usePromptDraftStore
+      .getState()
+      .setDraftValue(claudePlanApprovalDraftKey("session-a", "approval-a"), "feedback", "target");
+    usePromptDraftStore
+      .getState()
+      .setDraftValue(claudeQuestionDraftKey("session-b", "question-b"), "answer", "other");
 
     store.clearEnvironment("env-1");
 
     expect(store.getSession(sessionKeyA)).toBeUndefined();
     expect(store.getSession(sessionKeyB)?.sessionId).toBe("session-b");
-    expect(
-      useClaudeStore.getState().sessionLoadingRevisions.has(sessionKeyA),
-    ).toBe(false);
-    expect(
-      useClaudeStore.getState().sessionLoadingRevisions.has(sessionKeyB),
-    ).toBe(true);
+    expect(useClaudeStore.getState().sessionLoadingRevisions.has(sessionKeyA)).toBe(false);
+    expect(useClaudeStore.getState().sessionLoadingRevisions.has(sessionKeyB)).toBe(true);
     expect(store.getSelectedModel(sessionKeyA)).toBeUndefined();
     expect(store.getSelectedModel(sessionKeyB)).toBe("opus");
     expect(store.isComposingFor(sessionKeyA)).toBe(false);
@@ -229,19 +219,15 @@ describe("claudeStore cleanup and queue helpers", () => {
     expect(store.getPendingPlanApproval("approval-a")).toBeUndefined();
     expect(store.getPendingPlanApproval("approval-b")).toBeDefined();
     expect(
-      usePromptDraftStore.getState().drafts.has(
-        claudeQuestionDraftKey("session-a", "question-a"),
-      ),
+      usePromptDraftStore.getState().drafts.has(claudeQuestionDraftKey("session-a", "question-a")),
     ).toBe(false);
     expect(
-      usePromptDraftStore.getState().drafts.has(
-        claudePlanApprovalDraftKey("session-a", "approval-a"),
-      ),
+      usePromptDraftStore
+        .getState()
+        .drafts.has(claudePlanApprovalDraftKey("session-a", "approval-a")),
     ).toBe(false);
     expect(
-      usePromptDraftStore.getState().drafts.has(
-        claudeQuestionDraftKey("session-b", "question-b"),
-      ),
+      usePromptDraftStore.getState().drafts.has(claudeQuestionDraftKey("session-b", "question-b")),
     ).toBe(true);
   });
 
@@ -274,21 +260,23 @@ describe("claudeStore cleanup and queue helpers", () => {
       id: "old-approval",
       sessionId: "session-old",
     });
-    usePromptDraftStore.getState().setDraftValue(
-      claudeQuestionDraftKey("session-old", "old-question"),
-      "answers",
-      [["unfinished"]],
-    );
-    usePromptDraftStore.getState().setDraftValue(
-      claudePlanApprovalDraftKey("session-old", "old-approval"),
-      "feedback",
-      "unfinished",
-    );
-    usePromptDraftStore.getState().setDraftValue(
-      claudeQuestionDraftKey("session-other", "other-question"),
-      "answers",
-      [["keep"]],
-    );
+    usePromptDraftStore
+      .getState()
+      .setDraftValue(claudeQuestionDraftKey("session-old", "old-question"), "answers", [
+        ["unfinished"],
+      ]);
+    usePromptDraftStore
+      .getState()
+      .setDraftValue(
+        claudePlanApprovalDraftKey("session-old", "old-approval"),
+        "feedback",
+        "unfinished",
+      );
+    usePromptDraftStore
+      .getState()
+      .setDraftValue(claudeQuestionDraftKey("session-other", "other-question"), "answers", [
+        ["keep"],
+      ]);
 
     store.replaceSessionIdentity(SESSION_KEY, {
       sessionId: "session-new",
@@ -314,19 +302,19 @@ describe("claudeStore cleanup and queue helpers", () => {
     expect(state.pendingPlanApprovals.has("old-approval")).toBe(false);
     expect(state.selectedModel.get(SESSION_KEY)).toBe("claude-sonnet");
     expect(
-      usePromptDraftStore.getState().drafts.has(
-        claudeQuestionDraftKey("session-old", "old-question"),
-      ),
+      usePromptDraftStore
+        .getState()
+        .drafts.has(claudeQuestionDraftKey("session-old", "old-question")),
     ).toBe(false);
     expect(
-      usePromptDraftStore.getState().drafts.has(
-        claudePlanApprovalDraftKey("session-old", "old-approval"),
-      ),
+      usePromptDraftStore
+        .getState()
+        .drafts.has(claudePlanApprovalDraftKey("session-old", "old-approval")),
     ).toBe(false);
     expect(
-      usePromptDraftStore.getState().drafts.has(
-        claudeQuestionDraftKey("session-other", "other-question"),
-      ),
+      usePromptDraftStore
+        .getState()
+        .drafts.has(claudeQuestionDraftKey("session-other", "other-question")),
     ).toBe(true);
   });
 
@@ -349,9 +337,9 @@ describe("claudeStore cleanup and queue helpers", () => {
       isLoading: false,
     });
 
-    expect(
-      useClaudeStore.getState().sessionLoadingRevisions.get(SESSION_KEY),
-    ).toBe(revisionBeforeFork + 1);
+    expect(useClaudeStore.getState().sessionLoadingRevisions.get(SESSION_KEY)).toBe(
+      revisionBeforeFork + 1,
+    );
   });
 
   test("clearSession exhaustively removes every session-keyed map and only its pending requests", () => {
@@ -377,15 +365,42 @@ describe("claudeStore cleanup and queue helpers", () => {
         [targetKey, 3],
         [otherKey, 7],
       ]),
-      attachments: new Map([[targetKey, []], [otherKey, []]]),
-      draftText: new Map([[targetKey, "target"], [otherKey, "other"]]),
-      draftMentions: new Map([[targetKey, []], [otherKey, []]]),
-      messageQueue: new Map([[targetKey, []], [otherKey, []]]),
-      selectedModel: new Map([[targetKey, "sonnet"], [otherKey, "opus"]]),
-      isComposing: new Map([[targetKey, true], [otherKey, true]]),
-      effort: new Map([[targetKey, "high"], [otherKey, "max"]]),
-      planMode: new Map([[targetKey, true], [otherKey, true]]),
-      fastMode: new Map([[targetKey, true], [otherKey, true]]),
+      attachments: new Map([
+        [targetKey, []],
+        [otherKey, []],
+      ]),
+      draftText: new Map([
+        [targetKey, "target"],
+        [otherKey, "other"],
+      ]),
+      draftMentions: new Map([
+        [targetKey, []],
+        [otherKey, []],
+      ]),
+      messageQueue: new Map([
+        [targetKey, []],
+        [otherKey, []],
+      ]),
+      selectedModel: new Map([
+        [targetKey, "sonnet"],
+        [otherKey, "opus"],
+      ]),
+      isComposing: new Map([
+        [targetKey, true],
+        [otherKey, true],
+      ]),
+      effort: new Map([
+        [targetKey, "high"],
+        [otherKey, "max"],
+      ]),
+      planMode: new Map([
+        [targetKey, true],
+        [otherKey, true],
+      ]),
+      fastMode: new Map([
+        [targetKey, true],
+        [otherKey, true],
+      ]),
       contextUsage: new Map([
         [targetKey, { usedTokens: 1, totalTokens: 10, percentUsed: 10 }],
         [otherKey, { usedTokens: 2, totalTokens: 10, percentUsed: 20 }],
@@ -415,21 +430,19 @@ describe("claudeStore cleanup and queue helpers", () => {
         ["approval-other", { id: "approval-other", sessionId: "sdk-other" }],
       ]),
     });
-    usePromptDraftStore.getState().setDraftValue(
-      claudeQuestionDraftKey("sdk-target", "question-target"),
-      "answer",
-      "target",
-    );
-    usePromptDraftStore.getState().setDraftValue(
-      claudePlanApprovalDraftKey("sdk-target", "approval-target"),
-      "feedback",
-      "target",
-    );
-    usePromptDraftStore.getState().setDraftValue(
-      claudeQuestionDraftKey("sdk-other", "question-other"),
-      "answer",
-      "other",
-    );
+    usePromptDraftStore
+      .getState()
+      .setDraftValue(claudeQuestionDraftKey("sdk-target", "question-target"), "answer", "target");
+    usePromptDraftStore
+      .getState()
+      .setDraftValue(
+        claudePlanApprovalDraftKey("sdk-target", "approval-target"),
+        "feedback",
+        "target",
+      );
+    usePromptDraftStore
+      .getState()
+      .setDraftValue(claudeQuestionDraftKey("sdk-other", "question-other"), "answer", "other");
 
     useClaudeStore.getState().clearSession(targetKey);
 
@@ -461,19 +474,19 @@ describe("claudeStore cleanup and queue helpers", () => {
     expect(state.pendingPlanApprovals.has("approval-target")).toBe(false);
     expect(state.pendingPlanApprovals.has("approval-other")).toBe(true);
     expect(
-      usePromptDraftStore.getState().drafts.has(
-        claudeQuestionDraftKey("sdk-target", "question-target"),
-      ),
+      usePromptDraftStore
+        .getState()
+        .drafts.has(claudeQuestionDraftKey("sdk-target", "question-target")),
     ).toBe(false);
     expect(
-      usePromptDraftStore.getState().drafts.has(
-        claudePlanApprovalDraftKey("sdk-target", "approval-target"),
-      ),
+      usePromptDraftStore
+        .getState()
+        .drafts.has(claudePlanApprovalDraftKey("sdk-target", "approval-target")),
     ).toBe(false);
     expect(
-      usePromptDraftStore.getState().drafts.has(
-        claudeQuestionDraftKey("sdk-other", "question-other"),
-      ),
+      usePromptDraftStore
+        .getState()
+        .drafts.has(claudeQuestionDraftKey("sdk-other", "question-other")),
     ).toBe(true);
   });
 
@@ -484,9 +497,7 @@ describe("claudeStore cleanup and queue helpers", () => {
       // A tab whose session was created optimistically: the SDK has not
       // returned a session id yet, so there is nothing to sweep pending
       // requests by and the store must not guess.
-      sessions: new Map([
-        [targetKey, { sessionId: "", messages: [], isLoading: false }],
-      ]),
+      sessions: new Map([[targetKey, { sessionId: "", messages: [], isLoading: false }]]),
       draftText: new Map([[targetKey, "half-typed"]]),
       pendingQuestions: new Map([
         ["question-orphan", { id: "question-orphan", sessionId: "", questions: [] }],
@@ -518,9 +529,7 @@ describe("claudeStore cleanup and queue helpers", () => {
 
     expect(store.getModels("env-1").map((model) => model.id)).toEqual(["opus"]);
     expect(store.getModels("env-2").map((model) => model.id)).toEqual(["legacy"]);
-    expect(useClaudeStore.getState().models.map((model) => model.id)).toEqual([
-      "legacy",
-    ]);
+    expect(useClaudeStore.getState().models.map((model) => model.id)).toEqual(["legacy"]);
   });
 
   test("covers environment model updates, nullable init data, and pending selectors", () => {
@@ -597,10 +606,7 @@ describe("claudeStore cleanup and queue helpers", () => {
       fastModeEnabled: false,
     });
 
-    expect(store.getQueuedMessages(queueA).map((item) => item.id)).toEqual([
-      "q-1",
-      "q-2",
-    ]);
+    expect(store.getQueuedMessages(queueA).map((item) => item.id)).toEqual(["q-1", "q-2"]);
 
     store.setQueueProjection(queueA, []);
 
@@ -700,9 +706,7 @@ describe("claudeStore message patching", () => {
     // The reconnect case: the store holds revision 1 but the bridge has moved
     // past it. Applying by index would drop whatever changed in between, and
     // the bridge never re-sends it — so this must fail and force a refetch.
-    expect(useClaudeStore.getState().patchMessage(SESSION_KEY, patch({ revision: 5 }))).toBe(
-      false,
-    );
+    expect(useClaudeStore.getState().patchMessage(SESSION_KEY, patch({ revision: 5 }))).toBe(false);
     expect(useClaudeStore.getState().sessions.get(SESSION_KEY)).toBe(before);
   });
 
@@ -716,16 +720,12 @@ describe("claudeStore message patching", () => {
         .getState()
         .patchMessage(SESSION_KEY, patch({ changedParts: undefined as unknown as [] })),
     ).toBe(false);
-    expect(
-      useClaudeStore
-        .getState()
-        .patchMessage(SESSION_KEY, patch({ partCount: -1 })),
-    ).toBe(false);
-    expect(
-      useClaudeStore
-        .getState()
-        .patchMessage(SESSION_KEY, undefined as unknown as Patch),
-    ).toBe(false);
+    expect(useClaudeStore.getState().patchMessage(SESSION_KEY, patch({ partCount: -1 }))).toBe(
+      false,
+    );
+    expect(useClaudeStore.getState().patchMessage(SESSION_KEY, undefined as unknown as Patch)).toBe(
+      false,
+    );
     expect(useClaudeStore.getState().sessions.get(SESSION_KEY)).toBe(before);
   });
 
@@ -743,9 +743,7 @@ describe("claudeStore message patching", () => {
 
   test("reports failure for a session that does not exist", () => {
     expect(
-      useClaudeStore
-        .getState()
-        .patchMessage(createSessionKey("env-1", "other-tab"), patch()),
+      useClaudeStore.getState().patchMessage(createSessionKey("env-1", "other-tab"), patch()),
     ).toBe(false);
   });
 
@@ -833,9 +831,7 @@ describe("claudeStore client-only message merge", () => {
     useClaudeStore.getState().setMessages(SESSION_KEY, incoming);
 
     // The server fetch is authoritative here, so the array is adopted as-is.
-    expect(useClaudeStore.getState().getSession(SESSION_KEY)?.messages).toEqual(
-      incoming,
-    );
+    expect(useClaudeStore.getState().getSession(SESSION_KEY)?.messages).toEqual(incoming);
   });
 
   test("appends a client-only message newer than every fetched message", () => {
@@ -844,16 +840,14 @@ describe("claudeStore client-only message merge", () => {
       message(`${ERROR_MESSAGE_PREFIX}late`, "2026-07-20T12:00:09.000Z"),
     ]);
 
-    useClaudeStore.getState().setMessages(SESSION_KEY, [
-      message("assistant-1", "2026-07-20T12:00:00.000Z"),
-      message("assistant-2", "2026-07-20T12:00:02.000Z"),
-    ]);
+    useClaudeStore
+      .getState()
+      .setMessages(SESSION_KEY, [
+        message("assistant-1", "2026-07-20T12:00:00.000Z"),
+        message("assistant-2", "2026-07-20T12:00:02.000Z"),
+      ]);
 
-    expect(mergedIds()).toEqual([
-      "assistant-1",
-      "assistant-2",
-      `${ERROR_MESSAGE_PREFIX}late`,
-    ]);
+    expect(mergedIds()).toEqual(["assistant-1", "assistant-2", `${ERROR_MESSAGE_PREFIX}late`]);
   });
 
   test("appends a client-only message when the fetched transcript is empty", () => {
@@ -867,11 +861,13 @@ describe("claudeStore client-only message merge", () => {
   test("inserts a client-only message between the fetched messages it sits between", () => {
     seed([message(`${SYSTEM_MESSAGE_PREFIX}compact`, "2026-07-20T12:00:03.000Z")]);
 
-    useClaudeStore.getState().setMessages(SESSION_KEY, [
-      message("assistant-1", "2026-07-20T12:00:00.000Z"),
-      message("assistant-2", "2026-07-20T12:00:02.000Z"),
-      message("assistant-3", "2026-07-20T12:00:10.000Z"),
-    ]);
+    useClaudeStore
+      .getState()
+      .setMessages(SESSION_KEY, [
+        message("assistant-1", "2026-07-20T12:00:00.000Z"),
+        message("assistant-2", "2026-07-20T12:00:02.000Z"),
+        message("assistant-3", "2026-07-20T12:00:10.000Z"),
+      ]);
 
     expect(mergedIds()).toEqual([
       "assistant-1",
@@ -884,16 +880,14 @@ describe("claudeStore client-only message merge", () => {
   test("inserts a client-only message older than every fetched message at the front", () => {
     seed([message(`${ERROR_MESSAGE_PREFIX}early`, "2026-07-20T11:59:00.000Z")]);
 
-    useClaudeStore.getState().setMessages(SESSION_KEY, [
-      message("assistant-1", "2026-07-20T12:00:00.000Z"),
-      message("assistant-2", "2026-07-20T12:00:02.000Z"),
-    ]);
+    useClaudeStore
+      .getState()
+      .setMessages(SESSION_KEY, [
+        message("assistant-1", "2026-07-20T12:00:00.000Z"),
+        message("assistant-2", "2026-07-20T12:00:02.000Z"),
+      ]);
 
-    expect(mergedIds()).toEqual([
-      `${ERROR_MESSAGE_PREFIX}early`,
-      "assistant-1",
-      "assistant-2",
-    ]);
+    expect(mergedIds()).toEqual([`${ERROR_MESSAGE_PREFIX}early`, "assistant-1", "assistant-2"]);
   });
 
   test("keeps several client-only messages, each at its own point in the history", () => {
@@ -903,10 +897,12 @@ describe("claudeStore client-only message merge", () => {
       message(`${ERROR_MESSAGE_PREFIX}late`, "2026-07-20T12:00:30.000Z"),
     ]);
 
-    useClaudeStore.getState().setMessages(SESSION_KEY, [
-      message("assistant-1", "2026-07-20T12:00:00.000Z"),
-      message("assistant-2", "2026-07-20T12:00:10.000Z"),
-    ]);
+    useClaudeStore
+      .getState()
+      .setMessages(SESSION_KEY, [
+        message("assistant-1", "2026-07-20T12:00:00.000Z"),
+        message("assistant-2", "2026-07-20T12:00:10.000Z"),
+      ]);
 
     expect(mergedIds()).toEqual([
       `${ERROR_MESSAGE_PREFIX}early`,
@@ -922,27 +918,19 @@ describe("claudeStore client-only message merge", () => {
     // kept rather than dropped — it just sorts to the front.
     seed([message(`${ERROR_MESSAGE_PREFIX}undated`, "")]);
 
-    useClaudeStore.getState().setMessages(SESSION_KEY, [
-      message("assistant-1", "2026-07-20T12:00:00.000Z"),
-    ]);
+    useClaudeStore
+      .getState()
+      .setMessages(SESSION_KEY, [message("assistant-1", "2026-07-20T12:00:00.000Z")]);
 
-    expect(mergedIds()).toEqual([
-      `${ERROR_MESSAGE_PREFIX}undated`,
-      "assistant-1",
-    ]);
+    expect(mergedIds()).toEqual([`${ERROR_MESSAGE_PREFIX}undated`, "assistant-1"]);
   });
 
   test("keeps a fetched message with no timestamp ahead of a later client-only message", () => {
     seed([message(`${SYSTEM_MESSAGE_PREFIX}compact`, "2026-07-20T12:00:05.000Z")]);
 
-    useClaudeStore
-      .getState()
-      .setMessages(SESSION_KEY, [message("assistant-1", "")]);
+    useClaudeStore.getState().setMessages(SESSION_KEY, [message("assistant-1", "")]);
 
-    expect(mergedIds()).toEqual([
-      "assistant-1",
-      `${SYSTEM_MESSAGE_PREFIX}compact`,
-    ]);
+    expect(mergedIds()).toEqual(["assistant-1", `${SYSTEM_MESSAGE_PREFIX}compact`]);
   });
 
   test("falls back to appending when a timestamp cannot be parsed", () => {
@@ -950,10 +938,12 @@ describe("claudeStore client-only message merge", () => {
     // and the client-only message lands at the end rather than being lost.
     seed([message(`${ERROR_MESSAGE_PREFIX}unparseable`, "not-a-timestamp")]);
 
-    useClaudeStore.getState().setMessages(SESSION_KEY, [
-      message("assistant-1", "2026-07-20T12:00:00.000Z"),
-      message("assistant-2", "2026-07-20T12:00:02.000Z"),
-    ]);
+    useClaudeStore
+      .getState()
+      .setMessages(SESSION_KEY, [
+        message("assistant-1", "2026-07-20T12:00:00.000Z"),
+        message("assistant-2", "2026-07-20T12:00:02.000Z"),
+      ]);
 
     expect(mergedIds()).toEqual([
       "assistant-1",
@@ -965,16 +955,14 @@ describe("claudeStore client-only message merge", () => {
   test("falls back to appending when a fetched timestamp cannot be parsed", () => {
     seed([message(`${ERROR_MESSAGE_PREFIX}boom`, "2026-07-20T12:00:05.000Z")]);
 
-    useClaudeStore.getState().setMessages(SESSION_KEY, [
-      message("assistant-1", "not-a-timestamp"),
-      message("assistant-2", "2026-07-20T12:00:10.000Z"),
-    ]);
+    useClaudeStore
+      .getState()
+      .setMessages(SESSION_KEY, [
+        message("assistant-1", "not-a-timestamp"),
+        message("assistant-2", "2026-07-20T12:00:10.000Z"),
+      ]);
 
-    expect(mergedIds()).toEqual([
-      "assistant-1",
-      "assistant-2",
-      `${ERROR_MESSAGE_PREFIX}boom`,
-    ]);
+    expect(mergedIds()).toEqual(["assistant-1", "assistant-2", `${ERROR_MESSAGE_PREFIX}boom`]);
   });
 });
 
@@ -1026,20 +1014,21 @@ describe("claudeStore session selectors and pending requests", () => {
     store.addPendingPlanApproval({ id: "approval-1", sessionId: "sdk-a" });
     store.addPendingPlanApproval({ id: "approval-2", sessionId: "sdk-b" });
 
-    expect(
-      store.getPendingQuestionsForSession("sdk-a").map((item) => item.id),
-    ).toEqual(["question-1", "question-2"]);
-    expect(
-      store.getPendingQuestionsForSession("sdk-b").map((item) => item.id),
-    ).toEqual(["question-3"]);
+    expect(store.getPendingQuestionsForSession("sdk-a").map((item) => item.id)).toEqual([
+      "question-1",
+      "question-2",
+    ]);
+    expect(store.getPendingQuestionsForSession("sdk-b").map((item) => item.id)).toEqual([
+      "question-3",
+    ]);
     expect(store.getPendingQuestionsForSession("sdk-missing")).toEqual([]);
 
-    expect(
-      store.getPendingPlanApprovalsForSession("sdk-a").map((item) => item.id),
-    ).toEqual(["approval-1"]);
-    expect(
-      store.getPendingPlanApprovalsForSession("sdk-b").map((item) => item.id),
-    ).toEqual(["approval-2"]);
+    expect(store.getPendingPlanApprovalsForSession("sdk-a").map((item) => item.id)).toEqual([
+      "approval-1",
+    ]);
+    expect(store.getPendingPlanApprovalsForSession("sdk-b").map((item) => item.id)).toEqual([
+      "approval-2",
+    ]);
     expect(store.getPendingPlanApprovalsForSession("sdk-missing")).toEqual([]);
   });
 
@@ -1072,12 +1061,12 @@ describe("claudeStore session selectors and pending requests", () => {
     store.removePendingQuestion("question-1");
     store.removePendingPlanApproval("approval-1");
 
-    expect(
-      store.getPendingQuestionsForSession("sdk-a").map((item) => item.id),
-    ).toEqual(["question-2"]);
-    expect(
-      store.getPendingPlanApprovalsForSession("sdk-a").map((item) => item.id),
-    ).toEqual(["approval-2"]);
+    expect(store.getPendingQuestionsForSession("sdk-a").map((item) => item.id)).toEqual([
+      "question-2",
+    ]);
+    expect(store.getPendingPlanApprovalsForSession("sdk-a").map((item) => item.id)).toEqual([
+      "approval-2",
+    ]);
   });
 
   test("defaults effort to high, plan mode to off, and fast mode to off", () => {
@@ -1211,8 +1200,9 @@ describe("claudeStore per-session turn options", () => {
       const store = useClaudeStore.getState();
 
       store.setDismissedPromptSuggestion(SESSION_KEY, "Add a regression test");
-      expect(useClaudeStore.getState().getDismissedPromptSuggestion(SESSION_KEY))
-        .toBe("Add a regression test");
+      expect(useClaudeStore.getState().getDismissedPromptSuggestion(SESSION_KEY)).toBe(
+        "Add a regression test",
+      );
 
       store.setDismissedPromptSuggestion(SESSION_KEY, undefined);
       expect(useClaudeStore.getState().dismissedPromptSuggestions.has(SESSION_KEY)).toBe(false);
@@ -1249,9 +1239,7 @@ describe("claudeStore per-session turn options", () => {
       expect(useClaudeStore.getState().backgroundTasks.get(SESSION_KEY)).toEqual({
         "task-1": task,
       });
-      expect(
-        useClaudeStore.getState().backgroundTaskRevisions.get(SESSION_KEY),
-      ).toBe(1);
+      expect(useClaudeStore.getState().backgroundTaskRevisions.get(SESSION_KEY)).toBe(1);
     });
 
     test("deletes the key and advances its revision when the bridge reports no tasks", () => {
@@ -1264,9 +1252,7 @@ describe("claudeStore per-session turn options", () => {
       store.setBackgroundTasks(SESSION_KEY, {});
 
       expect(useClaudeStore.getState().backgroundTasks.has(SESSION_KEY)).toBe(false);
-      expect(
-        useClaudeStore.getState().backgroundTaskRevisions.get(SESSION_KEY),
-      ).toBe(2);
+      expect(useClaudeStore.getState().backgroundTaskRevisions.get(SESSION_KEY)).toBe(2);
     });
 
     test("detects an absent to present to absent snapshot sequence", () => {
@@ -1288,9 +1274,9 @@ describe("claudeStore per-session turn options", () => {
 
       store.setBackgroundTasks(SESSION_KEY, { "task-2": task });
 
-      expect(
-        Object.keys(useClaudeStore.getState().backgroundTasks.get(SESSION_KEY) ?? {}),
-      ).toEqual(["task-2"]);
+      expect(Object.keys(useClaudeStore.getState().backgroundTasks.get(SESSION_KEY) ?? {})).toEqual(
+        ["task-2"],
+      );
     });
 
     test("is scoped per session", () => {
@@ -1306,32 +1292,24 @@ describe("claudeStore per-session turn options", () => {
       const store = useClaudeStore.getState();
 
       store.setCompletionBlockedByBackgroundTasks(SESSION_KEY, true);
-      expect(
-        useClaudeStore.getState().completionBlockedByBackgroundTasks.get(SESSION_KEY),
-      ).toBe(true);
-      expect(
-        useClaudeStore.getState().completionHoldRevisions.get(SESSION_KEY),
-      ).toBe(1);
-      expect(
-        useClaudeStore.getState().backgroundTaskRevisions.has(SESSION_KEY),
-      ).toBe(false);
+      expect(useClaudeStore.getState().completionBlockedByBackgroundTasks.get(SESSION_KEY)).toBe(
+        true,
+      );
+      expect(useClaudeStore.getState().completionHoldRevisions.get(SESSION_KEY)).toBe(1);
+      expect(useClaudeStore.getState().backgroundTaskRevisions.has(SESSION_KEY)).toBe(false);
 
       store.setCompletionBlockedByBackgroundTasks(SESSION_KEY, false);
-      expect(
-        useClaudeStore.getState().completionBlockedByBackgroundTasks.has(SESSION_KEY),
-      ).toBe(false);
-      expect(
-        useClaudeStore.getState().completionHoldRevisions.get(SESSION_KEY),
-      ).toBe(2);
+      expect(useClaudeStore.getState().completionBlockedByBackgroundTasks.has(SESSION_KEY)).toBe(
+        false,
+      );
+      expect(useClaudeStore.getState().completionHoldRevisions.get(SESSION_KEY)).toBe(2);
     });
 
     test("does not advance the hold revision for an unchanged boolean", () => {
       const store = useClaudeStore.getState();
 
       store.setCompletionBlockedByBackgroundTasks(SESSION_KEY, false);
-      expect(
-        useClaudeStore.getState().completionHoldRevisions.has(SESSION_KEY),
-      ).toBe(false);
+      expect(useClaudeStore.getState().completionHoldRevisions.has(SESSION_KEY)).toBe(false);
 
       store.setCompletionBlockedByBackgroundTasks(SESSION_KEY, true);
       const stateAfterChange = useClaudeStore.getState();
@@ -1340,9 +1318,7 @@ describe("claudeStore per-session turn options", () => {
 
       store.setCompletionBlockedByBackgroundTasks(SESSION_KEY, true);
       const stateAfterNoop = useClaudeStore.getState();
-      expect(stateAfterNoop.completionBlockedByBackgroundTasks).toBe(
-        holdMapAfterChange,
-      );
+      expect(stateAfterNoop.completionBlockedByBackgroundTasks).toBe(holdMapAfterChange);
       expect(stateAfterNoop.completionHoldRevisions.get(SESSION_KEY)).toBe(1);
     });
   });
@@ -1424,9 +1400,7 @@ describe("claudeStore per-session turn options", () => {
         totalTokens: 10,
         percentUsed: 10,
       });
-      expect(store.getRateLimits(SESSION_KEY)).toEqual([
-        { label: "5h", usedPercent: 12 },
-      ]);
+      expect(store.getRateLimits(SESSION_KEY)).toEqual([{ label: "5h", usedPercent: 12 }]);
 
       store.setContextUsage(SESSION_KEY, {
         usedTokens: 2,

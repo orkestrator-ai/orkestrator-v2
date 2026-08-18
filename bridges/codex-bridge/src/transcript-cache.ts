@@ -1,8 +1,5 @@
 import { open, readFile, stat } from "node:fs/promises";
-import {
-  parseTranscriptRecords,
-  type TranscriptRecord,
-} from "./subagent-transcript.js";
+import { parseTranscriptRecords, type TranscriptRecord } from "./subagent-transcript.js";
 
 interface CachedTranscript {
   fileId: string;
@@ -115,9 +112,7 @@ export function getTranscriptCacheStats(): { entries: number; bytes: number } {
 }
 
 function normalizeTranscriptLines(lines: string[]): string[] {
-  return lines
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
+  return lines.map((line) => line.trim()).filter((line) => line.length > 0);
 }
 
 function splitTranscriptChunk(
@@ -138,11 +133,7 @@ function splitTranscriptChunk(
   };
 }
 
-async function readTranscriptChunk(
-  path: string,
-  start: number,
-  length: number,
-): Promise<string> {
+async function readTranscriptChunk(path: string, start: number, length: number): Promise<string> {
   if (length <= 0) {
     return "";
   }

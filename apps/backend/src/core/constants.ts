@@ -64,17 +64,15 @@ export const CODEX_MAX_CONCURRENT_THREADS_ENV = "CODEX_MAX_CONCURRENT_THREADS_PE
 
 export function isValidCodexMaxConcurrentThreads(value: unknown): value is number {
   return (
-    typeof value === "number"
-    && Number.isSafeInteger(value)
-    && value >= 1
-    && value <= MAX_CODEX_CONCURRENT_THREADS
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 1 &&
+    value <= MAX_CODEX_CONCURRENT_THREADS
   );
 }
 
 export function resolveCodexMaxConcurrentThreads(value: unknown): number {
-  return isValidCodexMaxConcurrentThreads(value)
-    ? value
-    : DEFAULT_CODEX_MAX_CONCURRENT_THREADS;
+  return isValidCodexMaxConcurrentThreads(value) ? value : DEFAULT_CODEX_MAX_CONCURRENT_THREADS;
 }
 
 export const ORKESTRATOR_PROJECT_CONFIG = "orkestrator-ai.json";

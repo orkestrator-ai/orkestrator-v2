@@ -8,7 +8,7 @@ import {
   normalizeAcpSessionConfig,
   planComposerApply,
   type AcpComposerPatch,
-  } from "./session-config.js";
+} from "./session-config.js";
 import { parseAcpTurnUsage } from "./usage.js";
 import {
   AcpProcess,
@@ -51,7 +51,7 @@ import {
   type BridgeTextPart,
   type JsonObject,
   type SessionState,
-  } from "./acp-context.js";
+} from "./acp-context.js";
 import {
   appendBounded,
   appendSaturating,
@@ -65,7 +65,7 @@ import {
   rememberHistoryMessage,
   trimPartsTo,
   turnRequiresCompleteOutput,
-  } from "./acp-transcript.js";
+} from "./acp-transcript.js";
 import {
   applyAcpPlanUpdate,
   applyCursorTask,
@@ -75,15 +75,10 @@ import {
   applyToolCallUpdate,
   boundedModelId,
   restoreCursorTodosFromMessages,
-  } from "./acp-tools.js";
+} from "./acp-tools.js";
 import { reconcileStaleToolParts } from "./acp-reconciliation.js";
-import {
-  emptySessionConfig,
-} from "./acp-persistence.js";
-import {
-  persistState,
-  schedulePersist,
-} from "./acp-persist-writer.js";
+import { emptySessionConfig } from "./acp-persistence.js";
+import { persistState, schedulePersist } from "./acp-persist-writer.js";
 
 export async function listResumableSessions(): Promise<JsonObject[]> {
   if (sessionListProbe) return sessionListProbe;
@@ -113,7 +108,11 @@ export async function listResumableSessionsReserved(): Promise<JsonObject[]> {
     const seenSessionIds = new Set<string>();
     const seenCursors = new Set<string>();
     let cursor: string | undefined;
-    for (let page = 0; page < MAX_SESSION_LIST_PAGES && listed.length < MAX_RESUMABLE_SESSIONS; page += 1) {
+    for (
+      let page = 0;
+      page < MAX_SESSION_LIST_PAGES && listed.length < MAX_RESUMABLE_SESSIONS;
+      page += 1
+    ) {
       const result = await child.request("session/list", {
         cwd: workingDirectory,
         ...(cursor ? { cursor } : {}),
@@ -129,10 +128,10 @@ export async function listResumableSessionsReserved(): Promise<JsonObject[]> {
         if (!cwd || resolve(cwd) !== workingDirectory) continue;
         seenSessionIds.add(acpSessionId);
         const meta = isObject(candidate._meta) ? candidate._meta : undefined;
-        const messageCount = Number.isSafeInteger(meta?.messageCount)
-          && Number(meta?.messageCount) >= 0
-          ? Number(meta!.messageCount)
-          : undefined;
+        const messageCount =
+          Number.isSafeInteger(meta?.messageCount) && Number(meta?.messageCount) >= 0
+            ? Number(meta!.messageCount)
+            : undefined;
         const createdAt = boundedString(candidate.createdAt, 64);
         const updatedAt = boundedString(candidate.updatedAt, 64);
         listed.push({
@@ -178,7 +177,8 @@ export async function resumeSession(
   }
   const alreadyLoaded = [...sessions.values()].find((state) => state.acpSessionId === acpSessionId);
   if (alreadyLoaded) return resumeExistingSession(alreadyLoaded, signal, patch);
-  if (activeSessionReservations() >= MAX_SESSIONS) throw new HttpError(429, "ACP session limit reached");
+  if (activeSessionReservations() >= MAX_SESSIONS)
+    throw new HttpError(429, "ACP session limit reached");
   const operation = resumeSessionReserved(acpSessionId, signal, patch);
   sessionResumes.set(acpSessionId, operation);
   try {
@@ -250,12 +250,17 @@ export async function resumeSessionReserved(
     };
     attachChild(state, child);
     sessions.set(state.id, state);
-    const loaded = await child.request("session/load", {
-      cwd: workingDirectory,
-      additionalDirectories: [],
-      mcpServers: [],
-      sessionId: acpSessionId,
-    }, RPC_TIMEOUT_MS, signal);
+    const loaded = await child.request(
+      "session/load",
+      {
+        cwd: workingDirectory,
+        additionalDirectories: [],
+        mcpServers: [],
+        sessionId: acpSessionId,
+      },
+      RPC_TIMEOUT_MS,
+      signal,
+    );
     state.historyReplay = false;
     // session/load is a projection of work owned by another ACP process. Its
     // historical active markers cannot describe children of this new process.
@@ -300,7 +305,8 @@ export async function createSession(
     const pending = sessionCreations.get(clientSessionKey);
     if (pending) return pending;
   }
-  if (activeSessionReservations() >= MAX_SESSIONS) throw new HttpError(429, "ACP session limit reached");
+  if (activeSessionReservations() >= MAX_SESSIONS)
+    throw new HttpError(429, "ACP session limit reached");
 
   const operation = createSessionReserved(clientSessionKey, signal, spawnOptions);
   if (clientSessionKey) sessionCreations.set(clientSessionKey, operation);
@@ -309,7 +315,8 @@ export async function createSession(
     return await operation;
   } finally {
     if (clientSessionKey) {
-      if (sessionCreations.get(clientSessionKey) === operation) sessionCreations.delete(clientSessionKey);
+      if (sessionCreations.get(clientSessionKey) === operation)
+        sessionCreations.delete(clientSessionKey);
     } else {
       adjustAnonymousSessionCreations(-1);
     }
@@ -321,7 +328,10 @@ export async function createSessionReserved(
   signal?: AbortSignal,
   spawnOptions: AcpSpawnOptions & AcpComposerPatch = {},
 ): Promise<SessionState> {
-  const child = new AcpProcess({ model: spawnOptions.model, effort: spawnOptions.effort ?? spawnOptions.reasoningId });
+  const child = new AcpProcess({
+    model: spawnOptions.model,
+    effort: spawnOptions.effort ?? spawnOptions.reasoningId,
+  });
   try {
     await child.initialize(signal);
     const created = await child.request(
@@ -465,7 +475,10 @@ export function attachSessionProcess(state: SessionState): Promise<AcpProcess> {
   return attach;
 }
 
-export async function ensureSessionProcess(state: SessionState, signal?: AbortSignal): Promise<AcpProcess> {
+export async function ensureSessionProcess(
+  state: SessionState,
+  signal?: AbortSignal,
+): Promise<AcpProcess> {
   if (state.attaching) {
     return signal ? raceAbort(state.attaching, signal) : state.attaching;
   }
@@ -488,12 +501,16 @@ export async function spawnAndLoadSession(state: SessionState): Promise<AcpProce
     attachChild(state, child);
     state.historyReplay = state.messages.length === 0 ? "hydrate" : "ignore";
     const hydratedHistory = state.historyReplay === "hydrate";
-    const loaded = await child.request("session/load", {
-      cwd: workingDirectory,
-      additionalDirectories: [],
-      mcpServers: [],
-      sessionId: state.acpSessionId,
-    }, RPC_TIMEOUT_MS);
+    const loaded = await child.request(
+      "session/load",
+      {
+        cwd: workingDirectory,
+        additionalDirectories: [],
+        mcpServers: [],
+        sessionId: state.acpSessionId,
+      },
+      RPC_TIMEOUT_MS,
+    );
     state.historyReplay = false;
     if (hydratedHistory) reconcileStaleToolParts(state, true);
     state.cursorTodos = restoreCursorTodosFromMessages(state.messages);
@@ -527,19 +544,30 @@ export function clearApprovals(state: SessionState): void {
 
 export function parkPermission(state: SessionState, requestId: number, params: JsonObject): void {
   const child = state.child;
-  if (!child || params.sessionId !== state.acpSessionId || state.approvals.size >= MAX_APPROVALS_PER_SESSION) {
+  if (
+    !child ||
+    params.sessionId !== state.acpSessionId ||
+    state.approvals.size >= MAX_APPROVALS_PER_SESSION
+  ) {
     child?.respond(requestId, { outcome: { outcome: "cancelled" } });
     return;
   }
   const options = Array.isArray(params.options)
-    ? params.options.flatMap((candidate) => {
-        if (!isObject(candidate) || typeof candidate.optionId !== "string") return [];
-        return [{
-          optionId: candidate.optionId.slice(0, 256),
-          name: (typeof candidate.name === "string" ? candidate.name : candidate.optionId).slice(0, 256),
-          ...(typeof candidate.kind === "string" ? { kind: candidate.kind.slice(0, 64) } : {}),
-        }];
-      }).slice(0, 20)
+    ? params.options
+        .flatMap((candidate) => {
+          if (!isObject(candidate) || typeof candidate.optionId !== "string") return [];
+          return [
+            {
+              optionId: candidate.optionId.slice(0, 256),
+              name: (typeof candidate.name === "string"
+                ? candidate.name
+                : candidate.optionId
+              ).slice(0, 256),
+              ...(typeof candidate.kind === "string" ? { kind: candidate.kind.slice(0, 64) } : {}),
+            },
+          ];
+        })
+        .slice(0, 20)
     : [];
   const id = randomBytes(12).toString("hex");
   const requestedAt = Date.now();
@@ -574,22 +602,24 @@ export function parkPermission(state: SessionState, requestId: number, params: J
 
 export function permissionTitle(params: JsonObject): string {
   const toolCall = isObject(params.toolCall) ? params.toolCall : undefined;
-  const title = typeof params.title === "string"
-    ? params.title
-    : typeof toolCall?.title === "string"
-      ? toolCall.title
-      : "Permission requested";
+  const title =
+    typeof params.title === "string"
+      ? params.title
+      : typeof toolCall?.title === "string"
+        ? toolCall.title
+        : "Permission requested";
   return title.slice(0, 500);
 }
 
 export function applySessionUpdate(state: SessionState, params: JsonObject): void {
   if (params.sessionId !== state.acpSessionId || !isObject(params.update)) return;
   const update = params.update;
-  const kind = typeof update.sessionUpdate === "string"
-    ? update.sessionUpdate
-    : typeof update.type === "string"
-      ? update.type
-      : "";
+  const kind =
+    typeof update.sessionUpdate === "string"
+      ? update.sessionUpdate
+      : typeof update.type === "string"
+        ? update.type
+        : "";
   if (kind === "usage_update" || kind === "state_update") {
     // Standard ACP occupancy (`usage_update`) and v2 turn-complete usage
     // (`state_update.usage`). Neither mutates the transcript. Cursor's CLI
@@ -623,11 +653,12 @@ export function applySessionUpdate(state: SessionState, params: JsonObject): voi
     return;
   }
   if (kind === "current_mode_update") {
-    const modeId = typeof update.currentModeId === "string"
-      ? update.currentModeId
-      : typeof update.modeId === "string"
-        ? update.modeId
-        : "";
+    const modeId =
+      typeof update.currentModeId === "string"
+        ? update.currentModeId
+        : typeof update.modeId === "string"
+          ? update.modeId
+          : "";
     if (modeId) {
       state.sessionConfig = applyCurrentModeUpdate(state.sessionConfig, modeId);
       state.revision += 1;
@@ -657,45 +688,55 @@ export function applySessionUpdate(state: SessionState, params: JsonObject): voi
     applyAcpPlanUpdate(state, update);
     return;
   }
-  if (kind !== "user_message"
-    && kind !== "user_message_chunk"
-    && kind !== "agent_message"
-    && kind !== "agent_message_chunk"
-    && kind !== "agent_thought_chunk") return;
+  if (
+    kind !== "user_message" &&
+    kind !== "user_message_chunk" &&
+    kind !== "agent_message" &&
+    kind !== "agent_message_chunk" &&
+    kind !== "agent_thought_chunk"
+  )
+    return;
   // User content is authored by `/session/prompt`, which pushes the
   // authoritative message before dispatching the turn. An agent that echoes the
   // prompt back mid-turn would append the same text onto that message a second
   // time — and for a structured turn the echo carries the appended JSON Schema
   // instructions too. Only a `session/load` replay, where the bridge has no
   // record of its own, may introduce user messages.
-  if ((kind === "user_message" || kind === "user_message_chunk")
-    && state.historyReplay !== "hydrate") return;
+  if (
+    (kind === "user_message" || kind === "user_message_chunk") &&
+    state.historyReplay !== "hydrate"
+  )
+    return;
   const text = contentText(update.content);
   if (!text) return;
   const role = kind === "user_message" || kind === "user_message_chunk" ? "user" : "assistant";
   const partType = kind === "agent_thought_chunk" ? "thinking" : "text";
   // A non-chunk update carries a complete message, so it always begins one.
   // Only chunks continue the message before them.
-  const isChunk = kind === "user_message_chunk"
-    || kind === "agent_message_chunk"
-    || kind === "agent_thought_chunk";
+  const isChunk =
+    kind === "user_message_chunk" ||
+    kind === "agent_message_chunk" ||
+    kind === "agent_thought_chunk";
   const providerMessageId = boundedString(update.messageId, MAX_TOOL_ID_BYTES)?.trim();
-  let message = providerMessageId
-    ? findHistoryMessage(state, providerMessageId)
-    : undefined;
+  let message = providerMessageId ? findHistoryMessage(state, providerMessageId) : undefined;
   const last = state.messages.at(-1);
   // With no provider message id there is no explicit boundary, so a chunk
   // continues the message before it regardless of part type: a thought chunk
   // followed by a text chunk is one assistant turn, not two.
-  if (!message && !providerMessageId && isChunk && last?.role === role && (
-    state.status === "running" || state.historyReplay === "hydrate"
-  )) {
+  if (
+    !message &&
+    !providerMessageId &&
+    isChunk &&
+    last?.role === role &&
+    (state.status === "running" || state.historyReplay === "hydrate")
+  ) {
     message = last;
   }
   if (!message) {
-    const modelId = role === "assistant"
-      ? boundedModelId(state.sessionConfig.composer.selectedModelId)
-      : undefined;
+    const modelId =
+      role === "assistant"
+        ? boundedModelId(state.sessionConfig.composer.selectedModelId)
+        : undefined;
     message = {
       id: randomBytes(12).toString("hex"),
       role,
@@ -736,9 +777,10 @@ export function applySessionUpdate(state: SessionState, params: JsonObject): voi
     // can already be saturated.
     if (nextPartText.truncated) saturatedText.add(created);
   }
-  const nextContent = partType === "text"
-    ? appendSaturating(message, message.content, text, MAX_MESSAGE_TEXT_BYTES)
-    : { value: message.content, truncated: false };
+  const nextContent =
+    partType === "text"
+      ? appendSaturating(message, message.content, text, MAX_MESSAGE_TEXT_BYTES)
+      : { value: message.content, truncated: false };
   message.content = nextContent.value;
   if (role === "assistant" && partType === "text" && state.currentTurnOutput !== null) {
     const captured = appendBounded(state.currentTurnOutput, text, MAX_MESSAGE_TEXT_BYTES);
@@ -747,13 +789,14 @@ export function applySessionUpdate(state: SessionState, params: JsonObject): voi
   }
   state.revision += 1;
   state.uncheckedTranscriptBytes += Buffer.byteLength(text) * (partType === "text" ? 2 : 1);
-  const transcriptTruncated = state.messages.length > MAX_MESSAGES
-    || state.uncheckedTranscriptBytes >= TRANSCRIPT_CHECK_INTERVAL_BYTES
-    ? boundTranscript(state)
-    : false;
+  const transcriptTruncated =
+    state.messages.length > MAX_MESSAGES ||
+    state.uncheckedTranscriptBytes >= TRANSCRIPT_CHECK_INTERVAL_BYTES
+      ? boundTranscript(state)
+      : false;
   if (
-    (nextPartText.truncated || nextContent.truncated || transcriptTruncated)
-    && turnRequiresCompleteOutput(state)
+    (nextPartText.truncated || nextContent.truncated || transcriptTruncated) &&
+    turnRequiresCompleteOutput(state)
   ) {
     failTranscriptLimit(state);
     return;
@@ -761,10 +804,13 @@ export function applySessionUpdate(state: SessionState, params: JsonObject): voi
   schedulePersist();
 }
 
-export function composerPatchFromSpawn(options: AcpSpawnOptions & AcpComposerPatch): AcpComposerPatch | undefined {
+export function composerPatchFromSpawn(
+  options: AcpSpawnOptions & AcpComposerPatch,
+): AcpComposerPatch | undefined {
   const patch: AcpComposerPatch = {};
   if (options.modelId || options.model) patch.modelId = options.modelId ?? options.model;
-  if (options.reasoningId || options.effort) patch.reasoningId = options.reasoningId ?? options.effort;
+  if (options.reasoningId || options.effort)
+    patch.reasoningId = options.reasoningId ?? options.effort;
   if (options.fastMode !== undefined) patch.fastMode = options.fastMode;
   if (options.mode) patch.mode = options.mode;
   return Object.keys(patch).length > 0 ? patch : undefined;
@@ -772,16 +818,18 @@ export function composerPatchFromSpawn(options: AcpSpawnOptions & AcpComposerPat
 
 export function parseComposerPatch(body: JsonObject): AcpComposerPatch | undefined {
   const mode = body.mode === "plan" || body.mode === "build" ? body.mode : undefined;
-  const modelId = typeof body.modelId === "string"
-    ? body.modelId.trim()
-    : typeof body.model === "string"
-      ? body.model.trim()
-      : "";
-  const reasoningId = typeof body.reasoningId === "string"
-    ? body.reasoningId.trim()
-    : typeof body.reasoningEffort === "string"
-      ? body.reasoningEffort.trim()
-      : "";
+  const modelId =
+    typeof body.modelId === "string"
+      ? body.modelId.trim()
+      : typeof body.model === "string"
+        ? body.model.trim()
+        : "";
+  const reasoningId =
+    typeof body.reasoningId === "string"
+      ? body.reasoningId.trim()
+      : typeof body.reasoningEffort === "string"
+        ? body.reasoningEffort.trim()
+        : "";
   const patch: AcpComposerPatch = {
     ...(modelId ? { modelId } : {}),
     ...(reasoningId ? { reasoningId } : {}),
@@ -868,13 +916,15 @@ export function applyVendorUpdate(state: SessionState, method: string, params: J
 export function recordTurnUsage(state: SessionState, payload: unknown): void {
   const turn = parseAcpTurnUsage(payload);
   if (!turn) return;
-  const accumulatedTurn = state.turnStartedAt === undefined
-    ? { ...(state.usage?.turn ?? {}), ...turn }
-    : { ...(state.currentTurnUsage ?? {}), ...turn };
+  const accumulatedTurn =
+    state.turnStartedAt === undefined
+      ? { ...state.usage?.turn, ...turn }
+      : { ...state.currentTurnUsage, ...turn };
   if (state.turnStartedAt !== undefined) state.currentTurnUsage = accumulatedTurn;
-  const durationMs = state.turnStartedAt === undefined
-    ? state.usage?.durationMs
-    : Math.max(0, Date.now() - state.turnStartedAt);
+  const durationMs =
+    state.turnStartedAt === undefined
+      ? state.usage?.durationMs
+      : Math.max(0, Date.now() - state.turnStartedAt);
   const modelId = state.sessionConfig.composer.selectedModelId;
   state.usage = {
     turn: accumulatedTurn,
@@ -899,11 +949,12 @@ export function recordTurnUsage(state: SessionState, payload: unknown): void {
 export function rememberAgentRuntime(initialized: JsonObject): void {
   const meta = isObject(initialized._meta) ? initialized._meta : {};
   const agentInfo = isObject(initialized.agentInfo) ? initialized.agentInfo : {};
-  const version = typeof agentInfo.version === "string"
-    ? agentInfo.version
-    : typeof meta.agentVersion === "string"
-      ? meta.agentVersion
-      : undefined;
+  const version =
+    typeof agentInfo.version === "string"
+      ? agentInfo.version
+      : typeof meta.agentVersion === "string"
+        ? meta.agentVersion
+        : undefined;
   if (version) agentRuntime.version = version.slice(0, 64);
 }
 

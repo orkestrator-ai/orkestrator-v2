@@ -18,16 +18,10 @@ describe("Claude Agent SDK runtime compatibility", () => {
     const bridgeManifest = JSON.parse(
       await readFile(join(packageRoot, "package.json"), "utf8"),
     ) as PackageManifest;
-    const expectedSdkVersion =
-      bridgeManifest.dependencies?.["@anthropic-ai/claude-agent-sdk"];
+    const expectedSdkVersion = bridgeManifest.dependencies?.["@anthropic-ai/claude-agent-sdk"];
     expect(expectedSdkVersion).toMatch(/^\d+\.\d+\.\d+$/);
 
-    const installedSdkRoot = join(
-      packageRoot,
-      "node_modules",
-      "@anthropic-ai",
-      "claude-agent-sdk",
-    );
+    const installedSdkRoot = join(packageRoot, "node_modules", "@anthropic-ai", "claude-agent-sdk");
     const installedManifest = JSON.parse(
       await readFile(join(installedSdkRoot, "package.json"), "utf8"),
     ) as InstalledSdkManifest;
@@ -199,10 +193,7 @@ describe("Claude Agent SDK runtime compatibility", () => {
     const fixtureDir = await mkdtemp(join(tmpdir(), "claude-sdk-contract-"));
     const executable = join(fixtureDir, "fake-claude");
     const responseFile = join(fixtureDir, "response.json");
-    await copyFile(
-      join(import.meta.dir, "testing", "fake-ask-user-question-cli.ts"),
-      executable,
-    );
+    await copyFile(join(import.meta.dir, "testing", "fake-ask-user-question-cli.ts"), executable);
     await chmod(executable, 0o755);
 
     try {
@@ -287,10 +278,7 @@ describe("Claude Agent SDK runtime compatibility", () => {
     const fixtureDir = await mkdtemp(join(tmpdir(), "claude-sdk-background-contract-"));
     const executable = join(fixtureDir, "fake-claude");
     const markerFile = join(fixtureDir, "background-marker.txt");
-    await copyFile(
-      join(import.meta.dir, "testing", "fake-background-task-cli.ts"),
-      executable,
-    );
+    await copyFile(join(import.meta.dir, "testing", "fake-background-task-cli.ts"), executable);
     await chmod(executable, 0o755);
 
     try {
@@ -364,10 +352,7 @@ describe("Claude Agent SDK runtime compatibility", () => {
     const fixtureDir = await mkdtemp(join(tmpdir(), "claude-sdk-background-continuation-"));
     const executable = join(fixtureDir, "fake-claude");
     const markerFile = join(fixtureDir, "background-marker.txt");
-    await copyFile(
-      join(import.meta.dir, "testing", "fake-background-task-cli.ts"),
-      executable,
-    );
+    await copyFile(join(import.meta.dir, "testing", "fake-background-task-cli.ts"), executable);
     await chmod(executable, 0o755);
 
     try {
@@ -490,10 +475,12 @@ describe("Claude Agent SDK runtime compatibility", () => {
           stdout: "pipe",
           stderr: "pipe",
         });
-        failedChild.stdin.write(`${JSON.stringify({
-          type: "user",
-          session_id: `contract-background-${childMode}-session`,
-        })}\n`);
+        failedChild.stdin.write(
+          `${JSON.stringify({
+            type: "user",
+            session_id: `contract-background-${childMode}-session`,
+          })}\n`,
+        );
         await failedChild.stdin.flush();
 
         const [stdout, stderr, exitCode] = await Promise.all([
@@ -502,16 +489,19 @@ describe("Claude Agent SDK runtime compatibility", () => {
           failedChild.exited,
         ]);
         expect(exitCode, stderr).toBe(0);
-        const messages = stdout.trim().split("\n").map(
-          (line) => JSON.parse(line) as Record<string, unknown>,
+        const messages = stdout
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line) as Record<string, unknown>);
+        expect(messages).toContainEqual(
+          expect.objectContaining({
+            type: "system",
+            subtype: "task_notification",
+            task_id: "contract-background-task",
+            status: "failed",
+            summary,
+          }),
         );
-        expect(messages).toContainEqual(expect.objectContaining({
-          type: "system",
-          subtype: "task_notification",
-          task_id: "contract-background-task",
-          status: "failed",
-          summary,
-        }));
         expect(messages.at(-1)).toMatchObject({
           type: "system",
           subtype: "background_tasks_changed",

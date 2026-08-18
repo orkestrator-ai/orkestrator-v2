@@ -17,7 +17,9 @@ import type {
 } from "@orkestrator/protocol/browser-preview";
 import { createContextMenuTemplate, type MenuLike } from "./context-menu.js";
 
-type WebContentsViewConstructor = new (options?: WebContentsViewConstructorOptions) => WebContentsView;
+type WebContentsViewConstructor = new (
+  options?: WebContentsViewConstructorOptions,
+) => WebContentsView;
 
 interface ManagedPreview {
   view: WebContentsView;
@@ -166,7 +168,8 @@ export class BrowserPreviewManager {
   async attach(input: BrowserPreviewAttachInput): Promise<BrowserPreviewState> {
     assertTabId(input.tabId);
     const navigationScope = previewNavigationScope(input.url);
-    if (!navigationScope) throw new Error("Browser previews require a loopback or authenticated gateway-preview URL");
+    if (!navigationScope)
+      throw new Error("Browser previews require a loopback or authenticated gateway-preview URL");
     const bounds = validateBounds(input.bounds, this.hostZoomFactor());
     let preview = this.previews.get(input.tabId);
 
@@ -208,10 +211,7 @@ export class BrowserPreviewManager {
     return this.snapshot(tabId, preview);
   }
 
-  consumeClipboardWriteUserActivation(
-    webContents: WebContents,
-    requestingUrl: string,
-  ): boolean {
+  consumeClipboardWriteUserActivation(webContents: WebContents, requestingUrl: string): boolean {
     if (webContents.isDestroyed()) return false;
     const preview = [...this.previews.values()].find(
       (candidate) => candidate.view.webContents === webContents,
@@ -230,14 +230,14 @@ export class BrowserPreviewManager {
     if (activatedAt === undefined) return false;
     this.clipboardUserActivations.delete(webContents);
     const activationAge = Date.now() - activatedAt;
-    return activationAge >= 0
-      && activationAge <= CLIPBOARD_USER_ACTIVATION_WINDOW_MS;
+    return activationAge >= 0 && activationAge <= CLIPBOARD_USER_ACTIVATION_WINDOW_MS;
   }
 
   async navigate(tabId: string, url: string): Promise<BrowserPreviewState> {
     const preview = this.get(tabId);
     const navigationScope = previewNavigationScope(url);
-    if (!navigationScope) throw new Error("Browser previews require a loopback or authenticated gateway-preview URL");
+    if (!navigationScope)
+      throw new Error("Browser previews require a loopback or authenticated gateway-preview URL");
     this.clipboardUserActivations.delete(preview.view.webContents);
     preview.requestedUrl = url;
     preview.navigationScope = navigationScope;
@@ -283,7 +283,7 @@ export class BrowserPreviewManager {
   }
 
   destroyAll(): void {
-    for (const tabId of [...this.previews.keys()]) this.destroy(tabId);
+    for (const tabId of Array.from(this.previews.keys())) this.destroy(tabId);
   }
 
   private createPreview(tabId: string, url: string, navigationScope: string): ManagedPreview {
@@ -324,11 +324,11 @@ export class BrowserPreviewManager {
     contents.setWindowOpenHandler(() => ({ action: "deny" }));
     contents.on("before-input-event", (event, input) => {
       const isAddressShortcut =
-        input.type === "keyDown"
-        && input.key.toLowerCase() === "l"
-        && (input.meta || input.control)
-        && !input.alt
-        && !input.shift;
+        input.type === "keyDown" &&
+        input.key.toLowerCase() === "l" &&
+        (input.meta || input.control) &&
+        !input.alt &&
+        !input.shift;
       if (!isAddressShortcut) return;
 
       event.preventDefault();
@@ -502,5 +502,4 @@ export class BrowserPreviewManager {
   private emit(tabId: string, preview: ManagedPreview): void {
     this.options.emitState(this.snapshot(tabId, preview));
   }
-
 }

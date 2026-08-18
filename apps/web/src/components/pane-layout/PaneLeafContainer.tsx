@@ -1,19 +1,7 @@
-import {
-  lazy,
-  memo,
-  useCallback,
-  useRef,
-  useLayoutEffect,
-  useState,
-  type ReactNode,
-} from "react";
+import { lazy, memo, useCallback, useRef, useLayoutEffect, useState, type ReactNode } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { useShallow } from "zustand/react/shallow";
-import {
-  usePaneLayoutStore,
-  useEnvironmentStore,
-  useConfigStore,
-} from "@/stores";
+import { usePaneLayoutStore, useEnvironmentStore, useConfigStore } from "@/stores";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { useTerminalPortalStore } from "@/stores/terminalPortalStore";
 import type { MultiReviewTabData, PaneLeaf } from "@/types/paneLayout";
@@ -83,9 +71,7 @@ function MultiReviewTabBoundary({
   // position to make the retry genuinely fresh.
   const handleViewFailure = useCallback(() => {
     if (data.reviewerId) {
-      clearPersistedVirtuosoState(
-        multiReviewReviewerScrollKey(data.workflowId, data.reviewerId),
-      );
+      clearPersistedVirtuosoState(multiReviewReviewerScrollKey(data.workflowId, data.reviewerId));
     }
   }, [data.reviewerId, data.workflowId]);
   return (
@@ -95,11 +81,7 @@ function MultiReviewTabBoundary({
       resetKeys={[isVisible, refreshRequestId, workflowRevision]}
       onError={handleViewFailure}
     >
-      <LazyMultiReviewTab
-        key={refreshRequestId}
-        data={data}
-        isActive={isVisible}
-      />
+      <LazyMultiReviewTab key={refreshRequestId} data={data} isActive={isVisible} />
     </LazyLoadBoundary>
   );
 }
@@ -130,26 +112,25 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
       setActivePane: state.setActivePane,
       setActiveTab: state.setActiveTab,
       environments: state.environments,
-    }))
+    })),
   );
 
   // Derive activePaneId from current environment state
   const currentEnvState = environments.get(environmentId);
   const activePaneId = currentEnvState?.activePaneId ?? "default";
   const containerRef = useRef<HTMLDivElement>(null);
-  const [tabRefreshRequestIds, setTabRefreshRequestIds] = useState(
-    () => new Map<string, number>(),
-  );
+  const [tabRefreshRequestIds, setTabRefreshRequestIds] = useState(() => new Map<string, number>());
 
   // Read the diff baseline reactively from the environment/config stores.
   const { projectId, createdFromCommit } = useEnvironmentStore(
     useShallow((state) => {
       const env = state.getEnvironmentById(environmentId);
       return { projectId: env?.projectId, createdFromCommit: env?.createdFromCommit };
-    })
+    }),
   );
   const repositories = useConfigStore((state) => state.config.repositories);
-  const comparisonRef = createdFromCommit || (projectId ? (repositories[projectId]?.prBaseBranch || "main") : "main");
+  const comparisonRef =
+    createdFromCommit || (projectId ? repositories[projectId]?.prBaseBranch || "main" : "main");
 
   // Set up droppable for tabbar
   const { setNodeRef, isOver } = useDroppable({
@@ -162,7 +143,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
     useShallow((state) => ({
       registerPaneHost: state.registerPaneHost,
       unregisterPaneHost: state.unregisterPaneHost,
-    }))
+    })),
   );
 
   // Register this pane's content area as a terminal host
@@ -189,7 +170,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
     (tabId: string) => {
       setActiveTab(pane.id, tabId, environmentId);
     },
-    [environmentId, pane.id, setActiveTab]
+    [environmentId, pane.id, setActiveTab],
   );
 
   const handleTabRefresh = useCallback((tabId: string) => {
@@ -202,16 +183,19 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
 
   // Check if this pane is focused (active in the layout)
   const isPaneFocused = activePaneId === pane.id;
-  const renderTabFallback = useCallback((isVisible: boolean) => (
-    <div
-      className={cn(
-        "absolute inset-0 flex items-center justify-center bg-background/80 text-muted-foreground",
-        isVisible ? "z-10 pointer-events-auto" : "hidden",
-      )}
-    >
-      Loading tab...
-    </div>
-  ), []);
+  const renderTabFallback = useCallback(
+    (isVisible: boolean) => (
+      <div
+        className={cn(
+          "absolute inset-0 flex items-center justify-center bg-background/80 text-muted-foreground",
+          isVisible ? "z-10 pointer-events-auto" : "hidden",
+        )}
+      >
+        Loading tab...
+      </div>
+    ),
+    [],
+  );
   // A tab that is not on screen must not blank the whole application when its
   // chunk fails, so the failure surface is scoped exactly like the loading one.
   const renderTabError = useCallback(
@@ -226,7 +210,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
       ref={containerRef}
       className={cn(
         "relative flex h-full w-full flex-col overflow-hidden bg-background",
-        isPaneFocused && "ring-1 ring-primary/20"
+        isPaneFocused && "ring-1 ring-primary/20",
       )}
       onClick={handlePaneClick}
     >
@@ -304,7 +288,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                 key={tab.id}
                 className={cn(
                   "absolute inset-0",
-                  isTabActive && isActive ? "z-10 pointer-events-auto" : "hidden"
+                  isTabActive && isActive ? "z-10 pointer-events-auto" : "hidden",
                 )}
               >
                 <LazyLoadBoundary
@@ -339,7 +323,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                 key={tab.id}
                 className={cn(
                   "absolute inset-0",
-                  isTabActive && isActive ? "z-10 pointer-events-auto" : "hidden"
+                  isTabActive && isActive ? "z-10 pointer-events-auto" : "hidden",
                 )}
               >
                 <LazyLoadBoundary
@@ -369,7 +353,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                 key={tab.id}
                 className={cn(
                   "absolute inset-0",
-                  isTabActive && isActive ? "z-10 pointer-events-auto" : "hidden"
+                  isTabActive && isActive ? "z-10 pointer-events-auto" : "hidden",
                 )}
               >
                 <LazyLoadBoundary

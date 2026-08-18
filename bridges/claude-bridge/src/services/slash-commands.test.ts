@@ -48,10 +48,7 @@ function describedCommand(description: string): string {
 const PINNED_MTIME = new Date("2026-07-01T00:00:00.000Z");
 
 /** Write a command file at the pinned mtime so it can be rewritten in place. */
-async function writePinnedCommand(
-  filePath: string,
-  description: string,
-): Promise<void> {
+async function writePinnedCommand(filePath: string, description: string): Promise<void> {
   await writeFile(filePath, describedCommand(description));
   await utimes(filePath, PINNED_MTIME, PINNED_MTIME);
 }
@@ -61,10 +58,7 @@ async function writePinnedCommand(
  * whole cache fingerprint — untouched, so a cached description survives and a
  * re-read is observable in the returned command string.
  */
-async function rewriteWithSameFingerprint(
-  filePath: string,
-  description: string,
-): Promise<void> {
+async function rewriteWithSameFingerprint(filePath: string, description: string): Promise<void> {
   const content = describedCommand(description);
   const before = await stat(filePath);
   if (Buffer.byteLength(content) !== before.size) {
@@ -143,10 +137,7 @@ description: Deploy the current branch
 # Deploy
 Body content here.`,
     );
-    await writeFile(
-      join(commandsDir, "no-frontmatter.md"),
-      "Just markdown without frontmatter.",
-    );
+    await writeFile(join(commandsDir, "no-frontmatter.md"), "Just markdown without frontmatter.");
     await writeFile(
       join(commandsDir, "single-quoted.md"),
       `---
@@ -241,9 +232,7 @@ description: Ship it
       const commands = await discoverSlashCommands(cwd);
       expect(commands.some((c) => c.startsWith("/help"))).toBe(true);
       expect(
-        warnings.some((w) =>
-          String(w[0] ?? "").includes("Failed to scan plugin commands"),
-        ),
+        warnings.some((w) => String(w[0] ?? "").includes("Failed to scan plugin commands")),
       ).toBe(true);
     } finally {
       console.warn = originalWarn;
@@ -280,9 +269,7 @@ description: Plugin help
     mockReadPluginManifest.mockImplementationOnce(async () => ({ name: "foo" }));
 
     const commands = await discoverSlashCommands(cwd);
-    expect(commands.filter((c) => c.startsWith("/help"))).toEqual([
-      "/help - Repo help",
-    ]);
+    expect(commands.filter((c) => c.startsWith("/help"))).toEqual(["/help - Repo help"]);
     expect(commands).toContain("/foo:help - Plugin help");
   });
 
@@ -300,30 +287,18 @@ description: Plugin help
     const commandPath = join(commandsDir, "deploy.md");
     await writePinnedCommand(commandPath, "First description");
 
-    expect(await discoverSlashCommands(cwd)).toContain(
-      "/deploy - First description",
-    );
+    expect(await discoverSlashCommands(cwd)).toContain("/deploy - First description");
 
     // Rewriting the body while preserving the fingerprint makes a cache hit
     // observable without reaching into the implementation: only a discovery
     // that re-read the file could report the new text.
-    await rewriteWithSameFingerprint(
-      commandPath,
-      "Later description",
-    );
-    expect(await discoverSlashCommands(cwd)).toContain(
-      "/deploy - First description",
-    );
+    await rewriteWithSameFingerprint(commandPath, "Later description");
+    expect(await discoverSlashCommands(cwd)).toContain("/deploy - First description");
 
     // An ordinary on-disk edit changes the fingerprint (size differs even when
     // the mtime granularity is coarse), so the cache must re-read it.
-    await writeFile(
-      commandPath,
-      describedCommand("Second, longer description"),
-    );
-    expect(await discoverSlashCommands(cwd)).toContain(
-      "/deploy - Second, longer description",
-    );
+    await writeFile(commandPath, describedCommand("Second, longer description"));
+    expect(await discoverSlashCommands(cwd)).toContain("/deploy - Second, longer description");
   });
 
   test("bounds the description cache so it cannot grow for the process lifetime", async () => {
@@ -333,10 +308,7 @@ description: Plugin help
     const probePath = join(commandsDir, "probe.md");
     await writePinnedCommand(probePath, "Cached alpha");
     expect(await discoverSlashCommands(cwd)).toContain("/probe - Cached alpha");
-    await rewriteWithSameFingerprint(
-      probePath,
-      "Reread bravo",
-    );
+    await rewriteWithSameFingerprint(probePath, "Reread bravo");
     expect(await discoverSlashCommands(cwd)).toContain("/probe - Cached alpha");
 
     // A directory discovery visits once and never again — an uninstalled
@@ -345,13 +317,8 @@ description: Plugin help
     const pluginCommandsDir = join(pluginPath, "commands");
     await mkdir(pluginCommandsDir, { recursive: true });
     await Promise.all(
-      Array.from(
-        { length: MAX_COMMAND_DESCRIPTION_CACHE_ENTRIES + 8 },
-        (_unused, index) =>
-          writeFile(
-            join(pluginCommandsDir, `bulk-${index}.md`),
-            describedCommand(`Bulk ${index}`),
-          ),
+      Array.from({ length: MAX_COMMAND_DESCRIPTION_CACHE_ENTRIES + 8 }, (_unused, index) =>
+        writeFile(join(pluginCommandsDir, `bulk-${index}.md`), describedCommand(`Bulk ${index}`)),
       ),
     );
     mockGetMergedPlugins.mockImplementationOnce(async () => [
@@ -373,19 +340,12 @@ description: Plugin help
     const probePath = join(commandsDir, "probe.md");
     await writePinnedCommand(probePath, "Cached alpha");
     expect(await discoverSlashCommands(cwd)).toContain("/probe - Cached alpha");
-    await rewriteWithSameFingerprint(
-      probePath,
-      "Reread bravo",
-    );
+    await rewriteWithSameFingerprint(probePath, "Reread bravo");
 
     // Churn more short-lived commands through the directory than the cache can
     // hold. Pruning each one as it disappears keeps the cache small enough that
     // the probe survives; without it the churn alone evicts the probe.
-    for (
-      let index = 0;
-      index < MAX_COMMAND_DESCRIPTION_CACHE_ENTRIES + 8;
-      index += 1
-    ) {
+    for (let index = 0; index < MAX_COMMAND_DESCRIPTION_CACHE_ENTRIES + 8; index += 1) {
       const churnPath = join(commandsDir, `churn-${index}.md`);
       await writeFile(churnPath, describedCommand(`Churn ${index}`));
       await discoverSlashCommands(cwd);
@@ -402,26 +362,16 @@ description: Plugin help
     const probePath = join(commandsDir, "probe.md");
     await writePinnedCommand(probePath, "Cached alpha");
     expect(await discoverSlashCommands(cwd)).toContain("/probe - Cached alpha");
-    await rewriteWithSameFingerprint(
-      probePath,
-      "Reread bravo",
-    );
+    await rewriteWithSameFingerprint(probePath, "Reread bravo");
 
     // A plugin whose directory is removed between discoveries. `readdir`
     // throws, which is the only chance to drop what that directory cached.
     const pluginParent = await makeTempDir();
-    for (
-      let index = 0;
-      index < MAX_COMMAND_DESCRIPTION_CACHE_ENTRIES + 8;
-      index += 1
-    ) {
+    for (let index = 0; index < MAX_COMMAND_DESCRIPTION_CACHE_ENTRIES + 8; index += 1) {
       const pluginPath = join(pluginParent, `plugin-${index}`);
       const pluginCommandsDir = join(pluginPath, "commands");
       await mkdir(pluginCommandsDir, { recursive: true });
-      await writeFile(
-        join(pluginCommandsDir, "only.md"),
-        describedCommand(`Plugin ${index}`),
-      );
+      await writeFile(join(pluginCommandsDir, "only.md"), describedCommand(`Plugin ${index}`));
       mockGetMergedPlugins.mockImplementation(async () => [
         { type: "local" as const, path: pluginPath },
       ]);
@@ -453,9 +403,7 @@ description: Plugin help
       `${header}${padding}🚀\ndescription: Survived the chunk boundary\n---\n# Body`,
     );
 
-    expect(await discoverSlashCommands(cwd)).toContain(
-      "/split - Survived the chunk boundary",
-    );
+    expect(await discoverSlashCommands(cwd)).toContain("/split - Survived the chunk boundary");
   });
 
   test("accepts frontmatter whose closing delimiter ends exactly at the read cap", async () => {
@@ -465,16 +413,12 @@ description: Plugin help
 
     const head = "---\ndescription: Exactly at the cap\nnotes: ";
     const tail = "\n---\n";
-    const padding = "x".repeat(
-      256 * 1024 - Buffer.byteLength(head) - Buffer.byteLength(tail),
-    );
+    const padding = "x".repeat(256 * 1024 - Buffer.byteLength(head) - Buffer.byteLength(tail));
     const content = `${head}${padding}${tail}`;
     expect(Buffer.byteLength(content)).toBe(256 * 1024);
     await writeFile(join(commandsDir, "at-cap.md"), `${content}# Body`);
 
-    expect(await discoverSlashCommands(cwd)).toContain(
-      "/at-cap - Exactly at the cap",
-    );
+    expect(await discoverSlashCommands(cwd)).toContain("/at-cap - Exactly at the cap");
   });
 
   test("parses the description of a command with a large body without choking", async () => {
@@ -574,9 +518,7 @@ description: Bravo value
 description: Recovered command
 ---`,
     );
-    expect(await discoverSlashCommands(cwd)).toContain(
-      "/broken - Recovered command",
-    );
+    expect(await discoverSlashCommands(cwd)).toContain("/broken - Recovered command");
   });
 
   test("drops deleted command entries and accepts a later recreation", async () => {
@@ -590,14 +532,12 @@ description: Recovered command
 description: Before deletion
 ---`,
     );
-    expect(await discoverSlashCommands(cwd)).toContain(
-      "/temporary - Before deletion",
-    );
+    expect(await discoverSlashCommands(cwd)).toContain("/temporary - Before deletion");
 
     await unlink(commandPath);
-    expect((await discoverSlashCommands(cwd)).some(
-      (command) => command.startsWith("/temporary"),
-    )).toBe(false);
+    expect(
+      (await discoverSlashCommands(cwd)).some((command) => command.startsWith("/temporary")),
+    ).toBe(false);
 
     await writeFile(
       commandPath,
@@ -605,8 +545,6 @@ description: Before deletion
 description: After recreation
 ---`,
     );
-    expect(await discoverSlashCommands(cwd)).toContain(
-      "/temporary - After recreation",
-    );
+    expect(await discoverSlashCommands(cwd)).toContain("/temporary - After recreation");
   });
 });

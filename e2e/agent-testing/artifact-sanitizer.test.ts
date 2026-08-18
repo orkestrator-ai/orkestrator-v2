@@ -8,10 +8,14 @@ import { MAX_SANITIZABLE_FILE_BYTES, sanitizeAgentTestingArtifacts } from "./art
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(temporaryDirectories.splice(0).map((target) => rm(target, {
-    recursive: true,
-    force: true,
-  })));
+  await Promise.all(
+    temporaryDirectories.splice(0).map((target) =>
+      rm(target, {
+        recursive: true,
+        force: true,
+      }),
+    ),
+  );
 });
 
 describe("agent-test artifact sanitizer", () => {
@@ -24,11 +28,14 @@ describe("agent-test artifact sanitizer", () => {
 
     const traceSource = await mkdtemp(path.join(os.tmpdir(), "ork-agent-trace-source-"));
     temporaryDirectories.push(traceSource);
-    await writeFile(path.join(traceSource, "trace.network"), [
-      `authorization: Bearer ${secret}`,
-      `cookie: orkestrator_gateway_auth=${session}; theme=dark`,
-      JSON.stringify({ name: "orkestrator_gateway_auth", value: session }),
-    ].join("\n"));
+    await writeFile(
+      path.join(traceSource, "trace.network"),
+      [
+        `authorization: Bearer ${secret}`,
+        `cookie: orkestrator_gateway_auth=${session}; theme=dark`,
+        JSON.stringify({ name: "orkestrator_gateway_auth", value: session }),
+      ].join("\n"),
+    );
     const archive = path.join(root, "trace.zip");
     expect(spawnSync("zip", ["-q", "-r", archive, "."], { cwd: traceSource }).status).toBe(0);
 
@@ -52,7 +59,10 @@ describe("agent-test artifact sanitizer", () => {
     temporaryDirectories.push(root);
     const traceSource = await mkdtemp(path.join(os.tmpdir(), "ork-agent-staging-source-"));
     temporaryDirectories.push(traceSource);
-    await writeFile(path.join(traceSource, "trace.network"), "cookie: orkestrator_gateway_auth=leaked\n");
+    await writeFile(
+      path.join(traceSource, "trace.network"),
+      "cookie: orkestrator_gateway_auth=leaked\n",
+    );
     const archive = path.join(root, "trace.zip");
     expect(spawnSync("zip", ["-q", "-r", archive, "."], { cwd: traceSource }).status).toBe(0);
 
@@ -61,8 +71,9 @@ describe("agent-test artifact sanitizer", () => {
     const unpacked = await mkdtemp(path.join(os.tmpdir(), "ork-agent-staging-check-"));
     temporaryDirectories.push(unpacked);
     expect(spawnSync("unzip", ["-qq", archive, "-d", unpacked]).status).toBe(0);
-    expect(await readFile(path.join(unpacked, "trace.network"), "utf8"))
-      .toContain("orkestrator_gateway_auth=[REDACTED]");
+    expect(await readFile(path.join(unpacked, "trace.network"), "utf8")).toContain(
+      "orkestrator_gateway_auth=[REDACTED]",
+    );
     // No staging directory survives next to the archive it redacted.
     expect(await readdir(root)).toEqual(["trace.zip"]);
   });
@@ -89,8 +100,9 @@ describe("agent-test artifact sanitizer", () => {
     await writeFile(artifact, "potential-secret");
     await truncate(artifact, MAX_SANITIZABLE_FILE_BYTES + 1);
 
-    await expect(sanitizeAgentTestingArtifacts(artifact, ["potential-secret"]))
-      .rejects.toThrow("sanitization limit");
+    await expect(sanitizeAgentTestingArtifacts(artifact, ["potential-secret"])).rejects.toThrow(
+      "sanitization limit",
+    );
     await expect(readFile(artifact)).rejects.toThrow();
   });
 
@@ -104,8 +116,9 @@ describe("agent-test artifact sanitizer", () => {
     await truncate(oversized, MAX_SANITIZABLE_FILE_BYTES + 1);
     await writeFile(safe, JSON.stringify({ secret }));
 
-    await expect(sanitizeAgentTestingArtifacts(root, [secret]))
-      .rejects.toThrow("sanitization limit");
+    await expect(sanitizeAgentTestingArtifacts(root, [secret])).rejects.toThrow(
+      "sanitization limit",
+    );
 
     expect(await stat(root)).not.toBeNull();
     expect(await stat(oversized).catch(() => null)).toBeNull();

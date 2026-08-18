@@ -1,15 +1,21 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 
 async function loadNativeDialog() {
-  return import("../../../apps/web/src/lib/native/dialog.ts?real") as Promise<typeof import("../../../apps/web/src/lib/native/dialog")>;
+  return import("../../../apps/web/src/lib/native/dialog.ts?real") as Promise<
+    typeof import("../../../apps/web/src/lib/native/dialog")
+  >;
 }
 
 async function loadNativeWindow() {
-  return import("../../../apps/web/src/lib/native/window.ts?real") as Promise<typeof import("../../../apps/web/src/lib/native/window")>;
+  return import("../../../apps/web/src/lib/native/window.ts?real") as Promise<
+    typeof import("../../../apps/web/src/lib/native/window")
+  >;
 }
 
 async function loadNativeProcess() {
-  return import("../../../apps/web/src/lib/native/process.ts?real") as Promise<typeof import("../../../apps/web/src/lib/native/process")>;
+  return import("../../../apps/web/src/lib/native/process.ts?real") as Promise<
+    typeof import("../../../apps/web/src/lib/native/process")
+  >;
 }
 
 afterEach(() => {
@@ -45,7 +51,9 @@ describe("native dialog/window/process wrappers", () => {
   test("applies native page zoom through the preload bridge", async () => {
     const { getCurrentWindow } = await loadNativeWindow();
     const setZoomFactor = mock(async () => true);
-    window.orkestrator = { window: { startDragging: mock(async () => undefined), setZoomFactor } } as never;
+    window.orkestrator = {
+      window: { startDragging: mock(async () => undefined), setZoomFactor },
+    } as never;
 
     await expect(getCurrentWindow().setZoomFactor(1.5)).resolves.toBe(true);
     expect(setZoomFactor).toHaveBeenCalledWith(1.5);

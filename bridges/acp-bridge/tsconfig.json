@@ -17,10 +17,5 @@
   // shipped source has to fail here rather than at runtime. `acp-test-harness.ts`
   // is the one non-`.test.ts` file that legitimately needs them, and it is
   // typechecked by `tsconfig.test.json` instead.
-  "exclude": [
-    "node_modules",
-    "dist",
-    "src/**/*.test.ts",
-    "src/acp-test-harness.ts"
-  ]
+  "exclude": ["node_modules", "dist", "src/**/*.test.ts", "src/acp-test-harness.ts"]
 }

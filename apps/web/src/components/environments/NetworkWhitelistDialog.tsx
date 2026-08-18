@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import {
   Dialog,
   DialogContent,
@@ -11,14 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import {
-  Loader2,
-  Shield,
-  Globe,
-  CheckCircle2,
-  XCircle,
-  AlertCircle,
-} from "lucide-react";
+import { Loader2, Shield, Globe, CheckCircle2, XCircle, AlertCircle } from "lucide-react";
 import * as backend from "@/lib/backend";
 import { useConfigStore } from "@/stores";
 import type { Environment, DomainTestResult } from "@/types";
@@ -40,13 +33,20 @@ export function NetworkWhitelistDialog({
   onUpdate,
 }: NetworkWhitelistDialogProps) {
   const config = useConfigStore((state) => state.config);
-  const globalDomains = config.global.allowedDomains || [];
+  // Memoised so the identity only changes when the domains do. Left inline, the
+  // `?? []` fallback produced a fresh array every render, so the effects below
+  // re-ran on every render and re-set state with a fresh `[]` — an unbounded
+  // render loop whenever the config has no allowedDomains yet.
+  const globalDomains = useMemo(
+    () => config.global.allowedDomains ?? [],
+    [config.global.allowedDomains],
+  );
 
   const [useGlobalDefaults, setUseGlobalDefaults] = useState(
-    !environment.allowedDomains || environment.allowedDomains.length === 0
+    !environment.allowedDomains || environment.allowedDomains.length === 0,
   );
   const [customDomains, setCustomDomains] = useState(
-    (environment.allowedDomains || globalDomains).join("\n")
+    (environment.allowedDomains || globalDomains).join("\n"),
   );
   const [domainErrors, setDomainErrors] = useState<string[]>([]);
   const [isSaving, setIsSaving] = useState(false);
@@ -59,9 +59,7 @@ export function NetworkWhitelistDialog({
       const customDomainList = environment.allowedDomains ?? [];
       const hasCustom = customDomainList.length > 0;
       setUseGlobalDefaults(!hasCustom);
-      setCustomDomains(
-        (hasCustom ? customDomainList : globalDomains).join("\n")
-      );
+      setCustomDomains((hasCustom ? customDomainList : globalDomains).join("\n"));
       setDomainErrors([]);
       setTestResults(null);
     }
@@ -135,11 +133,8 @@ export function NetworkWhitelistDialog({
     try {
       // If using global defaults, pass empty array to clear custom domains
       // Otherwise pass the custom domains
-      const domainsToSave = useGlobalDefaults ? [] : (domains || []);
-      const updated = await backend.updateEnvironmentAllowedDomains(
-        environment.id,
-        domainsToSave
-      );
+      const domainsToSave = useGlobalDefaults ? [] : domains || [];
+      const updated = await backend.updateEnvironmentAllowedDomains(environment.id, domainsToSave);
       onUpdate(updated);
       onOpenChange(false);
     } catch (err) {
@@ -168,9 +163,7 @@ export function NetworkWhitelistDialog({
               </>
             )}
           </DialogTitle>
-          <DialogDescription>
-            {environment.name}
-          </DialogDescription>
+          <DialogDescription>{environment.name}</DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 py-4">
@@ -182,7 +175,8 @@ export function NetworkWhitelistDialog({
                 <div>
                   <div className="font-medium text-sm">Full Network Access</div>
                   <div className="text-xs text-muted-foreground">
-                    This environment has unrestricted internet access. Whitelist settings do not apply.
+                    This environment has unrestricted internet access. Whitelist settings do not
+                    apply.
                   </div>
                 </div>
               </>
@@ -205,9 +199,7 @@ export function NetworkWhitelistDialog({
               {/* Global defaults toggle */}
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
-                  <Label htmlFor="network-use-global-defaults">
-                    Use Global Defaults
-                  </Label>
+                  <Label htmlFor="network-use-global-defaults">Use Global Defaults</Label>
                   <p className="text-xs text-muted-foreground">
                     Use the default allowed domains from global settings
                   </p>
@@ -305,10 +297,7 @@ export function NetworkWhitelistDialog({
             Cancel
           </Button>
           {!isFullAccess && (
-            <Button
-              onClick={handleSave}
-              disabled={isSaving || domainErrors.length > 0}
-            >
+            <Button onClick={handleSave} disabled={isSaving || domainErrors.length > 0}>
               {isSaving ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />

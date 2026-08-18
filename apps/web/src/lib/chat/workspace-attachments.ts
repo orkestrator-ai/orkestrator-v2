@@ -46,11 +46,7 @@ export function resolveWorkspaceAttachment(
   file: FileCandidate,
   context: WorkspaceAttachmentContext,
 ): WorkspaceAttachmentResult {
-  const attachment = createWorkspaceAttachment(
-    file,
-    context.containerId,
-    context.worktreePath,
-  );
+  const attachment = createWorkspaceAttachment(file, context.containerId, context.worktreePath);
   if (!attachment) {
     return {
       error: "Cannot attach file",
@@ -101,6 +97,6 @@ export function retainSupportedAttachments<T extends { type: "file" | "image" }>
 ): T[] {
   if (!capabilities) return [];
   return attachments.filter((attachment) =>
-    attachment.type === "image" ? capabilities.images : capabilities.files
+    attachment.type === "image" ? capabilities.images : capabilities.files,
   );
 }

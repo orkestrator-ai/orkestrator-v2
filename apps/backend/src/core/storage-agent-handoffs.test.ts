@@ -32,9 +32,7 @@ async function withStorage<T>(run: (storage: StorageService) => Promise<T>): Pro
   }
 }
 
-async function readStoredHandoffs(
-  filePath: string,
-): Promise<Record<string, unknown>> {
+async function readStoredHandoffs(filePath: string): Promise<Record<string, unknown>> {
   return JSON.parse(await fs.readFile(filePath, "utf8")) as Record<string, unknown>;
 }
 
@@ -55,12 +53,10 @@ describe("StorageService agent handoffs", () => {
       const mode = (await fs.stat(handoffFile)).mode & 0o777;
       expect(mode).toBe(0o600);
 
-      const retried = await storage.saveAgentHandoff(
-        "h1",
-        "e1",
-        2,
-        { sourceProvider: "codex", messages: [] },
-      );
+      const retried = await storage.saveAgentHandoff("h1", "e1", 2, {
+        sourceProvider: "codex",
+        messages: [],
+      });
       // The id is the idempotency key: once committed, a retry cannot replace
       // either the version or snapshot with conflicting caller data.
       expect(retried).toEqual(saved);
@@ -70,15 +66,15 @@ describe("StorageService agent handoffs", () => {
   test("validates ownership, environment lifecycle and size", async () => {
     await withStorage(async (storage) => {
       await storage.saveAgentHandoff("h1", "e1", 1, { messages: [] });
-      await expect(
-        storage.saveAgentHandoff("h1", "e2", 1, { messages: [] }),
-      ).rejects.toThrow("another environment");
+      await expect(storage.saveAgentHandoff("h1", "e2", 1, { messages: [] })).rejects.toThrow(
+        "another environment",
+      );
       await storage.updateEnvironment("e2", {
         deletionRequestedAt: new Date().toISOString(),
       });
-      await expect(
-        storage.saveAgentHandoff("h2", "e2", 1, { messages: [] }),
-      ).rejects.toThrow("being deleted");
+      await expect(storage.saveAgentHandoff("h2", "e2", 1, { messages: [] })).rejects.toThrow(
+        "being deleted",
+      );
       await expect(
         storage.saveAgentHandoff("h3", "e1", 1, {
           messages: ["x".repeat(32 * 1024 * 1024)],
@@ -90,33 +86,29 @@ describe("StorageService agent handoffs", () => {
   test("rejects malformed envelopes and non-serializable snapshots", async () => {
     await withStorage(async (storage) => {
       await expect(storage.getAgentHandoff(" ")).rejects.toThrow("must not be blank");
-      await expect(
-        storage.saveAgentHandoff("", "e1", 1, {}),
-      ).rejects.toThrow("ID must not be blank");
-      await expect(
-        storage.saveAgentHandoff("h1", "", 1, {}),
-      ).rejects.toThrow("environment ID must not be blank");
-      await expect(
-        storage.saveAgentHandoff("h1", "e1", 0, {}),
-      ).rejects.toThrow("positive integer");
-      await expect(
-        storage.saveAgentHandoff("h1", "e1", 1, []),
-      ).rejects.toThrow("must be an object");
-      await expect(
-        storage.saveAgentHandoff("h1", "missing", 1, {}),
-      ).rejects.toThrow("environment not found");
-      await expect(
-        storage.deleteAgentHandoff("", "e1"),
-      ).rejects.toThrow("ID must not be blank");
-      await expect(
-        storage.deleteAgentHandoff("h1", ""),
-      ).rejects.toThrow("environment ID must not be blank");
+      await expect(storage.saveAgentHandoff("", "e1", 1, {})).rejects.toThrow(
+        "ID must not be blank",
+      );
+      await expect(storage.saveAgentHandoff("h1", "", 1, {})).rejects.toThrow(
+        "environment ID must not be blank",
+      );
+      await expect(storage.saveAgentHandoff("h1", "e1", 0, {})).rejects.toThrow("positive integer");
+      await expect(storage.saveAgentHandoff("h1", "e1", 1, [])).rejects.toThrow(
+        "must be an object",
+      );
+      await expect(storage.saveAgentHandoff("h1", "missing", 1, {})).rejects.toThrow(
+        "environment not found",
+      );
+      await expect(storage.deleteAgentHandoff("", "e1")).rejects.toThrow("ID must not be blank");
+      await expect(storage.deleteAgentHandoff("h1", "")).rejects.toThrow(
+        "environment ID must not be blank",
+      );
 
       const circular: Record<string, unknown> = {};
       circular.self = circular;
-      await expect(
-        storage.saveAgentHandoff("h1", "e1", 1, circular),
-      ).rejects.toThrow("JSON serializable");
+      await expect(storage.saveAgentHandoff("h1", "e1", 1, circular)).rejects.toThrow(
+        "JSON serializable",
+      );
     });
   });
 
@@ -132,9 +124,7 @@ describe("StorageService agent handoffs", () => {
         messages: [{ text: "keep-h3" }],
       });
 
-      await expect(
-        storage.deleteAgentHandoff("h1", "e2"),
-      ).rejects.toThrow("another environment");
+      await expect(storage.deleteAgentHandoff("h1", "e2")).rejects.toThrow("another environment");
       await expect(storage.deleteAgentHandoff("h1", "e1")).resolves.toBe(true);
       await expect(storage.getAgentHandoff("h1")).resolves.toBeNull();
       await expect(storage.getAgentHandoff("h2")).resolves.not.toBeNull();
@@ -143,10 +133,7 @@ describe("StorageService agent handoffs", () => {
       const primary = path.join(storage.getDataDir(), "agent-handoffs.json");
       for (const candidate of [
         primary,
-        ...Array.from(
-          { length: 5 },
-          (_, index) => `${primary}.bak.${index + 1}`,
-        ),
+        ...Array.from({ length: 5 }, (_, index) => `${primary}.bak.${index + 1}`),
       ]) {
         const stat = await fs.stat(candidate).catch(() => null);
         if (!stat) continue;
@@ -177,11 +164,9 @@ describe("StorageService agent handoffs", () => {
       await fs.writeFile(corruptBackup, "{malformed-secret", { mode: 0o600 });
 
       await expect(storage.getAgentHandoff("h1")).resolves.toBeNull();
-      await expect(storage.deleteAgentHandoff("h1", "e2"))
-        .rejects.toThrow("another environment");
+      await expect(storage.deleteAgentHandoff("h1", "e2")).rejects.toThrow("another environment");
       await expect(storage.deleteAgentHandoff("h1", "e1")).resolves.toBe(true);
-      expect(JSON.stringify(await readStoredHandoffs(primary)))
-        .not.toContain("malformed-secret");
+      expect(JSON.stringify(await readStoredHandoffs(primary))).not.toContain("malformed-secret");
       expect(await fs.stat(`${primary}.bak.2`).catch(() => null)).toBeNull();
       await expect(storage.getAgentHandoff("h2")).resolves.not.toBeNull();
     });
@@ -201,14 +186,14 @@ describe("StorageService agent handoffs", () => {
         mode: 0o600,
       });
 
-      await expect(storage.deleteAgentHandoff("h1", "e2"))
-        .rejects.toThrow("another environment");
+      await expect(storage.deleteAgentHandoff("h1", "e2")).rejects.toThrow("another environment");
       await expect(storage.deleteAgentHandoff("h1", "e1")).resolves.toBe(false);
       for (let index = 1; index <= 5; index += 1) {
         const backup = `${primary}.bak.${index}`;
-        if (!await fs.stat(backup).catch(() => null)) continue;
-        expect(JSON.stringify(await readStoredHandoffs(backup)))
-          .not.toContain("backup-only-secret");
+        if (!(await fs.stat(backup).catch(() => null))) continue;
+        expect(JSON.stringify(await readStoredHandoffs(backup))).not.toContain(
+          "backup-only-secret",
+        );
       }
     });
   });
@@ -245,13 +230,11 @@ describe("StorageService agent handoffs", () => {
       expect(await storage.getAgentHandoff("h1")).toBeNull();
       expect(await storage.getAgentHandoff("h2")).not.toBeNull();
 
-      expect(JSON.stringify(await readStoredHandoffs(primary)))
-        .not.toContain("secret-e1");
+      expect(JSON.stringify(await readStoredHandoffs(primary))).not.toContain("secret-e1");
       for (let index = 1; index <= 5; index += 1) {
         const backup = `${primary}.bak.${index}`;
-        if (!await fs.stat(backup).catch(() => null)) continue;
-        expect(JSON.stringify(await readStoredHandoffs(backup)))
-          .not.toContain("secret-e1");
+        if (!(await fs.stat(backup).catch(() => null))) continue;
+        expect(JSON.stringify(await readStoredHandoffs(backup))).not.toContain("secret-e1");
       }
     });
   });
@@ -294,7 +277,7 @@ describe("StorageService agent handoffs", () => {
         primary,
         ...Array.from({ length: 5 }, (_, index) => `${primary}.bak.${index + 1}`),
       ]) {
-        if (!await fs.stat(candidate).catch(() => null)) continue;
+        if (!(await fs.stat(candidate).catch(() => null))) continue;
         const serialized = JSON.stringify(await readStoredHandoffs(candidate));
         expect(serialized).not.toContain("orphan-secret");
         expect(serialized).toContain("still-referenced");
@@ -315,8 +298,9 @@ describe("StorageService agent handoffs", () => {
       expect(await storage.getAgentHandoff("h1")).toBeNull();
       expect(await storage.getAgentHandoff("h2")).not.toBeNull();
 
-      await expect(storage.pruneAgentHandoffs("", ["h1"]))
-        .rejects.toThrow("environment ID must not be blank");
+      await expect(storage.pruneAgentHandoffs("", ["h1"])).rejects.toThrow(
+        "environment ID must not be blank",
+      );
     });
   });
 

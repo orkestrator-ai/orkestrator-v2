@@ -242,9 +242,7 @@ export class JsonlRpcClient {
       let newlineIndex: number;
       while ((newlineIndex = this.buffer.indexOf("\n", this.bufferScannedTo)) >= 0) {
         // Slice off `\r` too so CRLF framing does not corrupt the JSON tail.
-        const raw = this.buffer
-          .slice(lineStart, newlineIndex)
-          .replace(/\r$/, "");
+        const raw = this.buffer.slice(lineStart, newlineIndex).replace(/\r$/, "");
         lineStart = newlineIndex + 1;
         this.bufferScannedTo = lineStart;
         this.dispatchLine(raw);
@@ -354,8 +352,7 @@ export class JsonlRpcClient {
     if (this.closed) return;
     this.closed = true;
     const error =
-      this.closeError
-      ?? new AppServerProcessExitError(reason, { generation: this.generation });
+      this.closeError ?? new AppServerProcessExitError(reason, { generation: this.generation });
     this.rejectAllPending(error);
   }
 
@@ -392,7 +389,12 @@ export class JsonlRpcClient {
     await this.writeLine({ jsonrpc: "2.0", id, result });
   }
 
-  async respondWithError(id: JsonRpcId, code: number, message: string, data?: unknown): Promise<void> {
+  async respondWithError(
+    id: JsonRpcId,
+    code: number,
+    message: string,
+    data?: unknown,
+  ): Promise<void> {
     await this.writeLine({
       jsonrpc: "2.0",
       id,
@@ -548,7 +550,7 @@ export class SerialQueue {
   }
 
   async drainAll(): Promise<void> {
-    await Promise.all([...this.chains.values()]);
+    await Promise.all(this.chains.values());
   }
 
   clear(): void {

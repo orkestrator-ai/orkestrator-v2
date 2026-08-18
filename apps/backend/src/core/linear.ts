@@ -154,13 +154,16 @@ async function linearGraphql<T>(
 
   let payload: LinearGraphQLResponse<T>;
   try {
-    payload = await response.json() as LinearGraphQLResponse<T>;
+    payload = (await response.json()) as LinearGraphQLResponse<T>;
   } catch {
     throw new Error(`Linear returned HTTP ${response.status}`);
   }
 
   if (!response.ok) {
-    const message = payload.errors?.map((item) => item.message).filter(Boolean).join("; ");
+    const message = payload.errors
+      ?.map((item) => item.message)
+      .filter(Boolean)
+      .join("; ");
     throw new Error(message || `Linear returned HTTP ${response.status}`);
   }
 
@@ -223,7 +226,7 @@ function detailFromNode(value: unknown): LinearIssueDetail | null {
   const labelsConnection = isRecord(value.labels) ? value.labels : {};
   const labelNodes = Array.isArray(labelsConnection.nodes) ? labelsConnection.nodes : [];
   const labels = labelNodes
-    .map((node) => isRecord(node) ? optionalString(node.name) : undefined)
+    .map((node) => (isRecord(node) ? optionalString(node.name) : undefined))
     .filter((label): label is string => !!label);
 
   return {
@@ -384,7 +387,10 @@ export async function getLinearIssue(apiKey: string, issueId: string): Promise<L
   return { ...issue, comments };
 }
 
-export async function listLinearIssueComments(apiKey: string, issueId: string): Promise<LinearIssueComment[]> {
+export async function listLinearIssueComments(
+  apiKey: string,
+  issueId: string,
+): Promise<LinearIssueComment[]> {
   const comments: LinearIssueComment[] = [];
   let cursor: string | null = null;
   const seenCursors = new Set<string>();

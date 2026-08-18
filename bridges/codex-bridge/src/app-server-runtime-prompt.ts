@@ -37,7 +37,7 @@ import {
   parseCodexStructuredOutput,
   buildRecoveredContextPrompt,
   PromptAcceptedResult,
-  AppServerRuntimeBase
+  AppServerRuntimeBase,
 } from "./app-server-runtime-base.js";
 import { AppServerRuntimeSessions } from "./app-server-runtime-sessions.js";
 import { createHash } from "node:crypto";
@@ -138,7 +138,6 @@ import {
 import { fallbackReasoningId } from "@orkestrator/protocol/native-agent";
 import { toEngineInput } from "./app-server-runtime-helpers.js";
 
-
 export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
   async prompt(
     sessionId: string,
@@ -218,11 +217,10 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
             requestId,
             threadId: decision.record?.threadId ?? null,
             turnId: decision.record?.turnId,
-            ...(decision.record?.threadId
-              && this.registry.getThread(decision.record.threadId)?.turnStartedAt
+            ...(decision.record?.threadId &&
+            this.registry.getThread(decision.record.threadId)?.turnStartedAt
               ? {
-                  turnStartedAt:
-                    this.registry.getThread(decision.record.threadId)!.turnStartedAt,
+                  turnStartedAt: this.registry.getThread(decision.record.threadId)!.turnStartedAt,
                 }
               : {}),
             duplicate: true,
@@ -258,8 +256,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
               turnId: outcome.turnId,
               ...(this.registry.getThread(decision.record.threadId)?.turnStartedAt
                 ? {
-                    turnStartedAt:
-                      this.registry.getThread(decision.record.threadId)!.turnStartedAt,
+                    turnStartedAt: this.registry.getThread(decision.record.threadId)!.turnStartedAt,
                   }
                 : {}),
               duplicate: true,
@@ -387,11 +384,10 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     const retractProvisionalMessages = () => {
       if (provisionalMessagesRetracted) return;
       provisionalMessagesRetracted = true;
-      this.retractPromptMessages(
-        context!,
-        provisionalSessionIds,
-        [userMessage.id, assistantMessage.id],
-      );
+      this.retractPromptMessages(context!, provisionalSessionIds, [
+        userMessage.id,
+        assistantMessage.id,
+      ]);
     };
     // Set only after app-server explicitly says an initial attempt did not run.
     // It stays true throughout retry preparation, where any failure is still a
@@ -405,7 +401,11 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       // the complete turn immediately. The renderer reconciles this echo with
       // any matching optimistic row.
       this.options.emit({ type: "message.updated", sessionId: id, data: { message: userMessage } });
-      this.options.emit({ type: "message.updated", sessionId: id, data: { message: assistantMessage } });
+      this.options.emit({
+        type: "message.updated",
+        sessionId: id,
+        data: { message: assistantMessage },
+      });
     }
     this.emitStatus(context);
 
@@ -428,22 +428,20 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
         threadId: context.threadId,
       });
 
-      const startTurn = () => this.options.engine.startTurn({
-        handle: context!.engineHandle,
-        input: engineInput,
-        config: session.config,
-        requestId,
-        outputSchema: input.outputSchema,
-      });
+      const startTurn = () =>
+        this.options.engine.startTurn({
+          handle: context!.engineHandle,
+          input: engineInput,
+          config: session.config,
+          requestId,
+          outputSchema: input.outputSchema,
+        });
       let turn;
       try {
         turn = await startTurn();
       } catch (error) {
         const failure = this.options.engine.classifyFailure(error);
-        if (
-          !requestId.startsWith("initial-prompt:")
-          || !failure.retryImmediately
-        ) {
+        if (!requestId.startsWith("initial-prompt:") || !failure.retryImmediately) {
           throw error;
         }
         dispatchDefinitelyDidNotRun = true;
@@ -457,10 +455,12 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
         // a race where the replacement turn ran with an empty local transcript.
         const retryMessages = context.messages;
         await this.journal.markRetryable(requestId);
-        await new Promise((resolve) => setTimeout(
-          resolve,
-          this.options.initialPromptRetryDelayMs ?? DEFAULT_INITIAL_PROMPT_RETRY_DELAY_MS,
-        ));
+        await new Promise((resolve) =>
+          setTimeout(
+            resolve,
+            this.options.initialPromptRetryDelayMs ?? DEFAULT_INITIAL_PROMPT_RETRY_DELAY_MS,
+          ),
+        );
         let liveSession = this.registry.getSession(session.id);
         if (this.stopping || liveSession !== session) {
           context.dispatchInFlight = false;
@@ -540,9 +540,10 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
           try {
             thread = await this.options.engine.startThread({ config: session.config });
           } catch (error) {
-            const message = error instanceof Error
-              ? error.message
-              : "Codex failed to create a replacement thread";
+            const message =
+              error instanceof Error
+                ? error.message
+                : "Codex failed to create a replacement thread";
             staleContext.dispatchInFlight = false;
             retractProvisionalMessages();
             this.registry.setPhase(staleContext, "failed", message);
@@ -698,10 +699,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
         if (ambiguousResolution === "absent") retractProvisionalMessages();
       }
 
-      if (
-        ambiguousResolution === "attached"
-        || ambiguousResolution === "recovering"
-      ) {
+      if (ambiguousResolution === "attached" || ambiguousResolution === "recovering") {
         // A lost turn/start response is not a rejected prompt. The provider may
         // still be executing it, so keep structured output pending and return
         // the same accepted/processing contract as an ordinary dispatch.
@@ -719,23 +717,20 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
             ...(ambiguousResolution === "attached" && context.activeTurn
               ? { turnId: context.activeTurn.turnId }
               : {}),
-            ...(context.turnStartedAt
-              ? { turnStartedAt: context.turnStartedAt }
-              : {}),
+            ...(context.turnStartedAt ? { turnStartedAt: context.turnStartedAt } : {}),
             duplicate: true,
           },
         };
       }
 
       if (input.outputSchema) {
-        const marker = `${classified.engineError.code ?? ""} ${classified.engineError.message}`
-          .toLowerCase();
+        const marker =
+          `${classified.engineError.code ?? ""} ${classified.engineError.message}`.toLowerCase();
         const compactMarker = marker.replace(/[^a-z0-9]/g, "");
         session.structuredOutput = structuredOutputFailure(
           "codex",
-          (
-            marker.includes("structured") && marker.includes("retr")
-          ) || compactMarker.includes("structuredoutputretry")
+          (marker.includes("structured") && marker.includes("retr")) ||
+            compactMarker.includes("structuredoutputretry")
             ? "schema_retry_exhausted"
             : "provider_error",
           classified.engineError.message,
@@ -788,11 +783,12 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
         engineGeneration: this.options.engine.info().generation,
         assistantMessageId,
         startedAt:
-          context.turnStartedAt
-          ?? context.messages.find((message) => message.id === assistantMessageId)?.createdAt
-          ?? new Date(this.now()).toISOString(),
-        expectsStructuredOutput: [...context.bridgeSessionIds].some((sessionId) =>
-          this.registry.getSession(sessionId)?.structuredOutputRequestId === requestId
+          context.turnStartedAt ??
+          context.messages.find((message) => message.id === assistantMessageId)?.createdAt ??
+          new Date(this.now()).toISOString(),
+        expectsStructuredOutput: [...context.bridgeSessionIds].some(
+          (sessionId) =>
+            this.registry.getSession(sessionId)?.structuredOutputRequestId === requestId,
         ),
       });
       accumulator.markRunning();
@@ -906,8 +902,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     } catch (error) {
       // Safe failure: keep the overlap guard in recovering. Reporting failed/idle
       // here would permit a second turn without proof that the first stopped.
-      const message =
-        error instanceof Error ? error.message : "Failed to restart Codex safely";
+      const message = error instanceof Error ? error.message : "Failed to restart Codex safely";
       for (const sessionId of context.bridgeSessionIds) {
         this.options.emit({
           type: "session.error",
@@ -1046,8 +1041,8 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     }
 
     const shouldGenerate =
-      session.titleGenerationAttempted !== true
-      && (session.titleSource === "prompt" || !session.titleSource);
+      session.titleGenerationAttempted !== true &&
+      (session.titleSource === "prompt" || !session.titleSource);
     if (!shouldGenerate || !this.options.generateTitle) return;
 
     session.titleGenerationAttempted = true;
@@ -1090,7 +1085,9 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     session: BridgeSession,
     prompt: string,
     cwd: string,
-  ): Promise<{ kind: "prompt"; expandedPrompt: string } | { kind: "builtin"; response: string } | null> {
+  ): Promise<
+    { kind: "prompt"; expandedPrompt: string } | { kind: "builtin"; response: string } | null
+  > {
     // `/steer` accepts multiline free text, whereas the general slash-command
     // parser deliberately rejects newlines. Handle it first so an idle or stale
     // client never starts a fresh model turn with the raw command text.
@@ -1117,7 +1114,9 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       if (builtin.length > 0) {
         sections.push("", "Built in:");
         for (const command of builtin) {
-          sections.push(`- ${command.name}${command.description ? `: ${command.description}` : ""}`);
+          sections.push(
+            `- ${command.name}${command.description ? `: ${command.description}` : ""}`,
+          );
         }
       }
       if (prompts.length > 0) {
@@ -1222,10 +1221,10 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
 
   protected threadHasActiveWork(context: ThreadContext): boolean {
     return (
-      context.activeTurn !== null
-      || context.dispatchInFlight
-      || context.compacting
-      || phaseToExternalStatus(context.phase) === "running"
+      context.activeTurn !== null ||
+      context.dispatchInFlight ||
+      context.compacting ||
+      phaseToExternalStatus(context.phase) === "running"
     );
   }
 
@@ -1316,5 +1315,4 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
    * straight to idle would allow a new prompt to overlap a turn that is still
    * executing. The terminal transition happens in the background.
    */
-
 }

@@ -9,9 +9,7 @@ import { useAgentActivityStore } from "@/stores/agentActivityStore";
 
 export function useGlobalActivityMonitor(): void {
   const environments = useEnvironmentStore((state) => state.environments);
-  const replaceActivitySnapshot = useAgentActivityStore(
-    (state) => state.replaceActivitySnapshot,
-  );
+  const replaceActivitySnapshot = useAgentActivityStore((state) => state.replaceActivitySnapshot);
 
   useEffect(() => {
     replaceActivitySnapshot(environments);

@@ -1,14 +1,59 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
-import { parseStoredDesktopConnections, isResourceGeneration, isResourceManifestKind, isResourceSnapshotRevision, createProject, parseUpdateObject, runCommand, isAgentPlatform, fallbackReasoningId, isSelectableOpenCodeModelId, isSelectableOpenCodeProvider, normalizeOpenCodeModelProviders, openCodeModelDisplayLabel, synthesizedOpenCodeAgentModel } from "./commands-dependencies.js";
-import type { ResourceRevisionMap, AppConfig, AgentModel, AgentReasoningOption } from "./commands-dependencies.js";
-import { syncDiffStatsTracking, asString, asRecord, assertOnlyKeys, asAgentModelConfigKey, redactGlobalConfig, redactAppConfig, stripRendererCredentials, asOptionalString, asStringArray, asNonBlankString, asCachedCodexModels, peekLocalAgentBridge, peekContainerAgentBridge, fetchAcpNormalizedModels, parseClaudeBridgeModelCatalog, projectPathKey, duplicateLocalPathGuard, readOriginUrl, createProjectFromScratch } from "./commands-helpers.js";
+import {
+  parseStoredDesktopConnections,
+  isResourceGeneration,
+  isResourceManifestKind,
+  isResourceSnapshotRevision,
+  createProject,
+  parseUpdateObject,
+  runCommand,
+  isAgentPlatform,
+  fallbackReasoningId,
+  isSelectableOpenCodeModelId,
+  isSelectableOpenCodeProvider,
+  normalizeOpenCodeModelProviders,
+  openCodeModelDisplayLabel,
+  synthesizedOpenCodeAgentModel,
+} from "./commands-dependencies.js";
+import type {
+  ResourceRevisionMap,
+  AppConfig,
+  AgentModel,
+  AgentReasoningOption,
+} from "./commands-dependencies.js";
+import {
+  syncDiffStatsTracking,
+  asString,
+  asRecord,
+  assertOnlyKeys,
+  asAgentModelConfigKey,
+  redactGlobalConfig,
+  redactAppConfig,
+  stripRendererCredentials,
+  asOptionalString,
+  asStringArray,
+  asNonBlankString,
+  asCachedCodexModels,
+  peekLocalAgentBridge,
+  peekContainerAgentBridge,
+  fetchAcpNormalizedModels,
+  parseClaudeBridgeModelCatalog,
+  projectPathKey,
+  duplicateLocalPathGuard,
+  readOriginUrl,
+  createProjectFromScratch,
+} from "./commands-helpers.js";
 
 export function registerProjectCommands(
   register: CommandRegistrar,
   dependencies: RegistryDependencies,
 ): void {
   const { conditionalManifestSnapshot, runProjectCreationCommand } = dependencies;
-  register("greet", ({ name }) => `Hello, ${asString(name, "name")}! You've been greeted from the Orkestrator backend!`);
+  register(
+    "greet",
+    ({ name }) =>
+      `Hello, ${asString(name, "name")}! You've been greeted from the Orkestrator backend!`,
+  );
   // File pickers belong to the connected client. Browser clients cannot expose
   // a server-side filesystem picker, while Electron handles this via preload.
   register("browse_for_directory", async () => null);
@@ -34,19 +79,17 @@ export function registerProjectCommands(
   });
 
   register("get_projects", (args, { storage }) =>
-    conditionalManifestSnapshot(args, storage, "project", () => storage.loadProjects())
+    conditionalManifestSnapshot(args, storage, "project", () => storage.loadProjects()),
   );
   register("add_project", async ({ gitUrl, localPath }, { storage }) => {
     const requestedLocalPath = asOptionalString(localPath);
     // Enforced inside the projects.json critical section so this cannot insert
     // the duplicate that create_project_from_scratch guards against.
-    const guard = requestedLocalPath === undefined
-      ? undefined
-      : duplicateLocalPathGuard(await projectPathKey(requestedLocalPath), requestedLocalPath);
-    return storage.addProject(
-      createProject(asString(gitUrl, "gitUrl"), requestedLocalPath),
-      guard,
-    );
+    const guard =
+      requestedLocalPath === undefined
+        ? undefined
+        : duplicateLocalPathGuard(await projectPathKey(requestedLocalPath), requestedLocalPath);
+    return storage.addProject(createProject(asString(gitUrl, "gitUrl"), requestedLocalPath), guard);
   });
   register("create_project_from_scratch", (args, { storage }) => {
     assertOnlyKeys(args, ["localPath"], "arguments");
@@ -56,24 +99,34 @@ export function registerProjectCommands(
       runProjectCreationCommand,
     );
   });
-  register("remove_project", ({ projectId }, { storage }) => storage.removeProject(asString(projectId, "projectId")));
-  register("get_project", ({ projectId }, { storage }) => storage.getProject(asString(projectId, "projectId")));
-  register("update_project", ({ projectId, updates }, { storage }) => storage.updateProject(asString(projectId, "projectId"), parseUpdateObject(updates)));
-  register("reorder_projects", ({ projectIds }, { storage }) => storage.reorderProjects(asStringArray(projectIds)));
-  register("validate_git_url", ({ url }) => /^(https?:\/\/|git@|ssh:\/\/).+/.test(asString(url, "url").trim()));
+  register("remove_project", ({ projectId }, { storage }) =>
+    storage.removeProject(asString(projectId, "projectId")),
+  );
+  register("get_project", ({ projectId }, { storage }) =>
+    storage.getProject(asString(projectId, "projectId")),
+  );
+  register("update_project", ({ projectId, updates }, { storage }) =>
+    storage.updateProject(asString(projectId, "projectId"), parseUpdateObject(updates)),
+  );
+  register("reorder_projects", ({ projectIds }, { storage }) =>
+    storage.reorderProjects(asStringArray(projectIds)),
+  );
+  register("validate_git_url", ({ url }) =>
+    /^(https?:\/\/|git@|ssh:\/\/).+/.test(asString(url, "url").trim()),
+  );
   register("get_git_remote_url", async ({ path: repoPath }) => {
     // Reads the raw config value rather than `remote get-url`, which applies
     // `insteadOf` rewrites and can therefore hand back an embedded credential.
-    return await readOriginUrl(asString(repoPath, "path"), runCommand) || null;
+    return (await readOriginUrl(asString(repoPath, "path"), runCommand)) || null;
   });
 
   register("get_config", (args, { storage }) =>
     conditionalManifestSnapshot(args, storage, "config", async () =>
-      redactAppConfig(await storage.loadConfig())
-    )
+      redactAppConfig(await storage.loadConfig()),
+    ),
   );
   register("get_agent_model_catalog_cache", (_args, { storage }) =>
-    storage.getAgentModelCatalogCache()
+    storage.getAgentModelCatalogCache(),
   );
   register("get_native_agent_model_catalog", async ({ environmentId }, context) => {
     const { storage } = context;
@@ -81,9 +134,7 @@ export function registerProjectCommands(
     const environment = await storage.getEnvironment(id);
     if (!environment) throw new Error(`Environment not found: ${id}`);
     const cache = await storage.getAgentModelCatalogCache();
-    const claudeModels = environment.claudeModelCatalog?.models
-      ?? cache.claude?.models
-      ?? [];
+    const claudeModels = environment.claudeModelCatalog?.models ?? cache.claude?.models ?? [];
     const codexModels = cache.codex?.models ?? [];
     // The live catalogue is already filtered by the provider, but a cache
     // written before the allowlist changed is not. Filter here too so the
@@ -92,45 +143,48 @@ export function registerProjectCommands(
     const openCodeModelProviders = normalizeOpenCodeModelProviders(
       config.global.openCodeModelProviders,
     );
-    const openCodeModels = ((await storage.getOpenCodeModelCatalog(environment.projectId))
-      ?.models ?? []).filter((model) =>
-        isSelectableOpenCodeProvider(model.provider, openCodeModelProviders)
-      );
-    const runningOpenCodeBridge = environment.environmentType === "local"
-      ? await peekLocalAgentBridge(environment.id, context, "opencode")
-      : environment.containerId
-        ? await peekContainerAgentBridge(environment.containerId, "opencode")
-        : null;
-    const liveOpenCodeModels = context.nativeAgents && runningOpenCodeBridge
-      ? await context.nativeAgents.listModelCatalogForCache({
-          environmentId: id,
-          agent: "opencode",
-          logicalSessionKey: `model-catalog:${id}`,
-        }).catch(() => [])
-      : [];
+    const openCodeModels = (
+      (await storage.getOpenCodeModelCatalog(environment.projectId))?.models ?? []
+    ).filter((model) => isSelectableOpenCodeProvider(model.provider, openCodeModelProviders));
+    const runningOpenCodeBridge =
+      environment.environmentType === "local"
+        ? await peekLocalAgentBridge(environment.id, context, "opencode")
+        : environment.containerId
+          ? await peekContainerAgentBridge(environment.containerId, "opencode")
+          : null;
+    const liveOpenCodeModels =
+      context.nativeAgents && runningOpenCodeBridge
+        ? await context.nativeAgents
+            .listModelCatalogForCache({
+              environmentId: id,
+              agent: "opencode",
+              logicalSessionKey: `model-catalog:${id}`,
+            })
+            .catch(() => [])
+        : [];
     // Only the reads narrow. Persisting the filtered list instead would make the
     // allowlist durable, so widening it later would leave the launch dialogs —
     // which read this cache before any OpenCode server is ready — narrow until
     // an environment happened to run and re-list.
     if (liveOpenCodeModels.length > 0) {
-      await storage.cacheOpenCodeModelCatalog(
-        environment.projectId,
-        liveOpenCodeModels.map((model) => ({
-          id: model.id,
-          name: model.label,
-          provider: model.id.split("/")[0] || "opencode",
-          variants: model.reasoning
-            ?.map((option) => option.id)
-            .filter((id) => id !== "default"),
-          ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
-          ...(typeof model.supportsImageInput === "boolean"
-            ? { supportsImageInput: model.supportsImageInput }
-            : {}),
-        })),
-      ).catch(() => undefined);
+      await storage
+        .cacheOpenCodeModelCatalog(
+          environment.projectId,
+          liveOpenCodeModels.map((model) => ({
+            id: model.id,
+            name: model.label,
+            provider: model.id.split("/")[0] || "opencode",
+            variants: model.reasoning?.map((option) => option.id).filter((id) => id !== "default"),
+            ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
+            ...(typeof model.supportsImageInput === "boolean"
+              ? { supportsImageInput: model.supportsImageInput }
+              : {}),
+          })),
+        )
+        .catch(() => undefined);
     }
     const selectableLiveOpenCodeModels = liveOpenCodeModels.filter((model) =>
-      isSelectableOpenCodeModelId(model.id, openCodeModelProviders)
+      isSelectableOpenCodeModelId(model.id, openCodeModelProviders),
     );
     const [cursorModels, grokModels] = await Promise.all([
       fetchAcpNormalizedModels(environment, context, "cursor"),
@@ -156,29 +210,30 @@ export function registerProjectCommands(
     };
     const reasoning = (ids: readonly string[]): AgentReasoningOption[] =>
       ids.map((effort) => ({ id: effort, label: effortLabel(effort) }));
-    const cataloguedOpenCodeModels = selectableLiveOpenCodeModels.length > 0
-      ? selectableLiveOpenCodeModels
-      : openCodeModels.map((model): AgentModel => {
-          const reasoningOptions = [
-            { id: "default", label: "Default" },
-            ...reasoning(model.variants ?? []),
-          ];
-          return {
-            platform: "opencode",
-            id: model.id,
-            label: openCodeModelDisplayLabel(model.id, model.name),
-            providerLabel: model.provider,
-            reasoning: reasoningOptions,
-            defaultReasoningId: fallbackReasoningId(reasoningOptions) ?? "default",
-            supportsSpeed: false,
-            // OpenCode has primary agents, not a Build/Plan permission mode.
-            supportsMode: false,
-            ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
-            ...(typeof model.supportsImageInput === "boolean"
-              ? { supportsImageInput: model.supportsImageInput }
-              : {}),
-          };
-        });
+    const cataloguedOpenCodeModels =
+      selectableLiveOpenCodeModels.length > 0
+        ? selectableLiveOpenCodeModels
+        : openCodeModels.map((model): AgentModel => {
+            const reasoningOptions = [
+              { id: "default", label: "Default" },
+              ...reasoning(model.variants ?? []),
+            ];
+            return {
+              platform: "opencode",
+              id: model.id,
+              label: openCodeModelDisplayLabel(model.id, model.name),
+              providerLabel: model.provider,
+              reasoning: reasoningOptions,
+              defaultReasoningId: fallbackReasoningId(reasoningOptions) ?? "default",
+              supportsSpeed: false,
+              // OpenCode has primary agents, not a Build/Plan permission mode.
+              supportsMode: false,
+              ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
+              ...(typeof model.supportsImageInput === "boolean"
+                ? { supportsImageInput: model.supportsImageInput }
+                : {}),
+            };
+          });
     const cataloguedOpenCodeIds = new Set(cataloguedOpenCodeModels.map((model) => model.id));
     // Favourites (and TUI-chosen ids stored as favourites) have to appear in
     // the empty-tab picker before an OpenCode server has listed models.
@@ -207,26 +262,28 @@ export function registerProjectCommands(
         };
       }),
       ...codexModels.map((model): AgentModel => {
-        const reasoningOptions = model.reasoningOptions?.map((option) => ({
-          id: option.effort,
-          label: option.label,
-        })) ?? reasoning(model.reasoningEfforts ?? ["medium", "high"]);
+        const reasoningOptions =
+          model.reasoningOptions?.map((option) => ({
+            id: option.effort,
+            label: option.label,
+          })) ?? reasoning(model.reasoningEfforts ?? ["medium", "high"]);
         return {
           platform: "codex",
           id: model.id,
           label: model.name,
           providerLabel: "Codex",
           reasoning: reasoningOptions,
-          defaultReasoningId: fallbackReasoningId(reasoningOptions, model.defaultReasoningEffort)
-            ?? model.defaultReasoningEffort,
+          defaultReasoningId:
+            fallbackReasoningId(reasoningOptions, model.defaultReasoningEffort) ??
+            model.defaultReasoningEffort,
           supportsSpeed: true,
           supportsMode: true,
         };
       }),
       ...cataloguedOpenCodeModels,
       ...favoriteOpenCodeModels,
-      ...(cursorModels.length > 0 ? cursorModels : cache.cursor?.models ?? []),
-      ...(grokModels.length > 0 ? grokModels : cache.grok?.models ?? []),
+      ...(cursorModels.length > 0 ? cursorModels : (cache.cursor?.models ?? [])),
+      ...(grokModels.length > 0 ? grokModels : (cache.grok?.models ?? [])),
     ];
     return result;
   });
@@ -249,10 +306,13 @@ export function registerProjectCommands(
   register("save_config", async ({ config }, context) => {
     const { storage } = context;
     const candidate = asRecord(config, "config") as unknown as AppConfig;
-    await storage.saveConfig({
-      ...candidate,
-      global: stripRendererCredentials(asRecord(candidate.global, "config.global")),
-    }, { preserveCredentials: true });
+    await storage.saveConfig(
+      {
+        ...candidate,
+        global: stripRendererCredentials(asRecord(candidate.global, "config.global")),
+      },
+      { preserveCredentials: true },
+    );
     // A whole-config write can move any repository's baseline; see
     // `update_repository_config`.
     void syncDiffStatsTracking(context).catch(() => undefined);
@@ -262,7 +322,7 @@ export function registerProjectCommands(
     return storage.saveDesktopConnections(parseStoredDesktopConnections(desktopConnections));
   });
   register("get_global_config", async (_args, { storage }) =>
-    redactGlobalConfig((await storage.loadConfig()).global)
+    redactGlobalConfig((await storage.loadConfig()).global),
   );
   register("update_global_config", async ({ global }, { storage }) => {
     const updated = await storage.updateGlobalConfig(
@@ -277,9 +337,7 @@ export function registerProjectCommands(
     // renderer bug must not be able to persist an empty default.
     const id = asString(modelId, "modelId").trim();
     if (!id) throw new Error("Expected modelId to be non-empty");
-    return redactAppConfig(
-      await storage.updateAgentModelDefault(asAgentModelConfigKey(key), id),
-    );
+    return redactAppConfig(await storage.updateAgentModelDefault(asAgentModelConfigKey(key), id));
   });
   register("set_github_token", async ({ token }, { storage }) => {
     const nextToken = token === null ? null : asString(token, "token").trim();
@@ -302,7 +360,9 @@ export function registerProjectCommands(
     }
     return redactAppConfig(await storage.setAnthropicApiKey(nextApiKey));
   });
-  register("get_repository_config", ({ projectId }, { storage }) => storage.getRepositoryConfig(asString(projectId, "projectId")));
+  register("get_repository_config", ({ projectId }, { storage }) =>
+    storage.getRepositoryConfig(asString(projectId, "projectId")),
+  );
   register("update_repository_config", async ({ projectId, repoConfig }, context) => {
     const updated = await context.storage.updateRepositorySettings(
       asString(projectId, "projectId"),
@@ -315,36 +375,29 @@ export function registerProjectCommands(
     void syncDiffStatsTracking(context).catch(() => undefined);
     return redactAppConfig(updated);
   });
-  register("remember_environment_agent_selection", async ({
-    projectId,
-    platform,
-    mode,
-    model,
-    reasoningEffort,
-  }, { storage }) => {
-    if (!isAgentPlatform(platform)) {
-      throw new Error("Expected platform to be a supported agent platform");
-    }
-    const selectedPlatform = platform;
-    const selectedMode = asString(mode, "mode");
-    if (selectedMode !== "terminal" && selectedMode !== "native") {
-      throw new Error("Expected mode to be terminal or native");
-    }
-    const selectedModel = asOptionalString(model)?.trim();
-    const selectedReasoningEffort = asOptionalString(reasoningEffort)?.trim();
-    return redactAppConfig(await storage.patchRepositoryConfig(
-      asString(projectId, "projectId"),
-      {
-        lastEnvironmentAgentSelection: {
-          platform: selectedPlatform,
-          mode: selectedMode,
-          ...(selectedModel ? { model: selectedModel } : {}),
-          ...(selectedReasoningEffort
-            ? { reasoningEffort: selectedReasoningEffort }
-            : {}),
-        },
-      },
-    ));
-  });
-
+  register(
+    "remember_environment_agent_selection",
+    async ({ projectId, platform, mode, model, reasoningEffort }, { storage }) => {
+      if (!isAgentPlatform(platform)) {
+        throw new Error("Expected platform to be a supported agent platform");
+      }
+      const selectedPlatform = platform;
+      const selectedMode = asString(mode, "mode");
+      if (selectedMode !== "terminal" && selectedMode !== "native") {
+        throw new Error("Expected mode to be terminal or native");
+      }
+      const selectedModel = asOptionalString(model)?.trim();
+      const selectedReasoningEffort = asOptionalString(reasoningEffort)?.trim();
+      return redactAppConfig(
+        await storage.patchRepositoryConfig(asString(projectId, "projectId"), {
+          lastEnvironmentAgentSelection: {
+            platform: selectedPlatform,
+            mode: selectedMode,
+            ...(selectedModel ? { model: selectedModel } : {}),
+            ...(selectedReasoningEffort ? { reasoningEffort: selectedReasoningEffort } : {}),
+          },
+        }),
+      );
+    },
+  );
 }

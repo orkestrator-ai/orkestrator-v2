@@ -14,9 +14,7 @@ function plural(count: number, noun: string): string {
 }
 
 /** One line of substance for a report whose sections are all collapsed. */
-export function structuredReviewVerdictSummary(
-  report: StructuredReviewReport,
-): string {
+export function structuredReviewVerdictSummary(report: StructuredReviewReport): string {
   return [
     `Ready: ${report.verdict.ready}`,
     plural(report.issues.length, "issue"),

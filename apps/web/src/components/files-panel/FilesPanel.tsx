@@ -39,14 +39,17 @@ export function FilesPanel() {
     setPendingAction({ environmentId, kind, path });
   };
 
-  const revealFile = useCallback((filePath: string) => {
-    if (!isLocalEnvironment || !worktreePath) return;
-    void revealInFileManager(resolveLocalFilePath(worktreePath, filePath)).catch((error) => {
-      toast.error("Failed to reveal file", {
-        description: error instanceof Error ? error.message : String(error),
+  const revealFile = useCallback(
+    (filePath: string) => {
+      if (!isLocalEnvironment || !worktreePath) return;
+      void revealInFileManager(resolveLocalFilePath(worktreePath, filePath)).catch((error) => {
+        toast.error("Failed to reveal file", {
+          description: error instanceof Error ? error.message : String(error),
+        });
       });
-    });
-  }, [isLocalEnvironment, worktreePath]);
+    },
+    [isLocalEnvironment, worktreePath],
+  );
 
   const confirmFileAction = async () => {
     if (!pendingAction || pendingAction.environmentId !== environmentId) {

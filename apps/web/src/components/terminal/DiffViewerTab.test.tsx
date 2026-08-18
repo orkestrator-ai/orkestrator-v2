@@ -1,20 +1,5 @@
-import {
-  afterAll,
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  mock,
-  test,
-} from "bun:test";
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as realBackend from "@/lib/backend";
 import * as realMonacoReact from "@monaco-editor/react";
 import * as realMonacoLoader from "@/lib/monaco-loader";
@@ -97,12 +82,8 @@ mock.module("@/lib/monaco-loader", () => ({
   ensureMonacoConfigured: ensureMonacoConfiguredMock,
 }));
 
-const {
-  cacheImmutableDiffBaseForTests,
-  DiffViewerTab,
-  clearDiffBaseCacheForTests,
-  formatBaseRef,
-} = await import("./DiffViewerTab");
+const { cacheImmutableDiffBaseForTests, DiffViewerTab, clearDiffBaseCacheForTests, formatBaseRef } =
+  await import("./DiffViewerTab");
 
 const originalMatchMedia = window.matchMedia;
 const originalConfig = useConfigStore.getState().config;
@@ -116,18 +97,12 @@ function installMatchMedia() {
     },
     media: query,
     onchange: null,
-    addEventListener: (
-      _type: string,
-      listener: EventListenerOrEventListenerObject,
-    ) => {
+    addEventListener: (_type: string, listener: EventListenerOrEventListenerObject) => {
       if (typeof listener === "function") {
         mediaQueryListeners.add(listener as () => void);
       }
     },
-    removeEventListener: (
-      _type: string,
-      listener: EventListenerOrEventListenerObject,
-    ) => {
+    removeEventListener: (_type: string, listener: EventListenerOrEventListenerObject) => {
       if (typeof listener === "function") {
         mediaQueryListeners.delete(listener as () => void);
       }
@@ -208,22 +183,12 @@ afterAll(() => {
 
 describe("DiffViewerTab content loading", () => {
   test("loads modified and original content from a local worktree", async () => {
-    render(
-      <DiffViewerTab
-        {...baseProps}
-        worktreePath="/repo"
-        isLocalEnvironment
-      />,
-    );
+    render(<DiffViewerTab {...baseProps} worktreePath="/repo" isLocalEnvironment />);
 
     expect(screen.getByText("Loading diff...")).toBeTruthy();
     const editor = await screen.findByTestId("diff-editor");
     expect(readLocalFileMock).toHaveBeenCalledWith("/repo", baseProps.filePath);
-    expect(readLocalFileAtBranchMock).toHaveBeenCalledWith(
-      "/repo",
-      baseProps.filePath,
-      "main",
-    );
+    expect(readLocalFileAtBranchMock).toHaveBeenCalledWith("/repo", baseProps.filePath, "main");
     expect(editor.dataset.original).toBe("local original");
     expect(editor.dataset.modified).toBe("local modified");
     expect(editor.dataset.language).toBe("typescript");
@@ -234,15 +199,8 @@ describe("DiffViewerTab content loading", () => {
     render(<DiffViewerTab {...baseProps} containerId="container-1" />);
 
     const editor = await screen.findByTestId("diff-editor");
-    expect(readContainerFileMock).toHaveBeenCalledWith(
-      "container-1",
-      baseProps.filePath,
-    );
-    expect(readFileAtBranchMock).toHaveBeenCalledWith(
-      "container-1",
-      baseProps.filePath,
-      "main",
-    );
+    expect(readContainerFileMock).toHaveBeenCalledWith("container-1", baseProps.filePath);
+    expect(readFileAtBranchMock).toHaveBeenCalledWith("container-1", baseProps.filePath, "main");
     expect(editor.dataset.original).toBe("container original");
     expect(editor.dataset.modified).toBe("container modified");
     expect(editor.dataset.language).toBe("javascript");
@@ -251,13 +209,7 @@ describe("DiffViewerTab content loading", () => {
   test.each(["A", "?"] as const)(
     "treats %s as a new file and skips the original read",
     async (gitStatus) => {
-      render(
-        <DiffViewerTab
-          {...baseProps}
-          containerId="container-1"
-          gitStatus={gitStatus}
-        />,
-      );
+      render(<DiffViewerTab {...baseProps} containerId="container-1" gitStatus={gitStatus} />);
 
       const editor = await screen.findByTestId("diff-editor");
       expect(editor.dataset.original).toBe("");
@@ -280,11 +232,7 @@ describe("DiffViewerTab content loading", () => {
 
     const editor = await screen.findByTestId("diff-editor");
     expect(readContainerFileMock).not.toHaveBeenCalled();
-    expect(readFileAtBranchMock).toHaveBeenCalledWith(
-      "container-1",
-      baseProps.filePath,
-      "main",
-    );
+    expect(readFileAtBranchMock).toHaveBeenCalledWith("container-1", baseProps.filePath, "main");
     expect(editor.dataset.original).toBe("container original");
     expect(editor.dataset.modified).toBe("");
     expect(editor.dataset.language).toBe("javascript");
@@ -298,23 +246,13 @@ describe("DiffViewerTab content loading", () => {
       language: "",
     }));
     const view = render(
-      <DiffViewerTab
-        {...baseProps}
-        containerId="container-1"
-        gitStatus="D"
-        language="ruby"
-      />,
+      <DiffViewerTab {...baseProps} containerId="container-1" gitStatus="D" language="ruby" />,
     );
     expect((await screen.findByTestId("diff-editor")).dataset.language).toBe("ruby");
 
     readFileAtBranchMock.mockImplementationOnce(async () => null);
     view.rerender(
-      <DiffViewerTab
-        {...baseProps}
-        filePath="README"
-        containerId="container-1"
-        gitStatus="D"
-      />,
+      <DiffViewerTab {...baseProps} filePath="README" containerId="container-1" gitStatus="D" />,
     );
     await waitFor(() => {
       expect(screen.getByTestId("diff-editor").dataset.language).toBe("plaintext");
@@ -327,23 +265,13 @@ describe("DiffViewerTab content loading", () => {
       language: "",
     }));
     const view = render(
-      <DiffViewerTab
-        {...baseProps}
-        containerId="container-1"
-        gitStatus="A"
-        language="ruby"
-      />,
+      <DiffViewerTab {...baseProps} containerId="container-1" gitStatus="A" language="ruby" />,
     );
 
     expect((await screen.findByTestId("diff-editor")).dataset.language).toBe("ruby");
 
     view.rerender(
-      <DiffViewerTab
-        {...baseProps}
-        filePath="README"
-        containerId="container-1"
-        gitStatus="A"
-      />,
+      <DiffViewerTab {...baseProps} filePath="README" containerId="container-1" gitStatus="A" />,
     );
     await waitFor(() => {
       expect(screen.getByTestId("diff-editor").dataset.language).toBe("plaintext");
@@ -354,22 +282,16 @@ describe("DiffViewerTab content loading", () => {
     const view = render(<DiffViewerTab {...baseProps} gitStatus="A" />);
 
     expect(await screen.findByText("Failed to load diff")).toBeTruthy();
-    expect(
-      screen.getByText("No container ID or worktree path available"),
-    ).toBeTruthy();
+    expect(screen.getByText("No container ID or worktree path available")).toBeTruthy();
 
     view.rerender(<DiffViewerTab {...baseProps} gitStatus="D" />);
     expect(await screen.findByText("Failed to load diff")).toBeTruthy();
-    expect(
-      screen.getByText("No container ID or worktree path available"),
-    ).toBeTruthy();
+    expect(screen.getByText("No container ID or worktree path available")).toBeTruthy();
   });
 
   test("renders Error and non-Error backend failures", async () => {
     readContainerFileMock.mockRejectedValueOnce(new Error("backend unavailable"));
-    const view = render(
-      <DiffViewerTab {...baseProps} containerId="container-1" gitStatus="A" />,
-    );
+    const view = render(<DiffViewerTab {...baseProps} containerId="container-1" gitStatus="A" />);
 
     expect(await screen.findByText("backend unavailable")).toBeTruthy();
 
@@ -387,9 +309,7 @@ describe("DiffViewerTab content loading", () => {
 
   test("renders container and local original-read failures", async () => {
     readFileAtBranchMock.mockRejectedValueOnce(new Error("container base unavailable"));
-    const view = render(
-      <DiffViewerTab {...baseProps} containerId="container-1" />,
-    );
+    const view = render(<DiffViewerTab {...baseProps} containerId="container-1" />);
     expect(await screen.findByText("container base unavailable")).toBeTruthy();
 
     readLocalFileAtBranchMock.mockRejectedValueOnce("local base unavailable");
@@ -444,26 +364,14 @@ describe("DiffViewerTab content loading", () => {
     });
 
     const view = render(
-      <DiffViewerTab
-        {...baseProps}
-        filePath="src/slow.ts"
-        containerId="container-1"
-      />,
+      <DiffViewerTab {...baseProps} filePath="src/slow.ts" containerId="container-1" />,
     );
     await waitFor(() => {
-      expect(readFileAtBranchMock).toHaveBeenCalledWith(
-        "container-1",
-        "src/slow.ts",
-        "main",
-      );
+      expect(readFileAtBranchMock).toHaveBeenCalledWith("container-1", "src/slow.ts", "main");
     });
 
     view.rerender(
-      <DiffViewerTab
-        {...baseProps}
-        filePath="src/latest.ts"
-        containerId="container-1"
-      />,
+      <DiffViewerTab {...baseProps} filePath="src/latest.ts" containerId="container-1" />,
     );
     const editor = await screen.findByTestId("diff-editor");
     expect(editor.dataset.original).toBe("latest original");
@@ -478,9 +386,7 @@ describe("DiffViewerTab content loading", () => {
       });
       await firstOriginalRead.promise;
     });
-    expect(screen.getByTestId("diff-editor").dataset.original).toBe(
-      "latest original",
-    );
+    expect(screen.getByTestId("diff-editor").dataset.original).toBe("latest original");
     expect(screen.getByTestId("diff-editor").dataset.language).toBe("typescript");
     expect(screen.queryByText("Failed to load diff") === null).toBe(true);
   });
@@ -497,31 +403,17 @@ describe("DiffViewerTab content loading", () => {
     });
 
     const view = render(
-      <DiffViewerTab
-        {...baseProps}
-        filePath="src/slow-error.ts"
-        containerId="container-1"
-      />,
+      <DiffViewerTab {...baseProps} filePath="src/slow-error.ts" containerId="container-1" />,
     );
     await waitFor(() => {
-      expect(readFileAtBranchMock).toHaveBeenCalledWith(
-        "container-1",
-        "src/slow-error.ts",
-        "main",
-      );
+      expect(readFileAtBranchMock).toHaveBeenCalledWith("container-1", "src/slow-error.ts", "main");
     });
 
     view.rerender(
-      <DiffViewerTab
-        {...baseProps}
-        filePath="src/latest.ts"
-        containerId="container-1"
-      />,
+      <DiffViewerTab {...baseProps} filePath="src/latest.ts" containerId="container-1" />,
     );
     await waitFor(() => {
-      expect(screen.getByTestId("diff-editor").dataset.original).toBe(
-        "latest original",
-      );
+      expect(screen.getByTestId("diff-editor").dataset.original).toBe("latest original");
     });
 
     await act(async () => {
@@ -533,9 +425,7 @@ describe("DiffViewerTab content loading", () => {
       }
     });
     expect(screen.queryByText("stale base failure") === null).toBe(true);
-    expect(screen.getByTestId("diff-editor").dataset.original).toBe(
-      "latest original",
-    );
+    expect(screen.getByTestId("diff-editor").dataset.original).toBe("latest original");
   });
 
   test("ignores a stale async completion after the requested file changes", async () => {
@@ -550,20 +440,12 @@ describe("DiffViewerTab content loading", () => {
     }));
 
     const view = render(
-      <DiffViewerTab
-        {...baseProps}
-        filePath="src/slow.ts"
-        containerId="container-1"
-      />,
+      <DiffViewerTab {...baseProps} filePath="src/slow.ts" containerId="container-1" />,
     );
     expect(screen.getByText("Loading diff...")).toBeTruthy();
 
     view.rerender(
-      <DiffViewerTab
-        {...baseProps}
-        filePath="src/latest.ts"
-        containerId="container-1"
-      />,
+      <DiffViewerTab {...baseProps} filePath="src/latest.ts" containerId="container-1" />,
     );
     const editor = await screen.findByTestId("diff-editor");
     expect(editor.dataset.modified).toBe("latest modified");
@@ -577,15 +459,9 @@ describe("DiffViewerTab content loading", () => {
       });
       await firstRead.promise;
     });
-    expect(screen.getByTestId("diff-editor").dataset.modified).toBe(
-      "latest modified",
-    );
+    expect(screen.getByTestId("diff-editor").dataset.modified).toBe("latest modified");
     expect(screen.getByTestId("diff-editor").dataset.language).toBe("typescript");
-    expect(readFileAtBranchMock).not.toHaveBeenCalledWith(
-      "container-1",
-      "src/slow.ts",
-      "main",
-    );
+    expect(readFileAtBranchMock).not.toHaveBeenCalledWith("container-1", "src/slow.ts", "main");
   });
 });
 
@@ -676,18 +552,14 @@ describe("DiffViewerTab immutable base cache", () => {
     firstView.unmount();
 
     const secondView = render(<DiffViewerTab {...props} />);
-    expect((await screen.findByTestId("diff-editor")).dataset.original).toBe(
-      "container original",
-    );
+    expect((await screen.findByTestId("diff-editor")).dataset.original).toBe("container original");
     secondView.unmount();
 
     expect(readFileAtBranchMock).toHaveBeenCalledTimes(2);
   });
 
   test("keeps container, worktree, file, and commit cache keys distinct", async () => {
-    const loadOnce = async (
-      props: React.ComponentProps<typeof DiffViewerTab>,
-    ) => {
+    const loadOnce = async (props: React.ComponentProps<typeof DiffViewerTab>) => {
       const view = render(<DiffViewerTab {...props} />);
       await screen.findByTestId("diff-editor");
       view.unmount();
@@ -768,9 +640,9 @@ describe("DiffViewerTab immutable base cache", () => {
 
     const firstKeyCalls = readFileAtBranchMock.mock.calls.filter(
       ([containerId, filePath, branch]) =>
-        containerId === "container-1"
-        && filePath === "src/cache-0.ts"
-        && branch === "abcdef0000000000000000000000000000000000",
+        containerId === "container-1" &&
+        filePath === "src/cache-0.ts" &&
+        branch === "abcdef0000000000000000000000000000000000",
     );
     expect(firstKeyCalls).toHaveLength(2);
     expect(readFileAtBranchMock).toHaveBeenCalledTimes(130);
@@ -836,9 +708,7 @@ describe("DiffViewerTab editor lifecycle and controls", () => {
     monacoConfigured = false;
     const configuration = deferred<void>();
     ensureMonacoConfiguredMock.mockImplementationOnce(() => configuration.promise);
-    const view = render(
-      <DiffViewerTab {...baseProps} containerId="container-1" />,
-    );
+    const view = render(<DiffViewerTab {...baseProps} containerId="container-1" />);
 
     view.unmount();
     await act(async () => {
@@ -865,9 +735,7 @@ describe("DiffViewerTab editor lifecycle and controls", () => {
       },
     };
     const dispose = mock(() => {});
-    const view = render(
-      <DiffViewerTab {...baseProps} containerId="container-1" />,
-    );
+    const view = render(<DiffViewerTab {...baseProps} containerId="container-1" />);
     await screen.findByTestId("diff-editor");
 
     renderedDiffEditorProps?.beforeMount?.(monaco);
@@ -887,9 +755,7 @@ describe("DiffViewerTab editor lifecycle and controls", () => {
   });
 
   test("ignores disposal errors from an already-disposed editor", async () => {
-    const view = render(
-      <DiffViewerTab {...baseProps} containerId="container-1" />,
-    );
+    const view = render(<DiffViewerTab {...baseProps} containerId="container-1" />);
     await screen.findByTestId("diff-editor");
     renderedDiffEditorProps?.onMount?.({
       dispose: () => {
@@ -929,33 +795,20 @@ describe("DiffViewerTab editor lifecycle and controls", () => {
   });
 
   test("hides an inactive view without removing its authoritative content", async () => {
-    render(
-      <DiffViewerTab
-        {...baseProps}
-        containerId="container-1"
-        isActive={false}
-      />,
-    );
+    render(<DiffViewerTab {...baseProps} containerId="container-1" isActive={false} />);
 
     await screen.findByTestId("diff-editor");
     const root = screen.getByTestId("diff-editor").parentElement?.parentElement;
     expect(root?.className).toContain("pointer-events-none");
     expect(root?.className).toContain("opacity-0");
-    expect(screen.getByTestId("diff-editor").dataset.modified).toBe(
-      "container modified",
-    );
+    expect(screen.getByTestId("diff-editor").dataset.modified).toBe("container modified");
   });
 
   test("keeps inactive loading, error, and deleted branches hidden", async () => {
     const pendingRead = deferred<realBackend.FileContent>();
     readContainerFileMock.mockImplementationOnce(async () => pendingRead.promise);
     const view = render(
-      <DiffViewerTab
-        {...baseProps}
-        containerId="container-1"
-        gitStatus="A"
-        isActive={false}
-      />,
+      <DiffViewerTab {...baseProps} containerId="container-1" gitStatus="A" isActive={false} />,
     );
 
     const loadingRoot = screen.getByText("Loading diff...").parentElement?.parentElement;
@@ -970,8 +823,7 @@ describe("DiffViewerTab editor lifecycle and controls", () => {
         // The component converts this rejection into its error state.
       }
     });
-    const errorRoot = (await screen.findByText("Failed to load diff"))
-      .parentElement?.parentElement;
+    const errorRoot = (await screen.findByText("Failed to load diff")).parentElement?.parentElement;
     expect(errorRoot?.className).toContain("pointer-events-none");
     expect(errorRoot?.className).toContain("opacity-0");
 
@@ -1004,9 +856,9 @@ describe("DiffViewerTab editor lifecycle and controls", () => {
     expect(screen.getByTestId("diff-editor").dataset.sideBySide).toBe("false");
 
     setViewportWidth(768);
-    expect(
-      screen.getByRole("button", { name: "Inline" }).getAttribute("aria-pressed"),
-    ).toBe("true");
+    expect(screen.getByRole("button", { name: "Inline" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
     expect(screen.getByTestId("diff-editor").dataset.sideBySide).toBe("false");
 
     fireEvent.click(screen.getByRole("button", { name: "Side by side" }));
@@ -1156,11 +1008,7 @@ describe("DiffViewerTab on a mobile viewport", () => {
     expect(visualPath?.children.length).toBe(1);
     expect(visualPath?.textContent).toBe("Button.tsx");
     expect(screen.getByText("vs 63d1257")).toBeTruthy();
-    expect(
-      screen.getByTitle(
-        "vs 63d12576e9198f24bc2271a6a8c3702dfb391eae",
-      ),
-    ).toBeTruthy();
+    expect(screen.getByTitle("vs 63d12576e9198f24bc2271a6a8c3702dfb391eae")).toBeTruthy();
     expect(screen.getByText("New file").className).toContain("sr-only");
   });
 

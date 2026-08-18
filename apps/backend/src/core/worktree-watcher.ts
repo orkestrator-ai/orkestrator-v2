@@ -22,7 +22,10 @@ export interface WorktreeWatcherOptions {
   onChange: () => void;
   settleMs?: number;
   /** Injected for tests; defaults to node's recursive fs.watch. */
-  startWatch?: (target: string, listener: (eventType: string, filename: string | null) => void) => FSWatcher;
+  startWatch?: (
+    target: string,
+    listener: (eventType: string, filename: string | null) => void,
+  ) => FSWatcher;
   onError?: (error: unknown) => void;
 }
 
@@ -49,8 +52,9 @@ export function isIgnorableWorktreeChange(filename: string | null): boolean {
 
 export function startWorktreeWatcher(options: WorktreeWatcherOptions): WorktreeWatcher {
   const settleMs = options.settleMs ?? WATCH_SETTLE_MS;
-  const start = options.startWatch
-    ?? ((target, listener) => watch(target, { recursive: true, persistent: false }, listener));
+  const start =
+    options.startWatch ??
+    ((target, listener) => watch(target, { recursive: true, persistent: false }, listener));
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   let closed = false;

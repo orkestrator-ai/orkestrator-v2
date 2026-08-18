@@ -212,8 +212,7 @@ describe("JSONL framing", () => {
     const stdout = new FakeReadable();
     const notifications: string[] = [];
     const violations: Array<{ detail: string; preview: string }> = [];
-    const note = (method: string) =>
-      `${JSON.stringify({ jsonrpc: "2.0", method, params: {} })}\n`;
+    const note = (method: string) => `${JSON.stringify({ jsonrpc: "2.0", method, params: {} })}\n`;
 
     new JsonlRpcClient({
       generation: 1,
@@ -254,8 +253,7 @@ describe("JSONL framing", () => {
       },
     });
 
-    const note = (method: string) =>
-      `${JSON.stringify({ jsonrpc: "2.0", method, params: {} })}\n`;
+    const note = (method: string) => `${JSON.stringify({ jsonrpc: "2.0", method, params: {} })}\n`;
 
     expect(() => stdout.push(`${note("first")}not json\n${note("never-reached")}`)).toThrow(
       "violation handler exploded",
@@ -526,9 +524,9 @@ describe("write path", () => {
 
   test("rejects an outbound message over the size cap without writing it", async () => {
     const h = harness({ maxOutboundLineBytes: 64 });
-    await expect(
-      h.client.request("turn/start", { input: "x".repeat(500) }),
-    ).rejects.toBeInstanceOf(AppServerProtocolError);
+    await expect(h.client.request("turn/start", { input: "x".repeat(500) })).rejects.toBeInstanceOf(
+      AppServerProtocolError,
+    );
     expect(h.stdin.lines).toHaveLength(0);
   });
 

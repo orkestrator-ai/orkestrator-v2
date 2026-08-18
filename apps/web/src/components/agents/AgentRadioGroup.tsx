@@ -1,17 +1,17 @@
 import { useId, useRef } from "react";
-import { ClaudeIcon, CodexIcon, CursorAgentIcon, GrokBuildIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
+import {
+  ClaudeIcon,
+  CodexIcon,
+  CursorAgentIcon,
+  GrokBuildIcon,
+  OpenCodeIcon,
+} from "@/components/icons/AgentIcons";
 import { LAUNCH_AGENT_OPTIONS, type LaunchAgent } from "@/lib/agent-launch";
 import { cn } from "@/lib/utils";
 import { useConfigStore } from "@/stores";
 import { LEGACY_ENABLED_AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 
-export function AgentIcon({
-  agent,
-  className,
-}: {
-  agent: LaunchAgent;
-  className?: string;
-}) {
+export function AgentIcon({ agent, className }: { agent: LaunchAgent; className?: string }) {
   if (agent === "claude") return <ClaudeIcon className={className} />;
   if (agent === "codex") return <CodexIcon className={className} />;
   if (agent === "cursor") return <CursorAgentIcon className={className} />;
@@ -35,18 +35,11 @@ interface AgentRadioGroupProps {
  * buttons: the selection has to be reachable by keyboard and readable by a
  * screen reader as one group, which is what a real radiogroup already gives.
  */
-export function AgentRadioGroup({
-  value,
-  onChange,
-  label,
-  descriptions,
-}: AgentRadioGroupProps) {
+export function AgentRadioGroup({ value, onChange, label, descriptions }: AgentRadioGroupProps) {
   const enabledPlatforms = useConfigStore(
     (state) => state.config.global.enabledAgentPlatforms ?? LEGACY_ENABLED_AGENT_PLATFORMS,
   );
-  const options = LAUNCH_AGENT_OPTIONS.filter((option) =>
-    enabledPlatforms.includes(option.value)
-  );
+  const options = LAUNCH_AGENT_OPTIONS.filter((option) => enabledPlatforms.includes(option.value));
   const groupId = useId();
   const radioRefs = useRef(new Map<LaunchAgent, HTMLInputElement>());
 
@@ -108,9 +101,7 @@ export function AgentRadioGroup({
                 {option.label}
               </span>
               {description && (
-                <span className="mt-1 text-[11px] leading-snug text-zinc-500">
-                  {description}
-                </span>
+                <span className="mt-1 text-[11px] leading-snug text-zinc-500">{description}</span>
               )}
             </label>
           </div>

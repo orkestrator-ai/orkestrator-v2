@@ -7,9 +7,7 @@ import { StorageService } from "./storage.js";
 const dataDirs: string[] = [];
 
 async function createStorage(): Promise<StorageService> {
-  const dataDir = await fs.mkdtemp(
-    path.join(tmpdir(), "orkestrator-feature-build-claim-"),
-  );
+  const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-feature-build-claim-"));
   dataDirs.push(dataDir);
   const storage = new StorageService(dataDir);
   await storage.init();
@@ -18,9 +16,7 @@ async function createStorage(): Promise<StorageService> {
 
 afterEach(async () => {
   await Promise.all(
-    dataDirs.splice(0).map((dataDir) =>
-      fs.rm(dataDir, { recursive: true, force: true })
-    ),
+    dataDirs.splice(0).map((dataDir) => fs.rm(dataDir, { recursive: true, force: true })),
   );
 });
 
@@ -53,14 +49,8 @@ describe("StorageService feature build claims", () => {
     const storage = await createStorage();
     const feature = await storage.createFeaturePlan("project-1");
 
-    expect(
-      (await storage.claimFeaturePlanBuild(feature.id, "task-a")).claimed,
-    ).toBe(true);
-    expect(
-      (await storage.claimFeaturePlanBuild(feature.id, "task-a")).claimed,
-    ).toBe(true);
-    expect(
-      (await storage.claimFeaturePlanBuild(feature.id, "task-b")).claimed,
-    ).toBe(false);
+    expect((await storage.claimFeaturePlanBuild(feature.id, "task-a")).claimed).toBe(true);
+    expect((await storage.claimFeaturePlanBuild(feature.id, "task-a")).claimed).toBe(true);
+    expect((await storage.claimFeaturePlanBuild(feature.id, "task-b")).claimed).toBe(false);
   });
 });

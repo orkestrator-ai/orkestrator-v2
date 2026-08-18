@@ -16,7 +16,10 @@ mock.module("@/hooks/useClipboardImagePaste", () => ({
   processLocalClipboardPaste: mockProcessLocalClipboardPaste,
 }));
 
-import { escapePathForTerminalInput, handleTerminalPaste } from "../../../apps/web/src/lib/terminal-paste";
+import {
+  escapePathForTerminalInput,
+  handleTerminalPaste,
+} from "../../../apps/web/src/lib/terminal-paste";
 
 describe("handleTerminalPaste", () => {
   const mockWriteToTerminal = mock<(text: string) => Promise<void>>(() => Promise.resolve());
@@ -130,7 +133,7 @@ describe("handleTerminalPaste", () => {
       async (_containerId, onImageSaved, _onTextPaste, _onError) => {
         onImageSaved?.("/workspace/.orkestrator/clipboard/image.png");
         return true;
-      }
+      },
     );
 
     await handleTerminalPaste({
@@ -140,7 +143,9 @@ describe("handleTerminalPaste", () => {
       componentName: "Test",
     });
 
-    expect(mockWriteToTerminal).toHaveBeenCalledWith("/workspace/.orkestrator/clipboard/image.png ");
+    expect(mockWriteToTerminal).toHaveBeenCalledWith(
+      "/workspace/.orkestrator/clipboard/image.png ",
+    );
     expect(mockFocusTerminal).toHaveBeenCalled();
   });
 
@@ -149,7 +154,7 @@ describe("handleTerminalPaste", () => {
       async (_worktreePath, onImageSaved, _onTextPaste, _onError) => {
         await onImageSaved?.("/tmp/worktrees/My Project/.orkestrator/clipboard/image (1).png");
         return true;
-      }
+      },
     );
 
     await handleTerminalPaste({
@@ -161,7 +166,7 @@ describe("handleTerminalPaste", () => {
     });
 
     expect(mockWriteToTerminal).toHaveBeenCalledWith(
-      "/tmp/worktrees/My\\ Project/.orkestrator/clipboard/image\\ \\(1\\).png "
+      "/tmp/worktrees/My\\ Project/.orkestrator/clipboard/image\\ \\(1\\).png ",
     );
     expect(mockFocusTerminal).toHaveBeenCalled();
   });
@@ -171,7 +176,7 @@ describe("handleTerminalPaste", () => {
       async (_worktreePath, _onImageSaved, onTextPaste, _onError) => {
         onTextPaste?.("hello world");
         return true;
-      }
+      },
     );
 
     await handleTerminalPaste({
@@ -191,16 +196,17 @@ describe("handleTerminalPaste", () => {
     let pasteFinished = false;
 
     mockWriteToTerminal.mockImplementation(
-      () => new Promise<void>((resolve) => {
-        resolveWrite = resolve;
-      })
+      () =>
+        new Promise<void>((resolve) => {
+          resolveWrite = resolve;
+        }),
     );
 
     mockProcessLocalClipboardPaste.mockImplementation(
       async (_worktreePath, onImageSaved, _onTextPaste, _onError) => {
         await onImageSaved?.("/tmp/worktrees/my-env/.orkestrator/clipboard/image.png");
         return true;
-      }
+      },
     );
 
     const pastePromise = handleTerminalPaste({
@@ -228,7 +234,7 @@ describe("handleTerminalPaste", () => {
 describe("escapePathForTerminalInput", () => {
   test("escapes spaces and shell metacharacters", () => {
     expect(escapePathForTerminalInput("/tmp/My Project/$draft(image)#1!.png")).toBe(
-      "/tmp/My\\ Project/\\$draft\\(image\\)\\#1\\!.png"
+      "/tmp/My\\ Project/\\$draft\\(image\\)\\#1\\!.png",
     );
   });
 });

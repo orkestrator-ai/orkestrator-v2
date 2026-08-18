@@ -54,11 +54,7 @@ describe("InitializationLogs", () => {
     const consoleError = spyOn(console, "error").mockImplementation(() => undefined);
     const originalSetInterval = globalThis.setInterval;
     let runPoll: (() => void) | undefined;
-    globalThis.setInterval = ((
-      handler: TimerHandler,
-      timeout?: number,
-      ...args: unknown[]
-    ) => {
+    globalThis.setInterval = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
       if (timeout === 5 && typeof handler === "function") {
         runPoll = () => handler(...args);
         return 1 as unknown as ReturnType<typeof setInterval>;
@@ -106,11 +102,7 @@ describe("InitializationLogs", () => {
     // production cadence.
     const originalSetInterval = globalThis.setInterval;
     const intervals: Array<number | undefined> = [];
-    globalThis.setInterval = ((
-      handler: TimerHandler,
-      timeout?: number,
-      ...args: unknown[]
-    ) => {
+    globalThis.setInterval = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
       intervals.push(timeout);
       return originalSetInterval(handler, timeout, ...args);
     }) as typeof globalThis.setInterval;

@@ -46,11 +46,13 @@ describe("backend-owned activity projection", () => {
 
   test("rehydrates the latest backend snapshot after the observer remounts", async () => {
     useEnvironmentStore.setState({
-      environments: [{
-        id: "env-a",
-        agentActivityState: "working",
-        agentActivityUpdatedAt: "2026-08-04T10:00:00.000Z",
-      }] as never,
+      environments: [
+        {
+          id: "env-a",
+          agentActivityState: "working",
+          agentActivityUpdatedAt: "2026-08-04T10:00:00.000Z",
+        },
+      ] as never,
     });
     const first = renderHook(() => useGlobalActivityMonitor());
     await act(async () => undefined);
@@ -60,11 +62,13 @@ describe("backend-owned activity projection", () => {
 
     first.unmount();
     useEnvironmentStore.setState({
-      environments: [{
-        id: "env-b",
-        agentActivityState: "waiting",
-        agentActivityUpdatedAt: "2026-08-04T10:01:00.000Z",
-      }] as never,
+      environments: [
+        {
+          id: "env-b",
+          agentActivityState: "waiting",
+          agentActivityUpdatedAt: "2026-08-04T10:01:00.000Z",
+        },
+      ] as never,
     });
     expect(useAgentActivityStore.getState().containerStates).toEqual({
       "env-a": "working",
@@ -80,11 +84,13 @@ describe("backend-owned activity projection", () => {
 
   test("projects environment-store updates while the observer stays mounted", async () => {
     useEnvironmentStore.setState({
-      environments: [{
-        id: "env-a",
-        agentActivityState: "working",
-        agentActivityUpdatedAt: "2026-08-04T10:00:00.000Z",
-      }] as never,
+      environments: [
+        {
+          id: "env-a",
+          agentActivityState: "working",
+          agentActivityUpdatedAt: "2026-08-04T10:00:00.000Z",
+        },
+      ] as never,
     });
     const observer = renderHook(() => useGlobalActivityMonitor());
     await act(async () => undefined);
@@ -94,11 +100,13 @@ describe("backend-owned activity projection", () => {
 
     act(() => {
       useEnvironmentStore.setState({
-        environments: [{
-          id: "env-b",
-          agentActivityState: "waiting",
-          agentActivityUpdatedAt: "2026-08-04T10:01:00.000Z",
-        }] as never,
+        environments: [
+          {
+            id: "env-b",
+            agentActivityState: "waiting",
+            agentActivityUpdatedAt: "2026-08-04T10:01:00.000Z",
+          },
+        ] as never,
       });
     });
 

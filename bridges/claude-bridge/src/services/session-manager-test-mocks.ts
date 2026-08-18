@@ -19,31 +19,21 @@
  */
 import { afterAll, afterEach, describe, expect, jest, mock, spyOn, test } from "bun:test";
 
-
 import { EventEmitter } from "node:events";
-
 
 import * as realChildProcess from "node:child_process";
 
-
 import * as realFs from "node:fs";
-
 
 import * as realFsPromises from "node:fs/promises";
 
-
 import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
-
 
 import { homedir, tmpdir } from "node:os";
 
-
 import { join } from "node:path";
 
-
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
-
-
 
 // Snapshot the real mcp-config / plugin-config modules BEFORE installing the
 // stub mocks below. Bun's `mock.module(...)` is process-global, so without
@@ -52,78 +42,54 @@ import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 // `mock.module()` Rules" > "Snapshot-and-restore pattern".
 import * as realMcpConfig from "./mcp-config.js";
 
-
 import * as realPluginConfig from "./plugin-config.js";
-
 
 export { realChildProcess, realFs, realFsPromises, realMcpConfig, realPluginConfig };
 
-
 export const mcpConfigSnapshot = { ...realMcpConfig };
-
 
 export const pluginConfigSnapshot = { ...realPluginConfig };
 
-
 export const childProcessSnapshot = { ...realChildProcess };
-
 
 // Annotated rather than inferred: spreading the module widens to a structural
 // type that names `ReadStreamOptions`/`WriteStreamOptions`, which `node:fs`
 // does not export, so the emitted declaration cannot refer to them (TS4023).
 export const fsSnapshot: typeof realFs = { ...realFs };
 
-
 export const fsPromisesSnapshot = { ...realFsPromises };
-
 
 export const originalExistsSync = realFs.existsSync;
 
-
 export const originalReadFile = realFsPromises.readFile;
-
 
 export const originalExecFile = realChildProcess.execFile;
 
-
 export const originalSpawn = realChildProcess.spawn;
-
-
 
 export const mockExistsSync = mock((path: realFs.PathLike) => originalExistsSync(path));
 
-
 export const mockReadFile = mock(originalReadFile);
-
 
 export const mockExecFile = mock(originalExecFile);
 
-
 export const mockSpawn = mock(originalSpawn);
-
-
 
 mock.module("node:fs", () => ({
   ...realFs,
   existsSync: mockExistsSync,
 }));
 
-
-
 mock.module("node:fs/promises", () => ({
   ...realFsPromises,
   readFile: mockReadFile,
 }));
-
-
 
 mock.module("node:child_process", () => ({
   ...realChildProcess,
   execFile: mockExecFile,
   spawn: mockSpawn,
 }));
-
-
 
 // ---------------------------------------------------------------------------
 // Controllable mock for @anthropic-ai/claude-agent-sdk.query()
@@ -157,20 +123,13 @@ export interface QueryCall {
   isClosed: () => boolean;
 }
 
-
-
 export function pushSuccessfulContinuationResult(call: QueryCall): void {
   call.push({ type: "result", subtype: "success" });
 }
 
-
-
 export const pendingCalls: QueryCall[] = [];
 
-
 export const queryWaiters: Array<(call: QueryCall) => void> = [];
-
-
 
 /**
  * Extra members spliced onto the object `query()` returns.
@@ -181,8 +140,6 @@ export const queryWaiters: Array<(call: QueryCall) => void> = [];
  * them unconditionally would change what every other test's turn does.
  */
 export const queryControlOverrides: Record<string, unknown> = {};
-
-
 
 export function nextQueryCall(timeoutMs = 1000): Promise<QueryCall> {
   return new Promise((resolve, reject) => {
@@ -203,8 +160,6 @@ export function nextQueryCall(timeoutMs = 1000): Promise<QueryCall> {
     queryWaiters.push(resolveWrapped);
   });
 }
-
-
 
 export const mockQuery = mock((args: { prompt: unknown; options: QueryCall["options"] }) => {
   const queue: unknown[] = [];
@@ -298,8 +253,6 @@ export const mockQuery = mock((args: { prompt: unknown; options: QueryCall["opti
   });
 });
 
-
-
 // ---------------------------------------------------------------------------
 // Module-level SDK session store
 // ---------------------------------------------------------------------------
@@ -308,13 +261,9 @@ export const mockQuery = mock((args: { prompt: unknown; options: QueryCall["opti
 // id by pattern, so a placeholder string would never round-trip.
 export const PERSISTED_SDK_ID = "11111111-2222-4333-8444-555555555555";
 
-
 export const OTHER_SDK_ID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
 
-
 export const FORK_SDK_ID = "99999999-8888-4777-8666-555555555555";
-
-
 
 // The bridge feature-detects every one of these with `typeof x === "function"`
 // and silently degrades to a no-op when absent, so they have to be present as
@@ -330,8 +279,6 @@ export type SdkSessionInfo = {
   createdAt?: number;
 };
 
-
-
 export type SdkSessionMessage = {
   type: "user" | "assistant" | "system";
   uuid: string;
@@ -341,12 +288,9 @@ export type SdkSessionMessage = {
   isSidechain?: boolean;
 };
 
-
-
 export const mockSdkListSessions = mock(
   async (_options?: Record<string, unknown>): Promise<SdkSessionInfo[]> => [],
 );
-
 
 export const mockSdkGetSessionInfo = mock(
   async (
@@ -355,7 +299,6 @@ export const mockSdkGetSessionInfo = mock(
   ): Promise<SdkSessionInfo | undefined> => undefined,
 );
 
-
 export const mockSdkGetSessionMessages = mock(
   async (
     _sessionId: string,
@@ -363,11 +306,9 @@ export const mockSdkGetSessionMessages = mock(
   ): Promise<SdkSessionMessage[]> => [],
 );
 
-
 export const mockSdkDeleteSession = mock(
   async (_sessionId: string, _options?: Record<string, unknown>): Promise<void> => {},
 );
-
 
 export const mockSdkRenameSession = mock(
   async (
@@ -377,15 +318,12 @@ export const mockSdkRenameSession = mock(
   ): Promise<void> => {},
 );
 
-
 export const mockSdkForkSession = mock(
   async (
     _sessionId: string,
     _options?: Record<string, unknown>,
   ): Promise<{ sessionId: string }> => ({ sessionId: FORK_SDK_ID }),
 );
-
-
 
 export function resetSdkSessionStoreMocks(): void {
   mockSdkListSessions.mockReset();
@@ -402,8 +340,6 @@ export function resetSdkSessionStoreMocks(): void {
   mockSdkForkSession.mockImplementation(async () => ({ sessionId: FORK_SDK_ID }));
 }
 
-
-
 export function installSdkModuleMock(overrides: Record<string, unknown> = {}): void {
   mock.module("@anthropic-ai/claude-agent-sdk", () => ({
     query: mockQuery,
@@ -417,21 +353,13 @@ export function installSdkModuleMock(overrides: Record<string, unknown> = {}): v
   }));
 }
 
-
-
 installSdkModuleMock();
-
-
 
 export const mockGetMcpServersForSdk = mock(async () => ({}));
 
-
 export const mockGetMcpServerNames = mock(async () => new Set<string>());
 
-
 export const mockGetPluginsForSdk = mock(async () => [] as Array<{ type: "local"; path: string }>);
-
-
 
 /**
  * `sendPrompt` resolves both halves of the MCP config in one call
@@ -445,13 +373,9 @@ export const mockGetMcpRuntimeConfig = mock(async () => ({
   names: await mockGetMcpServerNames(),
 }));
 
-
-
 mock.module("./mcp-config.js", () => ({
   getMcpRuntimeConfig: mockGetMcpRuntimeConfig,
 }));
-
-
 
 mock.module("./plugin-config.js", () => ({
   getPluginsForSdk: mockGetPluginsForSdk,

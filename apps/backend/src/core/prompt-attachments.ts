@@ -16,10 +16,7 @@ export type PromptAttachment = {
   filename?: string;
 };
 
-type CommandInvoker = <T>(
-  command: string,
-  args?: Record<string, unknown>,
-) => Promise<T>;
+type CommandInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
 /** Matches the per-payload cap the write-file commands already enforce. */
 const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
@@ -98,13 +95,9 @@ function allocateUniqueFilename(filename: string, used: Set<string>): string {
  * Throws rather than filtering: a silently dropped attachment is a prompt that
  * references an image the agent cannot see.
  */
-export function assertValidPromptImages(
-  images: readonly unknown[],
-): TaskSnapshotImage[] {
+export function assertValidPromptImages(images: readonly unknown[]): TaskSnapshotImage[] {
   if (images.length > MAX_ATTACHMENT_COUNT) {
-    throw new Error(
-      `At most ${MAX_ATTACHMENT_COUNT} prompt images are allowed`,
-    );
+    throw new Error(`At most ${MAX_ATTACHMENT_COUNT} prompt images are allowed`);
   }
   let total = 0;
   const validated: TaskSnapshotImage[] = [];
@@ -143,13 +136,9 @@ export function assertValidPromptImages(
  * Queued prompts arrive with attachments the renderer already staged, so these
  * need no writing — only bounds and shape checks before they reach a bridge.
  */
-export function assertValidPromptAttachments(
-  attachments: readonly unknown[],
-): PromptAttachment[] {
+export function assertValidPromptAttachments(attachments: readonly unknown[]): PromptAttachment[] {
   if (attachments.length > MAX_ATTACHMENT_COUNT) {
-    throw new Error(
-      `At most ${MAX_ATTACHMENT_COUNT} prompt attachments are allowed`,
-    );
+    throw new Error(`At most ${MAX_ATTACHMENT_COUNT} prompt attachments are allowed`);
   }
   const validated: PromptAttachment[] = [];
   for (const candidate of attachments) {
@@ -162,12 +151,14 @@ export function assertValidPromptAttachments(
       throw new Error("Prompt attachment path must be a non-empty string");
     }
     const type = record.type === "file" ? "file" : "image";
-    const filename = typeof record.filename === "string" && record.filename.trim().length > 0
-      ? record.filename
-      : undefined;
-    const dataUrl = typeof record.dataUrl === "string" && record.dataUrl.trim().length > 0
-      ? record.dataUrl
-      : undefined;
+    const filename =
+      typeof record.filename === "string" && record.filename.trim().length > 0
+        ? record.filename
+        : undefined;
+    const dataUrl =
+      typeof record.dataUrl === "string" && record.dataUrl.trim().length > 0
+        ? record.dataUrl
+        : undefined;
     // A file attachment carries no inline data at either bridge, and an
     // oversized data URL would be rejected there anyway.
     if (type === "file" || (dataUrl && dataUrl.length > MAX_ATTACHMENT_BYTES * 2)) {
@@ -205,10 +196,7 @@ export async function stagePromptImages(
   const used = new Set<string>();
   const staged: PromptAttachment[] = [];
   for (const [index, image] of validated.entries()) {
-    const filename = allocateUniqueFilename(
-      sanitizeFilename(image.filename, index),
-      used,
-    );
+    const filename = allocateUniqueFilename(sanitizeFilename(image.filename, index), used);
     const relativePath = `${stagingDirectory}/${filename}`;
     const path = isLocal
       ? await invoke<string>("write_local_file", {

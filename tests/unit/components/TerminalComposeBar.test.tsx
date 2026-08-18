@@ -1,19 +1,14 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { mockReadImage } from "../../mocks/clipboard";
 import { mockToastError } from "../../mocks/sonner";
 
 const mockWriteContainerFile = mock(async () => {});
 const mockWriteLocalFile = mock(async () => "/tmp/file.png");
 const mockGetComposeDraft = mock(
-  async (_draftKey: string): Promise<{
+  async (
+    _draftKey: string,
+  ): Promise<{
     draftKey: string;
     ownerType: "environment" | "project";
     ownerId: string;
@@ -79,15 +74,11 @@ function image(id: string, base64Data = "QUJD"): DraftImage {
 function seedDraft(text = "", images: DraftImage[] = [], sessionKey = SESSION_KEY) {
   useTerminalSessionStore.setState({
     composeDraftText: text ? new Map([[sessionKey, text]]) : new Map(),
-    composeDraftImages: images.length
-      ? new Map([[sessionKey, images]])
-      : new Map(),
+    composeDraftImages: images.length ? new Map([[sessionKey, images]]) : new Map(),
   });
 }
 
-function renderComposeBar(
-  overrides: Partial<Parameters<typeof ComposeBar>[0]> = {},
-) {
+function renderComposeBar(overrides: Partial<Parameters<typeof ComposeBar>[0]> = {}) {
   const onClose = mock(() => {});
   const onSend = mock(() => {});
   const onAddressAll = mock(() => {});
@@ -190,9 +181,7 @@ describe("Terminal ComposeBar", () => {
     renderComposeBar({ className: "bottom-[calc(3.5rem+env(safe-area-inset-bottom))]" });
 
     const composeBar = document.querySelector("[data-compose-bar]");
-    expect(composeBar?.className).toContain(
-      "bottom-[calc(3.5rem+env(safe-area-inset-bottom))]",
-    );
+    expect(composeBar?.className).toContain("bottom-[calc(3.5rem+env(safe-area-inset-bottom))]");
     expect(composeBar?.className).toContain("absolute");
     expect(composeBar?.className).toContain("left-2");
     expect(composeBar?.className).not.toContain("bottom-2");
@@ -204,9 +193,7 @@ describe("Terminal ComposeBar", () => {
 
     expect(document.activeElement).toBe(textarea);
     fireEvent.change(textarea, { target: { value: "remember me" } });
-    expect(useTerminalSessionStore.getState().getComposeDraftText(SESSION_KEY)).toBe(
-      "remember me",
-    );
+    expect(useTerminalSessionStore.getState().getComposeDraftText(SESSION_KEY)).toBe("remember me");
 
     unmount();
     renderComposeBar();
@@ -275,13 +262,15 @@ describe("Terminal ComposeBar", () => {
     await waitFor(() => expect(getTextarea().value).toBe("local terminal prompt"));
 
     unmount();
-    await waitFor(() => expect(mockSaveComposeDraft).toHaveBeenCalledWith(
-      `terminal:env-pending:${encodeURIComponent(SESSION_KEY)}`,
-      "environment",
-      "env-pending",
-      { text: "local terminal prompt", images: [] },
-      1,
-    ));
+    await waitFor(() =>
+      expect(mockSaveComposeDraft).toHaveBeenCalledWith(
+        `terminal:env-pending:${encodeURIComponent(SESSION_KEY)}`,
+        "environment",
+        "env-pending",
+        { text: "local terminal prompt", images: [] },
+        1,
+      ),
+    );
   });
 
   test("ignores malformed backend fields", async () => {
@@ -373,7 +362,7 @@ describe("Terminal ComposeBar", () => {
         expect(warning).toHaveBeenCalledWith(
           "[ComposeBar] Failed to restore compose draft:",
           expect.objectContaining({ message: "draft storage unavailable" }),
-        )
+        ),
       );
 
       unmount();
@@ -395,7 +384,7 @@ describe("Terminal ComposeBar", () => {
       expect(mockDeleteComposeDraft).toHaveBeenCalledWith(
         `terminal:env-empty-cleanup:${encodeURIComponent(SESSION_KEY)}`,
         0,
-      )
+      ),
     );
   });
 
@@ -416,7 +405,7 @@ describe("Terminal ComposeBar", () => {
         expect(warning).toHaveBeenCalledWith(
           "[ComposeBar] Failed to persist compose draft during cleanup:",
           expect.objectContaining({ message: "save unavailable" }),
-        )
+        ),
       );
     } finally {
       console.warn = originalWarn;
@@ -665,9 +654,7 @@ describe("Terminal ComposeBar", () => {
         size: async () => ({ width: 2, height: 1 }),
       }));
     HTMLCanvasElement.prototype.toDataURL = function () {
-      return this.width === 1
-        ? "data:image/png;base64,RklSU1Q="
-        : "data:image/png;base64,U0VDT05E";
+      return this.width === 1 ? "data:image/png;base64,RklSU1Q=" : "data:image/png;base64,U0VDT05E";
     };
     renderComposeBar();
     getTextarea().focus();
@@ -773,9 +760,9 @@ describe("Terminal ComposeBar", () => {
     getTextarea().focus();
     dispatchPaste();
     await waitFor(() => {
-      expect(
-        useTerminalSessionStore.getState().getComposeDraftImages(nextSessionKey),
-      ).toHaveLength(1);
+      expect(useTerminalSessionStore.getState().getComposeDraftImages(nextSessionKey)).toHaveLength(
+        1,
+      );
     });
 
     await act(async () => {
@@ -784,7 +771,9 @@ describe("Terminal ComposeBar", () => {
     });
 
     expect(useTerminalSessionStore.getState().getComposeDraftImages(SESSION_KEY)).toEqual([]);
-    expect(useTerminalSessionStore.getState().getComposeDraftImages(nextSessionKey)).toHaveLength(1);
+    expect(useTerminalSessionStore.getState().getComposeDraftImages(nextSessionKey)).toHaveLength(
+      1,
+    );
   });
 
   test("contains an attachment-store failure and keeps the paste queue usable", async () => {
@@ -865,7 +854,11 @@ describe("Terminal ComposeBar", () => {
       "AAAA",
     );
     expect(onSend.mock.calls[0]).toEqual([
-      [expect.objectContaining({ id: expect.stringMatching(/^\/workspace\/\.orkestrator\/clipboard\//) })],
+      [
+        expect.objectContaining({
+          id: expect.stringMatching(/^\/workspace\/\.orkestrator\/clipboard\//),
+        }),
+      ],
       "explain this",
     ]);
     expect(useTerminalSessionStore.getState().getComposeDraftText(SESSION_KEY)).toBe("");
@@ -925,8 +918,9 @@ describe("Terminal ComposeBar", () => {
 
   test("writes images to a local worktree when no container is present", async () => {
     seedDraft("", [image("one", "BBBB")]);
-    mockWriteLocalFile.mockImplementation(async () =>
-      "/tmp/local repo/.orkestrator/clipboard/image.png");
+    mockWriteLocalFile.mockImplementation(
+      async () => "/tmp/local repo/.orkestrator/clipboard/image.png",
+    );
     const { onSend } = renderComposeBar({
       containerId: null,
       worktreePath: "/tmp/local repo",

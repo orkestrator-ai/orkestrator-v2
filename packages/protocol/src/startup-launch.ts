@@ -83,10 +83,10 @@ export function resolveStartupLaunch(input: {
   const { environment, repository, global } = input;
 
   const agent: AgentPlatform =
-    environment?.defaultAgent
-    ?? repository?.defaultAgent
-    ?? global?.defaultAgent
-    ?? DEFAULT_STARTUP_LAUNCH_AGENT;
+    environment?.defaultAgent ??
+    repository?.defaultAgent ??
+    global?.defaultAgent ??
+    DEFAULT_STARTUP_LAUNCH_AGENT;
 
   // Only Claude and Codex carry their own mode. Every other platform is
   // launched through the OpenCode mode, which is what the backend has always
@@ -94,23 +94,19 @@ export function resolveStartupLaunch(input: {
   // disagree about is worse than one they agree is unusual.
   const mode: StartupLaunchMode =
     agent === "claude"
-      ? (environment?.claudeMode
-        ?? repository?.agentStyle
-        ?? global?.claudeMode
-        ?? DEFAULT_CLAUDE_MODE)
+      ? (environment?.claudeMode ??
+        repository?.agentStyle ??
+        global?.claudeMode ??
+        DEFAULT_CLAUDE_MODE)
       : agent === "codex"
-        ? (environment?.codexMode
-          ?? global?.codexMode
-          ?? DEFAULT_STARTUP_LAUNCH_MODE)
-        : (environment?.opencodeMode
-          ?? global?.opencodeMode
-          ?? DEFAULT_STARTUP_LAUNCH_MODE);
+        ? (environment?.codexMode ?? global?.codexMode ?? DEFAULT_STARTUP_LAUNCH_MODE)
+        : (environment?.opencodeMode ?? global?.opencodeMode ?? DEFAULT_STARTUP_LAUNCH_MODE);
 
   const claudeNativeBackend: StartupLaunchClaudeBackend =
-    environment?.claudeNativeBackend
-    ?? repository?.claudeNativeBackend
-    ?? global?.claudeNativeBackend
-    ?? DEFAULT_STARTUP_LAUNCH_CLAUDE_BACKEND;
+    environment?.claudeNativeBackend ??
+    repository?.claudeNativeBackend ??
+    global?.claudeNativeBackend ??
+    DEFAULT_STARTUP_LAUNCH_CLAUDE_BACKEND;
 
   return {
     agent,

@@ -20,14 +20,16 @@ beforeEach(() => {
   saveNotesMock.mockClear();
   loadGitHubIssuesMock.mockClear();
   useProjectStore.setState({
-    projects: [{
-      id: "project-1",
-      name: "Project",
-      gitUrl: "https://github.com/acme/repo.git",
-      localPath: null,
-      addedAt: "2026-01-01T00:00:00.000Z",
-      order: 0,
-    }],
+    projects: [
+      {
+        id: "project-1",
+        name: "Project",
+        gitUrl: "https://github.com/acme/repo.git",
+        localPath: null,
+        addedAt: "2026-01-01T00:00:00.000Z",
+        order: 0,
+      },
+    ],
     isLoading: false,
     error: null,
   });
@@ -43,19 +45,21 @@ beforeEach(() => {
     projectBoardNotesOpen: false,
   });
   useGitHubIssuesStore.setState({
-    snapshots: new Map([[
-      "project-1",
-      {
-        repository: {
-          owner: "acme",
-          name: "repo",
-          fullName: "acme/repo",
-          htmlUrl: "https://github.com/acme/repo",
+    snapshots: new Map([
+      [
+        "project-1",
+        {
+          repository: {
+            owner: "acme",
+            name: "repo",
+            fullName: "acme/repo",
+            htmlUrl: "https://github.com/acme/repo",
+          },
+          viewer: { login: "reviewer" },
+          issues: [],
         },
-        viewer: { login: "reviewer" },
-        issues: [],
-      },
-    ]]),
+      ],
+    ]),
     loadingProjects: new Set(),
     projectErrors: new Map(),
     loadIssues: loadGitHubIssuesMock as unknown as ReturnType<
@@ -90,7 +94,9 @@ describe("canClearTaskBuildStatus", () => {
   });
 
   test("is true when the task has a leftover pipeline link and no build phase", () => {
-    expect(canClearTaskBuildStatus(makeTask({ buildPipelineId: "pipeline-1" }), undefined)).toBe(true);
+    expect(canClearTaskBuildStatus(makeTask({ buildPipelineId: "pipeline-1" }), undefined)).toBe(
+      true,
+    );
   });
 
   test.each<BuildPhase>(["complete", "failed", "paused"])(
@@ -112,9 +118,9 @@ describe("canClearTaskBuildStatus", () => {
     "creating-pr",
     "resolving-conflicts",
   ])("is false while actively building (phase %s) even with links", (phase) => {
-    expect(canClearTaskBuildStatus(makeTask({ environmentId: "env-1", buildPipelineId: "p-1" }), phase)).toBe(
-      false,
-    );
+    expect(
+      canClearTaskBuildStatus(makeTask({ environmentId: "env-1", buildPipelineId: "p-1" }), phase),
+    ).toBe(false);
   });
 });
 

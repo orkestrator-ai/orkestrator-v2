@@ -69,10 +69,7 @@ export class EventRing<T> {
   private droppedEvents = 0;
   private retainedBytes = 0;
 
-  constructor(
-    capacity: number = DEFAULT_RING_CAPACITY,
-    options: EventRingOptions<T> = {},
-  ) {
+  constructor(capacity: number = DEFAULT_RING_CAPACITY, options: EventRingOptions<T> = {}) {
     // A zero-capacity ring would report every reconnect as needing reconciliation,
     // which is correct but pointless; guard against a misconfigured 0.
     this.capacity = Math.max(1, capacity);
@@ -120,10 +117,7 @@ export class EventRing<T> {
     if (this.supersede) this.collapseSuperseded(event);
     this.retainedBytes += Math.max(0, this.measureBytes(event));
     this.buffer.push({ revision: this.revision, event });
-    while (
-      this.buffer.length > this.capacity
-      || this.retainedBytes > this.maxBytes
-    ) {
+    while (this.buffer.length > this.capacity || this.retainedBytes > this.maxBytes) {
       const removed = this.buffer.shift();
       if (!removed) break;
       this.retainedBytes -= Math.max(0, this.measureBytes(removed.event));

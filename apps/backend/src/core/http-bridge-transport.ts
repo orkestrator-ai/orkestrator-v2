@@ -7,11 +7,7 @@ import {
   ProviderUnavailableError,
   ProviderUnreachableError,
 } from "./agent-provider-contract.js";
-import {
-  asRecord,
-  isTransientHttpStatus,
-  nonEmptyString,
-} from "./agent-provider-runtime.js";
+import { asRecord, isTransientHttpStatus, nonEmptyString } from "./agent-provider-runtime.js";
 
 const DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS = 30_000;
 const ACP_SESSION_START_TIMEOUT_MS = 75_000;
@@ -34,11 +30,7 @@ const BRIDGE_ATTACH_TIMEOUT_MS = 90_000;
  * Which ceiling a request gets. `prompt` and `attach` are separate names for
  * the same budget so call sites read as what they do.
  */
-export type BridgeRequestTimeoutKind =
-  | "default"
-  | "session-start"
-  | "attach"
-  | "prompt";
+export type BridgeRequestTimeoutKind = "default" | "session-start" | "attach" | "prompt";
 
 /**
  * Transport failures that are proven to precede the first written byte.
@@ -77,18 +69,15 @@ function errorCode(value: unknown): string | undefined {
 export function isConnectPhaseFailure(error: unknown): boolean {
   const direct = errorCode(error);
   if (direct && CONNECT_PHASE_ERROR_CODES.has(direct)) return true;
-  const cause = typeof error === "object" && error !== null
-    ? (error as { cause?: unknown }).cause
-    : undefined;
+  const cause =
+    typeof error === "object" && error !== null ? (error as { cause?: unknown }).cause : undefined;
   const nested = errorCode(cause);
   return nested !== undefined && CONNECT_PHASE_ERROR_CODES.has(nested);
 }
 
 export interface HttpBridgeProviderDependencies {
   fetch?: typeof fetch;
-  stageImages?: (
-    images: NonNullable<ProviderSendOptions["images"]>,
-  ) => Promise<PromptAttachment[]>;
+  stageImages?: (images: NonNullable<ProviderSendOptions["images"]>) => Promise<PromptAttachment[]>;
 }
 
 export async function boundedJson(
@@ -144,10 +133,7 @@ function bridgeRequestTimeoutMs(
   if (connection.requestTimeoutMs !== undefined) {
     return Math.max(1, connection.requestTimeoutMs);
   }
-  if (
-    kind === "session-start"
-    && (connection.agent === "cursor" || connection.agent === "grok")
-  ) {
+  if (kind === "session-start" && (connection.agent === "cursor" || connection.agent === "grok")) {
     return ACP_SESSION_START_TIMEOUT_MS;
   }
   // Unlike session start this is not narrowed to the ACP agents: every bridge
@@ -168,9 +154,7 @@ export async function bridgeFetch(
   new Headers(init.headers).forEach((value, key) => headers.set(key, value));
   const timeoutMs = bridgeRequestTimeoutMs(connection, timeoutKind);
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
-  const signal = init.signal
-    ? AbortSignal.any([init.signal, timeoutSignal])
-    : timeoutSignal;
+  const signal = init.signal ? AbortSignal.any([init.signal, timeoutSignal]) : timeoutSignal;
   try {
     return await fetchImpl(`${connection.baseUrl}${path}`, {
       ...init,
@@ -181,15 +165,13 @@ export async function bridgeFetch(
     // A bridge that was never reached is a different fact from one that stopped
     // answering mid-request, and prompt dispatch resolves the two differently.
     if (isConnectPhaseFailure(error)) {
-      throw new ProviderUnreachableError(
-        `${connection.agent} bridge is not reachable`,
-        { cause: error },
-      );
+      throw new ProviderUnreachableError(`${connection.agent} bridge is not reachable`, {
+        cause: error,
+      });
     }
-    throw new ProviderUnavailableError(
-      `${connection.agent} bridge is unavailable`,
-      { cause: error },
-    );
+    throw new ProviderUnavailableError(`${connection.agent} bridge is unavailable`, {
+      cause: error,
+    });
   }
 }
 
@@ -211,12 +193,10 @@ export async function assertOkWithErrorDetail(
   if (response.ok) return;
   const payload = await boundedJson(response, operation).catch(() => null);
   const rawDetail = nonEmptyString(asRecord(payload)?.error);
-  const detail = rawDetail
-    ? rawDetail.replace(/[\r\n\t]+/g, " ").slice(0, 500)
-    : "";
-  const message = `${operation} ${isTransientHttpStatus(response.status)
-    ? "is temporarily unavailable"
-    : "failed"} (HTTP ${response.status})${detail ? `: ${detail}` : ""}`;
+  const detail = rawDetail ? rawDetail.replace(/[\r\n\t]+/g, " ").slice(0, 500) : "";
+  const message = `${operation} ${
+    isTransientHttpStatus(response.status) ? "is temporarily unavailable" : "failed"
+  } (HTTP ${response.status})${detail ? `: ${detail}` : ""}`;
   if (isTransientHttpStatus(response.status)) {
     throw new ProviderUnavailableError(message);
   }
@@ -243,7 +223,7 @@ export async function resolvePromptAttachments(
         "Prompt images require workspace staging before they can be attached",
       );
     }
-    attachments.push(...await stageImages(images));
+    attachments.push(...(await stageImages(images)));
   }
   return attachments.length > 0 ? attachments : undefined;
 }

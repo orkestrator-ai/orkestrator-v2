@@ -1,10 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import {
-  summarizeValue,
-  truncateUtf8,
-} from "../bounded-test-diagnostics";
+import { summarizeValue, truncateUtf8 } from "../bounded-test-diagnostics";
 import {
   DOM_SCALAR_METHODS,
   DOM_SCALAR_PROPERTIES,
@@ -46,7 +43,7 @@ async function testFiles(directory: string): Promise<string[]> {
   const files: string[] = [];
   for (const entry of entries) {
     const target = path.join(directory, entry.name);
-    if (entry.isDirectory()) files.push(...await testFiles(target));
+    if (entry.isDirectory()) files.push(...(await testFiles(target)));
     else if (/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(entry.name)) files.push(target);
   }
   return files;
@@ -78,14 +75,16 @@ describe("bounded test diagnostics", () => {
     ].join("\n");
 
     expect(findUnsafeDomAbsenceAssertions("fixture.test.ts", source)).toHaveLength(4);
-    expect(rewriteUnsafeDomAbsenceAssertions("fixture.test.ts", source)).toBe([
-      "expect(screen.queryByRole('button') === null).toBe(true);",
-      "expect(container.querySelector('.spinner') === null).toBe(true);",
-      "expect(await screen.findByRole('status') === null).toBe(true);",
-      "expect(container.querySelectorAll('.item')[0] === null).toBe(true);",
-      "expect(container.querySelector('.spinner')?.getAttribute('data-state')).toBeNull();",
-      "expect(container.querySelector('.ready')).not.toBeNull();",
-    ].join("\n"));
+    expect(rewriteUnsafeDomAbsenceAssertions("fixture.test.ts", source)).toBe(
+      [
+        "expect(screen.queryByRole('button') === null).toBe(true);",
+        "expect(container.querySelector('.spinner') === null).toBe(true);",
+        "expect(await screen.findByRole('status') === null).toBe(true);",
+        "expect(container.querySelectorAll('.item')[0] === null).toBe(true);",
+        "expect(container.querySelector('.spinner')?.getAttribute('data-state')).toBeNull();",
+        "expect(container.querySelector('.ready')).not.toBeNull();",
+      ].join("\n"),
+    );
   });
 
   test("exempts every allowlisted scalar projection", () => {
@@ -126,8 +125,10 @@ describe("bounded test diagnostics", () => {
       "expect(container.querySelector('.spinner')!.id satisfies string).toBeNull();",
     ];
     for (const assertion of wrapped) {
-      expect({ assertion, hits: findUnsafeDomAbsenceAssertions("f.test.ts", assertion).length })
-        .toEqual({ assertion, hits: 0 });
+      expect({
+        assertion,
+        hits: findUnsafeDomAbsenceAssertions("f.test.ts", assertion).length,
+      }).toEqual({ assertion, hits: 0 });
     }
 
     // The same wrappers must not launder a node into an exemption.
@@ -139,8 +140,10 @@ describe("bounded test diagnostics", () => {
       "expect(container.querySelector('.spinner') satisfies Element | null).toBeNull();",
     ];
     for (const assertion of laundered) {
-      expect({ assertion, hits: findUnsafeDomAbsenceAssertions("f.test.ts", assertion).length })
-        .toEqual({ assertion, hits: 1 });
+      expect({
+        assertion,
+        hits: findUnsafeDomAbsenceAssertions("f.test.ts", assertion).length,
+      }).toEqual({ assertion, hits: 1 });
     }
   });
 
@@ -157,8 +160,10 @@ describe("bounded test diagnostics", () => {
     ];
 
     for (const assertion of flagged) {
-      expect({ assertion, hits: findUnsafeDomAbsenceAssertions("f.test.ts", assertion).length })
-        .toEqual({ assertion, hits: 1 });
+      expect({
+        assertion,
+        hits: findUnsafeDomAbsenceAssertions("f.test.ts", assertion).length,
+      }).toEqual({ assertion, hits: 1 });
     }
   });
 
@@ -198,13 +203,17 @@ describe("bounded test diagnostics", () => {
 
     // Guard against a fixture too small to distinguish the two classes, then
     // pin the reason the subtree-sized projections are excluded.
-    expect(projectionByteLength(container.innerHTML))
-      .toBeGreaterThan(MAX_EXEMPT_PROJECTION_BYTES * 8);
+    expect(projectionByteLength(container.innerHTML)).toBeGreaterThan(
+      MAX_EXEMPT_PROJECTION_BYTES * 8,
+    );
     for (const projection of SUBTREE_SIZED_PROJECTIONS) {
-      expect({ projection, exempt: DOM_SCALAR_PROPERTIES.has(projection) })
-        .toEqual({ projection, exempt: false });
-      expect(projectionByteLength((container as unknown as Record<string, unknown>)[projection]))
-        .toBeGreaterThan(MAX_EXEMPT_PROJECTION_BYTES);
+      expect({ projection, exempt: DOM_SCALAR_PROPERTIES.has(projection) }).toEqual({
+        projection,
+        exempt: false,
+      });
+      expect(
+        projectionByteLength((container as unknown as Record<string, unknown>)[projection]),
+      ).toBeGreaterThan(MAX_EXEMPT_PROJECTION_BYTES);
     }
   });
 
@@ -220,13 +229,15 @@ describe("bounded test diagnostics", () => {
   });
 
   test("bounds depth, collection size, object keys, and special collections", () => {
-    expect(summarizeValue({ first: { second: { third: true } } }))
-      .toBe("Object { first: Object { second: [Object] } }");
-    expect(summarizeValue(Array.from({ length: 14 }, (_, index) => index)))
-      .toContain("… 2 more");
-    expect(summarizeValue(Object.fromEntries(
-      Array.from({ length: 22 }, (_, index) => [`key${index}`, index]),
-    ))).toContain("… 2 more keys");
+    expect(summarizeValue({ first: { second: { third: true } } })).toBe(
+      "Object { first: Object { second: [Object] } }",
+    );
+    expect(summarizeValue(Array.from({ length: 14 }, (_, index) => index))).toContain("… 2 more");
+    expect(
+      summarizeValue(
+        Object.fromEntries(Array.from({ length: 22 }, (_, index) => [`key${index}`, index])),
+      ),
+    ).toContain("… 2 more keys");
     expect(summarizeValue(new Map([["key", "value"]]))).toBe("[Map(size=1)]");
     expect(summarizeValue(new Set([1, 2]))).toBe("[Set(size=2)]");
   });
@@ -267,7 +278,7 @@ describe("bounded test diagnostics", () => {
     expect(status).not.toBe(0);
     expect(bytes).toBeLessThan(MAX_CANARY_OUTPUT_BYTES);
     expect(output).toContain("intentional diagnostic canary");
-    expect(output).toContain("<button aria-label=\"Context window\">");
+    expect(output).toContain('<button aria-label="Context window">');
     expect(output).not.toContain("react-stack-top-frame");
   }, 10_000);
 

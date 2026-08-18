@@ -15,10 +15,12 @@ describe("browser preview protocol contract", () => {
     ) as { exports: Record<string, string> };
 
     expect(packageJson.exports["./browser-preview"]).toBe("./src/browser-preview.ts");
-    expect(Bun.resolveSync(
-      "@orkestrator/protocol/browser-preview",
-      path.join(process.cwd(), "apps/desktop"),
-    )).toBe(path.join(process.cwd(), "packages/protocol/src/browser-preview.ts"));
+    expect(
+      Bun.resolveSync(
+        "@orkestrator/protocol/browser-preview",
+        path.join(process.cwd(), "apps/desktop"),
+      ),
+    ).toBe(path.join(process.cwd(), "packages/protocol/src/browser-preview.ts"));
   });
 
   test("keeps attachment bounds and state fields aligned", () => {

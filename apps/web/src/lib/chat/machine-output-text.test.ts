@@ -1,8 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-  isWithheldMachineOutput,
-  jsonDocumentState,
-} from "./machine-output-text";
+import { isWithheldMachineOutput, jsonDocumentState } from "./machine-output-text";
 
 describe("jsonDocumentState", () => {
   test("treats ordinary prose as prose", () => {
@@ -34,7 +31,7 @@ describe("jsonDocumentState", () => {
 
   test("keeps prose that merely contains or follows JSON", () => {
     expect(jsonDocumentState('{"a":1} and then some commentary')).toBe("not-json");
-    expect(jsonDocumentState("Here is the payload: {\"a\":1}")).toBe("not-json");
+    expect(jsonDocumentState('Here is the payload: {"a":1}')).toBe("not-json");
     expect(jsonDocumentState("} stray closing brace")).toBe("not-json");
   });
 

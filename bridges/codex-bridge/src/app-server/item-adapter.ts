@@ -27,7 +27,9 @@ function str(value: unknown): string | undefined {
 }
 
 function strArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : [];
 }
 
 /** app-server `inProgress` → SDK `in_progress`; `declined` has no SDK peer. */
@@ -196,11 +198,12 @@ export function adaptAppServerItem(raw: unknown): ItemAdaptationResult {
           // not settle one that is still running: reporting a terminal outcome
           // for an in-flight call is the same class of mistake as reporting
           // `idle` for a turn that is still executing.
-          status: raw.status === "inProgress"
-            ? "in_progress"
-            : raw.success === false
-              ? "failed"
-              : commandStatus(raw.status),
+          status:
+            raw.status === "inProgress"
+              ? "in_progress"
+              : raw.success === false
+                ? "failed"
+                : commandStatus(raw.status),
         } as EngineItem,
       };
     }
@@ -219,8 +222,10 @@ export function adaptAppServerItem(raw: unknown): ItemAdaptationResult {
     case "collabAgentToolCall": {
       const tool = collabToolName(raw.tool);
       if (!tool) return { item: null, unsupportedType: type };
-      const agentsStates: Record<string, { status?: CodexCollabAgentStatus; message?: string | null }> =
-        {};
+      const agentsStates: Record<
+        string,
+        { status?: CodexCollabAgentStatus; message?: string | null }
+      > = {};
       if (isRecord(raw.agentsStates)) {
         for (const [agentId, state] of Object.entries(raw.agentsStates)) {
           if (!isRecord(state)) continue;
@@ -295,10 +300,7 @@ export function adaptAppServerItem(raw: unknown): ItemAdaptationResult {
  * but the UI has always rendered it as a todo list, so it is synthesized into one
  * under a stable per-turn id.
  */
-export function planUpdateToTodoList(
-  turnId: string,
-  plan: unknown,
-): EngineItem | null {
+export function planUpdateToTodoList(turnId: string, plan: unknown): EngineItem | null {
   if (!Array.isArray(plan)) return null;
   const items = plan
     .filter(isRecord)

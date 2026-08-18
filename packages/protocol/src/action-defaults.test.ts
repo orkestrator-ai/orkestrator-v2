@@ -13,32 +13,40 @@ describe("normalizeActionDefaults", () => {
   });
 
   it("keeps well-formed entries and trims their strings", () => {
-    expect(normalizeActionDefaults({
-      review: { platform: "codex", model: " gpt-5.4 ", reasoningEffort: " high " },
-    })).toEqual({ review: { platform: "codex", model: "gpt-5.4", reasoningEffort: "high" } });
+    expect(
+      normalizeActionDefaults({
+        review: { platform: "codex", model: " gpt-5.4 ", reasoningEffort: " high " },
+      }),
+    ).toEqual({ review: { platform: "codex", model: "gpt-5.4", reasoningEffort: "high" } });
   });
 
   it("drops unknown action keys", () => {
-    expect(normalizeActionDefaults({
-      review: { platform: "claude" },
-      deploy: { platform: "claude" },
-    })).toEqual({ review: { platform: "claude" } });
+    expect(
+      normalizeActionDefaults({
+        review: { platform: "claude" },
+        deploy: { platform: "claude" },
+      }),
+    ).toEqual({ review: { platform: "claude" } });
   });
 
   it("drops an entry without a valid platform", () => {
     // A model id only means something inside its own platform's catalogue, so
     // an entry that names one without the other cannot be honoured.
-    expect(normalizeActionDefaults({
-      review: { model: "sonnet" },
-      pr: { platform: "not-an-agent", model: "sonnet" },
-      push: { platform: "claude" },
-    })).toEqual({ push: { platform: "claude" } });
+    expect(
+      normalizeActionDefaults({
+        review: { model: "sonnet" },
+        pr: { platform: "not-an-agent", model: "sonnet" },
+        push: { platform: "claude" },
+      }),
+    ).toEqual({ push: { platform: "claude" } });
   });
 
   it("drops blank model and reasoning values rather than persisting them", () => {
-    expect(normalizeActionDefaults({
-      pr: { platform: "claude", model: "   ", reasoningEffort: "" },
-    })).toEqual({ pr: { platform: "claude" } });
+    expect(
+      normalizeActionDefaults({
+        pr: { platform: "claude", model: "   ", reasoningEffort: "" },
+      }),
+    ).toEqual({ pr: { platform: "claude" } });
   });
 
   it("drops OpenCode's placeholder model but keeps the rest of the entry", () => {
@@ -46,15 +54,19 @@ describe("normalizeActionDefaults", () => {
     // models are cached. No OpenCode server knows it, so persisting it would
     // pin a bogus one-shot model; the entry still means "OpenCode's own
     // default model", which is what the placeholder stood for.
-    expect(normalizeActionDefaults({
-      push: { platform: "opencode", model: "default", reasoningEffort: "high" },
-    })).toEqual({ push: { platform: "opencode", reasoningEffort: "high" } });
+    expect(
+      normalizeActionDefaults({
+        push: { platform: "opencode", model: "default", reasoningEffort: "high" },
+      }),
+    ).toEqual({ push: { platform: "opencode", reasoningEffort: "high" } });
   });
 
   it("keeps `default` for platforms where it is a real catalog id", () => {
-    expect(normalizeActionDefaults({
-      review: { platform: "claude", model: "default" },
-    })).toEqual({ review: { platform: "claude", model: "default" } });
+    expect(
+      normalizeActionDefaults({
+        review: { platform: "claude", model: "default" },
+      }),
+    ).toEqual({ review: { platform: "claude", model: "default" } });
   });
 
   it("serializes to a canonical key order regardless of input order", () => {
@@ -69,69 +81,85 @@ describe("resolveActionDefault", () => {
   const enabledAgents = ["claude", "codex"] as const;
 
   it("falls back to the caller's agent when nothing is configured", () => {
-    expect(resolveActionDefault(undefined, "review", {
-      fallbackAgent: "claude",
-      enabledAgents,
-    })).toEqual({ agent: "claude" });
-    expect(resolveActionDefault({}, "review", {
-      fallbackAgent: "codex",
-      enabledAgents,
-    })).toEqual({ agent: "codex" });
+    expect(
+      resolveActionDefault(undefined, "review", {
+        fallbackAgent: "claude",
+        enabledAgents,
+      }),
+    ).toEqual({ agent: "claude" });
+    expect(
+      resolveActionDefault({}, "review", {
+        fallbackAgent: "codex",
+        enabledAgents,
+      }),
+    ).toEqual({ agent: "codex" });
   });
 
   it("returns the configured platform, model and reasoning level", () => {
-    expect(resolveActionDefault(
-      { review: { platform: "codex", model: "gpt-5.4", reasoningEffort: "xhigh" } },
-      "review",
-      { fallbackAgent: "claude", enabledAgents },
-    )).toEqual({ agent: "codex", model: "gpt-5.4", reasoningEffort: "xhigh" });
+    expect(
+      resolveActionDefault(
+        { review: { platform: "codex", model: "gpt-5.4", reasoningEffort: "xhigh" } },
+        "review",
+        { fallbackAgent: "claude", enabledAgents },
+      ),
+    ).toEqual({ agent: "codex", model: "gpt-5.4", reasoningEffort: "xhigh" });
   });
 
   it("ignores a default whose platform has since been disabled", () => {
     // The model belongs to the disabled platform; carrying it onto the
     // fallback agent would launch a model that agent does not have.
-    expect(resolveActionDefault(
-      { pr: { platform: "opencode", model: "opencode/claude-sonnet-5" } },
-      "pr",
-      { fallbackAgent: "claude", enabledAgents },
-    )).toEqual({ agent: "claude" });
+    expect(
+      resolveActionDefault(
+        { pr: { platform: "opencode", model: "opencode/claude-sonnet-5" } },
+        "pr",
+        { fallbackAgent: "claude", enabledAgents },
+      ),
+    ).toEqual({ agent: "claude" });
   });
 
   it("lets a narrower scope's agent outrank the application-level default", () => {
     // These defaults are application-level. An environment the user
     // deliberately created with Codex must not be retargeted by them, and
     // Claude's model cannot travel to Codex.
-    expect(resolveActionDefault(
-      { review: { platform: "claude", model: "opus", reasoningEffort: "max" } },
-      "review",
-      { fallbackAgent: "codex", overrideAgent: "codex", enabledAgents },
-    )).toEqual({ agent: "codex" });
+    expect(
+      resolveActionDefault(
+        { review: { platform: "claude", model: "opus", reasoningEffort: "max" } },
+        "review",
+        { fallbackAgent: "codex", overrideAgent: "codex", enabledAgents },
+      ),
+    ).toEqual({ agent: "codex" });
   });
 
   it("still applies the model when the narrower scope names the same agent", () => {
-    expect(resolveActionDefault(
-      { review: { platform: "codex", model: "gpt-5.4", reasoningEffort: "xhigh" } },
-      "review",
-      { fallbackAgent: "codex", overrideAgent: "codex", enabledAgents },
-    )).toEqual({ agent: "codex", model: "gpt-5.4", reasoningEffort: "xhigh" });
+    expect(
+      resolveActionDefault(
+        { review: { platform: "codex", model: "gpt-5.4", reasoningEffort: "xhigh" } },
+        "review",
+        { fallbackAgent: "codex", overrideAgent: "codex", enabledAgents },
+      ),
+    ).toEqual({ agent: "codex", model: "gpt-5.4", reasoningEffort: "xhigh" });
   });
 
   it("ignores a narrower scope naming a platform that is not enabled", () => {
     // A stale environment agent cannot strand the action on a disabled
     // platform; the configured default is still the better answer.
-    expect(resolveActionDefault(
-      { review: { platform: "codex", model: "gpt-5.4" } },
-      "review",
-      { fallbackAgent: "claude", overrideAgent: "opencode", enabledAgents },
-    )).toEqual({ agent: "codex", model: "gpt-5.4" });
+    expect(
+      resolveActionDefault({ review: { platform: "codex", model: "gpt-5.4" } }, "review", {
+        fallbackAgent: "claude",
+        overrideAgent: "opencode",
+        enabledAgents,
+      }),
+    ).toEqual({ agent: "codex", model: "gpt-5.4" });
   });
 
   it("falls back to the narrower scope when nothing is configured", () => {
-    expect(resolveActionDefault({}, "push", {
-      fallbackAgent: "claude",
-      overrideAgent: "codex",
-      enabledAgents,
-    })).toEqual({ agent: "codex" });
+    expect(
+      resolveActionDefault({}, "push", {
+        fallbackAgent: "claude",
+        overrideAgent: "codex",
+        enabledAgents,
+      }),
+    ).toEqual({ agent: "codex" });
   });
 
   it("reads only the requested action's entry", () => {
@@ -139,13 +167,17 @@ describe("resolveActionDefault", () => {
       review: { platform: "codex" as const, model: "gpt-5.4" },
       push: { platform: "claude" as const },
     };
-    expect(resolveActionDefault(defaults, "push", {
-      fallbackAgent: "codex",
-      enabledAgents,
-    })).toEqual({ agent: "claude" });
-    expect(resolveActionDefault(defaults, "resolve", {
-      fallbackAgent: "codex",
-      enabledAgents,
-    })).toEqual({ agent: "codex" });
+    expect(
+      resolveActionDefault(defaults, "push", {
+        fallbackAgent: "codex",
+        enabledAgents,
+      }),
+    ).toEqual({ agent: "claude" });
+    expect(
+      resolveActionDefault(defaults, "resolve", {
+        fallbackAgent: "codex",
+        enabledAgents,
+      }),
+    ).toEqual({ agent: "codex" });
   });
 });

@@ -29,38 +29,52 @@ describe("conditional backend wrappers", () => {
     await getLocalFileTreeSnapshot("/worktree", "known-tree");
 
     expect(invokeMock.mock.calls).toEqual([
-      ["get_git_status", {
-        containerId: "container-1",
-        targetBranch: "main",
-        includeUncommitted: true,
-        knownDigest: "known-git",
-      }],
-      ["get_file_tree", {
-        containerId: "container-1",
-        knownDigest: "",
-      }],
-      ["get_local_git_status", {
-        worktreePath: "/worktree",
-        targetBranch: "develop",
-        includeUncommitted: true,
-        knownDigest: "",
-      }],
-      ["get_local_file_tree", {
-        worktreePath: "/worktree",
-        knownDigest: "known-tree",
-      }],
+      [
+        "get_git_status",
+        {
+          containerId: "container-1",
+          targetBranch: "main",
+          includeUncommitted: true,
+          knownDigest: "known-git",
+        },
+      ],
+      [
+        "get_file_tree",
+        {
+          containerId: "container-1",
+          knownDigest: "",
+        },
+      ],
+      [
+        "get_local_git_status",
+        {
+          worktreePath: "/worktree",
+          targetBranch: "develop",
+          includeUncommitted: true,
+          knownDigest: "",
+        },
+      ],
+      [
+        "get_local_file_tree",
+        {
+          worktreePath: "/worktree",
+          knownDigest: "known-tree",
+        },
+      ],
     ]);
   });
 
   test("normalizes legacy raw arrays for every snapshot wrapper", async () => {
-    const changes = [{
-      path: "src/App.tsx",
-      filename: "App.tsx",
-      directory: "src",
-      additions: 1,
-      deletions: 0,
-      status: "M",
-    }];
+    const changes = [
+      {
+        path: "src/App.tsx",
+        filename: "App.tsx",
+        directory: "src",
+        additions: 1,
+        deletions: 0,
+        status: "M",
+      },
+    ];
     const tree = [{ name: "src", path: "src", isDirectory: true }];
     invokeMock
       .mockResolvedValueOnce(changes)
@@ -118,15 +132,11 @@ describe("conditional backend wrappers", () => {
       .mockResolvedValueOnce({ ids: [42], records: [] })
       .mockResolvedValueOnce([{ missingId: true }]);
 
-    await expect(
-      listBuildPipelinesConditional("project-1", {}),
-    ).resolves.toEqual({
+    await expect(listBuildPipelinesConditional("project-1", {})).resolves.toEqual({
       ids: ["pipeline-1", "pipeline-2"],
       records: [first, second],
     });
-    await expect(
-      listBuildPipelinesConditional("project-1", { "pipeline-1": 2 }),
-    ).resolves.toEqual({
+    await expect(listBuildPipelinesConditional("project-1", { "pipeline-1": 2 })).resolves.toEqual({
       ids: ["pipeline-1"],
       records: [first],
     });
@@ -134,12 +144,12 @@ describe("conditional backend wrappers", () => {
       projectId: "project-1",
       knownRevisions: { "pipeline-1": 2 },
     });
-    await expect(
-      listBuildPipelinesConditional("project-1", {}),
-    ).rejects.toThrow("Invalid list_build_pipelines response");
-    await expect(
-      listBuildPipelinesConditional("project-1", {}),
-    ).rejects.toThrow("Invalid list_build_pipelines response");
+    await expect(listBuildPipelinesConditional("project-1", {})).rejects.toThrow(
+      "Invalid list_build_pipelines response",
+    );
+    await expect(listBuildPipelinesConditional("project-1", {})).rejects.toThrow(
+      "Invalid list_build_pipelines response",
+    );
   });
 
   test("validates conditional build-pipeline point-read envelopes", async () => {
@@ -147,14 +157,16 @@ describe("conditional backend wrappers", () => {
     const changed = {
       unchanged: false,
       record: legacy,
-      messagePatches: [{
-        sessionKey: "session-1",
-        baseRevision: 2,
-        baseCount: 3,
-        startIndex: 2,
-        revision: 3,
-        messages: [{ id: "message-3" }],
-      }],
+      messagePatches: [
+        {
+          sessionKey: "session-1",
+          baseRevision: 2,
+          baseCount: 3,
+          startIndex: 2,
+          revision: 3,
+          messages: [{ id: "message-3" }],
+        },
+      ],
     };
     invokeMock
       .mockResolvedValueOnce(null)
@@ -163,15 +175,12 @@ describe("conditional backend wrappers", () => {
       .mockResolvedValueOnce(changed)
       .mockResolvedValueOnce({ unchanged: false, record: legacy, messagePatches: [{}] });
 
-    await expect(
-      getBuildPipelineConditional("missing"),
-    ).resolves.toBeNull();
-    await expect(
-      getBuildPipelineConditional("pipeline-1"),
-    ).resolves.toBe(legacy);
-    await expect(
-      getBuildPipelineConditional("pipeline-1", 4),
-    ).resolves.toEqual({ unchanged: true, revision: 4 });
+    await expect(getBuildPipelineConditional("missing")).resolves.toBeNull();
+    await expect(getBuildPipelineConditional("pipeline-1")).resolves.toBe(legacy);
+    await expect(getBuildPipelineConditional("pipeline-1", 4)).resolves.toEqual({
+      unchanged: true,
+      revision: 4,
+    });
     await expect(
       getBuildPipelineConditional("pipeline-1", 3, {
         "session-1": { revision: 2, count: 3 },
@@ -184,8 +193,8 @@ describe("conditional backend wrappers", () => {
         "session-1": { revision: 2, count: 3 },
       },
     });
-    await expect(
-      getBuildPipelineConditional("pipeline-1"),
-    ).rejects.toThrow("Invalid get_build_pipeline response");
+    await expect(getBuildPipelineConditional("pipeline-1")).rejects.toThrow(
+      "Invalid get_build_pipeline response",
+    );
   });
 });

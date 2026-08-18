@@ -41,8 +41,9 @@ describe("parsePromptAttachments", () => {
   test("accepts an absent list and a well-formed image", () => {
     expect(parsePromptAttachments(undefined)).toEqual([]);
     expect(parsePromptAttachments(null)).toEqual([]);
-    expect(parsePromptAttachments([{ type: "image", path: " a.png ", filename: "a.png" }]))
-      .toEqual([{ type: "image", path: "a.png", filename: "a.png" }]);
+    expect(parsePromptAttachments([{ type: "image", path: " a.png ", filename: "a.png" }])).toEqual(
+      [{ type: "image", path: "a.png", filename: "a.png" }],
+    );
   });
 
   test("refuses anything it cannot faithfully forward", () => {
@@ -50,15 +51,23 @@ describe("parsePromptAttachments", () => {
     // agent was never shown, so every one of these has to reject the request.
     expect(() => parsePromptAttachments("nope")).toThrow(PromptAttachmentError);
     expect(() => parsePromptAttachments([null])).toThrow(PromptAttachmentError);
-    expect(() => parsePromptAttachments([{ type: "file", path: "a.txt" }]))
-      .toThrow("Cursor and Grok accept image attachments only");
-    expect(() => parsePromptAttachments([{ type: "image" }]))
-      .toThrow("Each attachment needs a workspace path");
-    expect(() => parsePromptAttachments([{ type: "image", path: "a\0.png" }]))
-      .toThrow("null bytes");
-    expect(() => parsePromptAttachments(
-      Array.from({ length: MAX_PROMPT_ATTACHMENTS + 1 }, () => ({ type: "image", path: "a.png" })),
-    )).toThrow(`at most ${MAX_PROMPT_ATTACHMENTS}`);
+    expect(() => parsePromptAttachments([{ type: "file", path: "a.txt" }])).toThrow(
+      "Cursor and Grok accept image attachments only",
+    );
+    expect(() => parsePromptAttachments([{ type: "image" }])).toThrow(
+      "Each attachment needs a workspace path",
+    );
+    expect(() => parsePromptAttachments([{ type: "image", path: "a\0.png" }])).toThrow(
+      "null bytes",
+    );
+    expect(() =>
+      parsePromptAttachments(
+        Array.from({ length: MAX_PROMPT_ATTACHMENTS + 1 }, () => ({
+          type: "image",
+          path: "a.png",
+        })),
+      ),
+    ).toThrow(`at most ${MAX_PROMPT_ATTACHMENTS}`);
   });
 });
 
@@ -71,10 +80,12 @@ describe("readPromptImages", () => {
     // signature has to win over the caller-supplied extension.
     await fs.writeFile(resolve(root, "nested/mislabelled.png"), JPEG_HEADER);
 
-    expect(await readPromptImages(
-      [image("shot.png"), image(resolve(root, "nested/mislabelled.png"))],
-      root,
-    )).toEqual([
+    expect(
+      await readPromptImages(
+        [image("shot.png"), image(resolve(root, "nested/mislabelled.png"))],
+        root,
+      ),
+    ).toEqual([
       {
         data: ONE_PIXEL_PNG.toString("base64"),
         mimeType: "image/png",
@@ -97,12 +108,14 @@ describe("readPromptImages", () => {
     await fs.mkdir(resolve(root, "..screens"));
     await fs.writeFile(resolve(root, "..screens/shot.png"), ONE_PIXEL_PNG);
 
-    await expect(readPromptImages([image("..screens/shot.png")], root)).resolves.toEqual([{
-      data: ONE_PIXEL_PNG.toString("base64"),
-      mimeType: "image/png",
-      path: "..screens/shot.png",
-      absolutePath: resolve(root, "..screens/shot.png"),
-    }]);
+    await expect(readPromptImages([image("..screens/shot.png")], root)).resolves.toEqual([
+      {
+        data: ONE_PIXEL_PNG.toString("base64"),
+        mimeType: "image/png",
+        path: "..screens/shot.png",
+        absolutePath: resolve(root, "..screens/shot.png"),
+      },
+    ]);
   });
 
   test("refuses a path that escapes the workspace, directly or through a symlink", async () => {
@@ -129,14 +142,17 @@ describe("readPromptImages", () => {
     await fs.writeFile(resolve(root, "huge.png"), Buffer.alloc(MAX_IMAGE_ATTACHMENT_BYTES + 1));
     await fs.mkdir(resolve(root, "directory.png"));
 
-    await expect(readPromptImages([image("missing.png")], root))
-      .rejects.toThrow("could not be read");
+    await expect(readPromptImages([image("missing.png")], root)).rejects.toThrow(
+      "could not be read",
+    );
     await expect(readPromptImages([image("empty.png")], root)).rejects.toThrow("empty");
-    await expect(readPromptImages([image("notes.txt")], root))
-      .rejects.toThrow("PNG, JPEG, GIF, or WebP");
+    await expect(readPromptImages([image("notes.txt")], root)).rejects.toThrow(
+      "PNG, JPEG, GIF, or WebP",
+    );
     await expect(readPromptImages([image("huge.png")], root)).rejects.toThrow("8MB");
-    await expect(readPromptImages([image("directory.png")], root))
-      .rejects.toThrow(PromptAttachmentError);
+    await expect(readPromptImages([image("directory.png")], root)).rejects.toThrow(
+      PromptAttachmentError,
+    );
   });
 
   test("bounds the total bytes one prompt can carry", async () => {
@@ -148,10 +164,12 @@ describe("readPromptImages", () => {
     for (let index = 0; index < 5; index += 1) {
       await fs.writeFile(resolve(root, `large-${index}.png`), large);
     }
-    await expect(readPromptImages(
-      Array.from({ length: 5 }, (_, index) => image(`large-${index}.png`)),
-      root,
-    )).rejects.toThrow("32MB");
+    await expect(
+      readPromptImages(
+        Array.from({ length: 5 }, (_, index) => image(`large-${index}.png`)),
+        root,
+      ),
+    ).rejects.toThrow("32MB");
   });
 });
 
@@ -176,16 +194,15 @@ describe("assertStableRead", () => {
 
     // Labelled outcomes rather than a bare loop of `toThrow`, so a regression
     // names the case that stopped rejecting instead of a line number.
-    expect(cases.map(([label, final, bytesRead]) => {
-      try {
-        assertStableRead(identity, final, bytesRead);
-        return [label, "accepted"];
-      } catch (error) {
-        return [
-          label,
-          error instanceof PromptAttachmentError ? error.code : "unexpected error",
-        ];
-      }
-    })).toEqual(cases.map(([label]) => [label, "attachment_changed"]));
+    expect(
+      cases.map(([label, final, bytesRead]) => {
+        try {
+          assertStableRead(identity, final, bytesRead);
+          return [label, "accepted"];
+        } catch (error) {
+          return [label, error instanceof PromptAttachmentError ? error.code : "unexpected error"];
+        }
+      }),
+    ).toEqual(cases.map(([label]) => [label, "attachment_changed"]));
   });
 });

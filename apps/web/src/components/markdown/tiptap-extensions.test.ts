@@ -69,14 +69,8 @@ describe("Markdown Tiptap extensions", () => {
 
   test("accepts the repository Markdown files that previously failed", () => {
     const expectedMarkdown = new Map([
-      [
-        "AGENTS.md",
-        "**Always use v2 of the `@opencode-ai/sdk` package.**",
-      ],
-      [
-        "README.md",
-        "[`orkestrator.dev`](https://www.orkestrator.dev)",
-      ],
+      ["AGENTS.md", "**Always use v2 of the `@opencode-ai/sdk` package.**"],
+      ["README.md", "[`orkestrator.dev`](https://www.orkestrator.dev)"],
     ]);
 
     for (const [fileName, expected] of expectedMarkdown) {
@@ -93,9 +87,7 @@ describe("Markdown Tiptap extensions", () => {
   });
 
   test("round-trips GFM tables", () => {
-    const result = roundTrip(
-      "| Name | Value |\n| --- | --- |\n| one | two |",
-    );
+    const result = roundTrip("| Name | Value |\n| --- | --- |\n| one | two |");
 
     expect(result).toContain("| Name");
     expect(result).toContain("| ---");
@@ -161,8 +153,7 @@ describe("Markdown Tiptap extensions", () => {
   test("preserves Markdown image source, alt text, and title without fetching it", () => {
     editor = new Editor({
       extensions: createMarkdownExtensions(),
-      content:
-        'Before ![diagram](https://example.invalid/diagram.png "Architecture") after',
+      content: 'Before ![diagram](https://example.invalid/diagram.png "Architecture") after',
       contentType: "markdown",
     });
 
@@ -183,9 +174,7 @@ describe("Markdown Tiptap extensions", () => {
   });
 
   test("uses source and generic fallback labels for images", () => {
-    expect(roundTrip("![](assets/diagram.png)")).toBe(
-      "![](assets/diagram.png)",
-    );
+    expect(roundTrip("![](assets/diagram.png)")).toBe("![](assets/diagram.png)");
     expect(getCurrentEditor().getHTML()).toContain("Image: assets/diagram.png");
     editor?.destroy();
     editor = null;
@@ -251,20 +240,18 @@ describe("Markdown Tiptap extensions", () => {
   });
 
   test("rejects footnotes and raw HTML that would be lossy", () => {
+    expect(assessMarkdownForRichEditing("Paragraph\n\n[^1]: footnote")).toMatchObject({
+      safe: false,
+    });
     expect(
-      assessMarkdownForRichEditing("Paragraph\n\n[^1]: footnote"),
-    ).toMatchObject({ safe: false });
-    expect(
-      assessMarkdownForRichEditing(
-        "<details><summary>More</summary>Body</details>",
-      ),
+      assessMarkdownForRichEditing("<details><summary>More</summary>Body</details>"),
     ).toMatchObject({ safe: false });
   });
 
   test("accepts supported Markdown with YAML or TOML frontmatter", () => {
     for (const markdown of [
       "---\ntitle: Hello\ntags:\n  - one\n---\n\n# Page",
-      "+++\ntitle = \"Hello\"\n+++\n\n# Page",
+      '+++\ntitle = "Hello"\n+++\n\n# Page',
       "---\r\ntitle: Hello\r\n...\r\n\r\n# Page",
     ]) {
       expect(assessMarkdownForRichEditing(markdown)).toEqual({
@@ -277,7 +264,7 @@ describe("Markdown Tiptap extensions", () => {
   test("still rejects unsupported body syntax after valid frontmatter", () => {
     for (const markdown of [
       "---\ntitle: Footnotes\n---\n\nParagraph\n\n[^1]: footnote",
-      "+++\ntitle = \"HTML\"\n+++\n\n<details>raw</details>",
+      '+++\ntitle = "HTML"\n+++\n\n<details>raw</details>',
     ]) {
       expect(assessMarkdownForRichEditing(markdown)).toMatchObject({
         safe: false,
@@ -299,8 +286,8 @@ describe("Markdown Tiptap extensions", () => {
   test("splits every supported delimiter and line-ending variant exactly", () => {
     const cases = [
       {
-        markdown: "+++\ntitle = \"Hello\"\n+++\n# Page",
-        frontmatter: "+++\ntitle = \"Hello\"\n+++\n",
+        markdown: '+++\ntitle = "Hello"\n+++\n# Page',
+        frontmatter: '+++\ntitle = "Hello"\n+++\n',
         body: "# Page",
       },
       {
@@ -314,8 +301,8 @@ describe("Markdown Tiptap extensions", () => {
         body: "",
       },
       {
-        markdown: "+++\r\ntitle = \"Hello\"\r\n+++\r\n \t\r\n\r\n  body",
-        frontmatter: "+++\r\ntitle = \"Hello\"\r\n+++\r\n \t\r\n\r\n",
+        markdown: '+++\r\ntitle = "Hello"\r\n+++\r\n \t\r\n\r\n  body',
+        frontmatter: '+++\r\ntitle = "Hello"\r\n+++\r\n \t\r\n\r\n',
         body: "  body",
       },
     ];
@@ -328,12 +315,12 @@ describe("Markdown Tiptap extensions", () => {
   test("does not split non-leading, missing, or mismatched delimiters", () => {
     for (const markdown of [
       "Intro\n---\ntitle: x\n---\nBody",
-      "Intro\n+++\ntitle = \"x\"\n+++\nBody",
+      'Intro\n+++\ntitle = "x"\n+++\nBody',
       "plain Markdown",
       "---",
       "---\ntitle: unclosed",
       "---\ntitle: mismatched\n+++\nBody",
-      "+++\ntitle = \"mismatched\"\n---\nBody",
+      '+++\ntitle = "mismatched"\n---\nBody',
     ]) {
       expect(splitMarkdownFrontmatter(markdown)).toEqual({
         frontmatter: "",
@@ -344,9 +331,7 @@ describe("Markdown Tiptap extensions", () => {
 
   test("reattaches frontmatter with a source-compatible separator when needed", () => {
     expect(restoreMarkdownFrontmatter("", "Body")).toBe("Body");
-    expect(restoreMarkdownFrontmatter("---\ntitle: x\n---", "")).toBe(
-      "---\ntitle: x\n---",
-    );
+    expect(restoreMarkdownFrontmatter("---\ntitle: x\n---", "")).toBe("---\ntitle: x\n---");
     expect(restoreMarkdownFrontmatter("---\ntitle: x\n---\n", "Body")).toBe(
       "---\ntitle: x\n---\nBody",
     );
@@ -359,14 +344,13 @@ describe("Markdown Tiptap extensions", () => {
     expect(restoreMarkdownFrontmatter("---\ntitle: x\n---", "Body")).toBe(
       "---\ntitle: x\n---\nBody",
     );
-    expect(restoreMarkdownFrontmatter("+++\r\ntitle = \"x\"\r\n+++", "Body"))
-      .toBe("+++\r\ntitle = \"x\"\r\n+++\r\nBody");
+    expect(restoreMarkdownFrontmatter('+++\r\ntitle = "x"\r\n+++', "Body")).toBe(
+      '+++\r\ntitle = "x"\r\n+++\r\nBody',
+    );
     expect(restoreMarkdownFrontmatter("---\rtitle: x\r...", "Body")).toBe(
       "---\rtitle: x\r...\rBody",
     );
-    expect(restoreMarkdownFrontmatter("metadata", "Body")).toBe(
-      "metadata\nBody",
-    );
+    expect(restoreMarkdownFrontmatter("metadata", "Body")).toBe("metadata\nBody");
   });
 
   test("rejects Markdown when schema validation fails", () => {

@@ -16,7 +16,12 @@ import {
 const root = path.resolve(import.meta.dir, "../..");
 const read = (relativePath: string) => readFileSync(path.join(root, relativePath), "utf8");
 
-function device(name: string, udid: string, state = "Shutdown", isAvailable = true): SimulatorDevice {
+function device(
+  name: string,
+  udid: string,
+  state = "Shutdown",
+  isAvailable = true,
+): SimulatorDevice {
   return {
     dataPath: "/tmp/data",
     dataPathSize: 0,
@@ -38,23 +43,31 @@ function pngDimensions(relativePath: string): [number, number] {
 
 describe("iOS simulator orchestration", () => {
   test("parses device, default, separator, help, and missing-value arguments", () => {
-    expect(parseSimulatorArguments([], "Default Phone")).toEqual({ deviceName: "Default Phone", help: false });
+    expect(parseSimulatorArguments([], "Default Phone")).toEqual({
+      deviceName: "Default Phone",
+      help: false,
+    });
     expect(parseSimulatorArguments(["--", "--device", "iPhone 18"])).toEqual({
       deviceName: "iPhone 18",
       help: false,
     });
-    expect(parseSimulatorArguments(["--help"])).toEqual({ deviceName: "iPhone 17 Pro", help: true });
+    expect(parseSimulatorArguments(["--help"])).toEqual({
+      deviceName: "iPhone 17 Pro",
+      help: true,
+    });
     expect(() => parseSimulatorArguments(["--device"])).toThrow("Expected a simulator name");
   });
 
   test("orders runtimes numerically and selects the newest available exact-name device", () => {
     expect(runtimeVersion("com.apple.CoreSimulator.SimRuntime.iOS-26-1")).toEqual([26, 1]);
     expect(runtimeVersion("unknown")).toEqual([0]);
-    expect([
-      "com.apple.CoreSimulator.SimRuntime.iOS-18-5",
-      "com.apple.CoreSimulator.SimRuntime.iOS-26-1",
-      "com.apple.CoreSimulator.SimRuntime.iOS-26-0",
-    ].sort(compareRuntimeDescending)).toEqual([
+    expect(
+      [
+        "com.apple.CoreSimulator.SimRuntime.iOS-18-5",
+        "com.apple.CoreSimulator.SimRuntime.iOS-26-1",
+        "com.apple.CoreSimulator.SimRuntime.iOS-26-0",
+      ].sort(compareRuntimeDescending),
+    ).toEqual([
       "com.apple.CoreSimulator.SimRuntime.iOS-26-1",
       "com.apple.CoreSimulator.SimRuntime.iOS-26-0",
       "com.apple.CoreSimulator.SimRuntime.iOS-18-5",
@@ -64,7 +77,9 @@ describe("iOS simulator orchestration", () => {
       devices: {
         "com.apple.CoreSimulator.SimRuntime.iOS-18-5": [device("iPhone Pro", "old")],
         "com.apple.CoreSimulator.SimRuntime.iOS-26-1": [device("iPhone Pro", "new")],
-        "com.apple.CoreSimulator.SimRuntime.iOS-27-0": [device("iPhone Pro", "unavailable", "Shutdown", false)],
+        "com.apple.CoreSimulator.SimRuntime.iOS-27-0": [
+          device("iPhone Pro", "unavailable", "Shutdown", false),
+        ],
       },
     };
     expect(selectSimulatorDevice(list, "iPhone Pro")?.udid).toBe("new");
@@ -91,11 +106,13 @@ describe("iOS simulator orchestration", () => {
     expect(source).toContain("spawnSync(command, args");
     expect(source).toContain('fail("xcrun returned malformed simulator JSON.")');
     expect(source).toContain('"CODE_SIGNING_ALLOWED=NO"');
-    expect(source).toContain('if (import.meta.main) main()');
+    expect(source).toContain("if (import.meta.main) main()");
 
     const testSource = read("scripts/test-ios.ts");
-    expect(testSource).toContain('spawnSync("xcodebuild", [');
-    expect(testSource).toContain('selectFirstAvailableSimulator(simulatorList)');
+    // Whitespace-insensitive: the assertion is about argument-array spawning,
+    // not about how the formatter chose to wrap the call.
+    expect(testSource).toMatch(/spawnSync\(\s*"xcodebuild",\s*\[/);
+    expect(testSource).toContain("selectFirstAvailableSimulator(simulatorList)");
     expect(testSource).not.toContain("CODE_SIGNING_ALLOWED=NO");
   });
 });
@@ -108,8 +125,10 @@ describe("iOS project and deployment contracts", () => {
 
   test("project and shared scheme include the app and unit-test targets", () => {
     const project = read("apps/ios/OrkestratorMobile.xcodeproj/project.pbxproj");
-    const scheme = read("apps/ios/OrkestratorMobile.xcodeproj/xcshareddata/xcschemes/OrkestratorMobile.xcscheme");
-    expect(project).toContain('A50000000000000000000002 /* OrkestratorMobileTests */');
+    const scheme = read(
+      "apps/ios/OrkestratorMobile.xcodeproj/xcshareddata/xcschemes/OrkestratorMobile.xcscheme",
+    );
+    expect(project).toContain("A50000000000000000000002 /* OrkestratorMobileTests */");
     expect(project).toContain('productType = "com.apple.product-type.bundle.unit-test"');
     expect(project).toContain("OrkestratorMobileTests.swift in Sources");
     expect(scheme).toContain('BlueprintName="OrkestratorMobileTests"');
@@ -160,8 +179,9 @@ describe("iOS project and deployment contracts", () => {
     ) as { images: Array<{ filename?: string }> };
     const brandFile = brand.images.find((image) => image.filename)?.filename;
     expect(brandFile).toBe("BrandMark.png");
-    expect(pngDimensions(`apps/ios/OrkestratorMobile/Assets.xcassets/BrandMark.imageset/${brandFile}`))
-      .toEqual([512, 512]);
+    expect(
+      pngDimensions(`apps/ios/OrkestratorMobile/Assets.xcassets/BrandMark.imageset/${brandFile}`),
+    ).toEqual([512, 512]);
   });
 
   test("documentation and ignore policy cover prerequisites, secure storage, and build artifacts", () => {
@@ -189,7 +209,9 @@ describe("iOS UI and WebKit security contracts", () => {
     expect(source).toContain("SecureField(");
     expect(source).toContain("model.connectionError");
     expect(source).toContain("model.dismissConnectionEditor()");
-    expect(source).toContain(".disabled(model.isConnecting || model.draftAddress.isEmpty || model.draftToken.isEmpty)");
+    expect(source).toContain(
+      ".disabled(model.isConnecting || model.draftAddress.isEmpty || model.draftToken.isEmpty)",
+    );
   });
 
   test("WebKit bridge is ephemeral, origin-scoped, and torn down authoritatively", () => {

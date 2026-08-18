@@ -75,9 +75,7 @@ export async function precompressDirectory(root: string): Promise<PrecompressRes
   if (!rootStat?.isDirectory()) {
     // A bare ENOENT here reads as a script bug. The real cause is almost always
     // that the Vite build did not run, so say that instead.
-    throw new Error(
-      `[precompress] ${root} is not a directory. Run the renderer build first.`,
-    );
+    throw new Error(`[precompress] ${root} is not a directory. Run the renderer build first.`);
   }
   let compressedCount = 0;
   let processedFileCount = 0;

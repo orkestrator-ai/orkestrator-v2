@@ -93,10 +93,16 @@ function FeatureListItem({
           : "border-transparent hover:border-border hover:bg-muted/35",
       )}
     >
-      <div className="truncate text-sm font-medium text-foreground">{feature.title || "new feature"}</div>
+      <div className="truncate text-sm font-medium text-foreground">
+        {feature.title || "new feature"}
+      </div>
       <div className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground">
         <span className="capitalize">{feature.status}</span>
-        {storyCount > 0 && <span>{storyCount} stor{storyCount === 1 ? "y" : "ies"}</span>}
+        {storyCount > 0 && (
+          <span>
+            {storyCount} stor{storyCount === 1 ? "y" : "ies"}
+          </span>
+        )}
       </div>
     </button>
   );
@@ -105,8 +111,10 @@ function FeatureListItem({
 function getPreferredEnvironmentType(projectId: string): EnvironmentType {
   const config = useConfigStore.getState().config;
   const project = useProjectStore.getState().getProjectById(projectId);
-  return config.repositories[projectId]?.lastEnvironmentType
-    ?? (project?.localPath ? "local" : "containerized");
+  return (
+    config.repositories[projectId]?.lastEnvironmentType ??
+    (project?.localPath ? "local" : "containerized")
+  );
 }
 
 function formatStoryTabTitle(story: FeatureStoryCard): string {
@@ -194,14 +202,10 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
 
     const persistCurrentDrafts = () => {
       const drafts = projectDrafts();
-      const operation = Object.keys(drafts).length === 0
-        ? discardComposeDraft(draftKey)
-        : persistComposeDraft(
-            draftKey,
-            "project",
-            projectId,
-            drafts,
-          );
+      const operation =
+        Object.keys(drafts).length === 0
+          ? discardComposeDraft(draftKey)
+          : persistComposeDraft(draftKey, "project", projectId, drafts);
       draftsChanged = false;
       void operation.catch((error) => {
         console.warn("[FeaturesView] Failed to persist chat drafts:", error);
@@ -231,12 +235,12 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
         draftReadSucceeded = true;
         const featureLoadSucceeded = await featureLoadPromise;
         if (
-          disposed
-          || !featureLoadSucceeded
-          || draftsChanged
-          || !persisted
-          || typeof persisted.value !== "object"
-          || !persisted.value
+          disposed ||
+          !featureLoadSucceeded ||
+          draftsChanged ||
+          !persisted ||
+          typeof persisted.value !== "object" ||
+          !persisted.value
         ) {
           return;
         }
@@ -267,19 +271,23 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
   }, [loadFeatures, projectId]);
 
   const projectFeatures = useMemo(
-    () => features
-      .filter((feature) => feature.projectId === projectId)
-      .sort((a, b) => {
-        const recencyDifference = latestUserMessageTime(b) - latestUserMessageTime(a);
-        return Number.isNaN(recencyDifference) || recencyDifference === 0
-          ? a.order - b.order
-          : recencyDifference;
-      }),
+    () =>
+      features
+        .filter((feature) => feature.projectId === projectId)
+        .sort((a, b) => {
+          const recencyDifference = latestUserMessageTime(b) - latestUserMessageTime(a);
+          return Number.isNaN(recencyDifference) || recencyDifference === 0
+            ? a.order - b.order
+            : recencyDifference;
+        }),
     [features, projectId],
   );
 
   const selectedFeature = useMemo(
-    () => projectFeatures.find((feature) => feature.id === selectedFeatureId) ?? projectFeatures[0] ?? null,
+    () =>
+      projectFeatures.find((feature) => feature.id === selectedFeatureId) ??
+      projectFeatures[0] ??
+      null,
     [projectFeatures, selectedFeatureId],
   );
   /**
@@ -290,14 +298,14 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
    * is nothing here for an unmount to abandon.
    */
   const projectPlanning = useMemo(
-    () => projectFeatures
-      .map((feature) => feature.planning)
-      .filter((record): record is FeaturePlanningRecord => record !== undefined),
+    () =>
+      projectFeatures
+        .map((feature) => feature.planning)
+        .filter((record): record is FeaturePlanningRecord => record !== undefined),
     [projectFeatures],
   );
-  const runningPlanning = projectPlanning.find(
-    (record) => isActiveFeaturePlanningPhase(record.phase),
-  ) ?? null;
+  const runningPlanning =
+    projectPlanning.find((record) => isActiveFeaturePlanningPhase(record.phase)) ?? null;
   const failedPlanning = projectPlanning.find((record) => record.phase === "failed") ?? null;
   // One planning turn at a time per project: they all share the plan's Codex
   // session, and a second turn would interleave with the first.
@@ -311,11 +319,11 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
     : undefined;
   const recoveryMessage = failedPlanning
     ? `${failedStory?.title || failedFeature?.title || "Feature conversation"}: ${
-      failedPlanning.failure?.message || "Codex planning needs attention."
-    }`
+        failedPlanning.failure?.message || "Codex planning needs attention."
+      }`
     : undefined;
   const featureDraft = selectedFeature
-    ? chatDrafts.get(featureChatDraftId(selectedFeature.id)) ?? ""
+    ? (chatDrafts.get(featureChatDraftId(selectedFeature.id)) ?? "")
     : "";
 
   useEffect(() => {
@@ -325,10 +333,14 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
     }
   }, [selectedFeature, selectedFeatureId]);
 
+  // Keyed on the feature id alone on purpose: re-running when the story count
+  // changes would yank the user out of the chat tab as stories arrive.
+  /* oxlint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
     setRightTab(selectedFeature?.stories.length ? "stories" : "chat");
     setOpenStoryTabs([]);
   }, [selectedFeature?.id]);
+  /* oxlint-enable react-hooks/exhaustive-deps */
 
   useEffect(() => {
     if (!selectedFeature) {
@@ -442,12 +454,15 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
     setRightTab(`story:${storyId}`);
   }, []);
 
-  const closeStoryTab = useCallback((storyId: string) => {
-    setOpenStoryTabs((tabs) => tabs.filter((id) => id !== storyId));
-    if (rightTab === `story:${storyId}`) {
-      setRightTab("stories");
-    }
-  }, [rightTab]);
+  const closeStoryTab = useCallback(
+    (storyId: string) => {
+      setOpenStoryTabs((tabs) => tabs.filter((id) => id !== storyId));
+      if (rightTab === `story:${storyId}`) {
+        setRightTab("stories");
+      }
+    },
+    [rightTab],
+  );
 
   const handleCreateFeature = useCallback(async () => {
     const featureId = await createFeature(projectId);
@@ -461,13 +476,14 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
   const handleBuildFeature = useCallback(
     async (feature: FeaturePlan) => {
       if (
-        buildingFeatureId
-        || hasBlockingConversation
-        || feature.status === "building"
-        || !!feature.buildTaskId
-        || !!feature.buildPipelineId
-        || feature.stories.length === 0
-      ) return;
+        buildingFeatureId ||
+        hasBlockingConversation ||
+        feature.status === "building" ||
+        !!feature.buildTaskId ||
+        !!feature.buildPipelineId ||
+        feature.stories.length === 0
+      )
+        return;
       setBuildingFeatureId(feature.id);
       let ownsBuildReservation = false;
       let unreservedTaskId: string | null = null;
@@ -617,7 +633,9 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
                   Stories
                 </TabsTrigger>
                 {openStoryTabs.map((storyId) => {
-                  const story = selectedFeature.stories.find((candidate) => candidate.id === storyId);
+                  const story = selectedFeature.stories.find(
+                    (candidate) => candidate.id === storyId,
+                  );
                   if (!story) return null;
                   return (
                     <TabsTrigger
@@ -656,18 +674,18 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
                   size="sm"
                   className="ml-auto gap-1.5"
                   disabled={
-                    buildingFeatureId === selectedFeature.id
-                    || hasBlockingConversation
-                    || selectedFeature.status === "building"
-                    || !!selectedFeature.buildTaskId
-                    || !!selectedFeature.buildPipelineId
+                    buildingFeatureId === selectedFeature.id ||
+                    hasBlockingConversation ||
+                    selectedFeature.status === "building" ||
+                    !!selectedFeature.buildTaskId ||
+                    !!selectedFeature.buildPipelineId
                   }
                   onClick={() => void handleBuildFeature(selectedFeature)}
                 >
-                  {buildingFeatureId === selectedFeature.id
-                    || selectedFeature.status === "building"
-                    || !!selectedFeature.buildTaskId
-                    || !!selectedFeature.buildPipelineId ? (
+                  {buildingFeatureId === selectedFeature.id ||
+                  selectedFeature.status === "building" ||
+                  !!selectedFeature.buildTaskId ||
+                  !!selectedFeature.buildPipelineId ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   ) : (
                     <Wrench className="h-3.5 w-3.5" />
@@ -685,42 +703,40 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
                 isRunning={hasRunningConversation}
                 isBlocked={hasBlockingConversation}
                 recoveryMessage={recoveryMessage}
-                onRetryRecovery={failedPlanning
-                  ? () => retryFailedPlanning(failedPlanning)
-                  : undefined}
-                onStopWaiting={failedPlanning
-                  ? () => abandonFailedPlanning(failedPlanning)
-                  : undefined}
+                onRetryRecovery={
+                  failedPlanning ? () => retryFailedPlanning(failedPlanning) : undefined
+                }
+                onStopWaiting={
+                  failedPlanning ? () => abandonFailedPlanning(failedPlanning) : undefined
+                }
                 onSend={sendFeatureMessage}
                 onRefresh={refreshFeatures}
               />
             </TabsContent>
 
             <TabsContent value="stories" className={RIGHT_PANE_CONTENT_CLASS}>
-              <FeatureStoriesPanel
-                feature={selectedFeature}
-                onOpenStory={openStory}
-              />
+              <FeatureStoriesPanel feature={selectedFeature} onOpenStory={openStory} />
             </TabsContent>
 
             {selectedStory && (
               <TabsContent value={`story:${selectedStory.id}`} className={RIGHT_PANE_CONTENT_CLASS}>
                 <StoryDetailPanel
                   story={selectedStory}
-                  draft={chatDrafts.get(storyChatDraftId(selectedFeature.id, selectedStory.id)) ?? ""}
-                  setDraft={(value) => setChatDraft(
-                    storyChatDraftId(selectedFeature.id, selectedStory.id),
-                    value,
-                  )}
+                  draft={
+                    chatDrafts.get(storyChatDraftId(selectedFeature.id, selectedStory.id)) ?? ""
+                  }
+                  setDraft={(value) =>
+                    setChatDraft(storyChatDraftId(selectedFeature.id, selectedStory.id), value)
+                  }
                   isRunning={hasRunningConversation}
                   isBlocked={hasBlockingConversation}
                   recoveryMessage={recoveryMessage}
-                  onRetryRecovery={failedPlanning
-                    ? () => retryFailedPlanning(failedPlanning)
-                    : undefined}
-                  onStopWaiting={failedPlanning
-                    ? () => abandonFailedPlanning(failedPlanning)
-                    : undefined}
+                  onRetryRecovery={
+                    failedPlanning ? () => retryFailedPlanning(failedPlanning) : undefined
+                  }
+                  onStopWaiting={
+                    failedPlanning ? () => abandonFailedPlanning(failedPlanning) : undefined
+                  }
                   onSend={(text) => void sendStoryMessage(selectedStory, text)}
                   onRefresh={refreshFeatures}
                 />
@@ -813,9 +829,10 @@ export function NativeStyleChatPanel({
     [models],
   );
   const nativeMessages = useMemo(
-    () => messages
-      .map((message) => toNativeChatMessage(message, stripState))
-      .filter((message): message is NativeMessageType => message !== null),
+    () =>
+      messages
+        .map((message) => toNativeChatMessage(message, stripState))
+        .filter((message): message is NativeMessageType => message !== null),
     [messages, stripState],
   );
   const { isAtBottom, scrollToBottom, virtuosoRef, scrollProps } = useVirtuosoScrollState({
@@ -877,12 +894,7 @@ export function NativeStyleChatPanel({
                         </Button>
                       )}
                       {onStopWaiting && (
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="ghost"
-                          onClick={onStopWaiting}
-                        >
+                        <Button type="button" size="sm" variant="ghost" onClick={onStopWaiting}>
                           Stop waiting
                         </Button>
                       )}
@@ -949,7 +961,11 @@ export function NativeStyleChatPanel({
               onClick={handleSend}
               title="Send message"
             >
-              {isRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
+              {isRunning ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <ArrowUp className="h-4 w-4" />
+              )}
             </Button>
           </div>
         </div>
@@ -976,7 +992,9 @@ function FeatureStoriesPanel({
             className="rounded-md border border-border bg-card p-4 text-left shadow-sm transition-[border-color,box-shadow] hover:border-primary/50 hover:shadow-md"
           >
             <div className="flex items-start gap-2">
-              <h4 className="min-w-0 flex-1 text-sm font-semibold text-foreground">{story.title}</h4>
+              <h4 className="min-w-0 flex-1 text-sm font-semibold text-foreground">
+                {story.title}
+              </h4>
               <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
             </div>
             <p className="mt-2 line-clamp-4 text-xs leading-relaxed text-muted-foreground">

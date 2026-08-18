@@ -106,12 +106,18 @@ describe("getEnvironmentBrowserUrl", () => {
     expect(getEnvironmentBrowserUrl(undefined)).toBeNull();
     expect(getEnvironmentBrowserUrl(makeEnvironment({ hostEntryPort: 49152 }))).toBeNull();
     expect(getEnvironmentBrowserUrl(makeEnvironment({ entryPort: 3000 }))).toBeNull();
-    expect(getEnvironmentBrowserUrl(makeEnvironment({ entryPort: 3000, hostEntryPort: 0 }))).toBeNull();
-    expect(getEnvironmentBrowserUrl(makeEnvironment({
-      environmentType: "local",
-      entryPort: 3000,
-      hostEntryPort: 49152,
-      worktreePath: "/tmp/repo",
-    }))).toBeNull();
+    expect(
+      getEnvironmentBrowserUrl(makeEnvironment({ entryPort: 3000, hostEntryPort: 0 })),
+    ).toBeNull();
+    expect(
+      getEnvironmentBrowserUrl(
+        makeEnvironment({
+          environmentType: "local",
+          entryPort: 3000,
+          hostEntryPort: 49152,
+          worktreePath: "/tmp/repo",
+        }),
+      ),
+    ).toBeNull();
   });
 });

@@ -26,9 +26,7 @@ describe("SlashCommandMenu", () => {
       />,
     );
 
-    const menu = screen
-      .getByText("Slash Commands")
-      .closest(".rounded-xl") as HTMLElement;
+    const menu = screen.getByText("Slash Commands").closest(".rounded-xl") as HTMLElement;
     expect(menu.className).toContain("bg-zinc-900/95");
 
     const selected = screen.getByRole("button", { name: /clear/i });
@@ -79,12 +77,7 @@ describe("SlashCommandMenu", () => {
     // The caller filters as the user types; an empty result must collapse the
     // menu rather than leaving an empty popover floating over the composer.
     const { container } = render(
-      <SlashCommandMenu
-        commands={[]}
-        selectedIndex={0}
-        onSelect={() => {}}
-        onClose={() => {}}
-      />,
+      <SlashCommandMenu commands={[]} selectedIndex={0} onSelect={() => {}} onClose={() => {}} />,
     );
     expect(container.firstChild).toBeNull();
   });

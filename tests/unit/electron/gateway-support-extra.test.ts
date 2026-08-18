@@ -1,7 +1,33 @@
 import { describe, expect, mock, test } from "bun:test";
 import path from "node:path";
 import { createCommandRegistry } from "../../../apps/backend/src/core/commands";
-import { AggregateByteBudget, BoundedMetricMap, canStartStaticFallbackCompression, COMPRESSION_MIN_BYTES, compressionModeForListener, GATEWAY_COMMAND_METRIC_MAP_LIMIT, GATEWAY_COMMAND_METRIC_TOTAL_LABEL_BYTES, GATEWAY_COMPRESSION_MODES, GatewayMetricsStore, MAX_CONCURRENT_DYNAMIC_COMPRESSIONS, MAX_CONCURRENT_STATIC_FALLBACK_COMPRESSIONS, normalizeAcceptEncoding, normalizeCacheControl, normalizeContentEncoding, normalizeContentType, normalizeHttpMethod, normalizeHttpVersion, normalizeMetricLabel, normalizeNextHopProtocol, parseGatewayCompressionMode, prepareCompressedBody, recoverBodyResponseError, resolveGatewayCompressionMode, settlePreparedBodyResponse, truncateUtf8 } from "../../../apps/backend/src/gateway";
+import {
+  AggregateByteBudget,
+  BoundedMetricMap,
+  canStartStaticFallbackCompression,
+  COMPRESSION_MIN_BYTES,
+  compressionModeForListener,
+  GATEWAY_COMMAND_METRIC_MAP_LIMIT,
+  GATEWAY_COMMAND_METRIC_TOTAL_LABEL_BYTES,
+  GATEWAY_COMPRESSION_MODES,
+  GatewayMetricsStore,
+  MAX_CONCURRENT_DYNAMIC_COMPRESSIONS,
+  MAX_CONCURRENT_STATIC_FALLBACK_COMPRESSIONS,
+  normalizeAcceptEncoding,
+  normalizeCacheControl,
+  normalizeContentEncoding,
+  normalizeContentType,
+  normalizeHttpMethod,
+  normalizeHttpVersion,
+  normalizeMetricLabel,
+  normalizeNextHopProtocol,
+  parseGatewayCompressionMode,
+  prepareCompressedBody,
+  recoverBodyResponseError,
+  resolveGatewayCompressionMode,
+  settlePreparedBodyResponse,
+  truncateUtf8,
+} from "../../../apps/backend/src/gateway";
 import { writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 
@@ -18,23 +44,22 @@ import {
   writeRendererAsset,
 } from "./gateway-test-harness.js";
 
-
 describe("remote gateway", () => {
-
-
   test("prefers explicit compression configuration over the environment", () => {
-    expect(resolveGatewayCompressionMode("off", {
-      ORKESTRATOR_GATEWAY_COMPRESSION: "on",
-    })).toBe("off");
-    expect(resolveGatewayCompressionMode(undefined, {
-      ORKESTRATOR_GATEWAY_COMPRESSION: "body",
-    })).toBe("body");
+    expect(
+      resolveGatewayCompressionMode("off", {
+        ORKESTRATOR_GATEWAY_COMPRESSION: "on",
+      }),
+    ).toBe("off");
+    expect(
+      resolveGatewayCompressionMode(undefined, {
+        ORKESTRATOR_GATEWAY_COMPRESSION: "body",
+      }),
+    ).toBe("body");
     expect(resolveGatewayCompressionMode(undefined, {})).toBe("body");
     expect(compressionModeForListener("on", "control")).toBe("off");
     expect(compressionModeForListener("on", "browser")).toBe("on");
   });
-
-
 
   test("bounds incrementally sized decode buffers with an aggregate byte budget", () => {
     const budget = new AggregateByteBudget(1024);
@@ -61,8 +86,6 @@ describe("remote gateway", () => {
     expect(budget.tryAcquire(1024)).toBe(true);
   });
 
-
-
   test("parses gateway compression modes and rejects unknown values", () => {
     expect([...GATEWAY_COMPRESSION_MODES]).toEqual(["off", "body", "on"]);
     for (const mode of GATEWAY_COMPRESSION_MODES) {
@@ -74,16 +97,12 @@ describe("remote gateway", () => {
     // unrecognized is a configuration error rather than a silent fallback.
     expect(parseGatewayCompressionMode(undefined)).toBeUndefined();
     for (const invalid of ["", "gzip", "true", "  "]) {
-      expect(() => parseGatewayCompressionMode(invalid)).toThrow(
-        "Expected one of off, body, on",
-      );
+      expect(() => parseGatewayCompressionMode(invalid)).toThrow("Expected one of off, body, on");
     }
     expect(() => parseGatewayCompressionMode("gzip", "ORKESTRATOR_GATEWAY_COMPRESSION")).toThrow(
       "Invalid ORKESTRATOR_GATEWAY_COMPRESSION: gzip",
     );
   });
-
-
 
   test("falls back for non-beneficial and failed codecs and caps concurrent codec jobs", async () => {
     const source = Buffer.from("dynamic source ".repeat(256));
@@ -111,12 +130,14 @@ describe("remote gateway", () => {
     expect(failed.body).toEqual(source);
 
     const releases: Array<() => void> = [];
-    const parkedCompressor = mock(async () => new Promise<Buffer>((resolve) => {
-      releases.push(() => resolve(Buffer.from("compressed")));
-    }));
-    const parked = Array.from(
-      { length: MAX_CONCURRENT_DYNAMIC_COMPRESSIONS },
-      () => prepareCompressedBody(source, "text/plain", context, null, parkedCompressor),
+    const parkedCompressor = mock(
+      async () =>
+        new Promise<Buffer>((resolve) => {
+          releases.push(() => resolve(Buffer.from("compressed")));
+        }),
+    );
+    const parked = Array.from({ length: MAX_CONCURRENT_DYNAMIC_COMPRESSIONS }, () =>
+      prepareCompressedBody(source, "text/plain", context, null, parkedCompressor),
     );
     await waitUntil(
       () => releases.length === MAX_CONCURRENT_DYNAMIC_COMPRESSIONS,
@@ -136,17 +157,11 @@ describe("remote gateway", () => {
     expect((await Promise.all(parked)).every((result) => result.encoding === "gzip")).toBe(true);
 
     const retryCompressor = mock(async () => Buffer.from("compressed"));
-    expect((await prepareCompressedBody(
-      source,
-      "text/plain",
-      context,
-      null,
-      retryCompressor,
-    )).encoding).toBe("gzip");
+    expect(
+      (await prepareCompressedBody(source, "text/plain", context, null, retryCompressor)).encoding,
+    ).toBe("gzip");
     expect(retryCompressor).toHaveBeenCalledTimes(1);
   });
-
-
 
   test("recovers an unexpected body preparation failure before or after headers", async () => {
     const storedHeaders = new Map<string, string | number>();
@@ -182,13 +197,7 @@ describe("remote gateway", () => {
       headersSent: true,
       destroy,
     } as unknown as ServerResponse;
-    recoverBodyResponseError(
-      sentResponse,
-      200,
-      {},
-      source,
-      "prepare failed",
-    );
+    recoverBodyResponseError(sentResponse, 200, {}, source, "prepare failed");
     expect(destroy).toHaveBeenCalledTimes(1);
     expect(destroy.mock.calls[0]?.[0]).toBeInstanceOf(Error);
 
@@ -228,14 +237,12 @@ describe("remote gateway", () => {
     expect(destroyedResponse.destroy).not.toHaveBeenCalled();
   });
 
-
-
   test("keeps small dynamic bodies identity while allowing static compression on browser listeners", async () => {
     for (const compression of ["off", "body", "on"] as const) {
       const dataDir = await createTempDir(`ork-static-compression-${compression}-`);
       const rendererRoot = await createRendererRoot(
         dataDir,
-        "<div id=\"root\">".concat("content ".repeat(256), "</div>"),
+        '<div id="root">'.concat("content ".repeat(256), "</div>"),
       );
       const { info } = await startGateway({
         dataDir,
@@ -264,10 +271,9 @@ describe("remote gateway", () => {
       // `/metrics` is a diagnostic dump whose size grows with traffic and route
       // samples, so it is not a "small dynamic body" — it is eligible for
       // compression on exactly the same size rule as any other dynamic body.
-      const metricsResponse = await requestUrl(
-        `${info.url}__orkestrator/metrics`,
-        { headers: acceptsEverything },
-      );
+      const metricsResponse = await requestUrl(`${info.url}__orkestrator/metrics`, {
+        headers: acceptsEverything,
+      });
       expect(metricsResponse.status).toBe(200);
       const metricsBytes = Buffer.byteLength(decodeResponseBody(metricsResponse));
       if (compression === "off" || metricsBytes < COMPRESSION_MIN_BYTES) {
@@ -293,8 +299,6 @@ describe("remote gateway", () => {
     }
   });
 
-
-
   test("applies the dynamic compression threshold at the exact serialized byte boundary", async () => {
     const emptyResponseBytes = Buffer.byteLength(JSON.stringify({ result: "" }));
     const payloads = new Map([
@@ -307,15 +311,16 @@ describe("remote gateway", () => {
         invoke: mock(async (command: string) => payloads.get(command)),
       },
     });
-    const invoke = (command: string) => requestUrl(`${info.url}__orkestrator/invoke`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${info.token}`,
-        "content-type": "application/json",
-        "accept-encoding": "gzip",
-      },
-      body: JSON.stringify({ command, args: {} }),
-    });
+    const invoke = (command: string) =>
+      requestUrl(`${info.url}__orkestrator/invoke`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${info.token}`,
+          "content-type": "application/json",
+          "accept-encoding": "gzip",
+        },
+        body: JSON.stringify({ command, args: {} }),
+      });
 
     const below = await invoke("below_threshold");
     expect(below.headers["content-encoding"]).toBeUndefined();
@@ -324,8 +329,6 @@ describe("remote gateway", () => {
     expect(exact.headers["content-encoding"]).toBe("gzip");
     expect(Buffer.byteLength(decodeResponseBody(exact))).toBe(COMPRESSION_MIN_BYTES);
   });
-
-
 
   test("honors Accept-Encoding qualities, wildcards, and explicit exclusions", async () => {
     const dataDir = await createTempDir("ork-static-negotiation-");
@@ -359,10 +362,7 @@ describe("remote gateway", () => {
       expect(response.headers["content-encoding"] ?? "identity", acceptEncoding).toBe(expected);
     }
 
-    for (const acceptEncoding of [
-      "br;q=0, gzip;q=0, identity;q=0",
-      "*;q=0",
-    ]) {
+    for (const acceptEncoding of ["br;q=0, gzip;q=0, identity;q=0", "*;q=0"]) {
       const response = await requestUrl(`${info.url}assets/app-12345678.js`, {
         headers: { ...authorization, "accept-encoding": acceptEncoding },
       });
@@ -371,8 +371,6 @@ describe("remote gateway", () => {
       expect(response.headers.vary, acceptEncoding).toBe("Accept-Encoding");
     }
   });
-
-
 
   test("uses encoding-specific ETags and returns 304 for matching If-None-Match", async () => {
     const dataDir = await createTempDir("ork-static-etag-");
@@ -460,8 +458,6 @@ describe("remote gateway", () => {
     expect(malformed.status).toBe(200);
   });
 
-
-
   test("returns HEAD with GET headers and no body", async () => {
     const dataDir = await createTempDir("ork-static-head-");
     const rendererRoot = await createRendererRoot(dataDir);
@@ -490,8 +486,6 @@ describe("remote gateway", () => {
     expect(headResponse.headers.etag).toBe(getResponse.headers.etag);
     expect(headResponse.headers["last-modified"]).toBe(getResponse.headers["last-modified"]);
   });
-
-
 
   test("negotiates HEAD without running on-the-fly compression when no sibling exists", async () => {
     const dataDir = await createTempDir("ork-static-head-fallback-");
@@ -530,8 +524,6 @@ describe("remote gateway", () => {
     expect(getResponse.headers.etag).toBe(String(response.headers.etag));
   });
 
-
-
   test("keeps serving identity to identity-refusing clients while the compression pool is saturated", async () => {
     const dataDir = await createTempDir("ork-static-declined-saturated-");
     const rendererRoot = await createRendererRoot(dataDir);
@@ -546,14 +538,14 @@ describe("remote gateway", () => {
 
     const { info } = await startGateway({ dataDir, rendererRoot, compression: "body" });
     const responses = await Promise.all(
-      Array.from({ length: assetCount }, (_, index) => (
+      Array.from({ length: assetCount }, (_, index) =>
         requestUrl(`${info.url}assets/saturate-${String(index).padStart(8, "0")}.js`, {
           headers: {
             authorization: `Bearer ${info.token}`,
             "accept-encoding": "br, gzip, identity;q=0",
           },
-        })
-      )),
+        }),
+      ),
     );
 
     // Admission is bounded, so some of these are certainly declined. None may
@@ -566,18 +558,16 @@ describe("remote gateway", () => {
     }
   });
 
-
-
   test("bounds concurrent on-the-fly compression admission without failing requests", async () => {
-    expect(canStartStaticFallbackCompression(
-      MAX_CONCURRENT_STATIC_FALLBACK_COMPRESSIONS - 1,
-    )).toBe(true);
-    expect(canStartStaticFallbackCompression(
-      MAX_CONCURRENT_STATIC_FALLBACK_COMPRESSIONS,
-    )).toBe(false);
-    expect(canStartStaticFallbackCompression(
-      MAX_CONCURRENT_STATIC_FALLBACK_COMPRESSIONS + 1,
-    )).toBe(false);
+    expect(canStartStaticFallbackCompression(MAX_CONCURRENT_STATIC_FALLBACK_COMPRESSIONS - 1)).toBe(
+      true,
+    );
+    expect(canStartStaticFallbackCompression(MAX_CONCURRENT_STATIC_FALLBACK_COMPRESSIONS)).toBe(
+      false,
+    );
+    expect(canStartStaticFallbackCompression(MAX_CONCURRENT_STATIC_FALLBACK_COMPRESSIONS + 1)).toBe(
+      false,
+    );
 
     const dataDir = await createTempDir("ork-static-fallback-concurrency-");
     const rendererRoot = await createRendererRoot(dataDir);
@@ -592,24 +582,25 @@ describe("remote gateway", () => {
 
     const { info } = await startGateway({ dataDir, rendererRoot, compression: "body" });
     const responses = await Promise.all(
-      Array.from({ length: assetCount }, (_, index) => (
+      Array.from({ length: assetCount }, (_, index) =>
         requestUrl(`${info.url}assets/concurrent-${String(index).padStart(8, "0")}.js`, {
           headers: {
             authorization: `Bearer ${info.token}`,
             "accept-encoding": "br",
           },
-        })
-      )),
+        }),
+      ),
     );
 
     expect(responses.every((response) => response.status === 200)).toBe(true);
-    expect(responses.every((response) => (
-      response.headers["content-encoding"] === "br"
-      || response.headers["content-encoding"] === undefined
-    ))).toBe(true);
+    expect(
+      responses.every(
+        (response) =>
+          response.headers["content-encoding"] === "br" ||
+          response.headers["content-encoding"] === undefined,
+      ),
+    ).toBe(true);
   });
-
-
 
   test("rejects unsupported methods on static resources", async () => {
     const { info } = await startGateway();
@@ -623,8 +614,6 @@ describe("remote gateway", () => {
     expect(response.headers.allow).toBe("GET, HEAD");
     expect(response.rawBody.byteLength).toBe(0);
   });
-
-
 
   test("tracks stream gauges without double-counting a handshake", () => {
     const metrics = new GatewayMetricsStore("off");
@@ -666,8 +655,6 @@ describe("remote gateway", () => {
     expect(stream()).toMatchObject({ connecting: 0, open: 0, dropped: 1 });
   });
 
-
-
   test("sizes the command label budget to hold the whole backend registry", () => {
     const registry = createCommandRegistry();
     const names = [...registry.keys()];
@@ -679,15 +666,14 @@ describe("remote gateway", () => {
     expect(names.length).toBeGreaterThan(0);
     // One slot is reserved for `__overflow__`, plus `__unknown__`/`__invalid__`.
     expect(names.length).toBeLessThanOrEqual(GATEWAY_COMMAND_METRIC_MAP_LIMIT - 3);
-    expect(names.reduce((total, name) => total + Buffer.byteLength(name), 0))
-      .toBeLessThanOrEqual(GATEWAY_COMMAND_METRIC_TOTAL_LABEL_BYTES - 128);
+    expect(names.reduce((total, name) => total + Buffer.byteLength(name), 0)).toBeLessThanOrEqual(
+      GATEWAY_COMMAND_METRIC_TOTAL_LABEL_BYTES - 128,
+    );
     // Every registered name must survive normalization, or it would be filed
     // as `__invalid__` and vanish from the breakdown.
     const misnormalized = names.filter((name) => normalizeMetricLabel(name) !== name);
     expect(misnormalized).toEqual([]);
   });
-
-
 
   test("bounds a metric map by entry count and by total label bytes", () => {
     const byCount = new BoundedMetricMap<number>(8, 8 * 1024);
@@ -701,7 +687,10 @@ describe("remote gateway", () => {
     // 30-byte labels against a 96-byte budget: the byte bound binds first.
     const byBytes = new BoundedMetricMap<number>(1_000, 96);
     for (let index = 0; index < 50; index += 1) {
-      byBytes.set(byBytes.resolveKey(`label-${String(index).padStart(3, "0")}-xxxxxxxxxxxxxxxxxxxx`), index);
+      byBytes.set(
+        byBytes.resolveKey(`label-${String(index).padStart(3, "0")}-xxxxxxxxxxxxxxxxxxxx`),
+        index,
+      );
     }
     expect(byBytes.size).toBeLessThan(1_000);
     expect(byBytes.usedLabelBytes).toBeLessThanOrEqual(96);
@@ -718,8 +707,6 @@ describe("remote gateway", () => {
     expect(roomy.resolveKey("x".repeat(97))).toBe("__overflow__");
     expect(roomy.resolveKey("x".repeat(96))).toBe("x".repeat(96));
   });
-
-
 
   test("normalizes request and response header labels to fixed cardinality", () => {
     expect(normalizeHttpMethod("get")).toBe("GET");
@@ -790,8 +777,6 @@ describe("remote gateway", () => {
     expect(normalizeNextHopProtocol("spdy/3")).toBe("other");
   });
 
-
-
   test("truncates to a byte budget on UTF-8 boundaries without inventing characters", () => {
     expect(truncateUtf8("abc", 8)).toBe("abc");
     expect(truncateUtf8("abcdef", 3)).toBe("abc");
@@ -818,8 +803,6 @@ describe("remote gateway", () => {
       }
     }
   });
-
-
 
   test("bounds and normalizes route status, encoding, and retained header metrics", async () => {
     const target = createServer((_request, response) => {
@@ -859,9 +842,9 @@ describe("remote gateway", () => {
       statusCodes: { "299": 1 },
       encodings: { other: 1 },
     });
-    const sample = metrics.recentRouteSamples.find((candidate) => (
-      candidate.route === "proxy-loopback"
-    ));
+    const sample = metrics.recentRouteSamples.find(
+      (candidate) => candidate.route === "proxy-loopback",
+    );
     expect(sample).toMatchObject({
       method: "GET",
       httpVersion: "1.1",
@@ -879,8 +862,6 @@ describe("remote gateway", () => {
     expect(Object.keys(metrics.routes["proxy-loopback"]!.encodings)).toEqual(["other"]);
     expect(metrics.compression.configuredMode).toBe("body");
   });
-
-
 
   test("serializes invoke results once and keeps command metrics private and bounded", async () => {
     let resultSerializations = 0;
@@ -916,11 +897,12 @@ describe("remote gateway", () => {
       authorization: `Bearer ${info.token}`,
       "content-type": "application/json",
     };
-    const invoke = (command: string) => requestUrl(endpoint, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ command }),
-    });
+    const invoke = (command: string) =>
+      requestUrl(endpoint, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ command }),
+      });
 
     const success = await invoke("serialize_once");
     expect(success.status).toBe(200);
@@ -953,8 +935,9 @@ describe("remote gateway", () => {
     expect(keys.every((key) => !key.includes("secret"))).toBe(true);
     expect(keys.length).toBeLessThanOrEqual(GATEWAY_COMMAND_METRIC_MAP_LIMIT);
     expect(keys.every((key) => Buffer.byteLength(key) <= 96)).toBe(true);
-    expect(keys.reduce((total, key) => total + Buffer.byteLength(key), 0))
-      .toBeLessThanOrEqual(GATEWAY_COMMAND_METRIC_TOTAL_LABEL_BYTES);
+    expect(keys.reduce((total, key) => total + Buffer.byteLength(key), 0)).toBeLessThanOrEqual(
+      GATEWAY_COMMAND_METRIC_TOTAL_LABEL_BYTES,
+    );
 
     const successBody = '{"result":{"ok":true}}';
     expect(metrics.commands.serialize_once).toMatchObject({
@@ -970,8 +953,6 @@ describe("remote gateway", () => {
     });
     expect(metrics.commands.__unknown__).toMatchObject({ count: 1, failures: 1 });
   });
-
-
 
   test("treats a loopback browser listener as remote for compression rollout while control stays identity", async () => {
     const { info } = await startGateway({
@@ -992,26 +973,29 @@ describe("remote gateway", () => {
     const metrics = await requestUrl(`${info.url}__orkestrator/metrics`, {
       headers: { authorization: `Bearer ${info.token}` },
     });
-    const samples = ((metrics.json() as {
-      recentRouteSamples: Array<{
-        route: string;
-        listenerKind: string;
-        effectiveCompressionMode: string;
-      }>;
-    }).recentRouteSamples)
-      .filter((sample) => sample.route === "status");
+    const samples = (
+      metrics.json() as {
+        recentRouteSamples: Array<{
+          route: string;
+          listenerKind: string;
+          effectiveCompressionMode: string;
+        }>;
+      }
+    ).recentRouteSamples.filter((sample) => sample.route === "status");
 
-    expect(samples).toContainEqual(expect.objectContaining({
-      listenerKind: "control",
-      effectiveCompressionMode: "off",
-    }));
-    expect(samples).toContainEqual(expect.objectContaining({
-      listenerKind: "browser",
-      effectiveCompressionMode: "on",
-    }));
+    expect(samples).toContainEqual(
+      expect.objectContaining({
+        listenerKind: "control",
+        effectiveCompressionMode: "off",
+      }),
+    );
+    expect(samples).toContainEqual(
+      expect.objectContaining({
+        listenerKind: "browser",
+        effectiveCompressionMode: "on",
+      }),
+    );
   });
-
-
 
   test("serves static renderer files and blocks traversal outside the renderer root", async () => {
     const dataDir = await createTempDir("ork-gateway-static-");
@@ -1042,5 +1026,4 @@ describe("remote gateway", () => {
     });
     expect(traversal.status).toBe(403);
   });
-
 });

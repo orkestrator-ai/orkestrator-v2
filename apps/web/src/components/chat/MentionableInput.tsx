@@ -169,23 +169,21 @@ function renderContent(text: string, mentions: FileMention[]): string {
 }
 
 function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 function escapeAttr(text: string): string {
-  return escapeHtml(text)
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
+  return escapeHtml(text).replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function findMentionTokenRange(text: string, cursorPosition: number): { start: number; end: number } | null {
+function findMentionTokenRange(
+  text: string,
+  cursorPosition: number,
+): { start: number; end: number } | null {
   const cursor = Math.max(0, Math.min(cursorPosition, text.length));
   if (cursor === 0) return null;
 
@@ -207,9 +205,9 @@ function areMentionsEqual(a: FileMention[], b: FileMention[]): boolean {
   return a.every((mention, index) => {
     const other = b[index];
     return (
-      mention.id === other?.id
-      && mention.filename === other.filename
-      && mention.relativePath === other.relativePath
+      mention.id === other?.id &&
+      mention.filename === other.filename &&
+      mention.relativePath === other.relativePath
     );
   });
 }
@@ -232,7 +230,7 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
       minHeight = 28,
       maxHeight = 216,
     },
-    ref
+    ref,
   ) {
     const inputRef = useRef<HTMLDivElement>(null);
     const lastValueRef = useRef(value);
@@ -256,9 +254,9 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
 
         const activeSelection = window.getSelection();
         const cursorPos =
-          activeSelection
-          && activeSelection.rangeCount > 0
-          && inputRef.current.contains(activeSelection.getRangeAt(0).startContainer)
+          activeSelection &&
+          activeSelection.rangeCount > 0 &&
+          inputRef.current.contains(activeSelection.getRangeAt(0).startContainer)
             ? getCursorOffset(inputRef.current)
             : lastCursorPositionRef.current;
         const currentText = extractText(inputRef.current);
@@ -291,20 +289,17 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
         // picker dialog has focus, then add whitespace only where needed.
         const activeSelection = window.getSelection();
         const cursorPos =
-          activeSelection
-          && activeSelection.rangeCount > 0
-          && inputRef.current.contains(activeSelection.getRangeAt(0).startContainer)
+          activeSelection &&
+          activeSelection.rangeCount > 0 &&
+          inputRef.current.contains(activeSelection.getRangeAt(0).startContainer)
             ? getCursorOffset(inputRef.current)
             : lastCursorPositionRef.current;
         const currentText = extractText(inputRef.current);
         const leadingText = currentText.slice(0, cursorPos);
         const trailingText = currentText.slice(cursorPos);
-        const leadingSeparator =
-          leadingText.length > 0 && !/\s$/.test(leadingText) ? " " : "";
-        const trailingSeparator =
-          trailingText.length > 0 && /^\s/.test(trailingText) ? "" : " ";
-        const insertedText =
-          `${leadingSeparator}@${mention.filename}${trailingSeparator}`;
+        const leadingSeparator = leadingText.length > 0 && !/\s$/.test(leadingText) ? " " : "";
+        const trailingSeparator = trailingText.length > 0 && /^\s/.test(trailingText) ? "" : " ";
+        const insertedText = `${leadingSeparator}@${mention.filename}${trailingSeparator}`;
         const newText = leadingText + insertedText + trailingText;
         const newMentions = [...mentions, mention];
 
@@ -362,7 +357,7 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
 
       const newText = extractText(inputRef.current);
       const remainingMentions = mentions.filter((mention) =>
-        newText.includes(`@${mention.filename}`)
+        newText.includes(`@${mention.filename}`),
       );
 
       lastValueRef.current = newText;
@@ -424,7 +419,7 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
 
         handleInput();
       },
-      [handleInput]
+      [handleInput],
     );
 
     const handleKeyDown = useCallback(
@@ -447,7 +442,7 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
 
         onKeyDown?.(event);
       },
-      [onKeyDown]
+      [onKeyDown],
     );
 
     const showPlaceholder = !value;
@@ -471,7 +466,7 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
           className={cn(
             "native-compose-input w-full resize-none overflow-y-auto border-none bg-transparent px-1 py-1 text-sm text-foreground outline-none transition-colors",
             disabled && "cursor-not-allowed opacity-50",
-            className
+            className,
           )}
           style={{
             minHeight,
@@ -492,5 +487,5 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
         )}
       </div>
     );
-  }
+  },
 );

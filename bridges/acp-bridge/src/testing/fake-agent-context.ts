@@ -74,7 +74,6 @@ export const grokConfig = {
   },
 };
 
-
 export interface FakeAgentState {
   provider: typeof provider;
   cursorConfig: typeof cursorConfig;
@@ -104,12 +103,13 @@ export function sessionPayload(sessionId = "fake-session"): JsonObject {
   // An agent that advertises no model option at all. The bridge must then leave
   // the composer with no selection rather than inventing one, and assistant
   // messages must carry no model attribution.
-  const withoutModel = provider !== "grok" && process.env.FAKE_ACP_NO_MODEL_OPTION === "1"
-    ? {
-        ...cursorConfig,
-        configOptions: cursorConfig.configOptions.filter((option) => option.id !== "model"),
-      }
-    : config;
+  const withoutModel =
+    provider !== "grok" && process.env.FAKE_ACP_NO_MODEL_OPTION === "1"
+      ? {
+          ...cursorConfig,
+          configOptions: cursorConfig.configOptions.filter((option) => option.id !== "model"),
+        }
+      : config;
   return {
     ...withoutModel,
     sessionId,
@@ -190,8 +190,6 @@ export function whenReleased(release: () => void): void {
   }
   whenFileExists(holdTurnFile, release);
 }
-
-
 
 export function closeInput(): void {
   lines.close();

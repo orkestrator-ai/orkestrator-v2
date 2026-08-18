@@ -46,7 +46,10 @@ import {
   isUnmaterializedThreadError,
   toEngineError,
 } from "../app-server/errors.js";
-import { reconcileFromThreadTurns, type ReconciliationOutcome } from "../sessions/dispatch-journal.js";
+import {
+  reconcileFromThreadTurns,
+  type ReconciliationOutcome,
+} from "../sessions/dispatch-journal.js";
 import {
   APP_SERVER_CAPABILITIES,
   type CodexEngine,
@@ -81,17 +84,11 @@ import {
  * Sub-agent kinds are excluded on purpose: they are children, not conversations
  * the user picks from history.
  */
-export const ROOT_THREAD_SOURCE_KINDS = [
-  "cli",
-  "vscode",
-  "exec",
-  "appServer",
-  "unknown",
-] as const;
+export const ROOT_THREAD_SOURCE_KINDS = ["cli", "vscode", "exec", "appServer", "unknown"] as const;
 
 function objectRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
+    ? (value as Record<string, unknown>)
     : {};
 }
 
@@ -162,34 +159,38 @@ function allowlistRuntimeInventory(
           const name = optionalPublicString(skill.name);
           if (!name) return [];
           const skillInterface = objectRecord(skill.interface);
-          return [{
-            name,
-            ...(optionalPublicString(skill.description)
-              ? { description: optionalPublicString(skill.description) }
-              : {}),
-            ...(optionalPublicString(skill.shortDescription)
-              ? { shortDescription: optionalPublicString(skill.shortDescription) }
-              : {}),
-            ...(Object.keys(skillInterface).length > 0
-              ? {
-                  interface: {
-                    ...(optionalPublicString(skillInterface.displayName)
-                      ? { displayName: optionalPublicString(skillInterface.displayName) }
-                      : {}),
-                    ...(optionalPublicString(skillInterface.shortDescription)
-                      ? { shortDescription: optionalPublicString(skillInterface.shortDescription) }
-                      : {}),
-                    ...(optionalPublicString(skillInterface.brandColor)
-                      ? { brandColor: optionalPublicString(skillInterface.brandColor) }
-                      : {}),
-                  },
-                }
-              : {}),
-            ...(optionalPublicString(skill.scope)
-              ? { scope: optionalPublicString(skill.scope) }
-              : {}),
-            ...(typeof skill.enabled === "boolean" ? { enabled: skill.enabled } : {}),
-          }];
+          return [
+            {
+              name,
+              ...(optionalPublicString(skill.description)
+                ? { description: optionalPublicString(skill.description) }
+                : {}),
+              ...(optionalPublicString(skill.shortDescription)
+                ? { shortDescription: optionalPublicString(skill.shortDescription) }
+                : {}),
+              ...(Object.keys(skillInterface).length > 0
+                ? {
+                    interface: {
+                      ...(optionalPublicString(skillInterface.displayName)
+                        ? { displayName: optionalPublicString(skillInterface.displayName) }
+                        : {}),
+                      ...(optionalPublicString(skillInterface.shortDescription)
+                        ? {
+                            shortDescription: optionalPublicString(skillInterface.shortDescription),
+                          }
+                        : {}),
+                      ...(optionalPublicString(skillInterface.brandColor)
+                        ? { brandColor: optionalPublicString(skillInterface.brandColor) }
+                        : {}),
+                    },
+                  }
+                : {}),
+              ...(optionalPublicString(skill.scope)
+                ? { scope: optionalPublicString(skill.scope) }
+                : {}),
+              ...(typeof skill.enabled === "boolean" ? { enabled: skill.enabled } : {}),
+            },
+          ];
         }),
       });
       continue;
@@ -202,24 +203,26 @@ function allowlistRuntimeInventory(
         const key = optionalPublicString(hook.key);
         const eventName = optionalPublicString(hook.eventName);
         if (!key || !eventName) return [];
-        return [{
-          key,
-          eventName,
-          ...(optionalPublicString(hook.handlerType)
-            ? { handlerType: optionalPublicString(hook.handlerType) }
-            : {}),
-          ...(optionalPublicString(hook.source)
-            ? { source: optionalPublicString(hook.source) }
-            : {}),
-          ...(optionalPublicString(hook.pluginId)
-            ? { pluginId: optionalPublicString(hook.pluginId) }
-            : {}),
-          ...(typeof hook.enabled === "boolean" ? { enabled: hook.enabled } : {}),
-          ...(typeof hook.isManaged === "boolean" ? { isManaged: hook.isManaged } : {}),
-          ...(optionalPublicString(hook.trustStatus)
-            ? { trustStatus: optionalPublicString(hook.trustStatus) }
-            : {}),
-        }];
+        return [
+          {
+            key,
+            eventName,
+            ...(optionalPublicString(hook.handlerType)
+              ? { handlerType: optionalPublicString(hook.handlerType) }
+              : {}),
+            ...(optionalPublicString(hook.source)
+              ? { source: optionalPublicString(hook.source) }
+              : {}),
+            ...(optionalPublicString(hook.pluginId)
+              ? { pluginId: optionalPublicString(hook.pluginId) }
+              : {}),
+            ...(typeof hook.enabled === "boolean" ? { enabled: hook.enabled } : {}),
+            ...(typeof hook.isManaged === "boolean" ? { isManaged: hook.isManaged } : {}),
+            ...(optionalPublicString(hook.trustStatus)
+              ? { trustStatus: optionalPublicString(hook.trustStatus) }
+              : {}),
+          },
+        ];
       }),
     });
   }
@@ -245,9 +248,9 @@ function allowlistRateLimits(value: unknown): Record<string, unknown> | { error:
       allowed.resetsAt = window.resetsAt;
     }
     if (
-      typeof window.windowDurationMins === "number"
-      && Number.isFinite(window.windowDurationMins)
-      && window.windowDurationMins >= 0
+      typeof window.windowDurationMins === "number" &&
+      Number.isFinite(window.windowDurationMins) &&
+      window.windowDurationMins >= 0
     ) {
       allowed.windowDurationMins = window.windowDurationMins;
     }
@@ -346,7 +349,7 @@ export class AppServerEngine implements CodexEngine {
       clientInfo: options.clientInfo,
       configOverrides: options.configOverrides,
       now: options.now,
-      ...(options.supervisorOverrides ?? {}),
+      ...options.supervisorOverrides,
       // Listed after the overrides so they can never be replaced: losing these
       // would mean silently dropping every event and hanging every turn.
       onNotification: (notification, threadId, generation) => {
@@ -522,26 +525,23 @@ export class AppServerEngine implements CodexEngine {
     if (generation !== this.supervisor.getGeneration()) return;
 
     if (
-      notification.method === "warning"
-      || notification.method === "guardianWarning"
-      || notification.method === "deprecationNotice"
-      || notification.method === "configWarning"
-      || notification.method === "model/rerouted"
-      || notification.method === "mcpServer/startupStatus/updated"
+      notification.method === "warning" ||
+      notification.method === "guardianWarning" ||
+      notification.method === "deprecationNotice" ||
+      notification.method === "configWarning" ||
+      notification.method === "model/rerouted" ||
+      notification.method === "mcpServer/startupStatus/updated"
     ) {
       const params =
-        notification.params
-        && typeof notification.params === "object"
-        && !Array.isArray(notification.params)
-          ? notification.params as Record<string, unknown>
+        notification.params &&
+        typeof notification.params === "object" &&
+        !Array.isArray(notification.params)
+          ? (notification.params as Record<string, unknown>)
           : {};
-      const message = [
-        params.message,
-        params.reason,
-        params.error,
-        params.status,
-      ].find((value): value is string => typeof value === "string" && value.length > 0)
-        ?? notification.method.replaceAll("/", " ");
+      const message =
+        [params.message, params.reason, params.error, params.status].find(
+          (value): value is string => typeof value === "string" && value.length > 0,
+        ) ?? notification.method.replaceAll("/", " ");
       this.runtimeNotices.push({
         method: notification.method,
         // Redacted at *capture*, not on the way out: MCP-server startup errors
@@ -636,7 +636,9 @@ export class AppServerEngine implements CodexEngine {
           hidden: model.hidden === true,
           supportedReasoningEfforts: Array.isArray(model.supportedReasoningEfforts)
             ? model.supportedReasoningEfforts
-                .filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === "object")
+                .filter(
+                  (entry): entry is Record<string, unknown> => !!entry && typeof entry === "object",
+                )
                 .map((entry) => ({
                   effort: String(entry.reasoningEffort ?? ""),
                   description:
@@ -650,7 +652,9 @@ export class AppServerEngine implements CodexEngine {
               : undefined,
           serviceTiers: Array.isArray(model.serviceTiers)
             ? model.serviceTiers
-                .filter((tier): tier is Record<string, unknown> => !!tier && typeof tier === "object")
+                .filter(
+                  (tier): tier is Record<string, unknown> => !!tier && typeof tier === "object",
+                )
                 .map((tier) => String(tier.id ?? ""))
                 .filter((id) => id.length > 0)
             : undefined,
@@ -682,10 +686,7 @@ export class AppServerEngine implements CodexEngine {
     const response = await this.supervisor.request<{
       thread: Record<string, unknown>;
       model?: unknown;
-    }>(
-      "thread/start",
-      this.toThreadParams(options.config),
-    );
+    }>("thread/start", this.toThreadParams(options.config));
     return this.bindThread(response.thread, options.config, response.model);
   }
 
@@ -693,10 +694,7 @@ export class AppServerEngine implements CodexEngine {
     const response = await this.supervisor.request<{
       thread: Record<string, unknown>;
       model?: unknown;
-    }>(
-      "thread/resume",
-      { threadId, ...this.toThreadParams(options.config) },
-    );
+    }>("thread/resume", { threadId, ...this.toThreadParams(options.config) });
     const thread = this.bindThread(response.thread, options.config, response.model);
     // app-server reconstructs turn history on resume by default.
     thread.turns = this.extractTurns(response.thread);
@@ -711,14 +709,11 @@ export class AppServerEngine implements CodexEngine {
     const response = await this.supervisor.request<{
       thread: Record<string, unknown>;
       model?: unknown;
-    }>(
-      "thread/fork",
-      {
-        threadId,
-        ...(lastTurnId ? { lastTurnId } : {}),
-        ...this.toThreadParams(config),
-      },
-    );
+    }>("thread/fork", {
+      threadId,
+      ...(lastTurnId ? { lastTurnId } : {}),
+      ...this.toThreadParams(config),
+    });
     return this.bindThread(response.thread, config, response.model);
   }
 
@@ -732,15 +727,12 @@ export class AppServerEngine implements CodexEngine {
     input: EngineUserInput[],
     clientUserMessageId?: string,
   ): Promise<string> {
-    const response = await this.supervisor.request<{ turnId: string }>(
-      "turn/steer",
-      {
-        threadId,
-        expectedTurnId,
-        input: input.map(toAppServerInput),
-        ...(clientUserMessageId ? { clientUserMessageId } : {}),
-      },
-    );
+    const response = await this.supervisor.request<{ turnId: string }>("turn/steer", {
+      threadId,
+      expectedTurnId,
+      input: input.map(toAppServerInput),
+      ...(clientUserMessageId ? { clientUserMessageId } : {}),
+    });
     return response.turnId;
   }
 
@@ -806,9 +798,7 @@ export class AppServerEngine implements CodexEngine {
       this.supervisor.request("account/rateLimits/read", undefined),
     ]);
     const value = (result: PromiseSettledResult<unknown>) =>
-      result.status === "fulfilled"
-        ? result.value
-        : { error: "Unavailable" };
+      result.status === "fulfilled" ? result.value : { error: "Unavailable" };
     const engine = this.getHealth();
     return {
       engine: {
@@ -838,7 +828,10 @@ export class AppServerEngine implements CodexEngine {
     };
   }
 
-  async readThread(threadId: string, options: ReadThreadOptions = {}): Promise<EngineThread | null> {
+  async readThread(
+    threadId: string,
+    options: ReadThreadOptions = {},
+  ): Promise<EngineThread | null> {
     try {
       const response = await this.supervisor.request<{ thread: Record<string, unknown> }>(
         "thread/read",
@@ -924,8 +917,7 @@ export class AppServerEngine implements CodexEngine {
       name: typeof thread.name === "string" ? thread.name : null,
       preview: typeof thread.preview === "string" ? thread.preview : undefined,
       source: describeSource(thread.source),
-      parentThreadId:
-        typeof thread.parentThreadId === "string" ? thread.parentThreadId : null,
+      parentThreadId: typeof thread.parentThreadId === "string" ? thread.parentThreadId : null,
       updatedAt: secondsToIso(thread.updatedAt),
       createdAt: secondsToIso(thread.createdAt),
     };
@@ -940,9 +932,9 @@ export class AppServerEngine implements CodexEngine {
         const clientIds = items
           .filter(
             (item): item is Record<string, unknown> =>
-              !!item
-              && typeof item === "object"
-              && (item as Record<string, unknown>).type === "userMessage",
+              !!item &&
+              typeof item === "object" &&
+              (item as Record<string, unknown>).type === "userMessage",
           )
           .map((item) => item.clientId)
           .filter((clientId): clientId is string => typeof clientId === "string");
@@ -958,9 +950,9 @@ export class AppServerEngine implements CodexEngine {
           };
         });
         const itemsView =
-          turn.itemsView === "notLoaded"
-          || turn.itemsView === "summary"
-          || turn.itemsView === "full"
+          turn.itemsView === "notLoaded" ||
+          turn.itemsView === "summary" ||
+          turn.itemsView === "full"
             ? turn.itemsView
             : undefined;
         return {
@@ -1180,9 +1172,12 @@ export class AppServerEngine implements CodexEngine {
     const turns = (thread?.turns ?? []).map((turn) => ({
       id: turn.id,
       status: turn.status,
-      items: turn.reconciliationItems
-        ?? (turn.clientIds ?? (turn.clientId ? [turn.clientId] : []))
-          .map((clientId) => ({ type: "userMessage" as const, clientId })),
+      items:
+        turn.reconciliationItems ??
+        (turn.clientIds ?? (turn.clientId ? [turn.clientId] : [])).map((clientId) => ({
+          type: "userMessage" as const,
+          clientId,
+        })),
     }));
     return reconcileFromThreadTurns(turns, requestId);
   }

@@ -1,6 +1,17 @@
 import { describe, expect, mock, test } from "bun:test";
 import path from "node:path";
-import { eventMatchesSubscription, MAX_STATIC_FALLBACK_SOURCE_BYTES, normalizeGatewayEventMetricKey, normalizeMetricLabel, OrkestratorGateway, parseEventSubscriptionFilter, readStaticFileWithinLimit, rewriteBrowserPreviewBody, stripCodedContentHeaders, stripTransformedRepresentationHeaders } from "../../../apps/backend/src/gateway";
+import {
+  eventMatchesSubscription,
+  MAX_STATIC_FALLBACK_SOURCE_BYTES,
+  normalizeGatewayEventMetricKey,
+  normalizeMetricLabel,
+  OrkestratorGateway,
+  parseEventSubscriptionFilter,
+  readStaticFileWithinLimit,
+  rewriteBrowserPreviewBody,
+  stripCodedContentHeaders,
+  stripTransformedRepresentationHeaders,
+} from "../../../apps/backend/src/gateway";
 import { stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 
@@ -22,14 +33,10 @@ import {
   writeRendererAsset,
 } from "./gateway-test-harness.js";
 
-
 describe("remote gateway", () => {
-
-
-
   test("separates content-coded metadata from full transformed-representation stripping", () => {
     const upstream = () => ({
-      etag: "\"upstream\"",
+      etag: '"upstream"',
       "content-md5": "identity-md5",
       "content-digest": "sha-256=:content:",
       "repr-digest": "sha-256=:representation:",
@@ -43,7 +50,7 @@ describe("remote gateway", () => {
     const coded = upstream();
     stripCodedContentHeaders(coded);
     expect(coded).toEqual({
-      etag: "\"upstream\"",
+      etag: '"upstream"',
       "repr-digest": "sha-256=:representation:",
       digest: "sha-256=identity",
       "accept-ranges": "bytes",
@@ -62,8 +69,6 @@ describe("remote gateway", () => {
     stripTransformedRepresentationHeaders(bare);
     expect(bare).toEqual({ "content-type": "text/plain" });
   });
-
-
 
   test("uses gzip-only fallback and leaves non-beneficial content as identity", async () => {
     const dataDir = await createTempDir("ork-static-fallback-selection-");
@@ -136,8 +141,6 @@ describe("remote gateway", () => {
     expect(decodeResponseBody(unacceptable)).toBe("x");
   });
 
-
-
   test("serves identity when a coded form was acceptable but the server declined it", async () => {
     const dataDir = await createTempDir("ork-static-declined-");
     const rendererRoot = await createRendererRoot(dataDir);
@@ -171,8 +174,6 @@ describe("remote gateway", () => {
     expect(unrepresentable.status).toBe(406);
   });
 
-
-
   test("reads fallback sources through a stat-verified bounded file handle", async () => {
     const root = await createTempDir("ork-static-bounded-read-");
     const filePath = path.join(root, "asset.js");
@@ -180,20 +181,12 @@ describe("remote gateway", () => {
     const originalStat = await stat(filePath);
 
     expect(
-      await readStaticFileWithinLimit(
-        filePath,
-        originalStat.mtimeMs,
-        originalStat.size,
-      ),
+      await readStaticFileWithinLimit(filePath, originalStat.mtimeMs, originalStat.size),
     ).toEqual(Buffer.from("small source"));
 
     await writeFile(filePath, Buffer.alloc(1024 * 1024, 0x61));
     expect(
-      await readStaticFileWithinLimit(
-        filePath,
-        originalStat.mtimeMs,
-        originalStat.size,
-      ),
+      await readStaticFileWithinLimit(filePath, originalStat.mtimeMs, originalStat.size),
     ).toBeNull();
     expect(
       await readStaticFileWithinLimit(
@@ -211,11 +204,11 @@ describe("remote gateway", () => {
     ).toBeNull();
   });
 
-
-
   test("collapses per-entity event names and rejects unusable labels", () => {
     expect(normalizeGatewayEventMetricKey("terminal-output-session-1")).toBe("terminal-output");
-    expect(normalizeGatewayEventMetricKey("terminal-output-tmux:env:tab")).toBe("terminal-output-tmux");
+    expect(normalizeGatewayEventMetricKey("terminal-output-tmux:env:tab")).toBe(
+      "terminal-output-tmux",
+    );
     // One label per container would otherwise evict genuine event names.
     expect(normalizeGatewayEventMetricKey("claude-state-abc123")).toBe("claude-state");
     expect(normalizeGatewayEventMetricKey("claude-state-def456")).toBe("claude-state");
@@ -237,8 +230,6 @@ describe("remote gateway", () => {
     }
   });
 
-
-
   test("never retains a rejected command name, including when the registry is not consulted", async () => {
     const secretLikeName = "AValidLookingSecretToken1234567890";
     // Mirrors OrkestratorBackend: shutdown is refused before the registry
@@ -255,14 +246,15 @@ describe("remote gateway", () => {
       hasCommand: (command: string) => command === "registered_command",
     };
     const { info } = await startGateway({ backend });
-    const invoke = (command: string) => requestUrl(`${info.url}__orkestrator/invoke`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${info.token}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({ command }),
-    });
+    const invoke = (command: string) =>
+      requestUrl(`${info.url}__orkestrator/invoke`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${info.token}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ command }),
+      });
 
     expect((await invoke(secretLikeName)).status).toBe(500);
     shuttingDown = true;
@@ -277,34 +269,31 @@ describe("remote gateway", () => {
     expect(metrics.commands.registered_command).toMatchObject({ count: 1, failures: 1 });
   });
 
-
-
   test("filters terminal prefixes while restoring explicitly subscribed sessions", () => {
     expect(parseEventSubscriptionFilter(" terminal-output-one, menu- ")).toEqual([
       "terminal-output-one",
       "menu-",
     ]);
-    expect(eventMatchesSubscription(
-      "menu-zoom",
-      null,
-      ["terminal-output-one"],
-      ["terminal-output-"],
-    )).toBe(false);
-    expect(eventMatchesSubscription(
-      "terminal-output-one",
-      null,
-      ["terminal-output-one"],
-      ["terminal-output-"],
-    )).toBe(true);
-    expect(eventMatchesSubscription(
-      "terminal-output-two",
-      null,
-      ["terminal-output-one"],
-      ["terminal-output-"],
-    )).toBe(false);
+    expect(
+      eventMatchesSubscription("menu-zoom", null, ["terminal-output-one"], ["terminal-output-"]),
+    ).toBe(false);
+    expect(
+      eventMatchesSubscription(
+        "terminal-output-one",
+        null,
+        ["terminal-output-one"],
+        ["terminal-output-"],
+      ),
+    ).toBe(true);
+    expect(
+      eventMatchesSubscription(
+        "terminal-output-two",
+        null,
+        ["terminal-output-one"],
+        ["terminal-output-"],
+      ),
+    ).toBe(false);
   });
-
-
 
   test("counts actual event writes, bounds labels, and closes each stream exactly once", async () => {
     const { gateway, info } = await startGateway();
@@ -372,14 +361,13 @@ describe("remote gateway", () => {
     expect(eventKeys.every((key) => !key.includes("secret"))).toBe(true);
     expect(eventKeys).toHaveLength(128);
     expect(eventKeys.every((key) => Buffer.byteLength(key) <= 96)).toBe(true);
-    expect(eventKeys.reduce((total, key) => total + Buffer.byteLength(key), 0)).toBeLessThanOrEqual(8 * 1024);
+    expect(eventKeys.reduce((total, key) => total + Buffer.byteLength(key), 0)).toBeLessThanOrEqual(
+      8 * 1024,
+    );
 
     healthy.response.destroy();
     healthy.close();
-    await waitUntil(
-      () => eventClients(gateway).size === 0,
-      "Healthy stream did not close",
-    );
+    await waitUntil(() => eventClients(gateway).size === 0, "Healthy stream did not close");
     metrics = await readGatewayMetrics(info);
     expect(metrics.stream).toMatchObject({
       open: 0,
@@ -388,8 +376,6 @@ describe("remote gateway", () => {
       dropped: 1,
     });
   });
-
-
 
   test("retains only the latest refused tmux repaint and flushes it on drain", async () => {
     const dataDir = await createTempDir("ork-gateway-tmux-soft-limit-");
@@ -416,9 +402,7 @@ describe("remote gateway", () => {
       excludedPrefixes: ["terminal-output-"],
       desyncedSessions: new Set<string>(),
     };
-    const clients = (
-      gateway as unknown as { clients: Map<object, typeof state> }
-    ).clients;
+    const clients = (gateway as unknown as { clients: Map<object, typeof state> }).clients;
     clients.set(client, state);
 
     gateway.emit("terminal-output-tmux:env:tab:one", {
@@ -458,17 +442,17 @@ describe("remote gateway", () => {
       full: false,
     });
     client.writableLength = 0;
-    expect((
-      gateway as unknown as {
-        flushDesyncNotices(client: object, state: typeof state): boolean;
-      }
-    ).flushDesyncNotices(client, state)).toBe(true);
+    expect(
+      (
+        gateway as unknown as {
+          flushDesyncNotices(client: object, state: typeof state): boolean;
+        }
+      ).flushDesyncNotices(client, state),
+    ).toBe(true);
     expect(writes).toHaveLength(2);
     expect(writes[1]).toContain('"desynced":true');
     expect(writes[1]).not.toContain("recovery base");
   });
-
-
 
   test("retains one latest repaint per session for a multiplexed terminal stream", async () => {
     // A same-origin browser now multiplexes every mounted terminal onto one
@@ -494,16 +478,11 @@ describe("remote gateway", () => {
     };
     const state = {
       prefixes: null,
-      includedPrefixes: [
-        "terminal-output-tmux:env:tab:one",
-        "terminal-output-tmux:env:tab:two",
-      ],
+      includedPrefixes: ["terminal-output-tmux:env:tab:one", "terminal-output-tmux:env:tab:two"],
       excludedPrefixes: ["terminal-output-"],
       desyncedSessions: new Set<string>(),
     };
-    const clients = (
-      gateway as unknown as { clients: Map<object, typeof state> }
-    ).clients;
+    const clients = (gateway as unknown as { clients: Map<object, typeof state> }).clients;
     clients.set(client, state);
 
     gateway.emit("terminal-output-tmux:env:tab:one", {
@@ -523,9 +502,7 @@ describe("remote gateway", () => {
       full: true,
     });
     expect(writes).toEqual([]);
-    expect(state.desyncedSessions).toEqual(
-      new Set(["tmux:env:tab:one", "tmux:env:tab:two"]),
-    );
+    expect(state.desyncedSessions).toEqual(new Set(["tmux:env:tab:one", "tmux:env:tab:two"]));
 
     client.writableLength = 0;
     const flushed = (
@@ -547,8 +524,6 @@ describe("remote gateway", () => {
     expect(state.desyncedSessions.size).toBe(0);
   });
 
-
-
   test("disconnects before a current frame would exceed the hard buffer limit", async () => {
     const dataDir = await createTempDir("ork-gateway-hard-limit-");
     const rendererRoot = await createRendererRoot(dataDir);
@@ -565,9 +540,7 @@ describe("remote gateway", () => {
       write: mock(() => true),
       destroy: mock(() => undefined),
     };
-    const clients = (
-      gateway as unknown as { clients: Map<object, unknown> }
-    ).clients;
+    const clients = (gateway as unknown as { clients: Map<object, unknown> }).clients;
     clients.set(client, {
       prefixes: null,
       includedPrefixes: null,
@@ -581,8 +554,6 @@ describe("remote gateway", () => {
     expect(clients.has(client)).toBe(false);
     expect(logger.warn).toHaveBeenCalledTimes(1);
   });
-
-
 
   test("subscribes a connecting stream from its own query string", async () => {
     const { gateway, info } = await startGateway();
@@ -618,8 +589,6 @@ describe("remote gateway", () => {
     terminal.close();
   });
 
-
-
   test("leaves application string literals and already-proxied paths untouched", () => {
     const prefix = "/__orkestrator/browser/loopback/3000";
     const target = new URL("http://127.0.0.1:3000/");
@@ -636,14 +605,13 @@ describe("remote gateway", () => {
     expect(rewriteBrowserPreviewBody(source, prefix, target, "js")).toBe(source);
   });
 
-
-
   test("keeps desktop control available and selects another browser port when the preferred port is occupied", async () => {
     const occupied = createServer((_request, response) => response.end("occupied"));
     auxiliaryServers.push(occupied);
     await new Promise<void>((resolve) => occupied.listen(0, "127.0.0.1", resolve));
     const occupiedAddress = occupied.address();
-    if (!occupiedAddress || typeof occupiedAddress === "string") throw new Error("Expected TCP address");
+    if (!occupiedAddress || typeof occupiedAddress === "string")
+      throw new Error("Expected TCP address");
 
     const { info } = await startGateway({
       port: occupiedAddress.port,
@@ -665,8 +633,6 @@ describe("remote gateway", () => {
     expect(browserResponse.status).toBe(200);
   });
 
-
-
   test("uses an ephemeral browser port after every nearby fallback port is occupied", async () => {
     const occupied = await occupyContiguousPorts(21);
     auxiliaryServers.push(...occupied.servers);
@@ -678,8 +644,6 @@ describe("remote gateway", () => {
     expect(selectedPort < occupied.start || selectedPort > occupied.start + 20).toBe(true);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("nearby ports were in use"));
   });
-
-
 
   test("falls back to an ephemeral port when port 65535 is occupied", async () => {
     const occupied = createServer((_request, response) => response.end("occupied"));
@@ -702,8 +666,6 @@ describe("remote gateway", () => {
 
     expect(new URL(info.browserUrl!).port).not.toBe("65535");
   });
-
-
 
   test("accepts command bodies far larger than the shared JSON limit and rejects oversized ones with 413", async () => {
     const dataDir = await createTempDir("ork-gateway-invoke-size-");
@@ -767,8 +729,6 @@ describe("remote gateway", () => {
     expect(backend.invoke).toHaveBeenCalledTimes(1);
   });
 
-
-
   test("surfaces persistence failures without reporting a successful rotation", async () => {
     const root = await createTempDir("ork-gateway-write-failure-");
     const fileInsteadOfDirectory = path.join(root, "not-a-directory");
@@ -783,5 +743,4 @@ describe("remote gateway", () => {
 
     await expect(gateway.setToken("replacement-token-123456")).rejects.toThrow();
   });
-
 });

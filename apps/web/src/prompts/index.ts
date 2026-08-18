@@ -9,9 +9,6 @@ export {
   createResolveConflictsPrompt,
 } from "./git-workflows";
 
-export {
-  buildReviewInstructionBlock,
-  resolveReviewInstruction,
-} from "./review-shared";
+export { buildReviewInstructionBlock, resolveReviewInstruction } from "./review-shared";
 
 export { createOrkestratorScriptPrompt } from "./orkestrator-script";

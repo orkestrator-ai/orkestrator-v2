@@ -11,12 +11,7 @@ interface FileMentionMenuProps {
   onClose: () => void;
 }
 
-export function FileMentionMenu({
-  files,
-  selectedIndex,
-  onSelect,
-  onClose,
-}: FileMentionMenuProps) {
+export function FileMentionMenu({ files, selectedIndex, onSelect, onClose }: FileMentionMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const selectedRef = useRef<HTMLButtonElement>(null);
 
@@ -46,7 +41,7 @@ export function FileMentionMenu({
         aria-label="File and folder suggestions"
         className={cn(
           "absolute z-50 max-h-96 w-full min-w-0 overflow-y-auto rounded-xl border border-zinc-700/70 bg-zinc-900/95 shadow-[0_18px_48px_rgba(0,0,0,0.42)] backdrop-blur-sm sm:w-96",
-          "animate-in fade-in-0 zoom-in-95"
+          "animate-in fade-in-0 zoom-in-95",
         )}
         style={{ bottom: "100%", left: 0, marginBottom: "4px" }}
       >
@@ -64,7 +59,7 @@ export function FileMentionMenu({
       aria-label="File and folder suggestions"
       className={cn(
         "absolute z-50 max-h-96 w-full min-w-0 overflow-y-auto rounded-xl border border-zinc-700/70 bg-zinc-900/95 shadow-[0_18px_48px_rgba(0,0,0,0.42)] backdrop-blur-sm sm:w-96",
-        "animate-in fade-in-0 zoom-in-95"
+        "animate-in fade-in-0 zoom-in-95",
       )}
       style={{ bottom: "100%", left: 0, marginBottom: "4px" }}
     >
@@ -75,8 +70,7 @@ export function FileMentionMenu({
         {files.map((file, index) => {
           const isSelected = index === selectedIndex;
           const lastSlashIndex = file.relativePath.lastIndexOf("/");
-          const directory =
-            lastSlashIndex >= 0 ? file.relativePath.slice(0, lastSlashIndex) : "";
+          const directory = lastSlashIndex >= 0 ? file.relativePath.slice(0, lastSlashIndex) : "";
 
           return (
             <button
@@ -99,13 +93,20 @@ export function FileMentionMenu({
                 "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm transition-colors",
                 isSelected
                   ? "bg-zinc-800/80 text-foreground"
-                  : "hover:bg-zinc-800/70 hover:text-foreground"
+                  : "hover:bg-zinc-800/70 hover:text-foreground",
               )}
             >
               {file.isDirectory ? (
-                <Folder className="h-4 w-4 shrink-0 text-amber-500 dark:text-amber-400" aria-hidden="true" />
+                <Folder
+                  className="h-4 w-4 shrink-0 text-amber-500 dark:text-amber-400"
+                  aria-hidden="true"
+                />
               ) : (
-                <FileIcon filename={file.filename} className="h-4 w-4 shrink-0" aria-hidden="true" />
+                <FileIcon
+                  filename={file.filename}
+                  className="h-4 w-4 shrink-0"
+                  aria-hidden="true"
+                />
               )}
               <span className="truncate font-medium">{file.filename}</span>
               {directory && (

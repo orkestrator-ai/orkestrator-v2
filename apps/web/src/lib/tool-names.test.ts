@@ -74,23 +74,19 @@ describe("getToolTitleDisplayName", () => {
   });
 
   test("humanizes a title that merely duplicates the content", () => {
-    expect(getToolTitleDisplayName("apply_patch", undefined, "apply_patch")).toBe(
-      "Apply Patch",
-    );
+    expect(getToolTitleDisplayName("apply_patch", undefined, "apply_patch")).toBe("Apply Patch");
   });
 
   test("preserves a genuinely descriptive title verbatim", () => {
     expect(getToolTitleDisplayName("Inspect the Codex integration", "Agent")).toBe(
       "Inspect the Codex integration",
     );
-    expect(getToolTitleDisplayName("CustomReviewer", "Agent")).toBe(
-      "CustomReviewer",
-    );
+    expect(getToolTitleDisplayName("CustomReviewer", "Agent")).toBe("CustomReviewer");
   });
 
   test("never title-cases a command-like title even if it matches content", () => {
-    expect(
-      getToolTitleDisplayName("rg -n codex src", "bash", "rg -n codex src"),
-    ).toBe("rg -n codex src");
+    expect(getToolTitleDisplayName("rg -n codex src", "bash", "rg -n codex src")).toBe(
+      "rg -n codex src",
+    );
   });
 });

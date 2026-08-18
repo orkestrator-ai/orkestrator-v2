@@ -17,9 +17,7 @@ export function useUnreadEnvironmentSync(): void {
 
   useEffect(() => {
     if (!selectedEnvironmentId) return;
-    const environment = environments.find(
-      (candidate) => candidate.id === selectedEnvironmentId,
-    );
+    const environment = environments.find((candidate) => candidate.id === selectedEnvironmentId);
     if (!environment?.hasUnreadWork) return;
 
     const observedActivityAt = environment.lastActivityAt ?? null;
@@ -38,14 +36,10 @@ export function useUnreadEnvironmentSync(): void {
         const persistedActivityAt = persistedEnvironment.lastActivityAt ?? null;
         const persistedIsCurrent =
           currentActivityAt === persistedActivityAt ||
-          (
-            persistedActivityAt !== null &&
+          (persistedActivityAt !== null &&
             Number.isFinite(Date.parse(persistedActivityAt)) &&
-            (
-              currentActivityAt === null ||
-              Date.parse(persistedActivityAt) >= Date.parse(currentActivityAt)
-            )
-          );
+            (currentActivityAt === null ||
+              Date.parse(persistedActivityAt) >= Date.parse(currentActivityAt)));
         if (persistedIsCurrent) {
           useEnvironmentStore.getState().updateEnvironment(selectedEnvironmentId, {
             hasUnreadWork: persistedEnvironment.hasUnreadWork === true,

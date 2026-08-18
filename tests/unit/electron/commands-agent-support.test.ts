@@ -107,8 +107,6 @@ import type {
   RepositoryConfig,
 } from "./command-fixtures";
 
-
-
 describe("resolveBrowserOpenCommand", () => {
   test("uses direct platform launchers without a command interpreter", () => {
     expect(resolveBrowserOpenCommand("https://example.com/a?x=1&y=2", "darwin")).toEqual({
@@ -132,8 +130,6 @@ describe("resolveBrowserOpenCommand", () => {
     );
   });
 });
-
-
 
 describe("resolveFileManagerRevealCommands", () => {
   test("uses native selection commands on macOS and Windows", () => {

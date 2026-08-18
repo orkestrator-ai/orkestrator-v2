@@ -83,7 +83,11 @@ function parseErrorBody(value: unknown): JsonRpcErrorBody | null {
  */
 export function classifyInbound(value: unknown): InboundMessage {
   if (!isRecord(value)) {
-    return { kind: "invalid", detail: "envelope is not an object", preview: preview(String(value)) };
+    return {
+      kind: "invalid",
+      detail: "envelope is not an object",
+      preview: preview(String(value)),
+    };
   }
 
   const hasId = value.id !== undefined && value.id !== null;
@@ -107,7 +111,11 @@ export function classifyInbound(value: unknown): InboundMessage {
 
   if (hasId) {
     if (!isValidId(value.id)) {
-      return { kind: "invalid", detail: "response id must be a string or finite number", preview: "" };
+      return {
+        kind: "invalid",
+        detail: "response id must be a string or finite number",
+        preview: "",
+      };
     }
     const errorBody = parseErrorBody(value.error);
     if (errorBody) return { kind: "response", id: value.id, error: errorBody };

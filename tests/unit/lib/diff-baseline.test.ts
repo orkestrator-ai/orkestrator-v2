@@ -8,33 +8,41 @@ const CREATION_COMMIT = "a".repeat(40);
 
 describe("resolveComparisonRef", () => {
   test("prefers the recorded creation commit over any configured branch", () => {
-    expect(resolveComparisonRef(CREATION_COMMIT, {
-      defaultBranch: "trunk",
-      prBaseBranch: "release",
-    })).toBe(CREATION_COMMIT);
+    expect(
+      resolveComparisonRef(CREATION_COMMIT, {
+        defaultBranch: "trunk",
+        prBaseBranch: "release",
+      }),
+    ).toBe(CREATION_COMMIT);
   });
 
   test("uses the PR base branch when there is no creation commit", () => {
-    expect(resolveComparisonRef(undefined, {
-      defaultBranch: "trunk",
-      prBaseBranch: "release",
-    })).toBe("release");
+    expect(
+      resolveComparisonRef(undefined, {
+        defaultBranch: "trunk",
+        prBaseBranch: "release",
+      }),
+    ).toBe("release");
   });
 
   // A repository on master/trunk would otherwise be measured against a ref that
   // does not exist, and diff stats fail silently, so the badge just never appears.
   test("falls back to the repository default branch when the PR base is blank", () => {
-    expect(resolveComparisonRef(undefined, {
-      defaultBranch: "trunk",
-      prBaseBranch: "",
-    })).toBe("trunk");
+    expect(
+      resolveComparisonRef(undefined, {
+        defaultBranch: "trunk",
+        prBaseBranch: "",
+      }),
+    ).toBe("trunk");
   });
 
   test("falls back to the default branch when the environment has no creation commit and no PR base", () => {
-    expect(resolveComparisonRef(null, {
-      defaultBranch: "master",
-      prBaseBranch: "",
-    })).toBe("master");
+    expect(
+      resolveComparisonRef(null, {
+        defaultBranch: "master",
+        prBaseBranch: "",
+      }),
+    ).toBe("master");
   });
 
   test.each([undefined, null])("uses the last-resort ref when config is %p", (config) => {
@@ -42,34 +50,44 @@ describe("resolveComparisonRef", () => {
   });
 
   test("uses the last-resort ref when both configured branches are blank", () => {
-    expect(resolveComparisonRef(undefined, {
-      defaultBranch: "",
-      prBaseBranch: "",
-    })).toBe(FALLBACK_COMPARISON_REF);
+    expect(
+      resolveComparisonRef(undefined, {
+        defaultBranch: "",
+        prBaseBranch: "",
+      }),
+    ).toBe(FALLBACK_COMPARISON_REF);
   });
 
   test("treats an empty creation commit as absent", () => {
-    expect(resolveComparisonRef("", {
-      defaultBranch: "trunk",
-      prBaseBranch: "release",
-    })).toBe("release");
+    expect(
+      resolveComparisonRef("", {
+        defaultBranch: "trunk",
+        prBaseBranch: "release",
+      }),
+    ).toBe("release");
   });
 
   test("treats a whitespace-only creation commit as absent", () => {
-    expect(resolveComparisonRef(" \t\n", {
-      defaultBranch: "trunk",
-      prBaseBranch: "release",
-    })).toBe("release");
+    expect(
+      resolveComparisonRef(" \t\n", {
+        defaultBranch: "trunk",
+        prBaseBranch: "release",
+      }),
+    ).toBe("release");
   });
 
   test("ignores whitespace-only configured branches", () => {
-    expect(resolveComparisonRef(undefined, {
-      defaultBranch: "trunk",
-      prBaseBranch: " \t ",
-    })).toBe("trunk");
-    expect(resolveComparisonRef(undefined, {
-      defaultBranch: "\n ",
-      prBaseBranch: "\t",
-    })).toBe(FALLBACK_COMPARISON_REF);
+    expect(
+      resolveComparisonRef(undefined, {
+        defaultBranch: "trunk",
+        prBaseBranch: " \t ",
+      }),
+    ).toBe("trunk");
+    expect(
+      resolveComparisonRef(undefined, {
+        defaultBranch: "\n ",
+        prBaseBranch: "\t",
+      }),
+    ).toBe(FALLBACK_COMPARISON_REF);
   });
 });

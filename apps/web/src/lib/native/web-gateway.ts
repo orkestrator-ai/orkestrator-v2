@@ -60,7 +60,7 @@ async function readBrowserClipboardImage(): Promise<{
     if (!imageType) continue;
 
     const blob = await item.getType(imageType);
-    return { ...await readClipboardImageDimensions(blob), blob };
+    return { ...(await readClipboardImageDimensions(blob)), blob };
   }
 
   return null;
@@ -106,9 +106,7 @@ function terminalTransportEnabled(options: BrowserGatewayOptions): boolean {
 }
 
 function parseEventBlock(block: string): { data: string | null; id: string | null } {
-  const idLine = block
-    .split(/\r?\n/)
-    .findLast((line) => line.startsWith("id:"));
+  const idLine = block.split(/\r?\n/).findLast((line) => line.startsWith("id:"));
   const data = block
     .split(/\r?\n/)
     .filter((line) => line.startsWith("data:"))
@@ -127,7 +125,8 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let bootMetricsTimeout: ReturnType<typeof setTimeout> | null = null;
   let bootMetricsDeferredTimer: ReturnType<typeof setTimeout> | null = null;
-  let bootMetricsLoadObserved = typeof document === "undefined" || document.readyState === "complete";
+  let bootMetricsLoadObserved =
+    typeof document === "undefined" || document.readyState === "complete";
   let bootMetricsReported = false;
   let bootMetricsEventStreamConnectedMs: number | null = null;
   let mainEventCursor: string | null = null;
@@ -188,7 +187,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     return Object.keys(result).length > 0 ? result : undefined;
   };
 
-  const credentials = bearerToken || baseUrl ? "omit" as const : "same-origin" as const;
+  const credentials = bearerToken || baseUrl ? ("omit" as const) : ("same-origin" as const);
   const websocketTerminalsEnabled = terminalTransportEnabled(options);
   let terminalSocket: TerminalWebSocketClient | null = null;
   let disposeAgentTestActivity: () => void = () => undefined;
@@ -242,13 +241,15 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
         method: "POST",
         credentials,
         signal: controller.signal,
-      }).then((response) => {
-        // 401 is a lapsed session and needs the login page. 404 only means this
-        // gateway has no such route, so the tab is fine and simply has nothing
-        // to renew — tearing it down further would be wrong.
-        if (response.status === 401) handleCredentialLapse();
-        else if (response.status === 404) removeListeners();
-      }).catch(() => undefined);
+      })
+        .then((response) => {
+          // 401 is a lapsed session and needs the login page. 404 only means this
+          // gateway has no such route, so the tab is fine and simply has nothing
+          // to renew — tearing it down further would be wrong.
+          if (response.status === 401) handleCredentialLapse();
+          else if (response.status === 404) removeListeners();
+        })
+        .catch(() => undefined);
     };
     disposeAgentTestActivity = removeListeners;
     try {
@@ -275,17 +276,13 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
    * so a remote tab looking at one environment no longer downloads output from
    * every terminal in every other environment.
    */
-  const eventStreamPath = (
-    terminalEvents?: string | readonly string[],
-    since?: string | null,
-  ) => {
+  const eventStreamPath = (terminalEvents?: string | readonly string[], since?: string | null) => {
     const params = new URLSearchParams({
       excludeEvents: TERMINAL_OUTPUT_EVENT_PREFIX,
     });
     if (terminalEvents) {
-      const included = typeof terminalEvents === "string"
-        ? terminalEvents
-        : terminalEvents.join(",");
+      const included =
+        typeof terminalEvents === "string" ? terminalEvents : terminalEvents.join(",");
       if (included) params.set("includeEvents", included);
     }
     if (!terminalEvents && since) params.set("since", since);
@@ -313,10 +310,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       return;
     }
     if (typeof parsed.event !== "string") return;
-    if (
-      options.terminalFallback
-      && !terminalEventStreams.get(parsed.event)?.fallbackActive
-    ) return;
+    if (options.terminalFallback && !terminalEventStreams.get(parsed.event)?.fallbackActive) return;
     if (options.mainStream && options.lastEventId) {
       mainEventCursor = options.lastEventId;
     }
@@ -325,9 +319,9 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     // arriving on a terminal socket can neither reach ordinary listeners nor
     // latch main-stream connection state it has no authority over.
     if (
-      parsed.event === GATEWAY_CONNECTED_EVENT
-      || parsed.event === GATEWAY_RECONCILE_REQUIRED_EVENT
-      || parsed.event === GATEWAY_CURSOR_EVENT
+      parsed.event === GATEWAY_CONNECTED_EVENT ||
+      parsed.event === GATEWAY_RECONCILE_REQUIRED_EVENT ||
+      parsed.event === GATEWAY_CURSOR_EVENT
     ) {
       if (!options.mainStream) return;
       if (parsed.event === GATEWAY_CURSOR_EVENT) return;
@@ -336,11 +330,10 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
         announceEventStreamConnected();
         return;
       }
-      const status = parsed.payload
-        && typeof parsed.payload === "object"
-        && "status" in parsed.payload
-        ? (parsed.payload as { status?: unknown }).status
-        : null;
+      const status =
+        parsed.payload && typeof parsed.payload === "object" && "status" in parsed.payload
+          ? (parsed.payload as { status?: unknown }).status
+          : null;
       if (status === "fresh" && !mainConnectionAnnounced) {
         mainConnectionAnnounced = true;
         announceEventStreamConnected();
@@ -369,27 +362,42 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   };
 
   const sendBootMetrics = async () => {
-    if (bootMetricsReported || !options.reportBootMetrics || typeof performance === "undefined") return;
+    if (bootMetricsReported || !options.reportBootMetrics || typeof performance === "undefined")
+      return;
     bootMetricsReported = true;
     clearBootMetricsTimers();
 
-    const navigation = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
+    const navigation = performance.getEntriesByType("navigation")[0] as
+      | PerformanceNavigationTiming
+      | undefined;
     const resources = performance.getEntriesByType("resource") as PerformanceResourceTiming[];
     const paintEntries = performance.getEntriesByType("paint");
     const firstPaint = paintEntries.find((entry) => entry.name === "first-paint");
-    const firstContentfulPaint = paintEntries.find((entry) => entry.name === "first-contentful-paint");
+    const firstContentfulPaint = paintEntries.find(
+      (entry) => entry.name === "first-contentful-paint",
+    );
     const payload = {
-      platform: window.__orkestratorClientPlatform
-        ?? ((window as Window & { webkit?: unknown }).webkit ? "ios-wkwebview" : "desktop-browser"),
+      platform:
+        window.__orkestratorClientPlatform ??
+        ((window as Window & { webkit?: unknown }).webkit ? "ios-wkwebview" : "desktop-browser"),
       navigationType: navigation?.type ?? "unknown",
       nextHopProtocol: navigation?.nextHopProtocol ?? null,
       transferSize: navigation?.transferSize ?? null,
       encodedBodySize: navigation?.encodedBodySize ?? null,
       decodedBodySize: navigation?.decodedBodySize ?? null,
       resourceCount: resources.length,
-      resourceTransferSize: resources.reduce((total, entry) => total + (entry.transferSize ?? 0), 0),
-      resourceEncodedBodySize: resources.reduce((total, entry) => total + (entry.encodedBodySize ?? 0), 0),
-      resourceDecodedBodySize: resources.reduce((total, entry) => total + (entry.decodedBodySize ?? 0), 0),
+      resourceTransferSize: resources.reduce(
+        (total, entry) => total + (entry.transferSize ?? 0),
+        0,
+      ),
+      resourceEncodedBodySize: resources.reduce(
+        (total, entry) => total + (entry.encodedBodySize ?? 0),
+        0,
+      ),
+      resourceDecodedBodySize: resources.reduce(
+        (total, entry) => total + (entry.decodedBodySize ?? 0),
+        0,
+      ),
       jsTransferSize: resources
         .filter((entry) => entry.initiatorType === "script")
         .reduce((total, entry) => total + (entry.transferSize ?? 0), 0),
@@ -452,10 +460,14 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   const startBootMetricsReporter = () => {
     if (!options.reportBootMetrics || bootMetricsReported || bootMetricsTimeout) return;
     if (!bootMetricsLoadHasHappened()) {
-      window.addEventListener("load", () => {
-        bootMetricsLoadObserved = true;
-        maybeSendBootMetrics();
-      }, { once: true });
+      window.addEventListener(
+        "load",
+        () => {
+          bootMetricsLoadObserved = true;
+          maybeSendBootMetrics();
+        },
+        { once: true },
+      );
     }
     bootMetricsTimeout = setTimeout(() => {
       bootMetricsTimeout = null;
@@ -608,9 +620,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     stream.connectedBefore = true;
     resolveTerminalStreamReady(stream);
     if (!isReconnect) return;
-    dispatchMessage(
-      JSON.stringify({ event: stream.event, payload: { desynced: true } }),
-    );
+    dispatchMessage(JSON.stringify({ event: stream.event, payload: { desynced: true } }));
   };
 
   const clearBrowserTerminalReconnectTimer = () => {
@@ -679,9 +689,9 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       // null check matters: a fatal error clears the source but leaves the
       // event list, and that retry has to be able to rebuild.
       if (
-        browserTerminalEventSource
-        && browserTerminalSubscribedEvents?.length === events.length
-        && browserTerminalSubscribedEvents.every((event, index) => event === events[index])
+        browserTerminalEventSource &&
+        browserTerminalSubscribedEvents?.length === events.length &&
+        browserTerminalSubscribedEvents.every((event, index) => event === events[index])
       ) {
         // The filter is unchanged but a stream object behind it may not be: a
         // terminal that unsubscribed and resubscribed the same event has a
@@ -760,11 +770,12 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
             throw new Error(`Gateway terminal event stream failed with HTTP ${response.status}`);
           }
           if (
-            controller.signal.aborted
-            || stream.closed
-            || !stream.fallbackActive
-            || terminalEventStreams.get(stream.event) !== stream
-          ) return;
+            controller.signal.aborted ||
+            stream.closed ||
+            !stream.fallbackActive ||
+            terminalEventStreams.get(stream.event) !== stream
+          )
+            return;
           announceTerminalStreamOpen(stream);
           await consumeFetchEventStream(response, controller, false, true);
         } catch (error) {
@@ -774,14 +785,14 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
         } finally {
           if (stream.controller === controller) stream.controller = null;
           if (
-            !stream.closed
+            !stream.closed &&
             // Stopping the fallback works by aborting this controller, which is
             // what runs this block. Without this check the stop schedules its
             // own replacement and the terminal ends up on both transports.
-            && stream.fallbackActive
-            && terminalEventStreams.get(stream.event) === stream
-            && listeners.has(stream.event)
-            && !stream.reconnectTimer
+            stream.fallbackActive &&
+            terminalEventStreams.get(stream.event) === stream &&
+            listeners.has(stream.event) &&
+            !stream.reconnectTimer
           ) {
             stream.reconnectTimer = setTimeout(() => {
               stream.reconnectTimer = null;
@@ -923,7 +934,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   };
 
   const readGatewayResponse = async <T>(response: Response, fallback: string): Promise<T> => {
-    const payload = await response.json().catch(() => ({})) as T & { error?: string };
+    const payload = (await response.json().catch(() => ({}))) as T & { error?: string };
     if (!response.ok) {
       // The gateway only answers 401 from its authentication gate, so on an
       // agent-test session this is the deadline having passed rather than a
@@ -946,10 +957,10 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     args?: Record<string, unknown>,
     signal?: AbortSignal,
   ): Promise<T> => {
-    const snapshotSessionId = command === "get_terminal_output_snapshot"
-      && typeof args?.sessionId === "string"
-      ? args.sessionId
-      : null;
+    const snapshotSessionId =
+      command === "get_terminal_output_snapshot" && typeof args?.sessionId === "string"
+        ? args.sessionId
+        : null;
     try {
       const response = await fetch(apiUrl(`${GATEWAY_PREFIX}/invoke`), {
         method: "POST",
@@ -962,9 +973,10 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       const result = payload.result as T;
       if (snapshotSessionId) {
         if (
-          result && typeof result === "object"
-          && Number.isSafeInteger((result as { generation?: unknown }).generation)
-          && Number.isSafeInteger((result as { revision?: unknown }).revision)
+          result &&
+          typeof result === "object" &&
+          Number.isSafeInteger((result as { generation?: unknown }).generation) &&
+          Number.isSafeInteger((result as { revision?: unknown }).revision)
         ) {
           terminalSocket?.observeSnapshot(
             snapshotSessionId,
@@ -981,16 +993,22 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     }
   };
 
-  const terminalInputBatcher = new TerminalHttpInputBatcher(async (request, signal) => {
-    await invokeImmediately(request.command, {
-      sessionId: request.sessionId,
-      data: request.data,
-    }, signal);
-  },
-  options.terminalInputBatchDelayMs ?? TERMINAL_HTTP_INPUT_BATCH_DELAY_MS,
-  options.terminalInputMaxBatchBytes ?? TERMINAL_HTTP_INPUT_MAX_BUFFER_BYTES,
-  options.terminalInputMaxQueuedBytes ?? TERMINAL_HTTP_INPUT_MAX_QUEUED_BYTES,
-  options.terminalInputSendTimeoutMs ?? TERMINAL_HTTP_INPUT_SEND_TIMEOUT_MS);
+  const terminalInputBatcher = new TerminalHttpInputBatcher(
+    async (request, signal) => {
+      await invokeImmediately(
+        request.command,
+        {
+          sessionId: request.sessionId,
+          data: request.data,
+        },
+        signal,
+      );
+    },
+    options.terminalInputBatchDelayMs ?? TERMINAL_HTTP_INPUT_BATCH_DELAY_MS,
+    options.terminalInputMaxBatchBytes ?? TERMINAL_HTTP_INPUT_MAX_BUFFER_BYTES,
+    options.terminalInputMaxQueuedBytes ?? TERMINAL_HTTP_INPUT_MAX_QUEUED_BYTES,
+    options.terminalInputSendTimeoutMs ?? TERMINAL_HTTP_INPUT_SEND_TIMEOUT_MS,
+  );
 
   const terminalLifecycleTails = new Map<string, Promise<void>>();
   /** Serializes socket sends per terminal; releases before the acknowledgement. */
@@ -1020,7 +1038,12 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   const terminalInputQueue = (
     command: string,
     args: Record<string, unknown> | undefined,
-  ): { command: TerminalInputCommand; sessionId: string; closes: boolean; starts: boolean } | null => {
+  ): {
+    command: TerminalInputCommand;
+    sessionId: string;
+    closes: boolean;
+    starts: boolean;
+  } | null => {
     if (typeof args?.sessionId !== "string") return null;
     if (command === "terminal_resize") {
       return { command: "terminal_write", sessionId: args.sessionId, closes: false, starts: false };
@@ -1032,13 +1055,28 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       return { command: "terminal_write", sessionId: args.sessionId, closes: false, starts: true };
     }
     if (command === "local_terminal_resize") {
-      return { command: "local_terminal_write", sessionId: args.sessionId, closes: false, starts: false };
+      return {
+        command: "local_terminal_write",
+        sessionId: args.sessionId,
+        closes: false,
+        starts: false,
+      };
     }
     if (command === "close_local_terminal_session") {
-      return { command: "local_terminal_write", sessionId: args.sessionId, closes: true, starts: false };
+      return {
+        command: "local_terminal_write",
+        sessionId: args.sessionId,
+        closes: true,
+        starts: false,
+      };
     }
     if (command === "start_local_terminal_session") {
-      return { command: "local_terminal_write", sessionId: args.sessionId, closes: false, starts: true };
+      return {
+        command: "local_terminal_write",
+        sessionId: args.sessionId,
+        closes: false,
+        starts: true,
+      };
     }
     return null;
   };
@@ -1059,56 +1097,61 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     if (queue.closes) closeTerminalInputQueue(key);
     if (queue.starts) closedTerminalInputQueues.delete(key);
 
-    const operation = previous.catch(() => undefined).then(async () => {
-      // The gateway may have been replaced while this lifecycle command was
-      // queued behind an earlier operation for the same terminal.
-      if (terminalInputDisposedReason) throw terminalInputDisposedReason;
-      if (queue.starts) {
-        terminalInputBatcher.reset(queue.command, queue.sessionId);
-        return invokeImmediately<T>(command, args);
-      }
-
-      // A failed input promise has already reported the transport error. Resize
-      // and close must still reach the backend, while accepted successful input
-      // is flushed first so the lifecycle command cannot overtake it.
-      await terminalInputBatcher.flush(queue.command, queue.sessionId).catch(() => undefined);
-      await drainTerminalSocketInput(key);
-      // Disposal also rejects the flush itself. Do not turn that rejection into
-      // a stale resize/close request against the backend being replaced.
-      if (terminalInputDisposedReason) throw terminalInputDisposedReason;
-      try {
-        // A *rejected* socket resize must still reach the backend over HTTP.
-        // Left to propagate it would skip the request entirely and leave the
-        // PTY at stale dimensions with nothing surfaced to the user.
-        const resizedOverSocket = !queue.closes
-          && websocketTerminalsEnabled
-          && terminalSocket
-          && typeof args?.cols === "number"
-          && typeof args.rows === "number"
-          && await terminalSocket.resize(queue.sessionId, args.cols, args.rows)
-            .catch(() => false);
-        if (resizedOverSocket) {
-          terminalInputBatcher.clearFailure(queue.command, queue.sessionId);
-          return undefined as T;
+    const operation = previous
+      .catch(() => undefined)
+      .then(async () => {
+        // The gateway may have been replaced while this lifecycle command was
+        // queued behind an earlier operation for the same terminal.
+        if (terminalInputDisposedReason) throw terminalInputDisposedReason;
+        if (queue.starts) {
+          terminalInputBatcher.reset(queue.command, queue.sessionId);
+          return invokeImmediately<T>(command, args);
         }
-        const result = await invokeImmediately<T>(command, args);
-        // Resize proves the transport recovered, so re-arm a queue that failed
-        // closed. Without this a single transient write failure would leave a
-        // terminal that streams output but silently refuses every keystroke.
-        if (!queue.closes) terminalInputBatcher.clearFailure(queue.command, queue.sessionId);
-        return result;
-      } catch (error) {
-        // The terminal is still alive, so undo the provisional close rather than
-        // rejecting its input for the lifetime of the page.
-        if (queue.closes) closedTerminalInputQueues.delete(key);
-        throw error;
-      } finally {
-        // Unconditional: whether or not the close landed, input queued against
-        // the old session must not be delivered.
-        if (queue.closes) terminalInputBatcher.reset(queue.command, queue.sessionId);
-      }
-    });
-    const tail = operation.then(() => undefined, () => undefined);
+
+        // A failed input promise has already reported the transport error. Resize
+        // and close must still reach the backend, while accepted successful input
+        // is flushed first so the lifecycle command cannot overtake it.
+        await terminalInputBatcher.flush(queue.command, queue.sessionId).catch(() => undefined);
+        await drainTerminalSocketInput(key);
+        // Disposal also rejects the flush itself. Do not turn that rejection into
+        // a stale resize/close request against the backend being replaced.
+        if (terminalInputDisposedReason) throw terminalInputDisposedReason;
+        try {
+          // A *rejected* socket resize must still reach the backend over HTTP.
+          // Left to propagate it would skip the request entirely and leave the
+          // PTY at stale dimensions with nothing surfaced to the user.
+          const resizedOverSocket =
+            !queue.closes &&
+            websocketTerminalsEnabled &&
+            terminalSocket &&
+            typeof args?.cols === "number" &&
+            typeof args.rows === "number" &&
+            (await terminalSocket.resize(queue.sessionId, args.cols, args.rows).catch(() => false));
+          if (resizedOverSocket) {
+            terminalInputBatcher.clearFailure(queue.command, queue.sessionId);
+            return undefined as T;
+          }
+          const result = await invokeImmediately<T>(command, args);
+          // Resize proves the transport recovered, so re-arm a queue that failed
+          // closed. Without this a single transient write failure would leave a
+          // terminal that streams output but silently refuses every keystroke.
+          if (!queue.closes) terminalInputBatcher.clearFailure(queue.command, queue.sessionId);
+          return result;
+        } catch (error) {
+          // The terminal is still alive, so undo the provisional close rather than
+          // rejecting its input for the lifetime of the page.
+          if (queue.closes) closedTerminalInputQueues.delete(key);
+          throw error;
+        } finally {
+          // Unconditional: whether or not the close landed, input queued against
+          // the old session must not be delivered.
+          if (queue.closes) terminalInputBatcher.reset(queue.command, queue.sessionId);
+        }
+      });
+    const tail = operation.then(
+      () => undefined,
+      () => undefined,
+    );
     terminalLifecycleTails.set(key, tail);
     void tail.finally(() => {
       if (terminalLifecycleTails.get(key) === tail) terminalLifecycleTails.delete(key);
@@ -1128,7 +1171,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   const drainTerminalSocketInput = async (key: string): Promise<void> => {
     const outstanding = terminalInputAcks.get(key);
     if (!outstanding || outstanding.size === 0) return;
-    await Promise.all([...outstanding]);
+    await Promise.all(outstanding);
   };
 
   /**
@@ -1146,47 +1189,53 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     if (closedTerminalInputQueues.has(key)) {
       throw new Error("Terminal input is closed until the session restarts");
     }
-    const previousSend = terminalInputSendTails.get(key)
-      ?? terminalLifecycleTails.get(key)
-      ?? Promise.resolve();
+    const previousSend =
+      terminalInputSendTails.get(key) ?? terminalLifecycleTails.get(key) ?? Promise.resolve();
 
-    const send = previousSend.catch(() => undefined).then(async () => {
-      if (terminalInputDisposedReason) throw terminalInputDisposedReason;
-      const lifecycle = terminalLifecycleTails.get(key);
-      if (lifecycle) await lifecycle.catch(() => undefined);
-      if (terminalInputDisposedReason) throw terminalInputDisposedReason;
-      // A latched-failed HTTP queue must not veto a healthy socket. Its
-      // rejection has already been reported to whoever issued that write.
-      await terminalInputBatcher.flush(terminalInput.command, terminalInput.sessionId)
-        .catch(() => undefined);
-      if (terminalInputDisposedReason) throw terminalInputDisposedReason;
-      const acknowledgement = terminalSocket?.enqueueInput(
-        terminalInput.sessionId,
-        terminalInput.data,
-      ) ?? null;
-      if (acknowledgement) {
-        // The socket accepted this write, so a queue that failed closed on a
-        // transient HTTP error must not keep refusing later keystrokes.
-        terminalInputBatcher.clearFailure(terminalInput.command, terminalInput.sessionId);
-        // Wrapped, not returned bare: an async function *adopts* a returned
-        // promise, which would make the send tail wait for the acknowledgement
-        // and restore the very round trip per keystroke this avoids.
-        return { acknowledgement };
-      }
-      await terminalInputBatcher.enqueue(terminalInput);
-      return null;
-    });
+    const send = previousSend
+      .catch(() => undefined)
+      .then(async () => {
+        if (terminalInputDisposedReason) throw terminalInputDisposedReason;
+        const lifecycle = terminalLifecycleTails.get(key);
+        if (lifecycle) await lifecycle.catch(() => undefined);
+        if (terminalInputDisposedReason) throw terminalInputDisposedReason;
+        // A latched-failed HTTP queue must not veto a healthy socket. Its
+        // rejection has already been reported to whoever issued that write.
+        await terminalInputBatcher
+          .flush(terminalInput.command, terminalInput.sessionId)
+          .catch(() => undefined);
+        if (terminalInputDisposedReason) throw terminalInputDisposedReason;
+        const acknowledgement =
+          terminalSocket?.enqueueInput(terminalInput.sessionId, terminalInput.data) ?? null;
+        if (acknowledgement) {
+          // The socket accepted this write, so a queue that failed closed on a
+          // transient HTTP error must not keep refusing later keystrokes.
+          terminalInputBatcher.clearFailure(terminalInput.command, terminalInput.sessionId);
+          // Wrapped, not returned bare: an async function *adopts* a returned
+          // promise, which would make the send tail wait for the acknowledgement
+          // and restore the very round trip per keystroke this avoids.
+          return { acknowledgement };
+        }
+        await terminalInputBatcher.enqueue(terminalInput);
+        return null;
+      });
 
     // The send tail releases as soon as the frame is on the wire, so the next
     // keystroke follows immediately and still in order.
-    const sendTail = send.then(() => undefined, () => undefined);
+    const sendTail = send.then(
+      () => undefined,
+      () => undefined,
+    );
     terminalInputSendTails.set(key, sendTail);
     void sendTail.finally(() => {
       if (terminalInputSendTails.get(key) === sendTail) terminalInputSendTails.delete(key);
     });
 
     const acknowledged = send.then((result) => result?.acknowledgement);
-    const settled = acknowledged.then(() => undefined, () => undefined);
+    const settled = acknowledged.then(
+      () => undefined,
+      () => undefined,
+    );
     const outstanding = terminalInputAcks.get(key) ?? new Set<Promise<void>>();
     terminalInputAcks.set(key, outstanding);
     outstanding.add(settled);
@@ -1282,17 +1331,24 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
         });
       },
       setEnabled(): Promise<WebClientStatus> {
-        return Promise.reject(new Error("Web client controls are only available in the desktop app"));
+        return Promise.reject(
+          new Error("Web client controls are only available in the desktop app"),
+        );
       },
       resetServe(): Promise<WebClientStatus> {
-        return Promise.reject(new Error("Tailscale Serve reset is only available for the local desktop app"));
+        return Promise.reject(
+          new Error("Tailscale Serve reset is only available for the local desktop app"),
+        );
       },
       async getTokenSettings(): Promise<GatewayTokenSettings> {
         const response = await fetch(apiUrl(`${GATEWAY_PREFIX}/gateway-settings`), {
           credentials,
           headers: requestHeaders(),
         });
-        return readGatewayResponse<GatewayTokenSettings>(response, "Gateway settings request failed");
+        return readGatewayResponse<GatewayTokenSettings>(
+          response,
+          "Gateway settings request failed",
+        );
       },
       async setToken(token: string): Promise<GatewayTokenSettings> {
         const response = await fetch(apiUrl(`${GATEWAY_PREFIX}/gateway-settings`), {
@@ -1348,8 +1404,8 @@ export function installBrowserGatewayApi(
 ): void {
   const baseUrl = normalizedBaseUrl(options.baseUrl);
   if (
-    (!targetWindow.orkestrator || options.replaceExisting)
-    && targetWindow.location.protocol.startsWith("http")
+    (!targetWindow.orkestrator || options.replaceExisting) &&
+    targetWindow.location.protocol.startsWith("http")
   ) {
     if (options.replaceExisting && targetWindow.orkestrator) {
       browserGatewayDisposers.get(targetWindow.orkestrator)?.(
@@ -1368,8 +1424,9 @@ export function installBrowserGatewayApi(
       // its Vite instance is the only one given a profile id. Probing anywhere
       // else would spend a request per boot on a route that is always 404 —
       // including on every production gateway client.
-      agentTestSessionActivity: options.agentTestSessionActivity
-        ?? Boolean(import.meta.env.VITE_ORKESTRATOR_PROFILE?.trim()),
+      agentTestSessionActivity:
+        options.agentTestSessionActivity ??
+        Boolean(import.meta.env.VITE_ORKESTRATOR_PROFILE?.trim()),
     });
   }
 }

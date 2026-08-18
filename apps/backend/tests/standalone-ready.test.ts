@@ -43,11 +43,13 @@ describe("waitForStandaloneBackendReady", () => {
       },
     };
     const startedAt = performance.now();
-    await expect(waitForStandaloneBackendReady(child, {
-      readyTimeoutMs: 50,
-      killGraceMs: 30,
-      stderrDiagnosticTimeoutMs: 20,
-    })).rejects.toThrow(
+    await expect(
+      waitForStandaloneBackendReady(child, {
+        readyTimeoutMs: 50,
+        killGraceMs: 30,
+        stderrDiagnosticTimeoutMs: 20,
+      }),
+    ).rejects.toThrow(
       "Timed out waiting for standalone backend after 50ms: <stderr not drained in time>",
     );
     const elapsedMs = performance.now() - startedAt;
@@ -65,11 +67,13 @@ describe("waitForStandaloneBackendReady", () => {
         signals.push(signal);
       },
     };
-    await expect(waitForStandaloneBackendReady(child, {
-      readyTimeoutMs: 40,
-      killGraceMs: 30,
-      stderrDiagnosticTimeoutMs: 10,
-    })).rejects.toThrow(/Timed out waiting for standalone backend after 40ms/);
+    await expect(
+      waitForStandaloneBackendReady(child, {
+        readyTimeoutMs: 40,
+        killGraceMs: 30,
+        stderrDiagnosticTimeoutMs: 10,
+      }),
+    ).rejects.toThrow(/Timed out waiting for standalone backend after 40ms/);
     expect(signals).toEqual(["SIGTERM"]);
     await Bun.sleep(50);
     expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
@@ -87,11 +91,13 @@ describe("waitForStandaloneBackendReady", () => {
         stderr: hangingStream(),
         kill: () => undefined,
       };
-      await expect(waitForStandaloneBackendReady(child, {
-        readyTimeoutMs: 30,
-        killGraceMs: 10,
-        stderrDiagnosticTimeoutMs: 10,
-      })).rejects.toThrow(/Timed out waiting for standalone backend after 30ms/);
+      await expect(
+        waitForStandaloneBackendReady(child, {
+          readyTimeoutMs: 30,
+          killGraceMs: 10,
+          stderrDiagnosticTimeoutMs: 10,
+        }),
+      ).rejects.toThrow(/Timed out waiting for standalone backend after 30ms/);
       await Bun.sleep(40);
       expect(rejections).toEqual([]);
     } finally {
@@ -138,10 +144,12 @@ describe("waitForStandaloneBackendReady", () => {
       },
     };
     const startedAt = performance.now();
-    await expect(waitForStandaloneBackendReady(child, {
-      readyTimeoutMs: 5_000,
-      readAuthFile: async () => JSON.stringify({}),
-    })).rejects.toThrow("Backend auth file is missing its token");
+    await expect(
+      waitForStandaloneBackendReady(child, {
+        readyTimeoutMs: 5_000,
+        readAuthFile: async () => JSON.stringify({}),
+      }),
+    ).rejects.toThrow("Backend auth file is missing its token");
     expect(performance.now() - startedAt).toBeLessThan(500);
   });
 });

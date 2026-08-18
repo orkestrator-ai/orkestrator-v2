@@ -5,10 +5,11 @@ import process from "node:process";
 
 const root = path.resolve(import.meta.dir, "..");
 const project = path.join(root, "apps/ios/OrkestratorMobile.xcodeproj");
-const derivedData = process.env.ORKESTRATOR_IOS_DERIVED_DATA
-  ?? path.join(process.env.TMPDIR ?? "/tmp", "orkestrator-mobile-derived");
-const developerDirectory = process.env.DEVELOPER_DIR
-  ?? "/Applications/Xcode.app/Contents/Developer";
+const derivedData =
+  process.env.ORKESTRATOR_IOS_DERIVED_DATA ??
+  path.join(process.env.TMPDIR ?? "/tmp", "orkestrator-mobile-derived");
+const developerDirectory =
+  process.env.DEVELOPER_DIR ?? "/Applications/Xcode.app/Contents/Developer";
 const environment = { ...process.env, DEVELOPER_DIR: developerDirectory };
 
 export interface SimulatorDevice {
@@ -106,9 +107,14 @@ export function selectFirstAvailableSimulator(
 }
 
 export function availableSimulatorNames(simulatorList: SimulatorList): string[] {
-  return Array.from(new Set(
-    Object.values(simulatorList.devices).flat().filter((device) => device.isAvailable).map((device) => device.name),
-  )).sort();
+  return Array.from(
+    new Set(
+      Object.values(simulatorList.devices)
+        .flat()
+        .filter((device) => device.isAvailable)
+        .map((device) => device.name),
+    ),
+  ).sort();
 }
 
 export function builtApplicationPath(derivedDataPath: string): string {
@@ -119,7 +125,9 @@ export function main(): void {
   if (process.platform !== "darwin") fail("The iOS simulator requires macOS.");
   if (!existsSync(project)) fail(`Xcode project not found at ${project}.`);
   if (!existsSync(developerDirectory)) {
-    fail(`Xcode developer directory not found at ${developerDirectory}. Set DEVELOPER_DIR to your Xcode installation.`);
+    fail(
+      `Xcode developer directory not found at ${developerDirectory}. Set DEVELOPER_DIR to your Xcode installation.`,
+    );
   }
 
   let parsedArguments: SimulatorArguments;
@@ -152,7 +160,9 @@ Environment variables:
   const selected = selectSimulatorDevice(simulatorList, parsedArguments.deviceName);
   if (!selected) {
     const names = availableSimulatorNames(simulatorList);
-    fail(`No available simulator named "${parsedArguments.deviceName}". Available devices:\n  ${names.join("\n  ")}`);
+    fail(
+      `No available simulator named "${parsedArguments.deviceName}". Available devices:\n  ${names.join("\n  ")}`,
+    );
   }
 
   console.log(`[iOS] Using ${selected.name} (${selected.udid})`);
@@ -165,11 +175,16 @@ Environment variables:
 
   console.log("[iOS] Building OrkestratorMobile…");
   run("xcodebuild", [
-    "-project", project,
-    "-scheme", "OrkestratorMobile",
-    "-configuration", "Debug",
-    "-destination", `id=${selected.udid}`,
-    "-derivedDataPath", derivedData,
+    "-project",
+    project,
+    "-scheme",
+    "OrkestratorMobile",
+    "-configuration",
+    "Debug",
+    "-destination",
+    `id=${selected.udid}`,
+    "-derivedDataPath",
+    derivedData,
     "CODE_SIGNING_ALLOWED=NO",
     "build",
   ]);
@@ -180,7 +195,9 @@ Environment variables:
   console.log("[iOS] Installing and launching…");
   run("xcrun", ["simctl", "install", selected.udid, application]);
   run("xcrun", [
-    "simctl", "launch", "--terminate-running-process",
+    "simctl",
+    "launch",
+    "--terminate-running-process",
     selected.udid,
     "dev.orkestrator.mobile",
   ]);

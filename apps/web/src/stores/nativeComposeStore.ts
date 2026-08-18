@@ -69,9 +69,7 @@ function persistedDraftMetadata(draft: NativeComposeDraft): Readonly<Record<stri
     ...(draft.requestId ? { requestId: draft.requestId } : {}),
     fastMode: draft.fastMode,
     mode: draft.mode,
-    ...(draft.executionProfileId
-      ? { executionProfileId: draft.executionProfileId }
-      : {}),
+    ...(draft.executionProfileId ? { executionProfileId: draft.executionProfileId } : {}),
   });
   DRAFT_METADATA_CACHE.set(draft, metadata);
   return metadata;
@@ -80,34 +78,40 @@ function persistedDraftMetadata(draft: NativeComposeDraft): Readonly<Record<stri
 function restoreDraftMetadata(value: unknown): Partial<NativeComposeDraft> | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const metadata = value as Record<string, unknown>;
-  const platform = typeof metadata.platform === "string"
-    && VALID_AGENT_PLATFORMS.has(metadata.platform as AgentPlatform)
-    ? metadata.platform as AgentPlatform
-    : undefined;
-  const modelId = typeof metadata.modelId === "string" && metadata.modelId.length <= 1_024
-    ? metadata.modelId
-    : undefined;
-  const reasoningId = typeof metadata.reasoningId === "string" && metadata.reasoningId.length <= 256
-    ? metadata.reasoningId
-    : undefined;
-  const requestId = typeof metadata.requestId === "string" && metadata.requestId.length <= 200
-    ? metadata.requestId
-    : undefined;
+  const platform =
+    typeof metadata.platform === "string" &&
+    VALID_AGENT_PLATFORMS.has(metadata.platform as AgentPlatform)
+      ? (metadata.platform as AgentPlatform)
+      : undefined;
+  const modelId =
+    typeof metadata.modelId === "string" && metadata.modelId.length <= 1_024
+      ? metadata.modelId
+      : undefined;
+  const reasoningId =
+    typeof metadata.reasoningId === "string" && metadata.reasoningId.length <= 256
+      ? metadata.reasoningId
+      : undefined;
+  const requestId =
+    typeof metadata.requestId === "string" && metadata.requestId.length <= 200
+      ? metadata.requestId
+      : undefined;
   const fastMode = typeof metadata.fastMode === "boolean" ? metadata.fastMode : undefined;
   const mode = metadata.mode === "build" || metadata.mode === "plan" ? metadata.mode : undefined;
-  const executionProfileId = typeof metadata.executionProfileId === "string"
-    && metadata.executionProfileId.trim().length > 0
-    && metadata.executionProfileId.length <= 256
-    ? metadata.executionProfileId
-    : undefined;
+  const executionProfileId =
+    typeof metadata.executionProfileId === "string" &&
+    metadata.executionProfileId.trim().length > 0 &&
+    metadata.executionProfileId.length <= 256
+      ? metadata.executionProfileId
+      : undefined;
   if (
-    !platform
-    && !modelId
-    && !reasoningId
-    && fastMode === undefined
-    && !mode
-    && !executionProfileId
-  ) return undefined;
+    !platform &&
+    !modelId &&
+    !reasoningId &&
+    fastMode === undefined &&
+    !mode &&
+    !executionProfileId
+  )
+    return undefined;
   return {
     platform,
     modelId,
@@ -128,36 +132,33 @@ export function nativeComposeDraft(
 
 export const useNativeComposeStore = create<NativeComposeState>()((set) => ({
   drafts: new Map(),
-  updateDraft: (sessionKey, update) => set((state) => {
-    const drafts = new Map(state.drafts);
-    const existing = drafts.get(sessionKey);
-    const contentChanged = update.text !== undefined
-      || update.mentions !== undefined
-      || update.attachments !== undefined;
-    const next = { ...EMPTY_DRAFT, ...existing, ...update };
-    if (contentChanged && update.requestId === undefined) delete next.requestId;
-    drafts.set(sessionKey, next);
-    return { drafts };
-  }),
-  clearDraft: (sessionKey) => set((state) => {
-    if (!state.drafts.has(sessionKey)) return state;
-    const drafts = new Map(state.drafts);
-    drafts.delete(sessionKey);
-    return { drafts };
-  }),
+  updateDraft: (sessionKey, update) =>
+    set((state) => {
+      const drafts = new Map(state.drafts);
+      const existing = drafts.get(sessionKey);
+      const contentChanged =
+        update.text !== undefined ||
+        update.mentions !== undefined ||
+        update.attachments !== undefined;
+      const next = { ...EMPTY_DRAFT, ...existing, ...update };
+      if (contentChanged && update.requestId === undefined) delete next.requestId;
+      drafts.set(sessionKey, next);
+      return { drafts };
+    }),
+  clearDraft: (sessionKey) =>
+    set((state) => {
+      if (!state.drafts.has(sessionKey)) return state;
+      const drafts = new Map(state.drafts);
+      drafts.delete(sessionKey);
+      return { drafts };
+    }),
 }));
 
 function persistenceState(state: NativeComposeState): NativeComposePersistenceState {
   return {
-    draftText: new Map(
-      [...state.drafts].map(([key, draft]) => [key, draft.text]),
-    ),
-    draftMentions: new Map(
-      [...state.drafts].map(([key, draft]) => [key, draft.mentions]),
-    ),
-    attachments: new Map(
-      [...state.drafts].map(([key, draft]) => [key, draft.attachments]),
-    ),
+    draftText: new Map([...state.drafts].map(([key, draft]) => [key, draft.text])),
+    draftMentions: new Map([...state.drafts].map(([key, draft]) => [key, draft.mentions])),
+    attachments: new Map([...state.drafts].map(([key, draft]) => [key, draft.attachments])),
     setDraftText: (sessionKey, text) =>
       useNativeComposeStore.getState().updateDraft(sessionKey, { text }),
     setDraftMentions: (sessionKey, mentions) =>
@@ -188,9 +189,10 @@ export const nativeComposePersistenceStore = {
       state: NativeComposePersistenceState,
       previous: NativeComposePersistenceState,
     ) => void,
-  ) => useNativeComposeStore.subscribe((state, previous) => {
-    listener(persistenceState(state), persistenceState(previous));
-  }),
+  ) =>
+    useNativeComposeStore.subscribe((state, previous) => {
+      listener(persistenceState(state), persistenceState(previous));
+    }),
 };
 
 /**
@@ -217,28 +219,29 @@ export const unassignedNativeComposePersistenceStore = {
       state: NativeComposePersistenceState,
       previous: NativeComposePersistenceState,
     ) => void,
-  ) => useNativeComposeStore.subscribe((state, previous) => {
-    listener(
-      {
-        ...persistenceState(state),
-        draftMetadata: new Map(
-          [...state.drafts].map(([key, draft]) => [key, persistedDraftMetadata(draft)]),
-        ),
-        setDraftMetadata: (sessionKey, metadata) => {
-          const restored = restoreDraftMetadata(metadata);
-          if (restored) useNativeComposeStore.getState().updateDraft(sessionKey, restored);
+  ) =>
+    useNativeComposeStore.subscribe((state, previous) => {
+      listener(
+        {
+          ...persistenceState(state),
+          draftMetadata: new Map(
+            [...state.drafts].map(([key, draft]) => [key, persistedDraftMetadata(draft)]),
+          ),
+          setDraftMetadata: (sessionKey, metadata) => {
+            const restored = restoreDraftMetadata(metadata);
+            if (restored) useNativeComposeStore.getState().updateDraft(sessionKey, restored);
+          },
         },
-      },
-      {
-        ...persistenceState(previous),
-        draftMetadata: new Map(
-          [...previous.drafts].map(([key, draft]) => [key, persistedDraftMetadata(draft)]),
-        ),
-        setDraftMetadata: (sessionKey, metadata) => {
-          const restored = restoreDraftMetadata(metadata);
-          if (restored) useNativeComposeStore.getState().updateDraft(sessionKey, restored);
+        {
+          ...persistenceState(previous),
+          draftMetadata: new Map(
+            [...previous.drafts].map(([key, draft]) => [key, persistedDraftMetadata(draft)]),
+          ),
+          setDraftMetadata: (sessionKey, metadata) => {
+            const restored = restoreDraftMetadata(metadata);
+            if (restored) useNativeComposeStore.getState().updateDraft(sessionKey, restored);
+          },
         },
-      },
-    );
-  }),
+      );
+    }),
 };

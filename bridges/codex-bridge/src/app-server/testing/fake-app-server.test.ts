@@ -1,9 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-  FakeReadable,
-  FakeWritable,
-  ScriptedAppServer,
-} from "./fake-app-server.js";
+import { FakeReadable, FakeWritable, ScriptedAppServer } from "./fake-app-server.js";
 
 function collectJson(readable: FakeReadable): {
   messages: Array<Record<string, unknown>>;
@@ -78,9 +74,11 @@ describe("FakeWritable", () => {
     });
     let failure: Error | null | undefined;
 
-    expect(writable.write("not recorded\n", (error) => {
-      failure = error;
-    })).toBe(true);
+    expect(
+      writable.write("not recorded\n", (error) => {
+        failure = error;
+      }),
+    ).toBe(true);
     expect(failure?.message).toBe("EPIPE");
     expect(writable.lines).toEqual([]);
     expect(writable.lastRequest()).toBeUndefined();

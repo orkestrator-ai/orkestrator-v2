@@ -1,12 +1,4 @@
-import {
-  afterAll,
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  mock,
-  test,
-} from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, render, waitFor } from "@testing-library/react";
 import { createElement } from "react";
 
@@ -71,14 +63,14 @@ describe("processLocalClipboardPaste", () => {
       Promise.resolve({
         rgba: () => Promise.resolve(mockRgba),
         size: () => Promise.resolve(mockImageSize),
-      })
+      }),
     );
     mockReadText.mockImplementation(() => Promise.resolve("clipboard text"));
     mockWriteLocalFile.mockImplementation(() =>
-      Promise.resolve("/tmp/worktrees/env/.orkestrator/clipboard/test.png")
+      Promise.resolve("/tmp/worktrees/env/.orkestrator/clipboard/test.png"),
     );
     mockWriteContainerFile.mockImplementation(() =>
-      Promise.resolve("/workspace/.orkestrator/clipboard/test.png")
+      Promise.resolve("/workspace/.orkestrator/clipboard/test.png"),
     );
     mockToDataURL.mockImplementation(() => "data:image/png;base64,iVBORw0KGgo=");
 
@@ -86,7 +78,8 @@ describe("processLocalClipboardPaste", () => {
     HTMLCanvasElement.prototype.getContext = (() => ({
       putImageData: mockPutImageData,
     })) as unknown as typeof HTMLCanvasElement.prototype.getContext;
-    HTMLCanvasElement.prototype.toDataURL = mockToDataURL as unknown as typeof HTMLCanvasElement.prototype.toDataURL;
+    HTMLCanvasElement.prototype.toDataURL =
+      mockToDataURL as unknown as typeof HTMLCanvasElement.prototype.toDataURL;
   });
 
   test("saves clipboard image to local worktree and calls onImageSaved", async () => {
@@ -96,13 +89,15 @@ describe("processLocalClipboardPaste", () => {
     const result = await processLocalClipboardPaste(
       "/tmp/worktrees/env",
       onImageSaved,
-      onTextPaste
+      onTextPaste,
     );
 
     expect(result).toBe(true);
     expect(mockWriteLocalFile).toHaveBeenCalledTimes(1);
     expect(mockWriteLocalFile.mock.calls[0][0]).toBe("/tmp/worktrees/env");
-    expect(mockWriteLocalFile.mock.calls[0][1]).toMatch(/^\.orkestrator\/clipboard\/clipboard-.*\.png$/);
+    expect(mockWriteLocalFile.mock.calls[0][1]).toMatch(
+      /^\.orkestrator\/clipboard\/clipboard-.*\.png$/,
+    );
     expect(onImageSaved).toHaveBeenCalledWith("/tmp/worktrees/env/.orkestrator/clipboard/test.png");
     expect(onTextPaste).not.toHaveBeenCalled();
   });
@@ -113,9 +108,10 @@ describe("processLocalClipboardPaste", () => {
 
     const resultPromise = processLocalClipboardPaste(
       "/tmp/worktrees/env",
-      () => new Promise<void>((resolve) => {
-        resolveCallback = resolve;
-      })
+      () =>
+        new Promise<void>((resolve) => {
+          resolveCallback = resolve;
+        }),
     ).then((result) => {
       pasteFinished = true;
       return result;
@@ -139,7 +135,7 @@ describe("processLocalClipboardPaste", () => {
     const result = await processLocalClipboardPaste(
       "/tmp/worktrees/env",
       onImageSaved,
-      onTextPaste
+      onTextPaste,
     );
 
     expect(result).toBe(true);
@@ -158,7 +154,7 @@ describe("processLocalClipboardPaste", () => {
     const result = await processLocalClipboardPaste(
       "/tmp/worktrees/env",
       onImageSaved,
-      onTextPaste
+      onTextPaste,
     );
 
     expect(result).toBe(false);
@@ -176,7 +172,7 @@ describe("processLocalClipboardPaste", () => {
       "/tmp/worktrees/env",
       onImageSaved,
       undefined,
-      onError
+      onError,
     );
 
     expect(result).toBe(false);
@@ -185,9 +181,7 @@ describe("processLocalClipboardPaste", () => {
   });
 
   test("reports oversized encoded images without writing them", async () => {
-    mockToDataURL.mockImplementation(
-      () => `data:image/png;base64,${"A".repeat(12 * 1024 * 1024)}`,
-    );
+    mockToDataURL.mockImplementation(() => `data:image/png;base64,${"A".repeat(12 * 1024 * 1024)}`);
     const onError = mock(() => {});
 
     const result = await processLocalClipboardPaste(
@@ -209,11 +203,7 @@ describe("processLocalClipboardPaste", () => {
       null) as unknown as typeof HTMLCanvasElement.prototype.getContext;
     const onTextPaste = mock(() => {});
 
-    const result = await processLocalClipboardPaste(
-      "/tmp/worktrees/env",
-      undefined,
-      onTextPaste,
-    );
+    const result = await processLocalClipboardPaste("/tmp/worktrees/env", undefined, onTextPaste);
 
     expect(result).toBe(true);
     expect(onTextPaste).toHaveBeenCalledWith("clipboard text");
@@ -224,11 +214,7 @@ describe("processLocalClipboardPaste", () => {
     mockToDataURL.mockImplementation(() => "data:image/png;base64");
     const onTextPaste = mock(() => {});
 
-    const result = await processLocalClipboardPaste(
-      "/tmp/worktrees/env",
-      undefined,
-      onTextPaste,
-    );
+    const result = await processLocalClipboardPaste("/tmp/worktrees/env", undefined, onTextPaste);
 
     expect(result).toBe(true);
     expect(onTextPaste).toHaveBeenCalledWith("clipboard text");
@@ -239,9 +225,7 @@ describe("processLocalClipboardPaste", () => {
     mockReadImage.mockImplementation(() => Promise.reject(new Error("No image")));
     mockReadText.mockImplementation(() => Promise.reject(new Error("denied")));
 
-    await expect(
-      processLocalClipboardPaste("/tmp/worktrees/env"),
-    ).resolves.toBe(false);
+    await expect(processLocalClipboardPaste("/tmp/worktrees/env")).resolves.toBe(false);
     expect(mockWriteLocalFile).not.toHaveBeenCalled();
   });
 
@@ -283,18 +267,19 @@ describe("processClipboardPaste", () => {
       Promise.resolve({
         rgba: () => Promise.resolve(mockRgba),
         size: () => Promise.resolve(mockImageSize),
-      })
+      }),
     );
     mockReadText.mockImplementation(() => Promise.resolve("clipboard text"));
     mockWriteContainerFile.mockImplementation(() =>
-      Promise.resolve("/workspace/.orkestrator/clipboard/test.png")
+      Promise.resolve("/workspace/.orkestrator/clipboard/test.png"),
     );
     mockToDataURL.mockImplementation(() => "data:image/png;base64,iVBORw0KGgo=");
 
     HTMLCanvasElement.prototype.getContext = (() => ({
       putImageData: mockPutImageData,
     })) as unknown as typeof HTMLCanvasElement.prototype.getContext;
-    HTMLCanvasElement.prototype.toDataURL = mockToDataURL as unknown as typeof HTMLCanvasElement.prototype.toDataURL;
+    HTMLCanvasElement.prototype.toDataURL =
+      mockToDataURL as unknown as typeof HTMLCanvasElement.prototype.toDataURL;
   });
 
   test("saves clipboard image to container and calls onImageSaved", async () => {
@@ -317,9 +302,10 @@ describe("processClipboardPaste", () => {
     const resultPromise = processClipboardPaste(
       "container-123",
       undefined,
-      () => new Promise<void>((resolve) => {
-        resolveCallback = resolve;
-      })
+      () =>
+        new Promise<void>((resolve) => {
+          resolveCallback = resolve;
+        }),
     ).then((result) => {
       pasteFinished = true;
       return result;
@@ -358,29 +344,17 @@ describe("processClipboardPaste", () => {
     );
     const onError = mock(() => {});
 
-    const result = await processClipboardPaste(
-      "container-123",
-      undefined,
-      undefined,
-      onError,
-    );
+    const result = await processClipboardPaste("container-123", undefined, undefined, onError);
 
     expect(result).toBe(false);
     expect(onError).toHaveBeenCalledWith("container unavailable");
   });
 
   test("reports oversized encoded images without writing them", async () => {
-    mockToDataURL.mockImplementation(
-      () => `data:image/png;base64,${"A".repeat(12 * 1024 * 1024)}`,
-    );
+    mockToDataURL.mockImplementation(() => `data:image/png;base64,${"A".repeat(12 * 1024 * 1024)}`);
     const onError = mock(() => {});
 
-    const result = await processClipboardPaste(
-      "container-123",
-      undefined,
-      undefined,
-      onError,
-    );
+    const result = await processClipboardPaste("container-123", undefined, undefined, onError);
 
     expect(result).toBe(false);
     expect(mockWriteContainerFile).not.toHaveBeenCalled();
@@ -409,20 +383,14 @@ function setActiveElement(element: Element) {
   });
 }
 
-function imagePasteEvent(
-  image: File,
-  source: "items" | "files" = "items",
-): ClipboardEvent {
+function imagePasteEvent(image: File, source: "items" | "files" = "items"): ClipboardEvent {
   const event = new Event("paste", {
     bubbles: true,
     cancelable: true,
   }) as ClipboardEvent;
   Object.defineProperty(event, "clipboardData", {
     value: {
-      items:
-        source === "items"
-          ? [{ kind: "file", type: image.type, getAsFile: () => image }]
-          : [],
+      items: source === "items" ? [{ kind: "file", type: image.type, getAsFile: () => image }] : [],
       files: source === "files" ? [image] : [],
     },
   });
@@ -459,11 +427,11 @@ describe("useClipboardImagePaste", () => {
     cleanup();
     mockWriteContainerFile.mockReset();
     mockWriteLocalFile.mockReset();
-    mockWriteContainerFile.mockImplementation(async () =>
-      "/workspace/.orkestrator/clipboard/test.png"
+    mockWriteContainerFile.mockImplementation(
+      async () => "/workspace/.orkestrator/clipboard/test.png",
     );
-    mockWriteLocalFile.mockImplementation(async () =>
-      "/tmp/worktrees/env/.orkestrator/clipboard/test.png"
+    mockWriteLocalFile.mockImplementation(
+      async () => "/tmp/worktrees/env/.orkestrator/clipboard/test.png",
     );
     globalThis.FileReader = originalFileReader;
     setActiveElement(document.body);
@@ -474,11 +442,7 @@ describe("useClipboardImagePaste", () => {
     globalThis.FileReader = originalFileReader;
     delete (document as { activeElement?: Element }).activeElement;
     if (originalActiveElementDescriptor) {
-      Object.defineProperty(
-        Document.prototype,
-        "activeElement",
-        originalActiveElementDescriptor,
-      );
+      Object.defineProperty(Document.prototype, "activeElement", originalActiveElementDescriptor);
     }
   });
 
@@ -490,9 +454,7 @@ describe("useClipboardImagePaste", () => {
         onImageSaved,
       }),
     );
-    const event = imagePasteEvent(
-      new File(["png"], "shot.png", { type: "image/png" }),
-    );
+    const event = imagePasteEvent(new File(["png"], "shot.png", { type: "image/png" }));
     const stopPropagation = mock(() => {});
     event.stopPropagation = stopPropagation;
 
@@ -506,9 +468,7 @@ describe("useClipboardImagePaste", () => {
       expect.stringMatching(/^\.orkestrator\/clipboard\/clipboard-.*\.png$/),
       expect.any(String),
     );
-    expect(onImageSaved).toHaveBeenCalledWith(
-      "/workspace/.orkestrator/clipboard/test.png",
-    );
+    expect(onImageSaved).toHaveBeenCalledWith("/workspace/.orkestrator/clipboard/test.png");
   });
 
   test("uses WebKit file-list payloads and saves them to a local worktree", async () => {
@@ -520,10 +480,7 @@ describe("useClipboardImagePaste", () => {
         onImageSaved,
       }),
     );
-    const event = imagePasteEvent(
-      new File(["jpeg"], "photo.jpg", { type: "image/jpeg" }),
-      "files",
-    );
+    const event = imagePasteEvent(new File(["jpeg"], "photo.jpg", { type: "image/jpeg" }), "files");
 
     document.dispatchEvent(event);
 
@@ -534,9 +491,7 @@ describe("useClipboardImagePaste", () => {
       expect.stringMatching(/^\.orkestrator\/clipboard\/clipboard-.*\.png$/),
       expect.any(String),
     );
-    expect(onImageSaved).toHaveBeenCalledWith(
-      "/tmp/worktrees/env/.orkestrator/clipboard/test.png",
-    );
+    expect(onImageSaved).toHaveBeenCalledWith("/tmp/worktrees/env/.orkestrator/clipboard/test.png");
   });
 
   test("ignores events while inactive or without a configured target", async () => {
@@ -546,9 +501,7 @@ describe("useClipboardImagePaste", () => {
         isActive: false,
       }),
     );
-    const inactiveEvent = imagePasteEvent(
-      new File(["png"], "inactive.png", { type: "image/png" }),
-    );
+    const inactiveEvent = imagePasteEvent(new File(["png"], "inactive.png", { type: "image/png" }));
     document.dispatchEvent(inactiveEvent);
     inactive.unmount();
 
@@ -573,9 +526,7 @@ describe("useClipboardImagePaste", () => {
     compose.append(composeInput);
     document.body.append(compose);
     setActiveElement(composeInput);
-    const composeEvent = imagePasteEvent(
-      new File(["png"], "compose.png", { type: "image/png" }),
-    );
+    const composeEvent = imagePasteEvent(new File(["png"], "compose.png", { type: "image/png" }));
     document.dispatchEvent(composeEvent);
 
     const dialogInput = document.createElement("input");
@@ -584,9 +535,7 @@ describe("useClipboardImagePaste", () => {
     dialog.append(dialogInput);
     document.body.append(dialog);
     setActiveElement(dialogInput);
-    const dialogEvent = imagePasteEvent(
-      new File(["png"], "dialog.png", { type: "image/png" }),
-    );
+    const dialogEvent = imagePasteEvent(new File(["png"], "dialog.png", { type: "image/png" }));
     document.dispatchEvent(dialogEvent);
     await Promise.resolve();
 
@@ -657,13 +606,9 @@ describe("useClipboardImagePaste", () => {
       }),
     );
 
-    document.dispatchEvent(
-      imagePasteEvent(new File(["png"], "bad.png", { type: "image/png" })),
-    );
+    document.dispatchEvent(imagePasteEvent(new File(["png"], "bad.png", { type: "image/png" })));
 
-    await waitFor(() =>
-      expect(onError).toHaveBeenCalledWith("Invalid data URL format"),
-    );
+    await waitFor(() => expect(onError).toHaveBeenCalledWith("Invalid data URL format"));
     expect(mockWriteContainerFile).not.toHaveBeenCalled();
   });
 
@@ -687,9 +632,7 @@ describe("useClipboardImagePaste", () => {
     const file = new File(["png"], "failed.png", { type: "image/png" });
 
     document.dispatchEvent(imagePasteEvent(file));
-    await waitFor(() =>
-      expect(onError).toHaveBeenCalledWith("Failed to save image"),
-    );
+    await waitFor(() => expect(onError).toHaveBeenCalledWith("Failed to save image"));
 
     globalThis.FileReader = originalFileReader;
     document.dispatchEvent(imagePasteEvent(file));
@@ -699,9 +642,10 @@ describe("useClipboardImagePaste", () => {
   test("prevents duplicate writes while an image is already being saved", async () => {
     let finishWrite: ((path: string) => void) | undefined;
     mockWriteContainerFile.mockImplementation(
-      () => new Promise<string>((resolve) => {
-        finishWrite = resolve;
-      }),
+      () =>
+        new Promise<string>((resolve) => {
+          finishWrite = resolve;
+        }),
     );
     const onImageSaved = mock(() => {});
     render(
@@ -736,9 +680,7 @@ describe("useClipboardImagePaste", () => {
       }),
     );
 
-    document.dispatchEvent(
-      imagePasteEvent(new File(["png"], "shot.png", { type: "image/png" })),
-    );
+    document.dispatchEvent(imagePasteEvent(new File(["png"], "shot.png", { type: "image/png" })));
 
     await waitFor(() => expect(onError).toHaveBeenCalledWith("attachment rejected"));
     expect(mockWriteContainerFile).toHaveBeenCalledTimes(1);

@@ -66,11 +66,15 @@ export async function prepareContainerWorkspace(
   containerId: string,
   onOutput?: (chunk: string) => void,
 ): Promise<void> {
-  const support = await dockerExec(containerId, CONTAINER_WORKSPACE_PREPARE_SUPPORT_COMMAND, 60_000);
+  const support = await dockerExec(
+    containerId,
+    CONTAINER_WORKSPACE_PREPARE_SUPPORT_COMMAND,
+    60_000,
+  );
   if (!support.includes(CONTAINER_WORKSPACE_PREPARE_SUPPORTED_SENTINEL)) {
     throw new Error(
-      `Container base image is out of date and cannot prepare the workspace safely. `
-      + `Rebuild it with \`bun run docker:build\` (${DOCKER_IMAGE}), then recreate this environment's container.`,
+      `Container base image is out of date and cannot prepare the workspace safely. ` +
+        `Rebuild it with \`bun run docker:build\` (${DOCKER_IMAGE}), then recreate this environment's container.`,
     );
   }
 
@@ -99,7 +103,7 @@ export async function establishCreatedFromCommit(
   if (existing) return existing;
 
   const task = (async () => {
-    const current = await context.storage.getEnvironment(environment.id) ?? environment;
+    const current = (await context.storage.getEnvironment(environment.id)) ?? environment;
     if (current.createdFromCommit) return current;
 
     let commit: string | undefined;
@@ -112,7 +116,7 @@ export async function establishCreatedFromCommit(
       if (!current.containerId) {
         throw new Error(`Environment has no container: ${current.id}`);
       }
-      if (!await isContainerRunning(current.containerId)) {
+      if (!(await isContainerRunning(current.containerId))) {
         throw new Error(`Container is not running: ${current.containerId}`);
       }
       await prepareContainerWorkspace(current.containerId, onPrepareOutput);
@@ -147,7 +151,10 @@ export function enqueueLocalServerEnvironmentOperation<T>(
 ): Promise<T> {
   const previous = localServerEnvironmentOperations.get(environmentId) ?? Promise.resolve();
   const result = previous.then(operation, operation);
-  const tail = result.then(() => undefined, () => undefined);
+  const tail = result.then(
+    () => undefined,
+    () => undefined,
+  );
   localServerEnvironmentOperations.set(environmentId, tail);
   void tail.finally(() => {
     if (localServerEnvironmentOperations.get(environmentId) === tail) {
@@ -157,7 +164,10 @@ export function enqueueLocalServerEnvironmentOperation<T>(
   return result;
 }
 
-export function localServerFields(kind: LocalServerKind): { port: keyof Environment; pid: keyof Environment } {
+export function localServerFields(kind: LocalServerKind): {
+  port: keyof Environment;
+  pid: keyof Environment;
+} {
   if (kind === "opencode") return { port: "localOpencodePort", pid: "opencodePid" };
   if (kind === "claude") return { port: "localClaudePort", pid: "claudeBridgePid" };
   if (kind === "codex") return { port: "localCodexPort", pid: "codexBridgePid" };
@@ -214,9 +224,7 @@ export function aggregateRejectedResults(
   results: PromiseSettledResult<unknown>[],
   message: string,
 ): void {
-  const errors = results.flatMap((result) =>
-    result.status === "rejected" ? [result.reason] : []
-  );
+  const errors = results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
   if (errors.length > 0) throw new AggregateError(errors, message);
 }
 
@@ -241,9 +249,7 @@ export async function stopLocalServersForEnvironmentUnlocked(
   context: CommandContext,
 ): Promise<void> {
   const results = await Promise.allSettled(
-    LOCAL_SERVER_KINDS.map((kind) =>
-      stopLocalServerUnlocked(environmentId, context, kind)
-    ),
+    LOCAL_SERVER_KINDS.map((kind) => stopLocalServerUnlocked(environmentId, context, kind)),
   );
   aggregateRejectedResults(
     results,

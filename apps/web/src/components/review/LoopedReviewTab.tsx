@@ -17,10 +17,7 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { useOptionalTerminalContext } from "@/contexts";
-import {
-  reviewSeverityStyles,
-  StructuredReviewReportView,
-} from "./StructuredReviewReportView";
+import { reviewSeverityStyles, StructuredReviewReportView } from "./StructuredReviewReportView";
 import type { LoopedReviewTabData } from "@/types/paneLayout";
 import {
   hasReviewFindings,
@@ -83,7 +80,10 @@ function phaseLabel(workflow: LoopedReviewWorkflow): string {
     fixing: "Fixing active pool",
     "creating-pr": "Creating pull request",
     cancelling: "Cancelling provider work",
-    paused: "Paused", failed: "Needs attention", cancelled: "Cancelled", completed: "Completed",
+    paused: "Paused",
+    failed: "Needs attention",
+    cancelled: "Cancelled",
+    completed: "Completed",
   };
   return labels[workflow.phase];
 }
@@ -133,12 +133,21 @@ type StageState = "running" | "paused" | "stopped" | "error" | "done";
 type ReviewStage =
   | { kind: "overview"; id: string; label: string; sublabel: string }
   | {
-      kind: "round"; id: string; label: string; sublabel: string; state: StageState;
+      kind: "round";
+      id: string;
+      label: string;
+      sublabel: string;
+      state: StageState;
       round: LoopedReviewRound;
     }
   | {
-      kind: "pass"; id: string; label: string; sublabel: string; state: StageState;
-      round: LoopedReviewRound; pass: LoopedReviewPass;
+      kind: "pass";
+      id: string;
+      label: string;
+      sublabel: string;
+      state: StageState;
+      round: LoopedReviewRound;
+      pass: LoopedReviewPass;
     }
   | { kind: "archive"; id: string; label: string; sublabel: string; archive: ArchivedReviewPool };
 
@@ -147,10 +156,7 @@ const passStageId = (round: number, pass: number) => `pass:${round}:${pass}`;
 const archiveStageId = (archive: ArchivedReviewPool) =>
   `archive:${archive.round}:${archive.fixedAt}:${archive.fixSessionId}`;
 
-function roundState(
-  workflow: LoopedReviewWorkflow,
-  round: LoopedReviewRound,
-): StageState {
+function roundState(workflow: LoopedReviewWorkflow, round: LoopedReviewRound): StageState {
   if (round.status === "failed") return "error";
   if (round.status === "completed") return "done";
   if (round.round === workflow.currentRound && workflow.phase === "paused") return "paused";
@@ -158,10 +164,7 @@ function roundState(
   return "running";
 }
 
-function passState(
-  workflow: LoopedReviewWorkflow,
-  pass: LoopedReviewPass,
-): StageState {
+function passState(workflow: LoopedReviewWorkflow, pass: LoopedReviewPass): StageState {
   if (pass.status === "failed") return "error";
   if (pass.status === "completed") return "done";
   const isActivePass = workflow.activeSessionId === pass.sessionId;
@@ -182,12 +185,14 @@ function stageStatusLabel(state: StageState, status: string): string {
 }
 
 function buildStages(workflow: LoopedReviewWorkflow): ReviewStage[] {
-  const stages: ReviewStage[] = [{
-    kind: "overview",
-    id: "overview",
-    label: "Overview",
-    sublabel: poolSummary(workflow.activePool),
-  }];
+  const stages: ReviewStage[] = [
+    {
+      kind: "overview",
+      id: "overview",
+      label: "Overview",
+      sublabel: poolSummary(workflow.activePool),
+    },
+  ];
 
   const archivesByRound = new Map<number, ArchivedReviewPool[]>();
   for (const archive of workflow.archivedPools) {
@@ -265,20 +270,21 @@ function followedStageId(
   const ids = new Set(stages.map((stage) => stage.id));
   if (activeSession) {
     const { phase, round, pass } = activeSession;
-    const candidate = phase === "discovery" && pass !== undefined
-      ? passStageId(round, pass)
-      : phase === "fix"
-        ? stages.findLast(
-            (stage) => stage.kind === "archive" && stage.archive.round === round,
-          )?.id ?? roundStageId(round)
-        : phase === "preparation"
-          ? roundStageId(round)
-          : "overview";
+    const candidate =
+      phase === "discovery" && pass !== undefined
+        ? passStageId(round, pass)
+        : phase === "fix"
+          ? (stages.findLast((stage) => stage.kind === "archive" && stage.archive.round === round)
+              ?.id ?? roundStageId(round))
+          : phase === "preparation"
+            ? roundStageId(round)
+            : "overview";
     if (ids.has(candidate)) return candidate;
   }
-  return stages.findLast(
-    (stage) => stage.kind === "pass" && Boolean(stage.pass.report),
-  )?.id ?? "overview";
+  return (
+    stages.findLast((stage) => stage.kind === "pass" && Boolean(stage.pass.report))?.id ??
+    "overview"
+  );
 }
 
 function StageStateIcon({ state }: { state: StageState }) {
@@ -300,10 +306,12 @@ function StageStateIcon({ state }: { state: StageState }) {
 /** The panel surface every stage draws on, matching the report card. */
 function Card({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
-    <div className={cn(
-      "rounded-xl border border-border/50 bg-card/40 p-4 shadow-sm @sm:p-5",
-      className,
-    )}>
+    <div
+      className={cn(
+        "rounded-xl border border-border/50 bg-card/40 p-4 shadow-sm @sm:p-5",
+        className,
+      )}
+    >
       {children}
     </div>
   );
@@ -319,7 +327,8 @@ function CardHeading({ children, meta }: { children: React.ReactNode; meta?: Rea
 }
 
 function PoolView({ pool }: { pool: ReviewFindingPool }) {
-  if (!hasReviewFindings(pool)) return <p className="text-sm text-muted-foreground">No pooled findings.</p>;
+  if (!hasReviewFindings(pool))
+    return <p className="text-sm text-muted-foreground">No pooled findings.</p>;
   return (
     <div className="space-y-3">
       {pool.issues.map((issue) => (
@@ -332,13 +341,27 @@ function PoolView({ pool }: { pool: ReviewFindingPool }) {
           </p>
           <h3 className="mt-2 text-sm font-semibold text-foreground">{issue.title}</h3>
           <p className="mt-1 break-all font-mono text-xs text-foreground/65">
-            {issue.file}{issue.line ? `:${issue.line}` : ""}{issue.symbol ? ` · ${issue.symbol}` : ""}
+            {issue.file}
+            {issue.line ? `:${issue.line}` : ""}
+            {issue.symbol ? ` · ${issue.symbol}` : ""}
           </p>
           <dl className="mt-3 grid gap-2 text-sm text-foreground/85">
-            <div><dt className="inline font-medium text-foreground">Description: </dt><dd className="inline">{issue.description}</dd></div>
-            <div><dt className="inline font-medium text-foreground">Evidence: </dt><dd className="inline">{issue.evidence}</dd></div>
-            <div><dt className="inline font-medium text-foreground">Suggested fix: </dt><dd className="inline">{issue.suggestion}</dd></div>
-            <div><dt className="inline font-medium text-foreground">Verification: </dt><dd className="inline">{issue.verification}</dd></div>
+            <div>
+              <dt className="inline font-medium text-foreground">Description: </dt>
+              <dd className="inline">{issue.description}</dd>
+            </div>
+            <div>
+              <dt className="inline font-medium text-foreground">Evidence: </dt>
+              <dd className="inline">{issue.evidence}</dd>
+            </div>
+            <div>
+              <dt className="inline font-medium text-foreground">Suggested fix: </dt>
+              <dd className="inline">{issue.suggestion}</dd>
+            </div>
+            <div>
+              <dt className="inline font-medium text-foreground">Verification: </dt>
+              <dd className="inline">{issue.verification}</dd>
+            </div>
           </dl>
           {issue.alternativeFixes && issue.alternativeFixes.length > 0 && (
             <div className="mt-3 border-t border-current/15 pt-2">
@@ -358,8 +381,13 @@ function PoolView({ pool }: { pool: ReviewFindingPool }) {
         </article>
       ))}
       {pool.coverageGaps.map((gap) => (
-        <article key={gap.poolId} className="rounded-lg border border-sky-500/25 bg-sky-500/5 p-3.5">
-          <p className="break-all font-mono text-xs text-foreground/65">{gap.poolId} · {gap.file}</p>
+        <article
+          key={gap.poolId}
+          className="rounded-lg border border-sky-500/25 bg-sky-500/5 p-3.5"
+        >
+          <p className="break-all font-mono text-xs text-foreground/65">
+            {gap.poolId} · {gap.file}
+          </p>
           <p className="mt-1.5 text-sm text-foreground/85">{gap.untestedBehavior}</p>
         </article>
       ))}
@@ -414,6 +442,10 @@ export function LoopedReviewTab({
     }
   }, [data.workflowId, hydrateWorkflow]);
 
+  // The cleanup increments the generation fence, so reading the latest
+  // `.current` at cleanup time is the point: it must invalidate whatever
+  // restore is in flight, not the value captured when the effect ran.
+  /* oxlint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
     if (workflow) {
       ++restoreGeneration.current;
@@ -422,8 +454,15 @@ export function LoopedReviewTab({
       return;
     }
     void restoreWorkflow();
-    return () => { ++restoreGeneration.current; };
+    return () => {
+      // Reading the latest .current is the point: this is a generation fence
+      // that must invalidate whatever restore is in flight at cleanup time, not
+      // whichever value was current when the effect ran.
+      // oxlint-disable-next-line react-hooks/exhaustive-deps
+      ++restoreGeneration.current;
+    };
   }, [restoreWorkflow, workflow]);
+  /* oxlint-enable react-hooks/exhaustive-deps */
 
   // Becoming visible *again* re-reads the authoritative record: a hidden tab can
   // miss resource events entirely. Only the false→true transition triggers it —
@@ -442,9 +481,14 @@ export function LoopedReviewTab({
     commandInFlight.current = true;
     setCommandPending(true);
     setCommandError(null);
-    try { replaceWorkflow(await command()); }
-    catch (reason) { setCommandError(reason instanceof Error ? reason.message : String(reason)); }
-    finally { commandInFlight.current = false; setCommandPending(false); }
+    try {
+      replaceWorkflow(await command());
+    } catch (reason) {
+      setCommandError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      commandInFlight.current = false;
+      setCommandPending(false);
+    }
   };
 
   const openProviderSession = async (session: LoopedReviewSession) => {
@@ -470,21 +514,16 @@ export function LoopedReviewTab({
     }
   };
 
-  const sessionById = useMemo(() => new Map(
-    workflow?.sessions.map((session) => [session.id, session]) ?? [],
-  ), [workflow?.sessions]);
+  const sessionById = useMemo(
+    () => new Map(workflow?.sessions.map((session) => [session.id, session]) ?? []),
+    [workflow?.sessions],
+  );
 
   const activeSession = workflow?.activeSessionId
     ? sessionById.get(workflow.activeSessionId)
     : undefined;
-  const stages = useMemo(
-    () => (workflow ? buildStages(workflow) : []),
-    [workflow],
-  );
-  const followedId = useMemo(
-    () => followedStageId(stages, activeSession),
-    [activeSession, stages],
-  );
+  const stages = useMemo(() => (workflow ? buildStages(workflow) : []), [workflow]);
+  const followedId = useMemo(() => followedStageId(stages, activeSession), [activeSession, stages]);
 
   const selectStage = useCallback((stageId: string) => {
     pinnedStageRef.current = true;
@@ -497,8 +536,8 @@ export function LoopedReviewTab({
       pinnedStageRef.current = false;
       return;
     }
-    const selectionExists = selectedStageId !== null
-      && stages.some((stage) => stage.id === selectedStageId);
+    const selectionExists =
+      selectedStageId !== null && stages.some((stage) => stage.id === selectedStageId);
     // A pinned stage that vanished from the snapshot is no longer a choice the
     // user can hold on to, so release the pin and follow the workflow again.
     if (!selectionExists) pinnedStageRef.current = false;
@@ -506,26 +545,49 @@ export function LoopedReviewTab({
     if (followedId !== selectedStageId) setSelectedStageId(followedId);
   }, [followedId, selectedStageId, stages]);
 
-  if (hydrating) return <div className="flex h-full items-center justify-center bg-background" role="status">
-    <span className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />Restoring looped review…</span>
-  </div>;
-  if (!workflow) return <div className="grid h-full place-items-center bg-background p-6">
-    <div className="max-w-md rounded-xl border border-destructive/30 bg-destructive/5 p-5 text-center">
-      <AlertCircle className="mx-auto size-6 text-destructive" />
-      <p className="mt-3 font-semibold">Looped review unavailable</p>
-      <p className="mt-2 text-sm text-muted-foreground">{hydrationError ?? "The workflow snapshot is missing."}</p>
-      <Button className="mt-4" variant="outline" disabled={hydrating} onClick={() => void restoreWorkflow()}>
-        <RefreshCw className="mr-2 size-4" />Retry restore
-      </Button>
-    </div>
-  </div>;
+  if (hydrating)
+    return (
+      <div className="flex h-full items-center justify-center bg-background" role="status">
+        <span className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="size-4 animate-spin" />
+          Restoring looped review…
+        </span>
+      </div>
+    );
+  if (!workflow)
+    return (
+      <div className="grid h-full place-items-center bg-background p-6">
+        <div className="max-w-md rounded-xl border border-destructive/30 bg-destructive/5 p-5 text-center">
+          <AlertCircle className="mx-auto size-6 text-destructive" />
+          <p className="mt-3 font-semibold">Looped review unavailable</p>
+          <p className="mt-2 text-sm text-muted-foreground">
+            {hydrationError ?? "The workflow snapshot is missing."}
+          </p>
+          <Button
+            className="mt-4"
+            variant="outline"
+            disabled={hydrating}
+            onClick={() => void restoreWorkflow()}
+          >
+            <RefreshCw className="mr-2 size-4" />
+            Retry restore
+          </Button>
+        </div>
+      </div>
+    );
 
-  const selectedStage = stages.find((stage) => stage.id === selectedStageId)
-    ?? stages[0];
+  const selectedStage = stages.find((stage) => stage.id === selectedStageId) ?? stages[0];
   const history = workflow.sessions.flatMap((session) =>
-    (session.interactionTranscript ?? []).map((entry) => ({ session, entry: entry as {
-      id: string; title: string; body?: string; kind: string; outcome: string;
-    } }))
+    (session.interactionTranscript ?? []).map((entry) => ({
+      session,
+      entry: entry as {
+        id: string;
+        title: string;
+        body?: string;
+        kind: string;
+        outcome: string;
+      },
+    })),
   );
   const prUrl = safeHttpUrl(workflow.pr.url);
   const active = isLoopedReviewActivePhase(workflow.phase);
@@ -550,11 +612,12 @@ export function LoopedReviewTab({
     // inconsistency the pattern exists to remove.
     event.preventDefault();
     const current = stages.findIndex((stage) => stage.id === selectedStageId);
-    const next = step === "first"
-      ? 0
-      : step === "last"
-        ? stages.length - 1
-        : (Math.max(current, 0) + step + stages.length) % stages.length;
+    const next =
+      step === "first"
+        ? 0
+        : step === "last"
+          ? stages.length - 1
+          : (Math.max(current, 0) + step + stages.length) % stages.length;
     const target = stages[next];
     if (!target || target.id === selectedStageId) return;
     selectStage(target.id);
@@ -562,7 +625,10 @@ export function LoopedReviewTab({
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background" aria-label="Looped code review workflow">
+    <div
+      className="flex h-full min-h-0 flex-col bg-background"
+      aria-label="Looped code review workflow"
+    >
       <div className="flex items-center justify-between gap-3 border-b border-border/40 bg-zinc-900/40 px-4 py-3">
         <div className="min-w-0">
           <div className="truncate text-sm font-medium">Looped Code Review</div>
@@ -583,7 +649,9 @@ export function LoopedReviewTab({
             <span>·</span>
             <span>Round {workflow.currentRound}</span>
             <span>·</span>
-            <span>pass {workflow.currentPass || "—"}/{workflow.currentAllowance}</span>
+            <span>
+              pass {workflow.currentPass || "—"}/{workflow.currentAllowance}
+            </span>
           </div>
           <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
             {workflow.agent} · {workflow.model}
@@ -673,7 +741,8 @@ export function LoopedReviewTab({
           <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
           <span className="font-medium">Cancellation in progress</span>
           <span className="min-w-0 flex-1 text-amber-200/70">
-            Waiting for provider work from {workflow.cancellingFromPhase ?? "the active phase"} to stop.
+            Waiting for provider work from {workflow.cancellingFromPhase ?? "the active phase"} to
+            stop.
           </span>
         </div>
       )}
@@ -741,9 +810,7 @@ export function LoopedReviewTab({
                   aria-controls={panelId}
                   // One stop for the whole rail, then arrow keys within it —
                   // otherwise Tab walks every stage before reaching the panel.
-                  tabIndex={isSelected || (selectedStageId === null && index === 0)
-                    ? 0
-                    : -1}
+                  tabIndex={isSelected || (selectedStageId === null && index === 0) ? 0 : -1}
                   className={cn(
                     "flex w-full items-start gap-2 rounded-lg border px-2 py-2 text-left transition-colors",
                     isSelected
@@ -752,11 +819,13 @@ export function LoopedReviewTab({
                   )}
                   onClick={() => selectStage(stage.id)}
                 >
-                  {stage.kind === "overview"
-                    ? <ClipboardList className="h-3.5 w-3.5 text-muted-foreground" />
-                    : stage.kind === "archive"
-                      ? <Archive className="h-3.5 w-3.5 text-muted-foreground" />
-                      : <StageStateIcon state={stage.state} />}
+                  {stage.kind === "overview" ? (
+                    <ClipboardList className="h-3.5 w-3.5 text-muted-foreground" />
+                  ) : stage.kind === "archive" ? (
+                    <Archive className="h-3.5 w-3.5 text-muted-foreground" />
+                  ) : (
+                    <StageStateIcon state={stage.state} />
+                  )}
                   <span className="min-w-0">
                     <span
                       className={cn(
@@ -793,12 +862,15 @@ export function LoopedReviewTab({
                   <CardHeading meta={poolSummary(workflow.activePool)}>
                     Active finding pool
                   </CardHeading>
-                  <div className="mt-3"><PoolView pool={workflow.activePool} /></div>
+                  <div className="mt-3">
+                    <PoolView pool={workflow.activePool} />
+                  </div>
                 </Card>
                 {history.length > 0 && (
                   <Card>
                     <CardHeading>
-                      Unattended interaction history ({workflow.autoDeclineCount ?? 0} auto-declined)
+                      Unattended interaction history ({workflow.autoDeclineCount ?? 0}{" "}
+                      auto-declined)
                     </CardHeading>
                     <div className="mt-3 space-y-2">
                       {history.map(({ session, entry }) => (
@@ -808,7 +880,8 @@ export function LoopedReviewTab({
                         >
                           <p className="text-sm font-medium">{entry.title}</p>
                           <p className="mt-0.5 text-[11px] text-muted-foreground">
-                            {sessionLabel(session.phase, session.round, session.pass)} · {entry.kind} · {entry.outcome}
+                            {sessionLabel(session.phase, session.round, session.pass)} ·{" "}
+                            {entry.kind} · {entry.outcome}
                           </p>
                           {entry.body && (
                             <p className="mt-2 text-sm text-muted-foreground">{entry.body}</p>
@@ -849,13 +922,17 @@ export function LoopedReviewTab({
                       <div>
                         <dt className="text-xs text-muted-foreground">Changed files</dt>
                         <dd className="text-xs">
-                          {countLabel(selectedStage.round.package.changedFiles.length, "changed file")}
+                          {countLabel(
+                            selectedStage.round.package.changedFiles.length,
+                            "changed file",
+                          )}
                         </dd>
                       </div>
                       <div>
                         <dt className="text-xs text-muted-foreground">Diff size</dt>
                         <dd className="text-xs">
-                          {selectedStage.round.package.completeDiff.length.toLocaleString()} diff characters
+                          {selectedStage.round.package.completeDiff.length.toLocaleString()} diff
+                          characters
                         </dd>
                       </div>
                     </dl>
@@ -867,19 +944,19 @@ export function LoopedReviewTab({
                   {/* The user cannot judge a review without knowing the package
                       it ran against was truncated — omitted files, skipped
                       validation. */}
-                  {selectedStage.round.package
-                    && selectedStage.round.package.limitations.length > 0 && (
-                    <div className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
-                      <h3 className="text-sm font-medium text-amber-300">
-                        Review package limitations
-                      </h3>
-                      <ul className="mt-1.5 list-disc space-y-1 pl-5 text-xs text-muted-foreground">
-                        {selectedStage.round.package.limitations.map((limitation, index) => (
-                          <li key={index}>{limitation}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
+                  {selectedStage.round.package &&
+                    selectedStage.round.package.limitations.length > 0 && (
+                      <div className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
+                        <h3 className="text-sm font-medium text-amber-300">
+                          Review package limitations
+                        </h3>
+                        <ul className="mt-1.5 list-disc space-y-1 pl-5 text-xs text-muted-foreground">
+                          {selectedStage.round.package.limitations.map((limitation, index) => (
+                            <li key={index}>{limitation}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
                 </Card>
 
                 <Card>
@@ -894,7 +971,8 @@ export function LoopedReviewTab({
                           type="button"
                           className="flex w-full items-center gap-2 rounded-lg border border-border/60 bg-background/30 px-3 py-2 text-left transition-colors hover:bg-zinc-800/55"
                           onClick={() =>
-                            selectStage(passStageId(selectedStage.round.round, pass.pass))}
+                            selectStage(passStageId(selectedStage.round.round, pass.pass))
+                          }
                         >
                           <StageStateIcon state={passState(workflow, pass)} />
                           <span className="min-w-0 flex-1 truncate text-xs font-medium">
@@ -961,8 +1039,7 @@ export function LoopedReviewTab({
                       {selectedStage.archive.fixSummary}
                     </p>
                   )}
-                  {selectedStage.archive.fixNotes
-                    && selectedStage.archive.fixNotes.length > 0 && (
+                  {selectedStage.archive.fixNotes && selectedStage.archive.fixNotes.length > 0 && (
                     <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-muted-foreground">
                       {/* Archived notes never reorder, and a model can
                           legitimately repeat itself, so the position is the only
@@ -975,7 +1052,9 @@ export function LoopedReviewTab({
                 </Card>
                 <Card>
                   <CardHeading>Findings fixed in this round</CardHeading>
-                  <div className="mt-3"><PoolView pool={selectedStage.archive.pool} /></div>
+                  <div className="mt-3">
+                    <PoolView pool={selectedStage.archive.pool} />
+                  </div>
                 </Card>
               </section>
             )}

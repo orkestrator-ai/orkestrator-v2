@@ -35,9 +35,7 @@ import {
   tmuxSelectionPromptFingerprint,
   tmuxSessionName,
 } from "./tmux-shared.js";
-import {
-  TmuxBackend,
-} from "./tmux-backend.js";
+import { TmuxBackend } from "./tmux-backend.js";
 import {
   TMUX_INFO_EVENT_LIMIT,
   TranscriptTail,
@@ -155,7 +153,7 @@ export class TmuxSession {
     this.resumed = resumeSessionId !== undefined;
     this.sessionId = resumeSessionId ?? randomUUID();
     this.tmuxSession = tmuxSessionName(environmentId, tabId);
-    this.workspace = backend.kind === "local" ? backend.cwd ?? process.cwd() : "/workspace";
+    this.workspace = backend.kind === "local" ? (backend.cwd ?? process.cwd()) : "/workspace";
     this.claudeHome = backend.kind === "local" ? localClaudeHome() : "/home/node/.claude";
     this.workspaceHookPaths = workspaceHookPaths(
       path.join(runtimeRootPrefix, environmentId),
@@ -205,7 +203,7 @@ export class TmuxSession {
   async transcriptLines(): Promise<unknown[]> {
     const transcriptPath = await this.discoverTranscriptPath();
     if (!transcriptPath) return [];
-    const content = await this.backend.readFile(transcriptPath) ?? "";
+    const content = (await this.backend.readFile(transcriptPath)) ?? "";
 
     // Replay task tools from scratch: the file is authoritative for everything
     // written so far, and each historical line must carry the list as it stood
@@ -260,7 +258,9 @@ export class TmuxSession {
 
     const tmuxProbe = await this.backend.exec(["which", this.tmuxCommand]);
     if (tmuxProbe.status !== 0 || !tmuxProbe.stdout.trim()) {
-      throw new Error("tmux is not installed in this environment. For containers, rebuild the base image; for local, install tmux on the host.");
+      throw new Error(
+        "tmux is not installed in this environment. For containers, rebuild the base image; for local, install tmux on the host.",
+      );
     }
 
     const claudeCommand = await this.resolveClaudeCommand();
@@ -270,10 +270,14 @@ export class TmuxSession {
     const help = await this.backend.exec([claudeCommand, "--help"]);
     const helpText = `${help.stdout}\n${help.stderr}`;
     if (!helpText.includes("--session-id")) {
-      throw new Error("Installed claude CLI does not support --session-id. Upgrade to a newer Claude Code version, or switch to terminal/native mode.");
+      throw new Error(
+        "Installed claude CLI does not support --session-id. Upgrade to a newer Claude Code version, or switch to terminal/native mode.",
+      );
     }
     if (this.resumed && !helpText.includes("--resume")) {
-      throw new Error("Installed claude CLI does not support --resume. Upgrade to a newer Claude Code version to use the resume-session feature.");
+      throw new Error(
+        "Installed claude CLI does not support --resume. Upgrade to a newer Claude Code version to use the resume-session feature.",
+      );
     }
 
     const alive = await this.tmuxAlive();
@@ -295,10 +299,7 @@ export class TmuxSession {
               agentToolConnectionTarget(this.backend.kind),
             );
             agentMcpConfigPath = `${this.workspaceHookPaths.root}/agent-mcp.json`;
-            await this.backend.writePrivateFile(
-              agentMcpConfigPath,
-              agentMcpConfigJson(connection),
-            );
+            await this.backend.writePrivateFile(agentMcpConfigPath, agentMcpConfigJson(connection));
           }
         }
         const thinkingDisplay = await probeThinkingDisplaySupport(
@@ -314,12 +315,12 @@ export class TmuxSession {
           thinkingDisplay,
           agentMcpConfigPath,
         );
-        const runtimePrefix = this.backend.kind === "container"
-          ? ". /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true; "
-            + "orkestrator_source_runtime_env 2>/dev/null || true; "
-          : "";
-        const wrapped =
-          `${runtimePrefix}${claudeCmd}; echo '[claude exited]'; exec bash`;
+        const runtimePrefix =
+          this.backend.kind === "container"
+            ? ". /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true; " +
+              "orkestrator_source_runtime_env 2>/dev/null || true; "
+            : "";
+        const wrapped = `${runtimePrefix}${claudeCmd}; echo '[claude exited]'; exec bash`;
         const out = await this.backend.exec([
           this.tmuxCommand,
           "new-session",
@@ -466,11 +467,12 @@ export class TmuxSession {
   private async waitForTuiInputReady(): Promise<void> {
     const deadline = Date.now() + 10 * 60 * 1000;
     while (Date.now() < deadline) {
-      if (!await this.tmuxAlive().catch(() => false)) {
+      if (!(await this.tmuxAlive().catch(() => false))) {
         throw new Error("tmux session stopped before Claude was ready");
       }
       const snapshot = await this.capturePane().catch(() => "");
-      if (paneHasClaudeExited(snapshot)) throw new Error("Claude exited before the initial prompt was sent");
+      if (paneHasClaudeExited(snapshot))
+        throw new Error("Claude exited before the initial prompt was sent");
       if (!paneHasSelectionPrompt(snapshot)) return;
       await delay(500);
     }
@@ -525,7 +527,11 @@ export class TmuxSession {
             }
 
             try {
-              const timeouts = await drainTimeouts(this.backend, this.sessionHookPaths, snapshot.timeouts);
+              const timeouts = await drainTimeouts(
+                this.backend,
+                this.sessionHookPaths,
+                snapshot.timeouts,
+              );
               for (const timeout of timeouts) {
                 emittedBlockingIds.delete(timeout.id);
                 context.emit(CLAUDE_TMUX_EVENT, {
@@ -562,28 +568,28 @@ export class TmuxSession {
           }
 
           if (Date.now() >= this.nextObservationAt && !this.observationInFlight) {
-            this.nextObservationAt = Date.now() + (
-              this.busy
-                ? TMUX_BUSY_OBSERVATION_INTERVAL_MS
-                : TMUX_OBSERVATION_INTERVAL_MS
-            );
+            this.nextObservationAt =
+              Date.now() +
+              (this.busy ? TMUX_BUSY_OBSERVATION_INTERVAL_MS : TMUX_OBSERVATION_INTERVAL_MS);
             const forceEmit = this.forceNextObservation;
             this.forceNextObservation = false;
-            const observation = this.refreshObservation(context, forceEmit).catch((error) => {
-              if (forceEmit) {
-                this.forceNextObservation = true;
-                this.nextObservationAt = 0;
-              }
-              // Pane contents are sensitive. Report only the error class.
-              console.warn(
-                "[tmux] pane observation failed",
-                error instanceof Error ? error.name : "unknown error",
-              );
-            }).finally(() => {
-              if (this.observationInFlight === observation) {
-                this.observationInFlight = undefined;
-              }
-            });
+            const observation = this.refreshObservation(context, forceEmit)
+              .catch((error) => {
+                if (forceEmit) {
+                  this.forceNextObservation = true;
+                  this.nextObservationAt = 0;
+                }
+                // Pane contents are sensitive. Report only the error class.
+                console.warn(
+                  "[tmux] pane observation failed",
+                  error instanceof Error ? error.name : "unknown error",
+                );
+              })
+              .finally(() => {
+                if (this.observationInFlight === observation) {
+                  this.observationInFlight = undefined;
+                }
+              });
             this.observationInFlight = observation;
           }
 
@@ -591,7 +597,7 @@ export class TmuxSession {
           // container mode) and a session that ends stays ended, so it is
           // checked on a slower cadence than the hook and transcript reads.
           if (tick % LIVENESS_CHECK_EVERY_TICKS !== 0) continue;
-          if (!await this.tmuxAlive().catch(() => false)) {
+          if (!(await this.tmuxAlive().catch(() => false))) {
             let removed = false;
             await tmuxManager.installLock(this.environmentId).runExclusive(async () => {
               // A replace/stop may have won while the liveness process was in
@@ -599,18 +605,16 @@ export class TmuxSession {
               // same tab key; never emit a stale stopped frame for that case.
               if (this.stopRequested) return;
               if (await this.tmuxAlive().catch(() => false)) return;
-              removed = tmuxManager.removeIfSame(
-                this.environmentId,
-                this.tabId,
-                this,
-              );
+              removed = tmuxManager.removeIfSame(this.environmentId, this.tabId, this);
               if (!removed) return;
               this.setBusyState(false);
               await this.backend.removeDir(this.sessionHookPaths.sessionDir).catch(() => undefined);
               if (tmuxManager.sessionsInEnvironment(this.environmentId) === 0) {
-                await uninstallWorkspaceHooks(this.backend, this.workspaceHookPaths).catch((error) => {
-                  console.warn("[tmux] uninstallWorkspaceHooks failed", error);
-                });
+                await uninstallWorkspaceHooks(this.backend, this.workspaceHookPaths).catch(
+                  (error) => {
+                    console.warn("[tmux] uninstallWorkspaceHooks failed", error);
+                  },
+                );
               }
             });
             if (!removed) {
@@ -632,17 +636,10 @@ export class TmuxSession {
     })();
   }
 
-  private async refreshObservation(
-    context: CommandContext,
-    forceEmit = false,
-  ): Promise<void> {
+  private async refreshObservation(context: CommandContext, forceEmit = false): Promise<void> {
     const pane = await this.capturePane();
     const next = {
-      ...parseTmuxAgentObservation(
-        pane,
-        this.observation.revision + 1,
-        new Date().toISOString(),
-      ),
+      ...parseTmuxAgentObservation(pane, this.observation.revision + 1, new Date().toISOString()),
       generation: this.observationGeneration,
     };
     const promptChanged = JSON.stringify(next.prompt) !== JSON.stringify(this.observation.prompt);
@@ -686,14 +683,16 @@ export class TmuxSession {
     if (event.kind === "Stop") this.scheduleCompletionNotification(context);
     let emittedPayload = event.payload;
     if (event.kind === "Notification" || event.kind === "Stop") {
-      const payload = event.payload && typeof event.payload === "object"
-        ? event.payload as Record<string, unknown>
-        : undefined;
-      const rawMessage = typeof payload?.message === "string"
-        ? payload.message
-        : event.kind === "Stop"
-          ? "Claude finished responding"
-          : "Claude sent a notification";
+      const payload =
+        event.payload && typeof event.payload === "object"
+          ? (event.payload as Record<string, unknown>)
+          : undefined;
+      const rawMessage =
+        typeof payload?.message === "string"
+          ? payload.message
+          : event.kind === "Stop"
+            ? "Claude finished responding"
+            : "Claude sent a notification";
       const message = boundedInfoEventMessage(rawMessage);
       // Bound the message the subscribers get too. Retaining a trimmed copy
       // while broadcasting the original would move the cost rather than remove
@@ -701,8 +700,8 @@ export class TmuxSession {
       if (payload && typeof payload.message === "string") {
         emittedPayload = { ...payload, message };
       }
-      const duplicateIndex = this.infoEvents.findIndex((entry) =>
-        entry.id === event.id && entry.kind === event.kind
+      const duplicateIndex = this.infoEvents.findIndex(
+        (entry) => entry.id === event.id && entry.kind === event.kind,
       );
       if (duplicateIndex >= 0) this.infoEvents.splice(duplicateIndex, 1);
       this.infoEvents.push({
@@ -779,7 +778,10 @@ export class TmuxSession {
   private async sendTextUnlocked(text: string): Promise<void> {
     if (!text) return;
     const bufferName = `claude-tmux-input-${this.tmuxSession}`;
-    const load = await this.backend.exec([this.tmuxCommand, "load-buffer", "-b", bufferName, "-"], text);
+    const load = await this.backend.exec(
+      [this.tmuxCommand, "load-buffer", "-b", bufferName, "-"],
+      text,
+    );
     if (load.status !== 0) throw new Error(load.stderr || "tmux load-buffer failed");
     const paste = await this.backend.exec([
       this.tmuxCommand,
@@ -811,7 +813,14 @@ export class TmuxSession {
 
   private async sendLiteralUnlocked(text: string): Promise<void> {
     if (!text) return;
-    const out = await this.backend.exec([this.tmuxCommand, "send-keys", "-t", this.tmuxSession, "-l", text]);
+    const out = await this.backend.exec([
+      this.tmuxCommand,
+      "send-keys",
+      "-t",
+      this.tmuxSession,
+      "-l",
+      text,
+    ]);
     if (out.status !== 0) throw new Error(out.stderr || "tmux send-keys failed");
   }
 
@@ -820,7 +829,14 @@ export class TmuxSession {
   }
 
   private async sendKeysUnlocked(keys: string[]): Promise<void> {
-    const out = await this.backend.exec([this.tmuxCommand, "send-keys", "-t", this.tmuxSession, "--", ...keys]);
+    const out = await this.backend.exec([
+      this.tmuxCommand,
+      "send-keys",
+      "-t",
+      this.tmuxSession,
+      "--",
+      ...keys,
+    ]);
     if (out.status !== 0) throw new Error(out.stderr || "tmux send-keys failed");
   }
 
@@ -841,10 +857,10 @@ export class TmuxSession {
       };
       const observedPrompt = this.observation.prompt;
       if (
-        input.expectedGeneration !== this.observationGeneration
-        || input.expectedRevision !== this.observation.revision
-        || !observedPrompt
-        || tmuxSelectionPromptFingerprint(observedPrompt) !== input.expectedPromptFingerprint
+        input.expectedGeneration !== this.observationGeneration ||
+        input.expectedRevision !== this.observation.revision ||
+        !observedPrompt ||
+        tmuxSelectionPromptFingerprint(observedPrompt) !== input.expectedPromptFingerprint
       ) {
         markPromptForRefresh();
         throw new Error("Selection prompt is no longer current");
@@ -855,8 +871,8 @@ export class TmuxSession {
       // path so validation and key delivery form one serialized operation.
       const currentPrompt = parseTmuxSelectionPrompt(await this.capturePane());
       if (
-        !currentPrompt
-        || tmuxSelectionPromptFingerprint(currentPrompt) !== input.expectedPromptFingerprint
+        !currentPrompt ||
+        tmuxSelectionPromptFingerprint(currentPrompt) !== input.expectedPromptFingerprint
       ) {
         markPromptForRefresh();
         throw new Error("Selection prompt is no longer current");
@@ -951,7 +967,9 @@ export class TmuxSession {
       try {
         await this.persistFastModeOption(fastMode);
       } catch (error) {
-        throw new Error(`Fast mode changed but its restart metadata could not be saved: ${String(error)}`);
+        throw new Error(
+          `Fast mode changed but its restart metadata could not be saved: ${String(error)}`,
+        );
       }
     });
   }
@@ -1063,7 +1081,8 @@ export class TmuxSession {
 
   private async capturePanePermissionMode(): Promise<string | undefined> {
     const snapshot = await this.capturePane();
-    if (paneHasClaudeExited(snapshot)) throw new Error("Claude exited before its mode could be changed");
+    if (paneHasClaudeExited(snapshot))
+      throw new Error("Claude exited before its mode could be changed");
     if (paneHasSelectionPrompt(snapshot)) {
       throw new Error("Finish the active Claude prompt before changing modes");
     }
@@ -1124,11 +1143,13 @@ export class TmuxSession {
   }
 
   async writeInteractive(data: string): Promise<void> {
-    await this.inputMutex.runExclusive(() => sendInteractiveData(
-      data,
-      (literal) => this.sendLiteralUnlocked(literal),
-      (keys) => this.sendKeysUnlocked(keys),
-    ));
+    await this.inputMutex.runExclusive(() =>
+      sendInteractiveData(
+        data,
+        (literal) => this.sendLiteralUnlocked(literal),
+        (keys) => this.sendKeysUnlocked(keys),
+      ),
+    );
   }
 
   async capturePane(options: { ansi?: boolean; joinWrapped?: boolean } = {}): Promise<string> {
@@ -1166,9 +1187,9 @@ export class TmuxSession {
     const result = await this.backend
       .exec([this.tmuxCommand, "kill-session", "-t", this.tmuxSession])
       .catch(() => null);
-    const stopped = Boolean(result && (
-      result.status === 0 || isMissingTmuxSessionError(result.stderr)
-    ));
+    const stopped = Boolean(
+      result && (result.status === 0 || isMissingTmuxSessionError(result.stderr)),
+    );
     if (!stopped) return false;
     this.stopRequested = true;
     await this.backend.removeDir(this.sessionHookPaths.sessionDir).catch(() => undefined);
@@ -1224,12 +1245,18 @@ export function fastModeFromPane(snapshot: string): boolean | undefined {
 /** Return an actionable error for a visible `/fast` rejection. */
 export function fastModeRejectionFromPane(snapshot: string): string | undefined {
   const plain = stripAnsi(snapshot);
-  const rejection = plain.split("\n").reverse().find((line) =>
-    /fast mode(?: is)?.*(?:not available|unavailable|not supported)/i.test(line)
-    || /fast mode requires (?:an? )?(?:eligible|supported|paid|subscription|plan|account|model|Claude Code)/i.test(line)
-    || /unknown (?:command|argument).*\/fast/i.test(line)
-    || /\/fast.*requires Claude Code/i.test(line)
-  );
+  const rejection = plain
+    .split("\n")
+    .reverse()
+    .find(
+      (line) =>
+        /fast mode(?: is)?.*(?:not available|unavailable|not supported)/i.test(line) ||
+        /fast mode requires (?:an? )?(?:eligible|supported|paid|subscription|plan|account|model|Claude Code)/i.test(
+          line,
+        ) ||
+        /unknown (?:command|argument).*\/fast/i.test(line) ||
+        /\/fast.*requires Claude Code/i.test(line),
+    );
   return rejection?.trim() || undefined;
 }
 
@@ -1321,9 +1348,10 @@ export class TmuxSessionManager {
   findByTmuxName(environmentId: string, name: string): TmuxSession | undefined {
     for (const session of this.sessions.values()) {
       if (
-        session.environmentId === environmentId
-        && tmuxSessionName(session.environmentId, session.tabId) === name
-      ) return session;
+        session.environmentId === environmentId &&
+        tmuxSessionName(session.environmentId, session.tabId) === name
+      )
+        return session;
     }
     return undefined;
   }
@@ -1369,40 +1397,50 @@ export function persistTmuxEnvironmentActivity(
     return Promise.resolve();
   }
   const previous = tmuxActivityWrites.get(environmentId) ?? Promise.resolve();
-  const operation = previous.catch(() => undefined).then(async () => {
-    const state = tmuxManager.activityState(environmentId);
-    const environment = await storage.getEnvironment!(environmentId);
-    const persisted = environment?.agentActivitySources?.["claude-tmux"];
-    if (persisted?.state === state) return;
-    await storage.setEnvironmentAgentActivity!(
-      environmentId,
-      state,
-      new Date().toISOString(),
-      "claude-tmux",
-    );
-  });
-  const settled = operation.catch((error) => {
-    console.warn(
-      `[tmux] failed to persist activity for ${environmentId}:`,
-      error instanceof Error ? error.message : String(error),
-    );
-  }).finally(() => {
-    if (tmuxActivityWrites.get(environmentId) === settled) {
-      tmuxActivityWrites.delete(environmentId);
-    }
-  });
+  const operation = previous
+    .catch(() => undefined)
+    .then(async () => {
+      const state = tmuxManager.activityState(environmentId);
+      const environment = await storage.getEnvironment!(environmentId);
+      const persisted = environment?.agentActivitySources?.["claude-tmux"];
+      if (persisted?.state === state) return;
+      await storage.setEnvironmentAgentActivity!(
+        environmentId,
+        state,
+        new Date().toISOString(),
+        "claude-tmux",
+      );
+    });
+  const settled = operation
+    .catch((error) => {
+      console.warn(
+        `[tmux] failed to persist activity for ${environmentId}:`,
+        error instanceof Error ? error.message : String(error),
+      );
+    })
+    .finally(() => {
+      if (tmuxActivityWrites.get(environmentId) === settled) {
+        tmuxActivityWrites.delete(environmentId);
+      }
+    });
   tmuxActivityWrites.set(environmentId, settled);
   return settled;
 }
 
-export function workspaceAndClaudeHome(backend: TmuxBackend): { workspace: string; claudeHome: string } {
+export function workspaceAndClaudeHome(backend: TmuxBackend): {
+  workspace: string;
+  claudeHome: string;
+} {
   return {
-    workspace: backend.kind === "local" ? backend.cwd ?? process.cwd() : "/workspace",
+    workspace: backend.kind === "local" ? (backend.cwd ?? process.cwd()) : "/workspace",
     claudeHome: backend.kind === "local" ? localClaudeHome() : "/home/node/.claude",
   };
 }
 
-export async function resolveBackend(environmentId: string, context: CommandContext): Promise<TmuxBackend> {
+export async function resolveBackend(
+  environmentId: string,
+  context: CommandContext,
+): Promise<TmuxBackend> {
   const environment = await context.storage.getEnvironment(environmentId);
   if (!environment) throw new Error(`environment ${environmentId} not found`);
   if (environment.environmentType === "local") {
@@ -1423,7 +1461,10 @@ export function resolveBundledClaudePath(context: CommandContext): string | unde
   return candidates.find((candidate) => existsSync(candidate));
 }
 
-export function resolvePinnedClaudeCommand(context: CommandContext, backend: TmuxBackend): string | undefined {
+export function resolvePinnedClaudeCommand(
+  context: CommandContext,
+  backend: TmuxBackend,
+): string | undefined {
   return backend.kind === "container" ? undefined : resolveBundledClaudePath(context);
 }
 
@@ -1449,10 +1490,16 @@ export async function getOrCreateSession(
   return session;
 }
 
-export async function killOrphanSession(context: CommandContext, environmentId: string, tabId: string): Promise<void> {
+export async function killOrphanSession(
+  context: CommandContext,
+  environmentId: string,
+  tabId: string,
+): Promise<void> {
   try {
     const backend = await resolveBackend(environmentId, context);
-    await backend.exec(["tmux", "kill-session", "-t", tmuxSessionName(environmentId, tabId)]).catch(() => undefined);
+    await backend
+      .exec(["tmux", "kill-session", "-t", tmuxSessionName(environmentId, tabId)])
+      .catch(() => undefined);
   } catch (error) {
     console.debug("[tmux] skipping orphan kill", error);
   }
@@ -1477,9 +1524,9 @@ export async function killEnvironmentTmuxSessions(
   if (!listed) return { killed: [], complete: false };
   if (listed.status !== 0) {
     const noServer =
-      /no server running/i.test(listed.stderr)
-      || /failed to connect to server/i.test(listed.stderr)
-      || /no sessions/i.test(listed.stderr);
+      /no server running/i.test(listed.stderr) ||
+      /failed to connect to server/i.test(listed.stderr) ||
+      /no sessions/i.test(listed.stderr);
     return { killed: [], complete: noServer };
   }
   const targets = selectReapableTmuxSessions({
@@ -1493,9 +1540,7 @@ export async function killEnvironmentTmuxSessions(
     const result = await backend
       .exec(["tmux", "kill-session", "-t", name])
       .catch((error) =>
-        isMissingTmuxSessionError(error)
-          ? { status: 1, stdout: "", stderr: String(error) }
-          : null
+        isMissingTmuxSessionError(error) ? { status: 1, stdout: "", stderr: String(error) } : null,
       );
     if (result?.status === 0) {
       killed.push(name);
@@ -1531,7 +1576,6 @@ export async function killEnvironmentTmuxSessions(
  * and the worktree to still be on disk, so it runs before either is removed.
  */
 
-
 export function getLastTmuxOrphanSweepAt(): number {
   return lastTmuxOrphanSweepAt;
 }
@@ -1539,5 +1583,3 @@ export function getLastTmuxOrphanSweepAt(): number {
 export function setLastTmuxOrphanSweepAt(value: number): void {
   lastTmuxOrphanSweepAt = value;
 }
-
-

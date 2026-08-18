@@ -22,7 +22,14 @@
  * reporting every failure saves a second full run.
  */
 import { spawn } from "node:child_process";
-import { createReadStream, createWriteStream, existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import {
+  createReadStream,
+  createWriteStream,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  writeFileSync,
+} from "node:fs";
 import { mkdir, readdir, readFile, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { availableParallelism } from "node:os";
 import { tmpdir } from "node:os";
@@ -73,7 +80,12 @@ const TEST_LOG_DIRECTORY_PREFIX = "orkestrator-test-run.";
 const TEST_LOG_SENTINEL = ".orkestrator-test-log";
 
 function safeLogName(name: string): string {
-  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "group";
+  return (
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "") || "group"
+  );
 }
 
 export function createTestLogDirectory(): string {
@@ -113,19 +125,17 @@ export async function pruneExpiredTestLogDirectories(now = Date.now()): Promise<
   }
 }
 
-export function defaultRunGroup(
-  group: TestGroup,
-  env: NodeJS.ProcessEnv,
-): Promise<CommandResult> {
+export function defaultRunGroup(group: TestGroup, env: NodeJS.ProcessEnv): Promise<CommandResult> {
   return new Promise((resolve) => {
     const logDirectory = env[TEST_LOG_DIRECTORY_ENV] || createTestLogDirectory();
     mkdirSync(logDirectory, { recursive: true, mode: 0o700 });
     const logPath = path.join(logDirectory, `${safeLogName(group.name)}.log`);
     const log = createWriteStream(logPath, { flags: "w", mode: 0o600 });
     const configuredLimit = Number(env[TEST_MAX_OUTPUT_BYTES_ENV]);
-    const maxOutputBytes = Number.isSafeInteger(configuredLimit) && configuredLimit > 0
-      ? configuredLimit
-      : MAX_GROUP_OUTPUT_BYTES;
+    const maxOutputBytes =
+      Number.isSafeInteger(configuredLimit) && configuredLimit > 0
+        ? configuredLimit
+        : MAX_GROUP_OUTPUT_BYTES;
     const child = spawn(group.command, group.args, {
       cwd: root,
       env,
@@ -146,9 +156,10 @@ export function defaultRunGroup(
     let forceKill: ReturnType<typeof setTimeout> | undefined;
 
     const appendTail = (chunk: Buffer) => {
-      outputTail = chunk.byteLength >= MAX_GROUP_OUTPUT_TAIL_BYTES
-        ? chunk.subarray(chunk.byteLength - MAX_GROUP_OUTPUT_TAIL_BYTES)
-        : Buffer.concat([outputTail, chunk]).subarray(-MAX_GROUP_OUTPUT_TAIL_BYTES);
+      outputTail =
+        chunk.byteLength >= MAX_GROUP_OUTPUT_TAIL_BYTES
+          ? chunk.subarray(chunk.byteLength - MAX_GROUP_OUTPUT_TAIL_BYTES)
+          : Buffer.concat([outputTail, chunk]).subarray(-MAX_GROUP_OUTPUT_TAIL_BYTES);
     };
     const consume = (value: Buffer | string) => {
       const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
@@ -185,7 +196,8 @@ export function defaultRunGroup(
         .map((error) => error.message);
       resolve({
         status: outputLimitExceeded || errors.length > 0 ? 1 : childStatus,
-        output: `${outputTail.toString("utf8")}${errors.length ? `\n${errors.join("\n")}` : ""}`.trim(),
+        output:
+          `${outputTail.toString("utf8")}${errors.length ? `\n${errors.join("\n")}` : ""}`.trim(),
         logPath,
         outputBytes,
         outputLimitExceeded,
@@ -276,11 +288,15 @@ export async function finalizeTestLogs(
   }
   await writeFile(
     path.join(logDirectory, "summary.json"),
-    `${JSON.stringify({
-      version: 1,
-      succeeded: succeeded && groups.every((group) => !group.artifactError),
-      groups,
-    }, null, 2)}\n`,
+    `${JSON.stringify(
+      {
+        version: 1,
+        succeeded: succeeded && groups.every((group) => !group.artifactError),
+        groups,
+      },
+      null,
+      2,
+    )}\n`,
     { mode: 0o600 },
   );
   return logDirectory;
@@ -346,8 +362,7 @@ export const MIN_AGGREGATE_TEST_WORKERS = 1 + MIN_BRIDGE_WORKERS + 1;
  * it in strict env mode while keeping it out of the hash.
  */
 export const WORKSPACE_WORKERS_ENV = "ORKESTRATOR_TEST_WORKERS";
-export const ALLOW_MISSING_PROTOCOL_BINARY_ENV =
-  "CODEX_PROTOCOL_CHECK_ALLOW_MISSING_BINARY";
+export const ALLOW_MISSING_PROTOCOL_BINARY_ENV = "CODEX_PROTOCOL_CHECK_ALLOW_MISSING_BINARY";
 
 export function planWorkers(cores: number): WorkerPlan {
   // Never plan more Bun workers than logical cores across root + bridges +
@@ -377,8 +392,10 @@ export function buildConcurrentGroups(cores: number): TestGroup[] {
       name: "workspace (web, backend, desktop, web-public, cli, protocol)",
       command: "turbo",
       args: [
-        "run", "test:workspace",
-        "--cwd", ".",
+        "run",
+        "test:workspace",
+        "--cwd",
+        ".",
         "--filter=@orkestrator/web",
         "--filter=@orkestrator/backend",
         "--filter=@orkestrator/desktop",
@@ -386,7 +403,8 @@ export function buildConcurrentGroups(cores: number): TestGroup[] {
         "--filter=orkestrator",
         "--filter=@orkestrator/protocol",
         `--concurrency=${workers.workspaceConcurrency}`,
-        "--cache-dir", ".turbo",
+        "--cache-dir",
+        ".turbo",
       ],
       env: { [WORKSPACE_WORKERS_ENV]: String(workers.workspace) },
     },
@@ -410,11 +428,7 @@ export function buildConcurrentGroups(cores: number): TestGroup[] {
       // part of the turbo run above. Without this their suites never execute.
       name: "bridges",
       command: "bun",
-      args: [
-        "test", "bridges",
-        "--only-failures",
-        `--parallel=${workers.bridges}`,
-      ],
+      args: ["test", "bridges", "--only-failures", `--parallel=${workers.bridges}`],
     },
     {
       // Always validates the committed TypeScript lockfile. On developer
@@ -434,9 +448,7 @@ function formatDuration(ms: number): string {
   return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
 }
 
-export async function runAllTests(
-  overrides: Partial<TestAllDependencies> = {},
-): Promise<number> {
+export async function runAllTests(overrides: Partial<TestAllDependencies> = {}): Promise<number> {
   const dependencies = { ...defaultDependencies, ...overrides };
   await pruneExpiredTestLogDirectories().catch(() => undefined);
   const groups = buildConcurrentGroups(dependencies.cores);
@@ -486,11 +498,7 @@ export async function runAllTests(
       .filter(({ result }) => (result.status ?? 1) !== 0)
       .map(({ group }) => group.name);
     dependencies.log(`Failing groups: ${failed.join(", ")}`);
-    const artifacts = await finalizeTestLogs(
-      logDirectory,
-      results,
-      false,
-    );
+    const artifacts = await finalizeTestLogs(logDirectory, results, false);
     if (artifacts) dependencies.log(`Failure artifacts: ${artifacts}`);
     return firstFailure;
   }
@@ -500,9 +508,9 @@ export async function runAllTests(
   const xcodeDeveloperDirectory =
     dependencies.env.DEVELOPER_DIR ?? "/Applications/Xcode.app/Contents/Developer";
   if (
-    dependencies.env[INCLUDE_IOS_TESTS_ENV] === "1"
-    && dependencies.platform === "darwin"
-    && dependencies.exists(xcodeDeveloperDirectory)
+    dependencies.env[INCLUDE_IOS_TESTS_ENV] === "1" &&
+    dependencies.platform === "darwin" &&
+    dependencies.exists(xcodeDeveloperDirectory)
   ) {
     const iosGroup: TestGroup = {
       name: "ios",
@@ -516,11 +524,7 @@ export async function runAllTests(
     results.push(ios);
     const status = result.status ?? 1;
     if (status !== 0 && result.output) dependencies.log(result.output.trimEnd());
-    const artifacts = await finalizeTestLogs(
-      logDirectory,
-      results,
-      status === 0,
-    );
+    const artifacts = await finalizeTestLogs(logDirectory, results, status === 0);
     if (artifacts && status !== 0) dependencies.log(`Failure artifacts: ${artifacts}`);
     return status;
   }

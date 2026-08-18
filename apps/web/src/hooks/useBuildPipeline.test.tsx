@@ -1,11 +1,4 @@
-import {
-  afterAll,
-  beforeEach,
-  describe,
-  expect,
-  mock,
-  test,
-} from "bun:test";
+import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import type { BuildStepConfigs } from "@orkestrator/protocol/build-pipeline";
 import * as realBackend from "@/lib/backend";
@@ -27,11 +20,11 @@ const startBuildPipelineMock = mock(async (_input: unknown) =>
     environmentId: "env-new",
     taskId: "task-1",
     projectId: "project-1",
-  }));
+  }),
+);
 const getKanbanImageDataMock = mock(async (imageId: string) =>
-  imageId === "image-bad"
-    ? Promise.reject(new Error("missing image"))
-    : `data:${imageId}`);
+  imageId === "image-bad" ? Promise.reject(new Error("missing image")) : `data:${imageId}`,
+);
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
@@ -153,48 +146,62 @@ describe("useBuildPipeline", () => {
   test("converts Linear and GitHub issues into backend-owned task snapshots", async () => {
     const { result } = renderHook(() => useBuildPipeline());
     await act(async () => {
-      await result.current.startBuildFromLinearIssue({
-        id: "linear-id",
-        identifier: "ENG-42",
-        title: "Linear title",
-        description: "Linear body",
-        status: "In Progress",
-        teamKey: "ENG",
-        url: "https://linear.example/ENG-42",
-        updatedAt: "2026-07-29",
-        labels: [],
-        comments: [{
-          id: "comment-1",
-          body: "A comment",
-          authorName: "Ada",
-          createdAt: "2026-07-29",
-        }],
-      }, "project-1", "containerized");
+      await result.current.startBuildFromLinearIssue(
+        {
+          id: "linear-id",
+          identifier: "ENG-42",
+          title: "Linear title",
+          description: "Linear body",
+          status: "In Progress",
+          teamKey: "ENG",
+          url: "https://linear.example/ENG-42",
+          updatedAt: "2026-07-29",
+          labels: [],
+          comments: [
+            {
+              id: "comment-1",
+              body: "A comment",
+              authorName: "Ada",
+              createdAt: "2026-07-29",
+            },
+          ],
+        },
+        "project-1",
+        "containerized",
+      );
     });
     const linear = startBuildPipelineMock.mock.calls[0]?.[0] as Record<string, any>;
     expect(linear.taskId).toBe("linear-id");
-    expect(linear.source).toEqual(expect.objectContaining({
-      type: "linear",
-      issueIdentifier: "ENG-42",
-    }));
+    expect(linear.source).toEqual(
+      expect.objectContaining({
+        type: "linear",
+        issueIdentifier: "ENG-42",
+      }),
+    );
     expect(linear.taskSnapshot.comments).toContainEqual({ text: "Ada: A comment" });
 
     startBuildPipelineMock.mockClear();
     await act(async () => {
-      await result.current.startBuildFromGitHubIssue({
-        repositoryOwner: "Acme",
-        repositoryName: "Widget",
-        number: 7,
-        url: "https://github.com/Acme/Widget/issues/7",
-        title: "GitHub title",
-        body: "GitHub body",
-        labels: ["bug"],
-        status: "open",
-        comments: [{ id: 1, body: "Please fix", authorLogin: "grace" }],
-      }, "project-1", "local", "claude", {
-        existingEnvironmentId: "env-existing",
-        featurePlanId: "feature-1",
-      });
+      await result.current.startBuildFromGitHubIssue(
+        {
+          repositoryOwner: "Acme",
+          repositoryName: "Widget",
+          number: 7,
+          url: "https://github.com/Acme/Widget/issues/7",
+          title: "GitHub title",
+          body: "GitHub body",
+          labels: ["bug"],
+          status: "open",
+          comments: [{ id: 1, body: "Please fix", authorLogin: "grace" }],
+        },
+        "project-1",
+        "local",
+        "claude",
+        {
+          existingEnvironmentId: "env-existing",
+          featurePlanId: "feature-1",
+        },
+      );
     });
     const github = startBuildPipelineMock.mock.calls[0]?.[0] as Record<string, any>;
     expect(github.taskId).toBe("github:acme/widget#7");
@@ -207,28 +214,32 @@ describe("useBuildPipeline", () => {
     const { result } = renderHook(() => useBuildPipeline());
 
     await act(async () => {
-      await result.current.startBuildFromLinearIssue({
-        ...linearIssue,
-        creatorName: "Grace",
-        assigneeName: "Ada",
-        createdAt: "2026-07-28",
-        projectName: "Desktop",
-        cycleName: "July",
-        comments: [
-          {
-            id: "comment-attributed",
-            body: "Attributed comment",
-            authorName: "Ada",
-            createdAt: "2026-07-29",
-            updatedAt: "2026-07-30",
-          },
-          {
-            id: "comment-anonymous",
-            body: "Unattributed comment",
-            createdAt: "2026-07-30",
-          },
-        ],
-      }, "project-1", "local");
+      await result.current.startBuildFromLinearIssue(
+        {
+          ...linearIssue,
+          creatorName: "Grace",
+          assigneeName: "Ada",
+          createdAt: "2026-07-28",
+          projectName: "Desktop",
+          cycleName: "July",
+          comments: [
+            {
+              id: "comment-attributed",
+              body: "Attributed comment",
+              authorName: "Ada",
+              createdAt: "2026-07-29",
+              updatedAt: "2026-07-30",
+            },
+            {
+              id: "comment-anonymous",
+              body: "Unattributed comment",
+              createdAt: "2026-07-30",
+            },
+          ],
+        },
+        "project-1",
+        "local",
+      );
     });
 
     const input = startInput() as Record<string, any>;
@@ -262,12 +273,14 @@ describe("useBuildPipeline", () => {
       await result.current.startBuildFromLinearIssue(
         {
           ...linearIssue,
-          comments: [{
-            id: "comment-1",
-            body: "Do not include this discussion",
-            authorName: "Ada",
-            createdAt: "2026-07-29",
-          }],
+          comments: [
+            {
+              id: "comment-1",
+              body: "Do not include this discussion",
+              authorName: "Ada",
+              createdAt: "2026-07-29",
+            },
+          ],
         },
         "project-1",
         "local",
@@ -286,53 +299,61 @@ describe("useBuildPipeline", () => {
     const { result } = renderHook(() => useBuildPipeline());
 
     await act(async () => {
-      await result.current.startBuildFromLinearIssue({
-        ...linearIssue,
-        description: "",
-        status: "",
-        url: undefined,
-        teamKey: undefined,
-        comments: [],
-      }, "project-1", "local");
+      await result.current.startBuildFromLinearIssue(
+        {
+          ...linearIssue,
+          description: "",
+          status: "",
+          url: undefined,
+          teamKey: undefined,
+          comments: [],
+        },
+        "project-1",
+        "local",
+      );
     });
 
     const input = startInput() as Record<string, any>;
     expect(input.namingPrompt).toBe("ENG-42\n\nLinear title");
-    expect(input.taskSnapshot.comments).toEqual([
-      { text: "Linear issue: ENG-42" },
-    ]);
-    expect(input.source).toEqual(expect.objectContaining({
-      issueUrl: undefined,
-      status: "",
-      teamKey: undefined,
-    }));
+    expect(input.taskSnapshot.comments).toEqual([{ text: "Linear issue: ENG-42" }]);
+    expect(input.source).toEqual(
+      expect.objectContaining({
+        issueUrl: undefined,
+        status: "",
+        teamKey: undefined,
+      }),
+    );
   });
 
   test("preserves supported GitHub dates and both comment attribution forms", async () => {
     const { result } = renderHook(() => useBuildPipeline());
 
     await act(async () => {
-      await result.current.startBuildFromGitHubIssue({
-        ...githubIssue,
-        authorLogin: "grace",
-        assigneeLogins: ["ada", "linus"],
-        createdAt: "2026-07-28",
-        updatedAt: "2026-07-30",
-        comments: [
-          {
-            id: 1,
-            body: "Attributed comment",
-            authorLogin: "ada",
-            createdAt: "2026-07-29",
-            updatedAt: "2026-07-30",
-          },
-          {
-            id: "anonymous",
-            body: "Unattributed comment",
-            createdAt: "2026-07-30",
-          },
-        ],
-      }, "project-1", "local");
+      await result.current.startBuildFromGitHubIssue(
+        {
+          ...githubIssue,
+          authorLogin: "grace",
+          assigneeLogins: ["ada", "linus"],
+          createdAt: "2026-07-28",
+          updatedAt: "2026-07-30",
+          comments: [
+            {
+              id: 1,
+              body: "Attributed comment",
+              authorLogin: "ada",
+              createdAt: "2026-07-29",
+              updatedAt: "2026-07-30",
+            },
+            {
+              id: "anonymous",
+              body: "Unattributed comment",
+              createdAt: "2026-07-30",
+            },
+          ],
+        },
+        "project-1",
+        "local",
+      );
     });
 
     const input = startInput() as Record<string, any>;
@@ -454,13 +475,9 @@ describe("useBuildPipeline", () => {
     const { result } = renderHook(() => useBuildPipeline());
 
     await act(async () => {
-      await result.current.startBuildFromGitHubIssue(
-        githubIssue,
-        "project-1",
-        "local",
-        "claude",
-        { steps },
-      );
+      await result.current.startBuildFromGitHubIssue(githubIssue, "project-1", "local", "claude", {
+        steps,
+      });
     });
 
     expect(startInput().steps).toEqual(steps);
@@ -474,12 +491,7 @@ describe("useBuildPipeline", () => {
     // shape while allowing the Linear launcher to configure every stage.
     expect(result.current.startBuildFromLinearIssue.length).toBe(3);
     await act(async () => {
-      await result.current.startBuildFromLinearIssue(
-        linearIssue,
-        "project-1",
-        "local",
-        { steps },
-      );
+      await result.current.startBuildFromLinearIssue(linearIssue, "project-1", "local", { steps });
     });
 
     expect(startInput().steps).toEqual(steps);
@@ -534,55 +546,62 @@ describe("useBuildPipeline", () => {
 
   test("finds and focuses an existing build tab inside a nested split tree", async () => {
     usePaneLayoutStore.setState({
-      environments: new Map([["env-split", {
-        containerId: null,
-        activePaneId: "pane-other",
-        root: {
-          kind: "split",
-          id: "split-root",
-          direction: "horizontal",
-          sizes: [40, 60],
-          depth: 0,
-          children: [
-            {
-              kind: "leaf",
-              id: "pane-other",
-              tabs: [{ id: "terminal", type: "plain" }],
-              activeTabId: "terminal",
-            },
-            {
+      environments: new Map([
+        [
+          "env-split",
+          {
+            containerId: null,
+            activePaneId: "pane-other",
+            root: {
               kind: "split",
-              id: "split-nested",
-              direction: "vertical",
-              sizes: [50, 50],
-              depth: 1,
+              id: "split-root",
+              direction: "horizontal",
+              sizes: [40, 60],
+              depth: 0,
               children: [
                 {
                   kind: "leaf",
-                  id: "pane-empty",
-                  tabs: [],
-                  activeTabId: null,
+                  id: "pane-other",
+                  tabs: [{ id: "terminal", type: "plain" }],
+                  activeTabId: "terminal",
                 },
                 {
-                  kind: "leaf",
-                  id: "pane-build",
-                  tabs: [{
-                    id: "existing-build-tab",
-                    type: "claude-build",
-                    buildTabData: {
-                      environmentId: "env-split",
-                      pipelineId: "pipeline-original",
-                      taskId: "task-split",
-                      isLocal: true,
+                  kind: "split",
+                  id: "split-nested",
+                  direction: "vertical",
+                  sizes: [50, 50],
+                  depth: 1,
+                  children: [
+                    {
+                      kind: "leaf",
+                      id: "pane-empty",
+                      tabs: [],
+                      activeTabId: null,
                     },
-                  }],
-                  activeTabId: null,
+                    {
+                      kind: "leaf",
+                      id: "pane-build",
+                      tabs: [
+                        {
+                          id: "existing-build-tab",
+                          type: "claude-build",
+                          buildTabData: {
+                            environmentId: "env-split",
+                            pipelineId: "pipeline-original",
+                            taskId: "task-split",
+                            isLocal: true,
+                          },
+                        },
+                      ],
+                      activeTabId: null,
+                    },
+                  ],
                 },
               ],
             },
-          ],
-        },
-      }]]),
+          },
+        ],
+      ]),
       hydration: new Map(),
       activeEnvironmentId: null,
     });
@@ -599,12 +618,12 @@ describe("useBuildPipeline", () => {
     });
 
     const environment = usePaneLayoutStore.getState().environments.get("env-split");
-    expect(buildTabs("env-split").filter((tab) => tab.type === "claude-build"))
-      .toHaveLength(1);
+    expect(buildTabs("env-split").filter((tab) => tab.type === "claude-build")).toHaveLength(1);
     expect(environment?.activePaneId).toBe("pane-build");
-    expect(environment && getAllLeaves(environment.root)
-      .find((leaf) => leaf.id === "pane-build")?.activeTabId)
-      .toBe("existing-build-tab");
+    expect(
+      environment &&
+        getAllLeaves(environment.root).find((leaf) => leaf.id === "pane-build")?.activeTabId,
+    ).toBe("existing-build-tab");
   });
 
   test("does not race pending hydration with renderer-owned tab creation", async () => {
@@ -641,16 +660,10 @@ describe("useBuildPipeline", () => {
       await navigation;
     });
 
-    expect(buildTabs("env-hydrated").map((tab) => tab.id)).toEqual([
-      "restored-terminal",
-    ]);
-    const environment = usePaneLayoutStore
-      .getState()
-      .environments.get("env-hydrated");
+    expect(buildTabs("env-hydrated").map((tab) => tab.id)).toEqual(["restored-terminal"]);
+    const environment = usePaneLayoutStore.getState().environments.get("env-hydrated");
     expect(environment?.activePaneId).toBe("restored");
-    expect(environment && getAllLeaves(environment.root)[0]?.activeTabId).toBe(
-      "restored-terminal",
-    );
+    expect(environment && getAllLeaves(environment.root)[0]?.activeTabId).toBe("restored-terminal");
   });
 });
 

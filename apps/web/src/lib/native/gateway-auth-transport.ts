@@ -20,8 +20,7 @@ function isGatewayRequest(input: RequestInfo | URL): boolean {
   if (!directGatewayAuth) return false;
   const url = inputUrl(input);
   if (!url) return false;
-  return url.origin === directGatewayAuth.baseUrl
-    && url.pathname.startsWith("/__orkestrator/");
+  return url.origin === directGatewayAuth.baseUrl && url.pathname.startsWith("/__orkestrator/");
 }
 
 function authenticatedInit(input: RequestInfo | URL, init?: RequestInit): RequestInit {
@@ -94,11 +93,13 @@ class FetchEventSource {
       else if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
     }
     if (data.length === 0) return;
-    this.dispatchEvent(new MessageEvent(type, {
-      data: data.join("\n"),
-      lastEventId,
-      origin: new URL(this.url).origin,
-    }));
+    this.dispatchEvent(
+      new MessageEvent(type, {
+        data: data.join("\n"),
+        lastEventId,
+        origin: new URL(this.url).origin,
+      }),
+    );
   }
 
   private async connect(): Promise<void> {

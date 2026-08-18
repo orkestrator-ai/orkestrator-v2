@@ -9,7 +9,7 @@ import type { FileCandidate } from "@/types";
 export function useFileSearch(
   containerId: string | undefined,
   worktreePath: string | undefined,
-  enabled = true
+  enabled = true,
 ) {
   const [fileTree, setFileTree] = useState<FileNode[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -35,9 +35,7 @@ export function useFileSearch(
       return Promise.resolve();
     }
 
-    const requestKey = worktreePath
-      ? `worktree:${worktreePath}`
-      : `container:${containerId}`;
+    const requestKey = worktreePath ? `worktree:${worktreePath}` : `container:${containerId}`;
     const activeRequest = activeRequestRef.current;
     if (activeRequest?.key === requestKey) {
       return activeRequest.promise;
@@ -144,11 +142,7 @@ export function useFileSearch(
    * Returns up to `limit` results (default 30).
    */
   const searchFiles = useCallback(
-    (
-      query: string,
-      limit = 30,
-      options?: { filesOnly?: boolean },
-    ): FileCandidate[] => {
+    (query: string, limit = 30, options?: { filesOnly?: boolean }): FileCandidate[] => {
       const candidates = options?.filesOnly
         ? flatFiles.filter((file) => !file.isDirectory)
         : flatFiles;
@@ -198,7 +192,7 @@ export function useFileSearch(
 
       return scored.slice(0, limit).map(({ file }) => file);
     },
-    [flatFiles]
+    [flatFiles],
   );
 
   return {

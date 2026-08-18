@@ -22,7 +22,7 @@ mcp.get("/servers", async (c) => {
     console.error("[mcp] Error getting MCP servers:", error);
     return c.json(
       { error: error instanceof Error ? error.message : "Failed to get MCP servers" },
-      500
+      500,
     );
   }
 });

@@ -1,13 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ImgHTMLAttributes } from "react";
-import {
-  AlertTriangle,
-  Check,
-  Copy,
-  FolderOpen,
-  Loader2,
-  RefreshCw,
-  Search,
-} from "lucide-react";
+import { AlertTriangle, Check, Copy, FolderOpen, Loader2, RefreshCw, Search } from "lucide-react";
 import { toast } from "sonner";
 import type { Components } from "react-markdown";
 import { Button } from "@/components/ui/button";
@@ -15,7 +7,13 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
-import { ClaudeIcon, CodexIcon, CursorAgentIcon, GrokBuildIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
+import {
+  ClaudeIcon,
+  CodexIcon,
+  CursorAgentIcon,
+  GrokBuildIcon,
+  OpenCodeIcon,
+} from "@/components/icons/AgentIcons";
 import * as backend from "@/lib/backend";
 import type {
   AgentSkill,
@@ -28,7 +26,11 @@ import { cn } from "@/lib/utils";
 const PROVIDERS: Array<{ id: AgentSkillProvider; label: string; icon: React.ReactNode }> = [
   { id: "claude", label: "Claude", icon: <ClaudeIcon className="h-3.5 w-3.5" /> },
   { id: "codex", label: "Codex", icon: <CodexIcon className="h-3.5 w-3.5 text-emerald-400" /> },
-  { id: "cursor", label: "Cursor", icon: <CursorAgentIcon className="h-3.5 w-3.5 text-violet-400" /> },
+  {
+    id: "cursor",
+    label: "Cursor",
+    icon: <CursorAgentIcon className="h-3.5 w-3.5 text-violet-400" />,
+  },
   { id: "grok", label: "Grok", icon: <GrokBuildIcon className="h-3.5 w-3.5 text-sky-400" /> },
   { id: "opencode", label: "OpenCode", icon: <OpenCodeIcon className="h-3.5 w-3.5" /> },
 ];
@@ -76,8 +78,9 @@ const COPY_CONFIRM_MS = 1500;
  * document starts.
  */
 export function stripFrontmatter(content: string): string {
-  const match =
-    /^\uFEFF?---[ \t]*\r?\n(?:[\s\S]*?\r?\n)?(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/.exec(content);
+  const match = /^\uFEFF?---[ \t]*\r?\n(?:[\s\S]*?\r?\n)?(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/.exec(
+    content,
+  );
   return match ? content.slice(match[0].length) : content;
 }
 
@@ -97,12 +100,14 @@ function normalizeSkillScan(value: unknown, provider: AgentSkillProvider): Agent
     return { provider, roots: [], skills: [], errors: [] };
   }
   const candidate = value as Partial<AgentSkillScan> | null;
-  if (value === null
-    || typeof value !== "object"
-    || Array.isArray(value)
-    || !Array.isArray(candidate?.roots)
-    || !Array.isArray(candidate.skills)
-    || !Array.isArray(candidate.errors)) {
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    !Array.isArray(candidate?.roots) ||
+    !Array.isArray(candidate.skills) ||
+    !Array.isArray(candidate.errors)
+  ) {
     throw new Error("The backend returned an unreadable skill catalogue");
   }
   // The response's own `provider` is ignored: state is keyed by the tab that
@@ -157,10 +162,7 @@ interface SkillsSettingsProps {
   showProviderTabs?: boolean;
   description?: React.ReactNode;
   listSkills?: (provider: AgentSkillProvider) => Promise<AgentSkillScan>;
-  readSkill?: (
-    provider: AgentSkillProvider,
-    filePath: string,
-  ) => Promise<backend.AgentSkillFile>;
+  readSkill?: (provider: AgentSkillProvider, filePath: string) => Promise<backend.AgentSkillFile>;
   canRevealInFileManager?: boolean;
   embedded?: boolean;
   /**
@@ -214,39 +216,45 @@ export function SkillsSettings({
    * not flash a spinner. `reuseLoadedScans` opts out for callers whose scan is
    * not cheap; the Rescan button calls this directly either way.
    */
-  const loadProvider = useCallback(async (target: AgentSkillProvider) => {
-    const token = (scanTokens.current[target] ?? 0) + 1;
-    scanTokens.current[target] = token;
-    // Marked before the await, not after it: a scan already in flight is a scan
-    // this provider has, so a remount or a second visit must not start another.
-    loadedProviders.current.add(target);
+  const loadProvider = useCallback(
+    async (target: AgentSkillProvider) => {
+      const token = (scanTokens.current[target] ?? 0) + 1;
+      scanTokens.current[target] = token;
+      // Marked before the await, not after it: a scan already in flight is a scan
+      // this provider has, so a remount or a second visit must not start another.
+      loadedProviders.current.add(target);
 
-    setStates((prev) => ({ ...prev, [target]: { ...prev[target], loading: true, error: undefined } }));
-    try {
-      const scan = normalizeSkillScan(await listSkills(target), target);
-      if (scanTokens.current[target] !== token) return;
       setStates((prev) => ({
         ...prev,
-        [target]: {
-          scan,
-          loading: false,
-          revision: (prev[target]?.revision ?? 0) + 1,
-        },
+        [target]: { ...prev[target], loading: true, error: undefined },
       }));
-    } catch (err) {
-      if (scanTokens.current[target] !== token) return;
-      // A failed scan is not a result to reuse; the next visit tries again.
-      loadedProviders.current.delete(target);
-      setStates((prev) => ({
-        ...prev,
-        [target]: {
-          ...prev[target],
-          loading: false,
-          error: err instanceof Error ? err.message : String(err),
-        },
-      }));
-    }
-  }, [listSkills]);
+      try {
+        const scan = normalizeSkillScan(await listSkills(target), target);
+        if (scanTokens.current[target] !== token) return;
+        setStates((prev) => ({
+          ...prev,
+          [target]: {
+            scan,
+            loading: false,
+            revision: (prev[target]?.revision ?? 0) + 1,
+          },
+        }));
+      } catch (err) {
+        if (scanTokens.current[target] !== token) return;
+        // A failed scan is not a result to reuse; the next visit tries again.
+        loadedProviders.current.delete(target);
+        setStates((prev) => ({
+          ...prev,
+          [target]: {
+            ...prev[target],
+            loading: false,
+            error: err instanceof Error ? err.message : String(err),
+          },
+        }));
+      }
+    },
+    [listSkills],
+  );
 
   /**
    * A new loader means a different source (another environment), so nothing
@@ -278,10 +286,12 @@ export function SkillsSettings({
   const needle = appliedQuery.trim().toLowerCase();
   const filtered = useMemo(() => {
     if (!needle) return skills;
-    return skills.filter((skill) =>
-      skill.name.toLowerCase().includes(needle)
-      || skill.location.toLowerCase().includes(needle)
-      || skill.description.toLowerCase().includes(needle));
+    return skills.filter(
+      (skill) =>
+        skill.name.toLowerCase().includes(needle) ||
+        skill.location.toLowerCase().includes(needle) ||
+        skill.description.toLowerCase().includes(needle),
+    );
   }, [skills, needle]);
 
   /**
@@ -294,6 +304,10 @@ export function SkillsSettings({
   const selected: AgentSkill | undefined =
     skills.find((skill) => skill.id === selectedId) ?? filtered[0];
 
+  // Keyed on selected?.filePath, not `selected`: the identity changes as the
+  // list re-filters while the user types, and re-reading the file on every
+  // keystroke is exactly what the comment above this hook warns against.
+  /* oxlint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
     const token = fileToken.current + 1;
     fileToken.current = token;
@@ -319,6 +333,7 @@ export function SkillsSettings({
         setFileLoading(false);
       });
   }, [provider, selected?.filePath, state.revision, fileRetry, readSkill]);
+  /* oxlint-enable react-hooks/exhaustive-deps */
 
   /**
    * The confirmation is pane-scoped, so a timer armed for one skill would leave
@@ -370,9 +385,9 @@ export function SkillsSettings({
           <p className="mt-1 text-xs text-muted-foreground">
             {description ?? (
               <>
-                Every skill each agent can load from its user-level skill directories, including shared
-                locations such as <code className="text-[11px]">~/.agents/skills</code>. Project skills
-                are not listed here.
+                Every skill each agent can load from its user-level skill directories, including
+                shared locations such as <code className="text-[11px]">~/.agents/skills</code>.
+                Project skills are not listed here.
               </>
             )}
           </p>
@@ -450,7 +465,8 @@ export function SkillsSettings({
                         type="button"
                         aria-current={isSelected ? "true" : undefined}
                         onClick={() =>
-                          setSelectedByProvider((prev) => ({ ...prev, [provider]: skill.id }))}
+                          setSelectedByProvider((prev) => ({ ...prev, [provider]: skill.id }))
+                        }
                         className={cn(
                           "flex w-full flex-col items-start gap-0.5 border-l-2 px-3 py-2 text-left transition-colors",
                           isSelected
@@ -519,7 +535,9 @@ export function SkillsSettings({
               <div className="flex items-start justify-between gap-3 border-b border-zinc-800 p-3">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
-                    <h4 className="truncate text-sm font-medium text-foreground">{selected.name}</h4>
+                    <h4 className="truncate text-sm font-medium text-foreground">
+                      {selected.name}
+                    </h4>
                     <span className="shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-muted-foreground">
                       {selected.plugin
                         ? `Plugin · ${selected.plugin}`
@@ -542,7 +560,10 @@ export function SkillsSettings({
                 </div>
 
                 <div className="flex shrink-0 items-center gap-1">
-                  <Tabs value={rawMode ? "raw" : "rendered"} onValueChange={(v) => setRawMode(v === "raw")}>
+                  <Tabs
+                    value={rawMode ? "raw" : "rendered"}
+                    onValueChange={(v) => setRawMode(v === "raw")}
+                  >
                     <TabsList className="h-7 bg-zinc-900/80">
                       <TabsTrigger value="rendered" className={TAB_TRIGGER_CLASSES}>
                         Rendered
@@ -560,7 +581,11 @@ export function SkillsSettings({
                     aria-label={copied ? "Skill path copied" : "Copy skill path"}
                     title={copied ? "Skill path copied" : "Copy skill path"}
                   >
-                    {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+                    {copied ? (
+                      <Check className="h-3.5 w-3.5 text-emerald-400" />
+                    ) : (
+                      <Copy className="h-3.5 w-3.5" />
+                    )}
                   </Button>
                   {canRevealInFileManager && (
                     <Button

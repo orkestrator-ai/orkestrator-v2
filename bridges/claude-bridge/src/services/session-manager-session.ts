@@ -3,7 +3,11 @@
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { ImageBlockParam, TextBlockParam, ContentBlockParam } from "@anthropic-ai/sdk/resources/messages/messages";
+import type {
+  ImageBlockParam,
+  TextBlockParam,
+  ContentBlockParam,
+} from "@anthropic-ai/sdk/resources/messages/messages";
 import type {
   ModelInfo,
   SessionState,
@@ -31,10 +35,7 @@ import type {
 import { isSdkCompactBoundaryMessage, isSdkResultMessage } from "../types/index.js";
 import { TaskRegistry, isTaskListTool } from "@orkestrator/protocol/task-list";
 import { AGENT_INTERACTION_DEFAULT_TIMEOUT_MS } from "@orkestrator/protocol/agent-interactions";
-import {
-  isRootAssistantRecord,
-  normalizeBackendModelId,
-} from "@orkestrator/protocol/model-id";
+import { isRootAssistantRecord, normalizeBackendModelId } from "@orkestrator/protocol/model-id";
 import {
   structuredOutputFailure,
   type StructuredOutputResult,
@@ -63,14 +64,8 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import * as core from "./session-manager-core.js";
 import * as persistence from "./session-manager-persistence.js";
-import {
-  createSession,
-  sessionIdForClientKey,
-  sessions,
-} from "./session-manager-core.js";
-import {
-  ensurePersistedSession,
-} from "./session-manager-persistence.js";
+import { createSession, sessionIdForClientKey, sessions } from "./session-manager-core.js";
+import { ensurePersistedSession } from "./session-manager-persistence.js";
 /**
  * Idempotent create used by the HTTP route.
  *
@@ -84,8 +79,7 @@ export async function createOrRecoverSession(
 ): Promise<SessionState> {
   const stableId = sessionIdForClientKey(clientSessionKey);
   if (stableId) {
-    const existing = sessions.get(stableId)
-      ?? await ensurePersistedSession(stableId);
+    const existing = sessions.get(stableId) ?? (await ensurePersistedSession(stableId));
     if (existing) return existing;
   }
   return createSession(title, clientSessionKey);

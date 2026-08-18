@@ -3,7 +3,7 @@ import { renderHook, act } from "@testing-library/react";
 import { useElapsedTimer } from "@/hooks/useElapsedTimer";
 
 describe("useElapsedTimer", () => {
-  let dateNowSpy: ReturnType<typeof import("bun:test")["spyOn"]> | undefined;
+  let dateNowSpy: ReturnType<(typeof import("bun:test"))["spyOn"]> | undefined;
 
   afterEach(() => {
     dateNowSpy?.mockRestore();
@@ -260,11 +260,12 @@ const setIntervalMock = (() => {
 
   beforeEach(() => {
     callback = null;
-    globalThis.setInterval = (((fn: TimerHandler) => {
+    globalThis.setInterval = ((fn: TimerHandler) => {
       callback = fn as () => void;
       return 1 as unknown as ReturnType<typeof setInterval>;
-    }) as unknown) as typeof setInterval;
-    globalThis.clearInterval = (((_id?: ReturnType<typeof setInterval>) => undefined) as unknown) as typeof clearInterval;
+    }) as unknown as typeof setInterval;
+    globalThis.clearInterval = ((_id?: ReturnType<typeof setInterval>) =>
+      undefined) as unknown as typeof clearInterval;
   });
 
   afterEach(() => {

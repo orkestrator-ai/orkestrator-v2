@@ -12,7 +12,9 @@ import {
 
 afterEach(() => {
   useAgentActivityStore.setState({
-    tabStates: {}, containerStates: {}, containerStateUpdatedAt: {},
+    tabStates: {},
+    containerStates: {},
+    containerStateUpdatedAt: {},
   });
   useErrorDialogStore.setState({ error: null });
   useFileDirtyStore.setState({ dirtyFiles: new Map() });
@@ -58,11 +60,13 @@ describe("agentActivityStore", () => {
       "env-1": "2026-07-27T12:00:00.000Z",
     });
 
-    store.replaceActivitySnapshot([{
-      id: "env-2",
-      agentActivityState: "idle",
-      agentActivityUpdatedAt: "2026-07-27T12:00:01.000Z",
-    }]);
+    store.replaceActivitySnapshot([
+      {
+        id: "env-2",
+        agentActivityState: "idle",
+        agentActivityUpdatedAt: "2026-07-27T12:00:01.000Z",
+      },
+    ]);
     expect(useAgentActivityStore.getState().containerStates).toEqual({
       "env-2": "idle",
     });
@@ -89,15 +93,16 @@ describe("agentActivityStore", () => {
     expect(useAgentActivityStore.getState().containerStates).toEqual({
       "env-2": "waiting",
     });
-    expect(useAgentActivityStore.getState().containerStateUpdatedAt["env-1"])
-      .toBeUndefined();
+    expect(useAgentActivityStore.getState().containerStateUpdatedAt["env-1"]).toBeUndefined();
   });
 });
 describe("errorDialogStore and fileDirtyStore", () => {
   test("opens and closes error details with the original prompt", () => {
     useErrorDialogStore.getState().showError("Failure", "Details", "retry this");
     expect(useErrorDialogStore.getState().error).toMatchObject({
-      title: "Failure", message: "Details", initialPrompt: "retry this",
+      title: "Failure",
+      message: "Details",
+      initialPrompt: "retry this",
     });
     expect(useErrorDialogStore.getState().error?.timestamp).toBeInstanceOf(Date);
     useErrorDialogStore.getState().closeError();
@@ -139,12 +144,17 @@ describe("prMonitorStore", () => {
       monitorEntry("env-2"),
     ]);
     expect(usePrMonitorStore.getState().getMonitoringState("env-1")).toMatchObject({
-      mode: "merge-pending", checkInProgress: false, consecutiveErrors: 1,
+      mode: "merge-pending",
+      checkInProgress: false,
+      consecutiveErrors: 1,
     });
 
     state.applyEvent({
       environmentId: "env-1",
-      state: monitorEntry("env-1", { prState: "merged", prUrl: "https://github.com/org/repo/pull/1" }),
+      state: monitorEntry("env-1", {
+        prState: "merged",
+        prUrl: "https://github.com/org/repo/pull/1",
+      }),
     });
     expect(usePrMonitorStore.getState().getMonitoringState("env-1")?.prState).toBe("merged");
 
@@ -181,7 +191,10 @@ describe("local session and terminal portal state", () => {
     state.addSession(earlier);
     state.updateSession("session-1", { name: "New" });
     expect(state.getSession("session-1")?.name).toBe("New");
-    expect(state.getSessionsByEnvironment("env-1").map((item) => item.id)).toEqual(["session-2", "session-1"]);
+    expect(state.getSessionsByEnvironment("env-1").map((item) => item.id)).toEqual([
+      "session-2",
+      "session-1",
+    ]);
     state.setError("failed");
     expect(useSessionStore.getState().error).toBe("failed");
     state.removeSession("session-1");

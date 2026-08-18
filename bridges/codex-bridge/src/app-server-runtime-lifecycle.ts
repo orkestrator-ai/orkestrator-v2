@@ -37,7 +37,7 @@ import {
   parseCodexStructuredOutput,
   buildRecoveredContextPrompt,
   PromptAcceptedResult,
-  AppServerRuntimeBase
+  AppServerRuntimeBase,
 } from "./app-server-runtime-base.js";
 import { createHash } from "node:crypto";
 import type { AppServerEngine } from "./engine/app-server-engine.js";
@@ -136,7 +136,6 @@ import {
 } from "@orkestrator/protocol/structured-output";
 import { fallbackReasoningId } from "@orkestrator/protocol/native-agent";
 
-
 export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
   async start(): Promise<void> {
     if (this.started) return;
@@ -168,10 +167,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         confirmedModelsByTurn: persisted.confirmedModelsByTurn,
         lastAccessed: Date.parse(persisted.lastAccessed),
       });
-      this.lastPersistedAccess.set(
-        persisted.bridgeSessionId,
-        Date.parse(persisted.lastAccessed),
-      );
+      this.lastPersistedAccess.set(persisted.bridgeSessionId, Date.parse(persisted.lastAccessed));
     }
     // Claim the affected threads *before* the first await below, so a request
     // racing startup sees `recovering` rather than a misleading `idle`.
@@ -213,8 +209,9 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
     // the render state that work still needs.
     await this.options.engine.stop();
     await this.drainPendingWork();
-    await Promise.allSettled([...this.pendingSessionWrites]);
-    for (const threadId of [...this.threadState.keys()]) this.releaseThreadRuntimeState(threadId);
+    await Promise.allSettled(this.pendingSessionWrites);
+    for (const threadId of Array.from(this.threadState.keys()))
+      this.releaseThreadRuntimeState(threadId);
   }
 
   /**
@@ -292,10 +289,8 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       const threadId = record.threadId;
       if (!threadId) continue;
       const session =
-        this.registry.getSession(record.bridgeSessionId)
-        ?? this.registry
-          .listSessions()
-          .find((candidate) => candidate.threadId === threadId);
+        this.registry.getSession(record.bridgeSessionId) ??
+        this.registry.listSessions().find((candidate) => candidate.threadId === threadId);
       if (!session) {
         this.threadsAwaitingDispatchRecovery.delete(threadId);
         // No bridge session is bound to this thread any more, so nothing will
@@ -318,83 +313,82 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
        * loop then overwrites with the unconfirmed placeholder for the *old*
        * record, orphaning it.
        */
-      await this.registry.withDispatchLock(session, async () => {
-        let context: ThreadContext | undefined;
-        try {
-          context = await this.ensureAttached(session.id);
-        } catch (error) {
-          // Keep the record unresolved and the session non-idle. A later request or
-          // process restart can retry without risking a duplicate execution.
-          const existing =
-            this.registry.getThread(threadId)
-            ?? this.registry.attach(session.id, threadId, {
-              engineHandle: threadId,
-              engineGeneration: this.options.engine.info().generation,
-            });
-          existing.materialized = true;
-          existing.unsubscribed = true;
-          this.registry.setPhase(existing, "recovering");
-          this.emitStatus(existing);
-          // Arm the escalation path. Without it this thread stays `recovering`
-          // — reported as `running` — with nothing scheduled to resolve it, and
-          // every later prompt 409s until an unrelated generation change.
-          this.scheduleRecoveryBackstop(existing);
-          console.warn(
-            `[codex-bridge] Could not restore dispatch ${record.requestId}:`,
-            error instanceof Error ? error.message : error,
-          );
-          return;
-        }
-
-        if (!context) {
-          await this.journal.markTerminal(record.requestId, "failed", {
-            threadId,
-            turnId: record.turnId,
-          });
-          return;
-        }
-
-        const lastMessage = context.messages.at(-1);
-        const assistantMessage =
-          lastMessage?.role === "assistant"
-            ? lastMessage
-            : {
-                id: createMessageId(),
-                role: "assistant" as const,
-                content: "",
-                parts: [],
-                createdAt: new Date(this.now()).toISOString(),
-              };
-        if (lastMessage !== assistantMessage) {
-          context.messages.push(assistantMessage);
-          this.bumpMessageRevision(context);
-          // Announce the row before anything streams into it. Its updates are
-          // sparse patches keyed by message id, and a patch for a message the
-          // client has never seen can only be answered by refetching the whole
-          // transcript.
-          for (const sessionId of context.bridgeSessionIds) {
-            this.options.emit({
-              type: "message.updated",
-              sessionId,
-              data: { message: assistantMessage },
-            });
+      await this.registry
+        .withDispatchLock(session, async () => {
+          let context: ThreadContext | undefined;
+          try {
+            context = await this.ensureAttached(session.id);
+          } catch (error) {
+            // Keep the record unresolved and the session non-idle. A later request or
+            // process restart can retry without risking a duplicate execution.
+            const existing =
+              this.registry.getThread(threadId) ??
+              this.registry.attach(session.id, threadId, {
+                engineHandle: threadId,
+                engineGeneration: this.options.engine.info().generation,
+              });
+            existing.materialized = true;
+            existing.unsubscribed = true;
+            this.registry.setPhase(existing, "recovering");
+            this.emitStatus(existing);
+            // Arm the escalation path. Without it this thread stays `recovering`
+            // — reported as `running` — with nothing scheduled to resolve it, and
+            // every later prompt 409s until an unrelated generation change.
+            this.scheduleRecoveryBackstop(existing);
+            console.warn(
+              `[codex-bridge] Could not restore dispatch ${record.requestId}:`,
+              error instanceof Error ? error.message : error,
+            );
+            return;
           }
-        }
 
-        this.registry.setPhase(context, "recovering");
-        this.emitStatus(context);
-        await this.settleAmbiguousDispatch(
-          context,
-          record.requestId,
-          assistantMessage.id,
-          { forgetIfAbsent: record.state === "prepared" },
-        );
-        this.emitStatus(context);
-      }).finally(() => {
-        // The thread now has a real phase, so the startup override must stop
-        // applying whether the settle succeeded or threw.
-        this.threadsAwaitingDispatchRecovery.delete(threadId);
-      });
+          if (!context) {
+            await this.journal.markTerminal(record.requestId, "failed", {
+              threadId,
+              turnId: record.turnId,
+            });
+            return;
+          }
+
+          const lastMessage = context.messages.at(-1);
+          const assistantMessage =
+            lastMessage?.role === "assistant"
+              ? lastMessage
+              : {
+                  id: createMessageId(),
+                  role: "assistant" as const,
+                  content: "",
+                  parts: [],
+                  createdAt: new Date(this.now()).toISOString(),
+                };
+          if (lastMessage !== assistantMessage) {
+            context.messages.push(assistantMessage);
+            this.bumpMessageRevision(context);
+            // Announce the row before anything streams into it. Its updates are
+            // sparse patches keyed by message id, and a patch for a message the
+            // client has never seen can only be answered by refetching the whole
+            // transcript.
+            for (const sessionId of context.bridgeSessionIds) {
+              this.options.emit({
+                type: "message.updated",
+                sessionId,
+                data: { message: assistantMessage },
+              });
+            }
+          }
+
+          this.registry.setPhase(context, "recovering");
+          this.emitStatus(context);
+          await this.settleAmbiguousDispatch(context, record.requestId, assistantMessage.id, {
+            forgetIfAbsent: record.state === "prepared",
+          });
+          this.emitStatus(context);
+        })
+        .finally(() => {
+          // The thread now has a real phase, so the startup override must stop
+          // applying whether the settle succeeded or threw.
+          this.threadsAwaitingDispatchRecovery.delete(threadId);
+        });
     }
   }
 
@@ -504,11 +498,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
 
     const existing = this.registry.getThreadForSession(sessionId);
     const generation = this.options.engine.info().generation;
-    if (
-      existing
-      && !existing.unsubscribed
-      && existing.engineGeneration === generation
-    ) {
+    if (existing && !existing.unsubscribed && existing.engineGeneration === generation) {
       // `getThreadForSession` resolves by thread id alone, with no membership
       // check. A session restored from disk onto a thread another session had
       // already attached would otherwise never join `bridgeSessionIds` — and
@@ -574,9 +564,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
           // go with the thread, and this one is never coming back.
           this.releaseThreadRuntimeState(threadId);
           this.registry.detachThread(threadId);
-          await this.options.engine
-            .unsubscribeThread(existing.engineHandle)
-            .catch(() => undefined);
+          await this.options.engine.unsubscribeThread(existing.engineHandle).catch(() => undefined);
         }
         this.registry.clearThreadBinding(threadId);
         await Promise.all(
@@ -644,8 +632,8 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         lastPublishedSnapshotChars: 0,
         coalescer: new UpdateCoalescer({
           intervalMs:
-            this.options.coalesceIntervalMs
-            ?? (() =>
+            this.options.coalesceIntervalMs ??
+            (() =>
               messageSnapshotIntervalMs(
                 this.threadState.get(threadId)?.lastPublishedSnapshotChars ?? 0,
               )),
@@ -746,9 +734,9 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
 
     // Stale generation: the process that produced this has been replaced.
     if (
-      event.engineGeneration !== undefined
-      && context.engineGeneration !== 0
-      && event.engineGeneration < context.engineGeneration
+      event.engineGeneration !== undefined &&
+      context.engineGeneration !== 0 &&
+      event.engineGeneration < context.engineGeneration
     ) {
       return;
     }
@@ -788,10 +776,10 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       // transcript and, if `turn.completed` is among them, wedges the thread in
       // `running` forever.
       const isStale =
-        turn !== null
-        && turn.turnId !== event.turnId
-        && turn.requestId !== undefined
-        && !turn.isUnconfirmed();
+        turn !== null &&
+        turn.turnId !== event.turnId &&
+        turn.requestId !== undefined &&
+        !turn.isUnconfirmed();
       if (!isStale) {
         this.bufferEvent(threadId, event.turnId, event);
         return;
@@ -842,9 +830,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       case "thread.usage.updated": {
         const usage = {
           ...event.usage,
-          ...(this.accountRateLimits.length > 0
-            ? { rateLimits: this.accountRateLimits }
-            : {}),
+          ...(this.accountRateLimits.length > 0 ? { rateLimits: this.accountRateLimits } : {}),
           ...(this.accountCredits ? { credits: this.accountCredits } : {}),
         };
         this.usageByThread.set(threadId, usage);
@@ -870,8 +856,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         if (event.kind === "item.completed") turn.onItemCompleted(event.item);
         else if (event.kind === "item.started") {
           turn.onItemStarted(event.item, event.startedAtMs);
-        }
-        else turn.onItemUpdated(event.item);
+        } else turn.onItemUpdated(event.item);
         // `item/completed` is authoritative; show it without waiting a tick.
         if (event.kind === "item.completed") void this.stateFor(threadId).coalescer.flushNow();
         else this.stateFor(threadId).coalescer.schedule(this.now());
@@ -925,19 +910,23 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         // Recorded but not terminal: app-server can report a retryable error and
         // still complete the turn.
         if (turn) turn.onError(event.error);
-        this.enqueueAfterMessageFlush(threadId, () => {
-          for (const sessionId of context.bridgeSessionIds) {
-            this.options.emit({
-              type: "session.warning",
-              sessionId,
-              data: {
-                error: event.error.message,
-                code: event.error.code,
-                willRetry: event.willRetry,
-              },
-            });
-          }
-        }, { bytes: estimateOrderedEventBytes(event.error) });
+        this.enqueueAfterMessageFlush(
+          threadId,
+          () => {
+            for (const sessionId of context.bridgeSessionIds) {
+              this.options.emit({
+                type: "session.warning",
+                sessionId,
+                data: {
+                  error: event.error.message,
+                  code: event.error.code,
+                  willRetry: event.willRetry,
+                },
+              });
+            }
+          },
+          { bytes: estimateOrderedEventBytes(event.error) },
+        );
         return;
       }
       case "turn.completed": {
@@ -961,17 +950,13 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
    * Publish only app-server-observed model values. Thread settings confirm the
    * effective model for an accepted turn; a turn-scoped reroute wins over it.
    */
-  protected applyConfirmedModel(
-    context: ThreadContext,
-    model: string,
-    turnId?: string,
-  ): void {
+  protected applyConfirmedModel(context: ThreadContext, model: string, turnId?: string): void {
     if (!turnId) context.modelId = model;
     if (turnId) {
       context.confirmedModelsByTurn.set(turnId, model);
       for (const session of this.registry.boundSessionsForThread(context.threadId)) {
         session.confirmedModelsByTurn = {
-          ...(session.confirmedModelsByTurn ?? {}),
+          ...session.confirmedModelsByTurn,
           [turnId]: model,
         };
         void this.persistSession(session);
@@ -1006,12 +991,10 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
 
     const target = targets[0];
     const targetTurnId =
-      target?.turnId
-      ?? (
-        target?.id === context.activeTurn?.assistantMessageId
-          ? context.activeTurn?.turnId
-          : undefined
-      );
+      target?.turnId ??
+      (target?.id === context.activeTurn?.assistantMessageId
+        ? context.activeTurn?.turnId
+        : undefined);
     if (!turnId && targetTurnId && context.confirmedModelsByTurn.has(targetTurnId)) {
       return;
     }
@@ -1083,10 +1066,9 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
 
   protected snapshotBoundModelOverrides(threadId: string): Map<string, string> {
     return new Map(
-      this.registry.boundSessionsForThread(threadId).map((session) => [
-        session.id,
-        JSON.stringify(session.confirmedModelsByTurn ?? {}),
-      ]),
+      this.registry
+        .boundSessionsForThread(threadId)
+        .map((session) => [session.id, JSON.stringify(session.confirmedModelsByTurn ?? {})]),
     );
   }
 
@@ -1106,8 +1088,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       session.confirmedModelsByTurn =
         context.confirmedModelsByTurn.size > 0 ? { ...canonical } : undefined;
       if (
-        JSON.stringify(session.confirmedModelsByTurn ?? {})
-        !== (before.get(session.id) ?? "{}")
+        JSON.stringify(session.confirmedModelsByTurn ?? {}) !== (before.get(session.id) ?? "{}")
       ) {
         changed.push(session);
       }
@@ -1286,8 +1267,9 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
     const structuredSessions = structuredResult
       ? [...context.bridgeSessionIds]
           .map((sessionId) => this.registry.getSession(sessionId))
-          .filter((session): session is BridgeSession =>
-            session?.structuredOutputRequestId === turn.requestId
+          .filter(
+            (session): session is BridgeSession =>
+              session?.structuredOutputRequestId === turn.requestId,
           )
       : [];
     if (structuredResult && !structuredResult.ok && turn.phase === "completed") {
@@ -1359,10 +1341,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
     }
   }
 
-  protected runFinalization(
-    context: ThreadContext,
-    turn: TurnAccumulator,
-  ): Promise<void> {
+  protected runFinalization(context: ThreadContext, turn: TurnAccumulator): Promise<void> {
     const work = this.finalizeTurn(context, turn);
     this.pendingFinalizations.add(work);
     work.then(
@@ -1402,10 +1381,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       );
       if (existing) {
         const replacementQueueBytes = state.orderedEventBytes - existing.bytes + bytes;
-        if (
-          state.orderedEventActiveBytes + replacementQueueBytes
-          <= this.orderedEventMaxBytes()
-        ) {
+        if (state.orderedEventActiveBytes + replacementQueueBytes <= this.orderedEventMaxBytes()) {
           state.orderedEventBytes = replacementQueueBytes;
           existing.publish = publish;
           existing.bytes = bytes;
@@ -1415,11 +1391,10 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
     }
 
     if (
-      bytes > this.orderedEventMaxBytes()
-      || state.orderedEvents.length + (state.orderedEventDraining ? 2 : 1)
-        > this.orderedEventMaxCount()
-      || state.orderedEventActiveBytes + state.orderedEventBytes + bytes
-        > this.orderedEventMaxBytes()
+      bytes > this.orderedEventMaxBytes() ||
+      state.orderedEvents.length + (state.orderedEventDraining ? 2 : 1) >
+        this.orderedEventMaxCount() ||
+      state.orderedEventActiveBytes + state.orderedEventBytes + bytes > this.orderedEventMaxBytes()
     ) {
       this.replaceOrderedEventsWithReconcile(threadId, state);
       return;
@@ -1438,20 +1413,14 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
     return Math.max(1, this.options.orderedEventMaxBytes ?? MAX_ORDERED_EVENT_BYTES_PER_THREAD);
   }
 
-  protected replaceOrderedEventsWithReconcile(
-    threadId: string,
-    state: ThreadRuntimeState,
-  ): void {
+  protected replaceOrderedEventsWithReconcile(threadId: string, state: ThreadRuntimeState): void {
     state.orderedEvents.length = 0;
     state.orderedEventBytes = 0;
     state.orderedReconcilePending = true;
     this.startOrderedEventDrain(threadId, state);
   }
 
-  protected startOrderedEventDrain(
-    threadId: string,
-    state: ThreadRuntimeState,
-  ): void {
+  protected startOrderedEventDrain(threadId: string, state: ThreadRuntimeState): void {
     if (state.orderedEventDraining) return;
     state.orderedEventDraining = true;
     state.orderedEventTail = (async () => {
@@ -1499,8 +1468,8 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       } finally {
         state.orderedEventDraining = false;
         if (
-          (state.orderedReconcilePending || state.orderedEvents.length > 0)
-          && this.threadState.get(threadId) === state
+          (state.orderedReconcilePending || state.orderedEvents.length > 0) &&
+          this.threadState.get(threadId) === state
         ) {
           this.startOrderedEventDrain(threadId, state);
         }
@@ -1528,14 +1497,12 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
   ): boolean {
     if (turn.isTerminal()) return true;
     const probedAt = historical.render.subagentProbedAt;
-    if (
-      probedAt === 0
-      || Date.now() - probedAt >= SUBAGENT_TRANSCRIPT_PROBE_INTERVAL_MS
-    ) {
+    if (probedAt === 0 || Date.now() - probedAt >= SUBAGENT_TRANSCRIPT_PROBE_INTERVAL_MS) {
       return true;
     }
-    return turn.assistantSegmentVersion(segment.assistantMessageId)
-      !== historical.renderedItemVersion;
+    return (
+      turn.assistantSegmentVersion(segment.assistantMessageId) !== historical.renderedItemVersion
+    );
   }
 
   /** Re-renders the streaming assistant message and publishes a sparse update. */
@@ -1548,9 +1515,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
 
     let snapshotChars = 0;
     for (const segment of turn.assistantSegmentsInOrder()) {
-      const message = context.messages.find(
-        (entry) => entry.id === segment.assistantMessageId,
-      );
+      const message = context.messages.find((entry) => entry.id === segment.assistantMessageId);
       if (!message) continue;
       const isCurrent = segment.assistantMessageId === turn.assistantMessageId;
       const historical = isCurrent
@@ -1559,9 +1524,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       if (!isCurrent && !historical) continue;
       const renderState = isCurrent ? state.render : historical!.render;
       const publishedParts = isCurrent ? state.publishedParts : historical!.publishedParts;
-      const publishedModelId = isCurrent
-        ? state.publishedModelId
-        : historical!.publishedModelId;
+      const publishedModelId = isCurrent ? state.publishedModelId : historical!.publishedModelId;
 
       // A frozen row that has not moved since its last render would produce
       // byte-identical parts: every item resolves from `completedItemParts` and
@@ -1594,8 +1557,8 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       // message the client has never seen, which it can only answer by
       // refetching the entire transcript.
       if (
-        (isCurrent && state.publishedMessageId !== message.id)
-        || publishedModelId !== message.modelId
+        (isCurrent && state.publishedMessageId !== message.id) ||
+        publishedModelId !== message.modelId
       ) {
         if (isCurrent) {
           state.publishedMessageId = message.id;
@@ -1658,9 +1621,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
           data: {
             status,
             phase,
-            ...(context.turnStartedAt
-              ? { turnStartedAt: context.turnStartedAt }
-              : {}),
+            ...(context.turnStartedAt ? { turnStartedAt: context.turnStartedAt } : {}),
           },
         });
       }
@@ -1680,7 +1641,9 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
   protected toEngineConfig(body: Record<string, unknown>): EngineTurnConfig {
     const mode: ConversationMode = body.mode === "plan" ? "plan" : "build";
     const model =
-      typeof body.model === "string" && body.model.trim().length > 0 ? body.model.trim() : undefined;
+      typeof body.model === "string" && body.model.trim().length > 0
+        ? body.model.trim()
+        : undefined;
     const reasoningEffort =
       typeof body.modelReasoningEffort === "string" ? body.modelReasoningEffort : undefined;
     return {
@@ -1695,6 +1658,4 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       networkAccessEnabled: true,
     };
   }
-
-
 }

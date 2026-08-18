@@ -37,7 +37,7 @@ import {
   parseCodexStructuredOutput,
   buildRecoveredContextPrompt,
   PromptAcceptedResult,
-  AppServerRuntimeBase
+  AppServerRuntimeBase,
 } from "./app-server-runtime-base.js";
 import { AppServerRuntimeLifecycle } from "./app-server-runtime-lifecycle.js";
 import { createHash } from "node:crypto";
@@ -137,24 +137,21 @@ import {
 } from "@orkestrator/protocol/structured-output";
 import { fallbackReasoningId } from "@orkestrator/protocol/native-agent";
 
-
 export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle {
   createSession(body: Record<string, unknown>): { sessionId: string; title?: string } {
     const clientSessionKey =
-      typeof body.clientSessionKey === "string"
-      && body.clientSessionKey.trim().length > 0
-      && body.clientSessionKey.length <= 512
+      typeof body.clientSessionKey === "string" &&
+      body.clientSessionKey.trim().length > 0 &&
+      body.clientSessionKey.length <= 512
         ? body.clientSessionKey
         : undefined;
     const sessionId = clientSessionKey
-      ? `session-client-${
-          createHash("sha256")
-            .update(this.options.cwd)
-            .update("\0")
-            .update(clientSessionKey)
-            .digest("hex")
-            .slice(0, 32)
-        }`
+      ? `session-client-${createHash("sha256")
+          .update(this.options.cwd)
+          .update("\0")
+          .update(clientSessionKey)
+          .digest("hex")
+          .slice(0, 32)}`
       : createSessionId();
     const existing = this.registry.getSession(sessionId);
     if (existing) {
@@ -318,7 +315,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       title: parent.title ? `${parent.title} (fork)` : "Forked session",
       titleSource: "explicit",
       titleGenerationAttempted: true,
-      confirmedModelsByTurn: { ...(parent.confirmedModelsByTurn ?? {}) },
+      confirmedModelsByTurn: { ...parent.confirmedModelsByTurn },
     });
     try {
       const context = this.registry.attach(child.id, fork.id, {
@@ -526,9 +523,9 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       // Reusing an id for different input or a different target cannot be
       // interpreted safely. Do not dispatch either version again.
       if (
-        previous.threadId !== session.threadId
-        || previous.turnId !== expectedTurnId
-        || previous.inputDigest !== inputDigest
+        previous.threadId !== session.threadId ||
+        previous.turnId !== expectedTurnId ||
+        previous.inputDigest !== inputDigest
       ) {
         return "unknown";
       }
@@ -537,8 +534,8 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       try {
         const reconciled = await this.options.engine.reconcileRequest(session.threadId, requestId);
         if (
-          (reconciled.result === "attach" || reconciled.result === "terminal")
-          && reconciled.turnId === expectedTurnId
+          (reconciled.result === "attach" || reconciled.result === "terminal") &&
+          reconciled.turnId === expectedTurnId
         ) {
           this.rememberSteerRequest(requestId, { ...previous, state: "accepted" });
           await this.options.engine.drainNotifications(session.threadId);
@@ -606,10 +603,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       );
       let ordering: SteerOrdering = {};
       try {
-        const reconciled = await this.options.engine.reconcileRequest(
-          session.threadId,
-          requestId,
-        );
+        const reconciled = await this.options.engine.reconcileRequest(session.threadId, requestId);
         if (reconciled.turnId === expectedTurnId) {
           ordering = {
             precedingItemIds: reconciled.precedingItemIds,
@@ -645,12 +639,10 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       // and process exit) are ambiguous: the write may have landed before the
       // response was lost, so they must never be described as unsent.
       if (
-        error instanceof AppServerRpcError
-        && (
-          /expectedTurnId.*(?:match|stale)/i.test(error.message)
-          || /expected\s+turn(?:\s+id)?.*(?:match|stale)/i.test(error.message)
-          || /no longer accepting input/i.test(error.message)
-        )
+        error instanceof AppServerRpcError &&
+        (/expectedTurnId.*(?:match|stale)/i.test(error.message) ||
+          /expected\s+turn(?:\s+id)?.*(?:match|stale)/i.test(error.message) ||
+          /no longer accepting input/i.test(error.message))
       ) {
         return "mismatch";
       }
@@ -830,11 +822,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     }
 
     try {
-      const review = await this.options.engine.startReview(
-        session.threadId,
-        target,
-        "inline",
-      );
+      const review = await this.options.engine.startReview(session.threadId, target, "inline");
       const accumulator = new TurnAccumulator({
         threadId: context.threadId,
         turnId: review.turnId,
@@ -861,9 +849,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       return { outcome: "accepted", turnId: review.turnId };
     } catch (error) {
       context.dispatchInFlight = false;
-      context.messages = context.messages.filter(
-        (message) => message.id !== assistantMessage.id,
-      );
+      context.messages = context.messages.filter((message) => message.id !== assistantMessage.id);
       /**
        * The optimistic bubble was announced with a revision bump, so its removal
        * needs one too: a tab that was unmounted for the SSE frames reconciles on
@@ -1010,8 +996,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     // be executing its last turn. `idle` here would let the build pipeline
     // advance on a turn whose fate is unknown.
     const awaitingRecovery =
-      session.threadId !== null
-      && this.threadsAwaitingDispatchRecovery.has(session.threadId);
+      session.threadId !== null && this.threadsAwaitingDispatchRecovery.has(session.threadId);
     const phase = context?.phase ?? (awaitingRecovery ? "recovering" : "idle");
     const latestDispatch = this.journal.latestForSession(sessionId);
 
@@ -1035,9 +1020,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
         : {}),
       structuredOutputRequestId: session.structuredOutputRequestId,
       structuredOutput: session.structuredOutput,
-      contextUsage: session.threadId
-        ? this.usageByThread.get(session.threadId)
-        : undefined,
+      contextUsage: session.threadId ? this.usageByThread.get(session.threadId) : undefined,
       engineGeneration: this.options.engine.info().generation,
       messageRevision: session.messageRevision,
     };
@@ -1066,8 +1049,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     // Same rule as `getStatus`: a restored thread whose journal record has not
     // been settled yet may still be executing its last turn.
     const awaitingRecovery =
-      session.threadId !== null
-      && this.threadsAwaitingDispatchRecovery.has(session.threadId);
+      session.threadId !== null && this.threadsAwaitingDispatchRecovery.has(session.threadId);
     const phase = context?.phase ?? (awaitingRecovery ? "recovering" : "idle");
 
     // `starting`, `cancelling` and `recovering` all map to `running`. Reporting
@@ -1103,9 +1085,9 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     if (!session) return null;
     void this.touchSession(sessionId);
     if (
-      requestId
-      && session.structuredOutputRequestId
-      && requestId !== session.structuredOutputRequestId
+      requestId &&
+      session.structuredOutputRequestId &&
+      requestId !== session.structuredOutputRequestId
     ) {
       return { requestId, structuredOutput: null };
     }
@@ -1132,7 +1114,9 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       this.options.engine.abandonThreadApprovals(removedThread.threadId);
       // Last reference: release the thread but never delete the rollout.
       this.releaseThreadRuntimeState(removedThread.threadId);
-      await this.options.engine.unsubscribeThread(removedThread.engineHandle).catch(() => undefined);
+      await this.options.engine
+        .unsubscribeThread(removedThread.engineHandle)
+        .catch(() => undefined);
     }
     return true;
   }
@@ -1191,8 +1175,8 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       // Round-tripped so both sides drop `undefined` members identically; key
       // order is the store's own serialization of this same object.
       return (
-        JSON.stringify(persisted.config)
-        === JSON.stringify(JSON.parse(JSON.stringify(session.config)))
+        JSON.stringify(persisted.config) ===
+        JSON.stringify(JSON.parse(JSON.stringify(session.config)))
       );
     } catch {
       return false;
@@ -1232,9 +1216,10 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     if (!session?.threadId) return Promise.resolve();
 
     const retentionMs = this.options.sessionRetentionMs ?? DEFAULT_SESSION_RETENTION_MS;
-    const persistIntervalMs = retentionMs > 0
-      ? Math.min(DEFAULT_SESSION_ACTIVITY_PERSIST_INTERVAL_MS, Math.max(1, retentionMs / 2))
-      : DEFAULT_SESSION_ACTIVITY_PERSIST_INTERVAL_MS;
+    const persistIntervalMs =
+      retentionMs > 0
+        ? Math.min(DEFAULT_SESSION_ACTIVITY_PERSIST_INTERVAL_MS, Math.max(1, retentionMs / 2))
+        : DEFAULT_SESSION_ACTIVITY_PERSIST_INTERVAL_MS;
     const lastPersisted = this.lastPersistedAccess.get(sessionId) ?? 0;
     if (session.lastAccessed - lastPersisted < persistIntervalMs) return Promise.resolve();
 
@@ -1252,5 +1237,4 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
    * The whole body runs under the thread's dispatch lock so two tabs cannot both
    * observe an idle thread and both dispatch.
    */
-
 }

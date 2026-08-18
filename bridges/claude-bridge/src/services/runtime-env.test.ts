@@ -2,10 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  GITHUB_CREDENTIAL_FILE_ENV,
-  runtimeEnvironmentForAgentQuery,
-} from "./runtime-env.js";
+import { GITHUB_CREDENTIAL_FILE_ENV, runtimeEnvironmentForAgentQuery } from "./runtime-env.js";
 
 describe("Claude Agent SDK runtime environment", () => {
   test("preserves the inherited environment when no managed file is configured", async () => {

@@ -340,7 +340,13 @@ export type EngineEvent = EngineEventMeta &
         /** Present when the upstream event carries an item start clock. */
         startedAtMs?: number;
       }
-    | { kind: "item.text.delta"; threadId: string | null; turnId: string; itemId: string; delta: string }
+    | {
+        kind: "item.text.delta";
+        threadId: string | null;
+        turnId: string;
+        itemId: string;
+        delta: string;
+      }
     | {
         kind: "item.reasoning.delta";
         threadId: string | null;

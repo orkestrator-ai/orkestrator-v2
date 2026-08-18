@@ -44,10 +44,7 @@ export function TruncatedPath({
     >
       {directory && (
         <span
-          className={cn(
-            "min-w-0 shrink truncate text-left [direction:rtl]",
-            directoryClassName,
-          )}
+          className={cn("min-w-0 shrink truncate text-left [direction:rtl]", directoryClassName)}
         >
           <bdi dir="ltr">{directory}</bdi>
         </span>

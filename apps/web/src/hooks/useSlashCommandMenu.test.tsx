@@ -22,11 +22,12 @@ afterEach(() => cleanup());
 describe("useSlashCommandMenu", () => {
   test("opens for a leading slash and filters case-insensitively", async () => {
     const { result, rerender } = renderHook(
-      ({ text }) => useSlashCommandMenu({
-        commands: COMMANDS,
-        text,
-        setText: () => {},
-      }),
+      ({ text }) =>
+        useSlashCommandMenu({
+          commands: COMMANDS,
+          text,
+          setText: () => {},
+        }),
       { initialProps: { text: "/" } },
     );
 

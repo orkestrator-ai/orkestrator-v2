@@ -62,19 +62,19 @@ export function CodexPlanModeCard({
             onClick={() => void onSwitchToBuild()}
             disabled={isSubmitting}
           >
-            {isSubmitting
-              ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-              : <ArrowRight className="mr-1.5 h-3.5 w-3.5" />}
+            {isSubmitting ? (
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <ArrowRight className="mr-1.5 h-3.5 w-3.5" />
+            )}
             Switch To Build
           </Button>
-          <Button
-            size="sm"
-            onClick={() => void onApproveAndBuild()}
-            disabled={isSubmitting}
-          >
-            {isSubmitting
-              ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-              : <Check className="mr-1.5 h-3.5 w-3.5" />}
+          <Button size="sm" onClick={() => void onApproveAndBuild()} disabled={isSubmitting}>
+            {isSubmitting ? (
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Check className="mr-1.5 h-3.5 w-3.5" />
+            )}
             Approve Plan
           </Button>
         </div>

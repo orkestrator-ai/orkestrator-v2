@@ -113,12 +113,13 @@ function terminalEvent(payload: unknown): TerminalEvent | null {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
   const value = payload as { text?: unknown; generation?: unknown; revision?: unknown };
   if (
-    typeof value.text !== "string"
-    || !Number.isSafeInteger(value.generation)
-    || (value.generation as number) < 0
-    || !Number.isSafeInteger(value.revision)
-    || (value.revision as number) < 0
-  ) return null;
+    typeof value.text !== "string" ||
+    !Number.isSafeInteger(value.generation) ||
+    (value.generation as number) < 0 ||
+    !Number.isSafeInteger(value.revision) ||
+    (value.revision as number) < 0
+  )
+    return null;
   return {
     generation: value.generation as number,
     revision: value.revision as number,
@@ -133,9 +134,9 @@ function terminalEvent(payload: unknown): TerminalEvent | null {
  */
 function operationRefusal(result: unknown): string | null {
   if (
-    result
-    && typeof result === "object"
-    && (result as { delivered?: unknown }).delivered === false
+    result &&
+    typeof result === "object" &&
+    (result as { delivered?: unknown }).delivered === false
   ) {
     return "Terminal session is not running";
   }
@@ -145,18 +146,21 @@ function operationRefusal(result: unknown): string | null {
 function validSnapshot(value: unknown): value is TerminalSnapshot {
   if (!value || typeof value !== "object") return false;
   const snapshot = value as Partial<TerminalSnapshot>;
-  return typeof snapshot.output === "string"
-    && Number.isSafeInteger(snapshot.revision) && snapshot.revision! >= 0
-    && Number.isSafeInteger(snapshot.generation) && snapshot.generation! >= 0;
+  return (
+    typeof snapshot.output === "string" &&
+    Number.isSafeInteger(snapshot.revision) &&
+    snapshot.revision! >= 0 &&
+    Number.isSafeInteger(snapshot.generation) &&
+    snapshot.generation! >= 0
+  );
 }
 
 export class TerminalWebSocketGateway {
   private readonly server = new WebSocketServer({
     noServer: true,
     maxPayload: TERMINAL_WEBSOCKET_MAX_BINARY_BYTES,
-    handleProtocols: (protocols) => protocols.has(TERMINAL_WEBSOCKET_SUBPROTOCOL)
-      ? TERMINAL_WEBSOCKET_SUBPROTOCOL
-      : false,
+    handleProtocols: (protocols) =>
+      protocols.has(TERMINAL_WEBSOCKET_SUBPROTOCOL) ? TERMINAL_WEBSOCKET_SUBPROTOCOL : false,
   });
   private readonly sockets = new Set<SocketState>();
   private readonly upgradeSockets = new Set<Duplex>();
@@ -183,14 +187,15 @@ export class TerminalWebSocketGateway {
     // then it must authenticate in-band; accepting a cookie-authenticated
     // origin-less upgrade would bypass the browser CSWSH check.
     if (
-      (request.headers.origin && !this.options.originAllowed(request))
-      || (!request.headers.origin && this.options.tokenMatches(request))
+      (request.headers.origin && !this.options.originAllowed(request)) ||
+      (!request.headers.origin && this.options.tokenMatches(request))
     ) {
       this.rejectUpgrade(socket, 403, "Origin not allowed");
       return true;
     }
     const protocols = String(request.headers["sec-websocket-protocol"] ?? "")
-      .split(",").map((value) => value.trim());
+      .split(",")
+      .map((value) => value.trim());
     if (!protocols.includes(TERMINAL_WEBSOCKET_SUBPROTOCOL)) {
       this.rejectUpgrade(socket, 426, "Terminal WebSocket protocol required", {
         "Sec-WebSocket-Protocol": TERMINAL_WEBSOCKET_SUBPROTOCOL,
@@ -257,8 +262,8 @@ export class TerminalWebSocketGateway {
 
   /** Revoke every credential latched by an existing or in-flight upgrade. */
   revokeConnections(): void {
-    for (const state of [...this.sockets]) state.ws.terminate();
-    for (const socket of [...this.upgradeSockets]) socket.destroy();
+    for (const state of Array.from(this.sockets)) state.ws.terminate();
+    for (const socket of Array.from(this.upgradeSockets)) socket.destroy();
     this.upgradeSockets.clear();
   }
 
@@ -289,7 +294,11 @@ export class TerminalWebSocketGateway {
       this.scheduleCredentialExpiry(state, request);
     } else {
       state.authTimer = setTimeout(() => {
-        this.closeSocket(state, TERMINAL_WEBSOCKET_CLOSE.authenticationRequired, "Authentication required");
+        this.closeSocket(
+          state,
+          TERMINAL_WEBSOCKET_CLOSE.authenticationRequired,
+          "Authentication required",
+        );
       }, this.authTimeoutMs);
       state.authTimer.unref?.();
     }
@@ -304,7 +313,12 @@ export class TerminalWebSocketGateway {
     if (state.ws.readyState !== WebSocket.OPEN) return;
     if (isBinary) {
       if (!state.authenticated) {
-        this.fatal(state, "authentication-required", "Authenticate before sending terminal data", TERMINAL_WEBSOCKET_CLOSE.authenticationRequired);
+        this.fatal(
+          state,
+          "authentication-required",
+          "Authenticate before sending terminal data",
+          TERMINAL_WEBSOCKET_CLOSE.authenticationRequired,
+        );
         return;
       }
       this.onBinary(state, rawDataBytes(data));
@@ -312,25 +326,39 @@ export class TerminalWebSocketGateway {
     }
     const bytes = rawDataBytes(data);
     if (bytes.byteLength > TERMINAL_WEBSOCKET_MAX_CONTROL_BYTES) {
-      this.fatal(state, "frame-too-large", "Terminal control frame is too large", TERMINAL_WEBSOCKET_CLOSE.messageTooLarge);
+      this.fatal(
+        state,
+        "frame-too-large",
+        "Terminal control frame is too large",
+        TERMINAL_WEBSOCKET_CLOSE.messageTooLarge,
+      );
       return;
     }
     let frame;
     try {
-      frame = parseTerminalWebSocketClientControlFrame(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+      frame = parseTerminalWebSocketClientControlFrame(
+        new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+      );
     } catch (error) {
-      const code = error instanceof TerminalWebSocketControlFrameError ? error.code : "malformed-frame";
-      const closeCode = code === "unsupported-version"
-        ? TERMINAL_WEBSOCKET_CLOSE.unsupportedVersion
-        : code === "frame-too-large"
-          ? TERMINAL_WEBSOCKET_CLOSE.messageTooLarge
-          : TERMINAL_WEBSOCKET_CLOSE.protocolError;
+      const code =
+        error instanceof TerminalWebSocketControlFrameError ? error.code : "malformed-frame";
+      const closeCode =
+        code === "unsupported-version"
+          ? TERMINAL_WEBSOCKET_CLOSE.unsupportedVersion
+          : code === "frame-too-large"
+            ? TERMINAL_WEBSOCKET_CLOSE.messageTooLarge
+            : TERMINAL_WEBSOCKET_CLOSE.protocolError;
       this.fatal(state, code, "Invalid terminal control frame", closeCode);
       return;
     }
     if (!state.authenticated) {
       if (frame.type !== "authenticate" || !this.options.tokenMatches(request, frame.token)) {
-        this.fatal(state, "authentication-required", "Authentication required", TERMINAL_WEBSOCKET_CLOSE.authenticationRequired);
+        this.fatal(
+          state,
+          "authentication-required",
+          "Authentication required",
+          TERMINAL_WEBSOCKET_CLOSE.authenticationRequired,
+        );
         return;
       }
       state.authenticated = true;
@@ -341,7 +369,12 @@ export class TerminalWebSocketGateway {
       return;
     }
     if (frame.type === "authenticate") {
-      this.fatal(state, "malformed-frame", "Socket is already authenticated", TERMINAL_WEBSOCKET_CLOSE.protocolError);
+      this.fatal(
+        state,
+        "malformed-frame",
+        "Socket is already authenticated",
+        TERMINAL_WEBSOCKET_CLOSE.protocolError,
+      );
       return;
     }
     switch (frame.type) {
@@ -354,7 +387,14 @@ export class TerminalWebSocketGateway {
       case "resize": {
         const channel = this.channel(state, frame.channelId);
         if (!channel) {
-          this.operationResult(state, frame.channelId, frame.operationId, "resize", false, "Unknown terminal channel");
+          this.operationResult(
+            state,
+            frame.channelId,
+            frame.operationId,
+            "resize",
+            false,
+            "Unknown terminal channel",
+          );
           break;
         }
         this.enqueueOperation({
@@ -364,17 +404,22 @@ export class TerminalWebSocketGateway {
           operationId: frame.operationId,
           operation: "resize",
           bytes: 16,
-          invoke: () => this.options.backend.invoke("terminal_resize", {
-            sessionId: channel.sessionId,
-            cols: frame.cols,
-            rows: frame.rows,
-          }),
+          invoke: () =>
+            this.options.backend.invoke("terminal_resize", {
+              sessionId: channel.sessionId,
+              cols: frame.cols,
+              rows: frame.rows,
+            }),
         });
         break;
       }
       case "ack": {
         const channel = this.channel(state, frame.channelId);
-        if (channel && frame.generation === channel.generation && frame.revision <= channel.revision) {
+        if (
+          channel &&
+          frame.generation === channel.generation &&
+          frame.revision <= channel.revision
+        ) {
           state.invalidChannelFrames = 0;
         }
         break;
@@ -387,16 +432,33 @@ export class TerminalWebSocketGateway {
     try {
       frame = decodeTerminalBinaryFrame(bytes);
     } catch {
-      this.fatal(state, "malformed-frame", "Invalid terminal binary frame", TERMINAL_WEBSOCKET_CLOSE.protocolError);
+      this.fatal(
+        state,
+        "malformed-frame",
+        "Invalid terminal binary frame",
+        TERMINAL_WEBSOCKET_CLOSE.protocolError,
+      );
       return;
     }
     if (frame.type !== TERMINAL_BINARY_FRAME_TYPE.input) {
-      this.fatal(state, "malformed-frame", "Clients may only send input frames", TERMINAL_WEBSOCKET_CLOSE.protocolError);
+      this.fatal(
+        state,
+        "malformed-frame",
+        "Clients may only send input frames",
+        TERMINAL_WEBSOCKET_CLOSE.protocolError,
+      );
       return;
     }
     const channel = this.channel(state, frame.channelId);
     if (!channel) {
-      this.operationResult(state, frame.channelId, frame.revision, "input", false, "Unknown terminal channel");
+      this.operationResult(
+        state,
+        frame.channelId,
+        frame.revision,
+        "input",
+        false,
+        "Unknown terminal channel",
+      );
       return;
     }
     // Neither of these is a protocol violation, so neither may close the socket:
@@ -406,14 +468,24 @@ export class TerminalWebSocketGateway {
     // at worst a duplicate. Both are answered per channel.
     if (frame.generation !== channel.generation) {
       this.operationResult(
-        state, channel.id, frame.revision, "input", false, "Terminal generation changed",
+        state,
+        channel.id,
+        frame.revision,
+        "input",
+        false,
+        "Terminal generation changed",
       );
       this.desync(state, channel, "generation-changed", frame.generation, channel.revision);
       return;
     }
     if (frame.revision <= channel.inputSequence) {
       this.operationResult(
-        state, channel.id, frame.revision, "input", false, "Terminal input sequence is not increasing",
+        state,
+        channel.id,
+        frame.revision,
+        "input",
+        false,
+        "Terminal input sequence is not increasing",
       );
       return;
     }
@@ -426,26 +498,38 @@ export class TerminalWebSocketGateway {
       operationId: frame.revision,
       operation: "input",
       bytes: frame.bytes.byteLength,
-      invoke: () => this.options.backend.invoke("terminal_write", {
-        sessionId: channel.sessionId,
-        data,
-      }),
+      invoke: () =>
+        this.options.backend.invoke("terminal_write", {
+          sessionId: channel.sessionId,
+          data,
+        }),
     });
   }
 
   private async subscribe(
     state: SocketState,
-    frame: Extract<ReturnType<typeof parseTerminalWebSocketClientControlFrame>, { type: "subscribe" }>,
+    frame: Extract<
+      ReturnType<typeof parseTerminalWebSocketClientControlFrame>,
+      { type: "subscribe" }
+    >,
   ): Promise<void> {
     if (state.sessions.has(frame.sessionId)) {
       this.sendControl(state, {
-        type: "error", code: "subscription-denied", message: "Terminal is already subscribed", requestId: frame.requestId,
+        type: "error",
+        code: "subscription-denied",
+        message: "Terminal is already subscribed",
+        requestId: frame.requestId,
       });
       return;
     }
     const channelId = this.allocateChannelId(state);
     if (channelId === null) {
-      this.sendControl(state, { type: "error", code: "internal-error", message: "No terminal channels available", requestId: frame.requestId });
+      this.sendControl(state, {
+        type: "error",
+        code: "internal-error",
+        message: "No terminal channels available",
+        requestId: frame.requestId,
+      });
       return;
     }
     const channel: Channel = {
@@ -477,12 +561,21 @@ export class TerminalWebSocketGateway {
         }),
       ]);
       if (!validSnapshot(snapshotValue)) throw new Error("Invalid terminal snapshot");
-      const running = Boolean(statusValue && typeof statusValue === "object" && (statusValue as { running?: unknown }).running);
+      const running = Boolean(
+        statusValue &&
+        typeof statusValue === "object" &&
+        (statusValue as { running?: unknown }).running,
+      );
       // Remembered but not-yet-started sessions have generation 1. Unknown ids
       // have neither a running process nor retained/configured generation.
       if (!running && snapshotValue.generation === 0) {
         this.retireChannel(state, channel);
-        this.sendControl(state, { type: "error", code: "subscription-denied", message: "Terminal session is unavailable", requestId: frame.requestId });
+        this.sendControl(state, {
+          type: "error",
+          code: "subscription-denied",
+          message: "Terminal session is unavailable",
+          requestId: frame.requestId,
+        });
         return;
       }
       if (state.channels.get(channel.id) !== channel) return;
@@ -492,34 +585,42 @@ export class TerminalWebSocketGateway {
       channel.generation = snapshotValue.generation;
       channel.revision = hasCursor ? knownRevision : 0;
       const cursorMatches = hasCursor && knownGeneration === snapshotValue.generation;
-      const recovery = !cursorMatches || snapshotValue.mode !== "delta"
-        ? "snapshot-required"
-        : knownRevision === snapshotValue.revision
-          ? "current"
-          : "delta";
-      this.sendControl(state, recovery === "snapshot-required" ? {
-        type: "subscribed",
-        requestId: frame.requestId,
-        sessionId: frame.sessionId,
-        channelId: channel.id,
-        baseGeneration: null,
-        baseRevision: null,
-        targetGeneration: snapshotValue.generation,
-        targetRevision: snapshotValue.revision,
-        recovery,
-      } : {
-        type: "subscribed",
-        requestId: frame.requestId,
-        sessionId: frame.sessionId,
-        channelId: channel.id,
-        baseGeneration: knownGeneration,
-        baseRevision: knownRevision,
-        targetGeneration: snapshotValue.generation,
-        targetRevision: snapshotValue.revision,
-        recovery,
-      });
+      const recovery =
+        !cursorMatches || snapshotValue.mode !== "delta"
+          ? "snapshot-required"
+          : knownRevision === snapshotValue.revision
+            ? "current"
+            : "delta";
+      this.sendControl(
+        state,
+        recovery === "snapshot-required"
+          ? {
+              type: "subscribed",
+              requestId: frame.requestId,
+              sessionId: frame.sessionId,
+              channelId: channel.id,
+              baseGeneration: null,
+              baseRevision: null,
+              targetGeneration: snapshotValue.generation,
+              targetRevision: snapshotValue.revision,
+              recovery,
+            }
+          : {
+              type: "subscribed",
+              requestId: frame.requestId,
+              sessionId: frame.sessionId,
+              channelId: channel.id,
+              baseGeneration: knownGeneration,
+              baseRevision: knownRevision,
+              targetGeneration: snapshotValue.generation,
+              targetRevision: snapshotValue.revision,
+              recovery,
+            },
+      );
       if (recovery === "delta") {
-        const deltas = snapshotValue.deltas ?? [{ revision: snapshotValue.revision, text: snapshotValue.output }];
+        const deltas = snapshotValue.deltas ?? [
+          { revision: snapshotValue.revision, text: snapshotValue.output },
+        ];
         for (const delta of deltas) {
           if (delta.revision <= channel.revision) continue;
           this.enqueueOutput(state, channel, {
@@ -552,7 +653,8 @@ export class TerminalWebSocketGateway {
       const buffered = channel.bufferedLive.splice(0).sort((a, b) => a.revision - b.revision);
       channel.bufferedLiveBytes = 0;
       for (const output of buffered) {
-        if (output.generation === channel.generation && output.revision <= snapshotValue.revision) continue;
+        if (output.generation === channel.generation && output.revision <= snapshotValue.revision)
+          continue;
         this.enqueueOutput(state, channel, output);
       }
       this.sendControl(state, {
@@ -565,7 +667,12 @@ export class TerminalWebSocketGateway {
     } catch (error) {
       this.retireChannel(state, channel);
       this.options.logger.warn("[TerminalWebSocket] Subscription failed", error);
-      this.sendControl(state, { type: "error", code: "terminal-unavailable", message: "Terminal session is unavailable", requestId: frame.requestId });
+      this.sendControl(state, {
+        type: "error",
+        code: "terminal-unavailable",
+        message: "Terminal session is unavailable",
+        requestId: frame.requestId,
+      });
     }
   }
 
@@ -594,11 +701,21 @@ export class TerminalWebSocketGateway {
     const queued: QueuedFrame = { data, bytes: data.byteLength };
     const channelProjected = channel.queuedBytes + queued.bytes;
     const socketProjected = state.queuedBytes + state.ws.bufferedAmount + queued.bytes;
-    if (channelProjected > TERMINAL_WEBSOCKET_CHANNEL_HARD_BUFFER_BYTES || socketProjected > TERMINAL_WEBSOCKET_SOCKET_HARD_BUFFER_BYTES) {
-      this.closeSocket(state, TERMINAL_WEBSOCKET_CLOSE.slowConsumer, "Terminal socket exceeded its hard buffer limit");
+    if (
+      channelProjected > TERMINAL_WEBSOCKET_CHANNEL_HARD_BUFFER_BYTES ||
+      socketProjected > TERMINAL_WEBSOCKET_SOCKET_HARD_BUFFER_BYTES
+    ) {
+      this.closeSocket(
+        state,
+        TERMINAL_WEBSOCKET_CLOSE.slowConsumer,
+        "Terminal socket exceeded its hard buffer limit",
+      );
       return;
     }
-    if (channelProjected > TERMINAL_WEBSOCKET_CHANNEL_SOFT_BUFFER_BYTES || socketProjected > TERMINAL_WEBSOCKET_SOCKET_SOFT_BUFFER_BYTES) {
+    if (
+      channelProjected > TERMINAL_WEBSOCKET_CHANNEL_SOFT_BUFFER_BYTES ||
+      socketProjected > TERMINAL_WEBSOCKET_SOCKET_SOFT_BUFFER_BYTES
+    ) {
       this.desync(state, channel, "slow-consumer", output.generation, output.revision);
       return;
     }
@@ -623,7 +740,13 @@ export class TerminalWebSocketGateway {
     channel.queuedBytes = 0;
     channel.bufferedLive = [];
     channel.bufferedLiveBytes = 0;
-    this.sendControl(state, { type: "desync", channelId: channel.id, generation, revision, reason });
+    this.sendControl(state, {
+      type: "desync",
+      channelId: channel.id,
+      generation,
+      revision,
+      reason,
+    });
   }
 
   private ready(state: SocketState): void {
@@ -640,7 +763,11 @@ export class TerminalWebSocketGateway {
     const queued: QueuedFrame = { data, bytes: Buffer.byteLength(data) };
     const projected = state.queuedBytes + state.ws.bufferedAmount + queued.bytes;
     if (projected > TERMINAL_WEBSOCKET_SOCKET_HARD_BUFFER_BYTES) {
-      this.closeSocket(state, TERMINAL_WEBSOCKET_CLOSE.slowConsumer, "Terminal socket exceeded its hard buffer limit");
+      this.closeSocket(
+        state,
+        TERMINAL_WEBSOCKET_CLOSE.slowConsumer,
+        "Terminal socket exceeded its hard buffer limit",
+      );
       return;
     }
     state.controlQueue.push(queued);
@@ -681,7 +808,10 @@ export class TerminalWebSocketGateway {
       }
       state.roundRobinCursor = (state.roundRobinCursor + 1) % channels.length;
     }
-    if (state.controlQueue.length > 0 || [...state.channels.values()].some((channel) => channel.queue.length > 0)) {
+    if (
+      state.controlQueue.length > 0 ||
+      [...state.channels.values()].some((channel) => channel.queue.length > 0)
+    ) {
       this.scheduleFlush(state);
     }
   }
@@ -693,8 +823,18 @@ export class TerminalWebSocketGateway {
       return channel;
     }
     state.invalidChannelFrames += 1;
-    this.sendControl(state, { type: "error", code: "unknown-channel", message: "Unknown terminal channel", channelId });
-    if (state.invalidChannelFrames >= 3) this.closeSocket(state, TERMINAL_WEBSOCKET_CLOSE.policyViolation, "Repeated unknown terminal channel");
+    this.sendControl(state, {
+      type: "error",
+      code: "unknown-channel",
+      message: "Unknown terminal channel",
+      channelId,
+    });
+    if (state.invalidChannelFrames >= 3)
+      this.closeSocket(
+        state,
+        TERMINAL_WEBSOCKET_CLOSE.policyViolation,
+        "Repeated unknown terminal channel",
+      );
     return null;
   }
 
@@ -731,12 +871,13 @@ export class TerminalWebSocketGateway {
     // socket is still completing without allowing the new write to overtake it.
     const existing = this.sessionOperations.get(options.sessionId);
     const sequence = existing ?? { tail: Promise.resolve(), count: 0, bytes: 0 };
-    const saturated = (!existing
-        && this.sessionOperations.size >= TERMINAL_WEBSOCKET_MAX_PENDING_OPERATION_SESSIONS)
-      || sequence.count >= TERMINAL_WEBSOCKET_MAX_PENDING_OPERATIONS_PER_SESSION
-      || sequence.bytes + options.bytes > TERMINAL_WEBSOCKET_MAX_PENDING_OPERATION_BYTES_PER_SESSION
-      || this.pendingOperationCount >= TERMINAL_WEBSOCKET_MAX_PENDING_OPERATIONS
-      || this.pendingOperationBytes + options.bytes > TERMINAL_WEBSOCKET_MAX_PENDING_OPERATION_BYTES;
+    const saturated =
+      (!existing &&
+        this.sessionOperations.size >= TERMINAL_WEBSOCKET_MAX_PENDING_OPERATION_SESSIONS) ||
+      sequence.count >= TERMINAL_WEBSOCKET_MAX_PENDING_OPERATIONS_PER_SESSION ||
+      sequence.bytes + options.bytes > TERMINAL_WEBSOCKET_MAX_PENDING_OPERATION_BYTES_PER_SESSION ||
+      this.pendingOperationCount >= TERMINAL_WEBSOCKET_MAX_PENDING_OPERATIONS ||
+      this.pendingOperationBytes + options.bytes > TERMINAL_WEBSOCKET_MAX_PENDING_OPERATION_BYTES;
     if (saturated) {
       this.operationResult(
         options.state,
@@ -801,20 +942,25 @@ export class TerminalWebSocketGateway {
     ok: boolean,
     message?: string,
   ): void {
-    this.sendControl(state, ok ? {
-      type: "operation-result",
-      channelId,
-      operationId,
-      operation,
-      ok: true,
-    } : {
-      type: "operation-result",
-      channelId,
-      operationId,
-      operation,
-      ok: false,
-      message: message ?? "Terminal operation failed",
-    });
+    this.sendControl(
+      state,
+      ok
+        ? {
+            type: "operation-result",
+            channelId,
+            operationId,
+            operation,
+            ok: true,
+          }
+        : {
+            type: "operation-result",
+            channelId,
+            operationId,
+            operation,
+            ok: false,
+            message: message ?? "Terminal operation failed",
+          },
+    );
   }
 
   private allocateChannelId(state: SocketState): number | null {
@@ -834,7 +980,14 @@ export class TerminalWebSocketGateway {
   ): void {
     if (state.ws.readyState !== WebSocket.OPEN) return;
     try {
-      state.ws.send(JSON.stringify({ type: "error", code, message, fatal: true } satisfies TerminalWebSocketServerControlFrame));
+      state.ws.send(
+        JSON.stringify({
+          type: "error",
+          code,
+          message,
+          fatal: true,
+        } satisfies TerminalWebSocketServerControlFrame),
+      );
       this.closeSocket(state, closeCode, message);
     } catch {
       state.ws.terminate();
@@ -880,18 +1033,21 @@ export class TerminalWebSocketGateway {
     state.credentialExpiryTimer = null;
     const expiresAt = this.options.credentialExpiresAt?.(request, suppliedToken) ?? null;
     if (expiresAt === null) return;
-    state.credentialExpiryTimer = setTimeout(() => {
-      state.credentialExpiryTimer = null;
-      if (!this.options.tokenMatches(request, suppliedToken)) {
-        this.closeSocket(
-          state,
-          TERMINAL_WEBSOCKET_CLOSE.authenticationRequired,
-          "Authentication expired",
-        );
-        return;
-      }
-      this.scheduleCredentialExpiry(state, request, suppliedToken);
-    }, Math.max(1, expiresAt - Date.now()));
+    state.credentialExpiryTimer = setTimeout(
+      () => {
+        state.credentialExpiryTimer = null;
+        if (!this.options.tokenMatches(request, suppliedToken)) {
+          this.closeSocket(
+            state,
+            TERMINAL_WEBSOCKET_CLOSE.authenticationRequired,
+            "Authentication expired",
+          );
+          return;
+        }
+        this.scheduleCredentialExpiry(state, request, suppliedToken);
+      },
+      Math.max(1, expiresAt - Date.now()),
+    );
     state.credentialExpiryTimer.unref?.();
   }
 
@@ -902,7 +1058,9 @@ export class TerminalWebSocketGateway {
     headers: Record<string, string> = {},
   ): void {
     const body = `${message}\n`;
-    const headerLines = Object.entries(headers).map(([key, value]) => `${key}: ${value}\r\n`).join("");
+    const headerLines = Object.entries(headers)
+      .map(([key, value]) => `${key}: ${value}\r\n`)
+      .join("");
     socket.end(
       `HTTP/1.1 ${status} ${message}\r\nConnection: close\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: ${Buffer.byteLength(body)}\r\n${headerLines}\r\n${body}`,
     );

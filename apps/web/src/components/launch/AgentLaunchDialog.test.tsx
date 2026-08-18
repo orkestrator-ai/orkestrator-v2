@@ -10,8 +10,9 @@ const realDialogSnapshot = { ...realDialog };
 mock.module("@/components/ui/dialog", () => ({
   Dialog: ({ open, children }: { open: boolean; children: React.ReactNode }) =>
     open ? <div>{children}</div> : null,
-  DialogContent: ({ children }: { children: React.ReactNode }) =>
-    <div role="dialog">{children}</div>,
+  DialogContent: ({ children }: { children: React.ReactNode }) => (
+    <div role="dialog">{children}</div>
+  ),
   DialogDescription: ({ children }: { children: React.ReactNode }) => <p>{children}</p>,
   DialogFooter: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   DialogHeader: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
@@ -103,10 +104,12 @@ describe("AgentLaunchDialog", () => {
     expect(screen.getByText(/merge conflicts against/).textContent).toContain("release");
     expect(screen.getByText(/against release/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Resolve conflicts" }));
-    expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({
-      agent: "claude",
-      model: "claude-a",
-    }));
+    expect(onConfirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: "claude",
+        model: "claude-a",
+      }),
+    );
   });
 
   test("launches the preferred model and effort of the default agent", () => {

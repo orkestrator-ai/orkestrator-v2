@@ -91,10 +91,12 @@ class DefiniteFeaturePlanningError extends Error {
 function isBridgeMessage(value: unknown): value is BridgeMessage {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const candidate = value as Record<string, unknown>;
-  return typeof candidate.id === "string"
-    && candidate.id.length > 0
-    && candidate.id.length <= FEATURE_PLANNING_LIMITS.maxIdLength
-    && typeof candidate.role === "string";
+  return (
+    typeof candidate.id === "string" &&
+    candidate.id.length > 0 &&
+    candidate.id.length <= FEATURE_PLANNING_LIMITS.maxIdLength &&
+    typeof candidate.role === "string"
+  );
 }
 
 function bridgeMessageContent(entry: BridgeMessage): string {
@@ -136,8 +138,12 @@ function latestAssistantReply(
     if (baseline.has(entry.id)) break;
     if (minimumCreatedAt !== null) {
       const createdAt = entry.createdAt ? Date.parse(entry.createdAt) : Number.NaN;
-      if (!Number.isFinite(minimumCreatedAt) || !Number.isFinite(createdAt)
-        || createdAt < minimumCreatedAt) continue;
+      if (
+        !Number.isFinite(minimumCreatedAt) ||
+        !Number.isFinite(createdAt) ||
+        createdAt < minimumCreatedAt
+      )
+        continue;
     }
     const content = bridgeMessageContent(entry);
     if (!content.trim()) continue;
@@ -215,9 +221,7 @@ export class FeaturePlanningService {
       ...[...this.scheduledRuns.values()].map((entry) => entry.promise),
       ...(this.tickRun ? [this.tickRun.promise] : []),
     ]);
-    await Promise.allSettled(
-      [...this.providers.values()].map((provider) => provider.dispose?.()),
-    );
+    await Promise.allSettled([...this.providers.values()].map((provider) => provider.dispose?.()));
     this.providers.clear();
     this.idleSince.clear();
     this.cancellationRequests.clear();
@@ -446,16 +450,17 @@ export class FeaturePlanningService {
     const sessionId = session.sessionId;
     if (await this.clearIfCancellationRequested(record)) return;
     const plan = await this.storage.getFeaturePlan(record.featureId);
-    if (!plan) throw new DefiniteFeaturePlanningError(
-      "persistence",
-      "dispatching",
-      "The feature plan no longer exists",
+    if (!plan)
+      throw new DefiniteFeaturePlanningError(
+        "persistence",
+        "dispatching",
+        "The feature plan no longer exists",
+      );
+    const baseline = assistantMessageIds(
+      await this.providerOperation(environment.id, provider, () =>
+        this.messages(provider, sessionId),
+      ),
     );
-    const baseline = assistantMessageIds(await this.providerOperation(
-      environment.id,
-      provider,
-      () => this.messages(provider, sessionId),
-    ));
     const prompt = this.buildPrompt(plan, record, sessionId, session.created);
     const requestId = randomUUID();
     const dispatchId = randomUUID();
@@ -508,13 +513,13 @@ export class FeaturePlanningService {
       );
     }
     const provider = await this.provider(record.environmentId);
-    const activity = await this.providerOperation(record.environmentId, provider, async () => (
+    const activity = await this.providerOperation(record.environmentId, provider, async () =>
       provider.activity
         ? await provider.activity(record.providerSessionId!)
         : (await provider.status(record.providerSessionId!)) === "idle"
-          ? "idle" as const
-          : "working" as const
-    ));
+          ? ("idle" as const)
+          : ("working" as const),
+    );
     if (activity === "missing") {
       throw new DefiniteFeaturePlanningError(
         "provider",
@@ -523,25 +528,31 @@ export class FeaturePlanningService {
       );
     }
     const baseline = new Set(record.baselineAssistantIds ?? []);
-    const messages = await this.providerOperation(
-      record.environmentId,
-      provider,
-      () => this.messages(provider, record.providerSessionId!),
+    const messages = await this.providerOperation(record.environmentId, provider, () =>
+      this.messages(provider, record.providerSessionId!),
     );
-    const reply = record.kind === "story"
-      // A story refinement only counts once the state block is present;
-      // otherwise a preamble turn would be applied as the answer.
-      ? latestAssistantReply(messages, baseline, (content) => {
-          const parsed = parseStoryRefinement(content);
-          return parsed !== null
-            && (parsed.storyId === undefined || parsed.storyId === record.storyId);
-        }, record.requestId ? undefined : record.startedAt)
-      : latestAssistantReply(
-          messages,
-          baseline,
-          undefined,
-          record.requestId ? undefined : record.startedAt,
-        );
+    const reply =
+      record.kind === "story"
+        ? // A story refinement only counts once the state block is present;
+          // otherwise a preamble turn would be applied as the answer.
+          latestAssistantReply(
+            messages,
+            baseline,
+            (content) => {
+              const parsed = parseStoryRefinement(content);
+              return (
+                parsed !== null &&
+                (parsed.storyId === undefined || parsed.storyId === record.storyId)
+              );
+            },
+            record.requestId ? undefined : record.startedAt,
+          )
+        : latestAssistantReply(
+            messages,
+            baseline,
+            undefined,
+            record.requestId ? undefined : record.startedAt,
+          );
 
     if (reply && activity === "idle") {
       this.idleSince.delete(record.featureId);
@@ -595,23 +606,17 @@ export class FeaturePlanningService {
     if (!record.responseMessageId) {
       await this.update(record, (plan, current) => {
         const existing = this.findPersistedResponse(plan, current, raw);
-        const persisted = existing ?? this.appendMessage(
-          plan,
-          current,
-          "assistant",
-          raw,
-          "pending",
-          current.responseModelId,
-        );
+        const persisted =
+          existing ??
+          this.appendMessage(plan, current, "assistant", raw, "pending", current.responseModelId);
         current.responseMessageId = persisted.id;
       });
       const refreshed = await this.read(record.featureId);
       if (!refreshed) return;
       record = refreshed;
     }
-    const parsed = record.kind === "story"
-      ? parseStoryRefinement(raw)
-      : parseFeaturePlannerState(raw);
+    const parsed =
+      record.kind === "story" ? parseStoryRefinement(raw) : parseFeaturePlannerState(raw);
     if (!parsed) {
       // The reply is on the plan and on the record. Only the structured half
       // failed, so this stops for a user decision without losing anything.
@@ -659,10 +664,7 @@ export class FeaturePlanningService {
     return entry;
   }
 
-  private messageTarget(
-    plan: FeaturePlan,
-    record: FeaturePlanningRecord,
-  ): FeaturePlanMessage[] {
+  private messageTarget(plan: FeaturePlan, record: FeaturePlanningRecord): FeaturePlanMessage[] {
     if (record.kind !== "story") return plan.messages;
     const story = plan.stories.find((candidate) => candidate.id === record.storyId);
     if (!story) {
@@ -698,10 +700,7 @@ export class FeaturePlanningService {
     return undefined;
   }
 
-  private applyFeaturePlannerState(
-    plan: FeaturePlan,
-    record: FeaturePlanningRecord,
-  ): void {
+  private applyFeaturePlannerState(plan: FeaturePlan, record: FeaturePlanningRecord): void {
     const parsed = parseFeaturePlannerState(record.rawResponse ?? "");
     if (!parsed) return;
     // A plan that has moved on to building must not be dragged back to an
@@ -720,17 +719,10 @@ export class FeaturePlanningService {
         });
       }
     }
-    this.resolveStateApplications(
-      plan,
-      record,
-      preserveLaterBuildState ? "superseded" : "applied",
-    );
+    this.resolveStateApplications(plan, record, preserveLaterBuildState ? "superseded" : "applied");
   }
 
-  private applyStoryRefinement(
-    plan: FeaturePlan,
-    record: FeaturePlanningRecord,
-  ): void {
+  private applyStoryRefinement(plan: FeaturePlan, record: FeaturePlanningRecord): void {
     const parsed = parseStoryRefinement(record.rawResponse ?? "");
     const story = plan.stories.find((candidate) => candidate.id === record.storyId);
     if (!parsed) return;
@@ -768,9 +760,7 @@ export class FeaturePlanningService {
     const messages = this.messageTarget(plan, record);
     for (const entry of messages) {
       if (entry.stateApplication !== "pending") continue;
-      entry.stateApplication = entry.id === record.responseMessageId
-        ? outcome
-        : "superseded";
+      entry.stateApplication = entry.id === record.responseMessageId ? outcome : "superseded";
     }
   }
 
@@ -782,9 +772,7 @@ export class FeaturePlanningService {
    * Returns the running planning environment, creating and starting it when
    * needed. A `null` return means "not ready yet, try next tick".
    */
-  private async ensureEnvironment(
-    record: FeaturePlanningRecord,
-  ): Promise<Environment | null> {
+  private async ensureEnvironment(record: FeaturePlanningRecord): Promise<Environment | null> {
     const plan = await this.storage.getFeaturePlan(record.featureId);
     if (!plan) {
       throw new DefiniteFeaturePlanningError(
@@ -823,8 +811,9 @@ export class FeaturePlanningService {
   private async createEnvironment(plan: FeaturePlan): Promise<Environment> {
     const config = await this.storage.loadConfig();
     const project = await this.storage.getProject(plan.projectId);
-    const environmentType = config.repositories[plan.projectId]?.lastEnvironmentType
-      ?? (project?.localPath ? "local" : "containerized");
+    const environmentType =
+      config.repositories[plan.projectId]?.lastEnvironmentType ??
+      (project?.localPath ? "local" : "containerized");
     const created = await this.invoke<Environment>("create_environment", {
       projectId: plan.projectId,
       name: `feature-plan-${plan.title || "new-feature"}`,
@@ -860,19 +849,15 @@ export class FeaturePlanningService {
     if (existing) {
       // Liveness only: a session whose last turn failed still exists, so it is
       // reused rather than replaced by a second planning session.
-      const { status } = await this.providerOperation(
-        environmentId,
-        provider,
-        () => readProviderStatus(provider, existing),
+      const { status } = await this.providerOperation(environmentId, provider, () =>
+        readProviderStatus(provider, existing),
       );
       if (status !== "missing") return { sessionId: existing, created: false };
     }
     const config = await this.storage.loadConfig();
     const repository = config.repositories[record.projectId];
-    const created = await this.providerOperation(
-      environmentId,
-      provider,
-      () => provider.createSession("review", plan?.title || "Feature planning", {
+    const created = await this.providerOperation(environmentId, provider, () =>
+      provider.createSession("review", plan?.title || "Feature planning", {
         clientSessionKey: `feature-planning:${record.featureId}`,
         mode: "plan",
         ...(repository?.defaultModel || config.global.codexModel
@@ -942,9 +927,10 @@ export class FeaturePlanningService {
         "The planning environment no longer exists",
       );
     }
-    const connection = environment.environmentType === "local"
-      ? await this.localConnection(environment)
-      : await this.containerConnection(environment);
+    const connection =
+      environment.environmentType === "local"
+        ? await this.localConnection(environment)
+        : await this.containerConnection(environment);
     const provider = createBuildPipelineProvider(connection, { autoAnswerRequests: false });
     this.providers.set(environmentId, provider);
     return provider;
@@ -1093,29 +1079,31 @@ export class FeaturePlanningService {
       if (!plan.codexSessionId || !plan.codexEnvironmentId) continue;
       const pending = this.unansweredMessage(plan);
       if (!pending) continue;
-      await this.storage.startFeaturePlanning({
-        version: FEATURE_PLANNING_RECORD_VERSION,
-        operationId: randomUUID(),
-        featureId: plan.id,
-        projectId: plan.projectId,
-        kind: pending.storyId ? "story" : "feature",
-        ...(pending.storyId ? { storyId: pending.storyId } : {}),
-        userMessage: pending.message.content,
-        userMessageId: pending.message.id,
-        environmentId: plan.codexEnvironmentId,
-        providerSessionId: plan.codexSessionId,
-        // Adopted as already-dispatched: the turn may well be running, and
-        // re-sending it is the one thing that must not happen.
-        dispatchId: randomUUID(),
-        dispatchState: "sent",
-        baselineAssistantIds: [],
-        phase: "running",
-        startedAt: pending.message.createdAt,
-        attemptStartedAt: pending.message.createdAt,
-        dispatchedAt: pending.message.createdAt,
-        updatedAt: nowIso(),
-        backendRevision: 0,
-      }).catch(() => undefined);
+      await this.storage
+        .startFeaturePlanning({
+          version: FEATURE_PLANNING_RECORD_VERSION,
+          operationId: randomUUID(),
+          featureId: plan.id,
+          projectId: plan.projectId,
+          kind: pending.storyId ? "story" : "feature",
+          ...(pending.storyId ? { storyId: pending.storyId } : {}),
+          userMessage: pending.message.content,
+          userMessageId: pending.message.id,
+          environmentId: plan.codexEnvironmentId,
+          providerSessionId: plan.codexSessionId,
+          // Adopted as already-dispatched: the turn may well be running, and
+          // re-sending it is the one thing that must not happen.
+          dispatchId: randomUUID(),
+          dispatchState: "sent",
+          baselineAssistantIds: [],
+          phase: "running",
+          startedAt: pending.message.createdAt,
+          attemptStartedAt: pending.message.createdAt,
+          dispatchedAt: pending.message.createdAt,
+          updatedAt: nowIso(),
+          backendRevision: 0,
+        })
+        .catch(() => undefined);
     }
   }
 

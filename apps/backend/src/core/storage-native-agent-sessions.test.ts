@@ -83,10 +83,7 @@ describe("StorageService native agent sessions", () => {
           updatedAt: new Date(2).toISOString(),
         },
       };
-      await fs.writeFile(
-        path.join(dataDir, "native-agent-sessions.json"),
-        JSON.stringify(legacy),
-      );
+      await fs.writeFile(path.join(dataDir, "native-agent-sessions.json"), JSON.stringify(legacy));
 
       expect(await first.getNativeAgentSession(input.key)).toEqual({
         ...input,
@@ -108,14 +105,17 @@ describe("StorageService native agent sessions", () => {
         ...input,
         logicalSessionKey: "looped-review:workflow-1:discovery:round-1",
       };
-      await fs.writeFile(file, JSON.stringify({
-        [input.key]: {
-          ...legacyInput,
-          providerSessionId: "legacy-provider-session",
-          createdAt: new Date(1).toISOString(),
-          updatedAt: new Date(2).toISOString(),
-        },
-      }));
+      await fs.writeFile(
+        file,
+        JSON.stringify({
+          [input.key]: {
+            ...legacyInput,
+            providerSessionId: "legacy-provider-session",
+            createdAt: new Date(1).toISOString(),
+            updatedAt: new Date(2).toISOString(),
+          },
+        }),
+      );
 
       const migrated = await first.getOrCreateNativeAgentSession(
         {
@@ -141,11 +141,14 @@ describe("StorageService native agent sessions", () => {
 
   test("persists unattended origin and policy on newly created logical sessions", async () => {
     await withStorage(async (first) => {
-      const saved = await first.getOrCreateNativeAgentSession({
-        ...input,
-        origin: "looped-review",
-        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-      }, async () => "provider-session");
+      const saved = await first.getOrCreateNativeAgentSession(
+        {
+          ...input,
+          origin: "looped-review",
+          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+        },
+        async () => "provider-session",
+      );
       expect(saved).toMatchObject({
         version: 1,
         origin: "looped-review",
@@ -217,8 +220,9 @@ describe("StorageService native agent sessions", () => {
       await fs.writeFile(file, original);
       const create = mock(async () => "replacement-provider-session");
 
-      await expect(first.getOrCreateNativeAgentSession(input, create))
-        .rejects.toThrow("invalid or uses an unsupported version");
+      await expect(first.getOrCreateNativeAgentSession(input, create)).rejects.toThrow(
+        "invalid or uses an unsupported version",
+      );
       expect(create).not.toHaveBeenCalled();
       expect(await fs.readFile(file, "utf8")).toBe(original);
     });
@@ -255,14 +259,17 @@ describe("StorageService native agent sessions", () => {
   test("persists a migration discovered on the read path", async () => {
     await withStorage(async (first) => {
       const file = path.join(first.getDataDir(), "native-agent-sessions.json");
-      await fs.writeFile(file, JSON.stringify({
-        [input.key]: {
-          ...input,
-          providerSessionId: "legacy-provider-session",
-          createdAt: new Date(1).toISOString(),
-          updatedAt: new Date(2).toISOString(),
-        },
-      }));
+      await fs.writeFile(
+        file,
+        JSON.stringify({
+          [input.key]: {
+            ...input,
+            providerSessionId: "legacy-provider-session",
+            createdAt: new Date(1).toISOString(),
+            updatedAt: new Date(2).toISOString(),
+          },
+        }),
+      );
 
       // The read is lock-free until it finds something to migrate; then it must
       // take the lock and write, so the next process does not repeat the work.
@@ -302,10 +309,13 @@ describe("StorageService native agent sessions", () => {
         createdAt: new Date(1).toISOString(),
         updatedAt: new Date(2).toISOString(),
       };
-      await fs.writeFile(file, JSON.stringify({
-        "readable-key": readable,
-        "poisoned-key": future,
-      }));
+      await fs.writeFile(
+        file,
+        JSON.stringify({
+          "readable-key": readable,
+          "poisoned-key": future,
+        }),
+      );
 
       expect(await first.getNativeAgentSession("readable-key")).toEqual(readable);
       expect(await first.getNativeAgentSession("absent-key")).toBeNull();
@@ -317,8 +327,7 @@ describe("StorageService native agent sessions", () => {
         { ...input, key: "new-key" },
         async () => "new-provider-session",
       );
-      expect(JSON.parse(await fs.readFile(file, "utf8"))["poisoned-key"])
-        .toEqual(future);
+      expect(JSON.parse(await fs.readFile(file, "utf8"))["poisoned-key"]).toEqual(future);
     });
   });
 
@@ -340,10 +349,13 @@ describe("StorageService native agent sessions", () => {
         input,
         async () => "doomed-provider-session",
       );
-      await fs.writeFile(file, JSON.stringify({
-        [input.key]: doomed,
-        "poisoned-key": future,
-      }));
+      await fs.writeFile(
+        file,
+        JSON.stringify({
+          [input.key]: doomed,
+          "poisoned-key": future,
+        }),
+      );
 
       // Deleting an environment is how a user clears a poisoned store, so it
       // must never be the operation that the poisoned record blocks.
@@ -373,17 +385,24 @@ describe("StorageService native agent sessions", () => {
 
   test("rejects origin and policy combinations that weaken workflow authority", async () => {
     await withStorage(async (first) => {
-      await expect(first.getOrCreateNativeAgentSession({
-        ...input,
-        origin: "looped-review",
-        interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
-      }, async () => "provider-session")).rejects.toThrow("input is invalid");
-      await expect(first.adoptNativeAgentSession({
-        ...input,
-        providerSessionId: "provider-session",
-        origin: "interactive-native",
-        interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-      })).rejects.toThrow("adoption input is invalid");
+      await expect(
+        first.getOrCreateNativeAgentSession(
+          {
+            ...input,
+            origin: "looped-review",
+            interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+          },
+          async () => "provider-session",
+        ),
+      ).rejects.toThrow("input is invalid");
+      await expect(
+        first.adoptNativeAgentSession({
+          ...input,
+          providerSessionId: "provider-session",
+          origin: "interactive-native",
+          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+        }),
+      ).rejects.toThrow("adoption input is invalid");
     });
   });
 
@@ -410,10 +429,10 @@ describe("StorageService native agent sessions", () => {
 
   test("round-trips a bounded content-free interaction resolution journal", async () => {
     await withStorage(async (first, second) => {
-      const saved = await first.updateAgentInteractionResolutionJournal(
-        (journal) => ({
-          ...journal,
-          entries: [{
+      const saved = await first.updateAgentInteractionResolutionJournal((journal) => ({
+        ...journal,
+        entries: [
+          {
             id: "claim-1",
             interactionId: "interaction-1",
             provider: "codex",
@@ -427,9 +446,9 @@ describe("StorageService native agent sessions", () => {
               fence: 4,
               claimedAt: Date.now(),
             },
-          }],
-        }),
-      );
+          },
+        ],
+      }));
       expect(saved.version).toBe(AGENT_INTERACTION_JOURNAL_VERSION);
       expect(await second.getAgentInteractionResolutionJournal()).toEqual(saved);
       expect(JSON.stringify(saved)).not.toContain("prompt");
@@ -449,8 +468,11 @@ describe("StorageService native agent sessions", () => {
           entries: [...journal.entries, terminalJournalEntry(2)],
         })),
       ]);
-      expect((await first.getAgentInteractionResolutionJournal()).entries
-        .map((entry) => entry.id).sort()).toEqual(["claim-1", "claim-2"]);
+      expect(
+        (await first.getAgentInteractionResolutionJournal()).entries
+          .map((entry) => entry.id)
+          .sort(),
+      ).toEqual(["claim-1", "claim-2"]);
     });
   });
 
@@ -481,22 +503,24 @@ describe("StorageService native agent sessions", () => {
 
   test("reclaims an abandoned claim rather than wedging the journal", async () => {
     await withStorage(async (first) => {
-      const file = path.join(
-        first.getDataDir(),
-        "agent-interaction-resolution-journal.json",
-      );
+      const file = path.join(first.getDataDir(), "agent-interaction-resolution-journal.json");
       const claimedAt = Date.now() - AGENT_INTERACTION_CLAIM_RETENTION_MS - 1;
-      await fs.writeFile(file, JSON.stringify({
-        version: AGENT_INTERACTION_JOURNAL_VERSION,
-        entries: [{
-          ...terminalJournalEntry(1),
-          state: "claimed",
-          claim: { ...terminalJournalEntry(1).claim, claimedAt },
-          outcome: undefined,
-          providerResolvedAt: undefined,
-          workflowRecordedAt: undefined,
-        }],
-      }));
+      await fs.writeFile(
+        file,
+        JSON.stringify({
+          version: AGENT_INTERACTION_JOURNAL_VERSION,
+          entries: [
+            {
+              ...terminalJournalEntry(1),
+              state: "claimed",
+              claim: { ...terminalJournalEntry(1).claim, claimedAt },
+              outcome: undefined,
+              providerResolvedAt: undefined,
+              workflowRecordedAt: undefined,
+            },
+          ],
+        }),
+      );
       const read = await first.getAgentInteractionResolutionJournal();
       expect(read.entries).toHaveLength(1);
       expect(read.entries[0]).toMatchObject({
@@ -518,44 +542,48 @@ describe("StorageService native agent sessions", () => {
       }));
       const rolled = await first.updateAgentInteractionResolutionJournal((journal) => ({
         ...journal,
-        entries: [...journal.entries, terminalJournalEntry(entries.length, Date.now() + entries.length)],
+        entries: [
+          ...journal.entries,
+          terminalJournalEntry(entries.length, Date.now() + entries.length),
+        ],
       }));
       expect(rolled.entries).toHaveLength(AGENT_INTERACTION_LIMITS.maxJournalEntries);
       expect(rolled.entries.some((entry) => entry.id === "claim-0")).toBe(false);
-      expect(rolled.entries.some((entry) => entry.id === `claim-${entries.length}`))
-        .toBe(true);
+      expect(rolled.entries.some((entry) => entry.id === `claim-${entries.length}`)).toBe(true);
     });
   });
 
   test("rejects malformed journals and invalid updater results", async () => {
     await withStorage(async (first) => {
-      const file = path.join(
-        first.getDataDir(),
-        "agent-interaction-resolution-journal.json",
-      );
+      const file = path.join(first.getDataDir(), "agent-interaction-resolution-journal.json");
       await fs.writeFile(file, JSON.stringify({ version: 1, entries: [{}] }));
       await expect(first.getAgentInteractionResolutionJournal()).rejects.toThrow(
         "journal is invalid",
       );
       await fs.writeFile(file, JSON.stringify({ version: 1, entries: [] }));
-      await expect(first.updateAgentInteractionResolutionJournal(() => ({
-        version: 2,
-        entries: [],
-      } as never))).rejects.toThrow("cleanup input");
+      await expect(
+        first.updateAgentInteractionResolutionJournal(
+          () =>
+            ({
+              version: 2,
+              entries: [],
+            }) as never,
+        ),
+      ).rejects.toThrow("cleanup input");
     });
   });
 
   test("persists journal cleanup with restricted permissions", async () => {
     await withStorage(async (first) => {
-      const file = path.join(
-        first.getDataDir(),
-        "agent-interaction-resolution-journal.json",
-      );
+      const file = path.join(first.getDataDir(), "agent-interaction-resolution-journal.json");
       const expiredAt = Date.now() - AGENT_INTERACTION_JOURNAL_RETENTION_MS - 1;
-      await fs.writeFile(file, JSON.stringify({
-        version: AGENT_INTERACTION_JOURNAL_VERSION,
-        entries: [terminalJournalEntry(1, expiredAt)],
-      }));
+      await fs.writeFile(
+        file,
+        JSON.stringify({
+          version: AGENT_INTERACTION_JOURNAL_VERSION,
+          entries: [terminalJournalEntry(1, expiredAt)],
+        }),
+      );
       await first.updateAgentInteractionResolutionJournal((journal) => journal);
       expect(JSON.parse(await fs.readFile(file, "utf8"))).toEqual({
         version: AGENT_INTERACTION_JOURNAL_VERSION,
@@ -578,14 +606,10 @@ describe("StorageService native agent sessions", () => {
 
       jest.useFakeTimers();
       try {
-        const held = first.runWithLiveEnvironment(
-          "env-1",
-          "Held operation",
-          async () => {
-            signalEntered();
-            await operationBarrier;
-          },
-        );
+        const held = first.runWithLiveEnvironment("env-1", "Held operation", async () => {
+          signalEntered();
+          await operationBarrier;
+        });
         await entered;
 
         // Move beyond the stale-lock threshold. The 5-second heartbeat must
@@ -603,10 +627,14 @@ describe("StorageService native agent sessions", () => {
           },
         );
         for (let attempt = 0; attempt < 10; attempt += 1) {
-          await fs.stat(path.join(
-            (await first.getEnvironment("env-1"))?.worktreePath ?? "",
-            "environments.json.lock",
-          )).catch(() => undefined);
+          await fs
+            .stat(
+              path.join(
+                (await first.getEnvironment("env-1"))?.worktreePath ?? "",
+                "environments.json.lock",
+              ),
+            )
+            .catch(() => undefined);
         }
         expect(contenderEntered).toBe(false);
 
@@ -629,18 +657,17 @@ describe("StorageService native agent sessions", () => {
     // sessions. The worst legitimate holder is a cold ACP session create — four
     // 30s attempts plus 1.75s of backoff — so a waiter budgeted for a JSON write
     // would fail against a perfectly healthy holder.
-    const budget = (StorageService as unknown as {
-      NATIVE_AGENT_SESSION_LOCK_TIMEOUT_MS: number;
-    }).NATIVE_AGENT_SESSION_LOCK_TIMEOUT_MS;
+    const budget = (
+      StorageService as unknown as {
+        NATIVE_AGENT_SESSION_LOCK_TIMEOUT_MS: number;
+      }
+    ).NATIVE_AGENT_SESSION_LOCK_TIMEOUT_MS;
     expect(budget).toBeGreaterThan(4 * 30_000 + 1_750);
   });
 
   test("completes deletion's session cleanup queued behind an in-flight dispatch", async () => {
     await withStorage(async (first, second) => {
-      await first.getOrCreateNativeAgentSession(
-        input,
-        async () => "provider-session",
-      );
+      await first.getOrCreateNativeAgentSession(input, async () => "provider-session");
       let signalDispatchEntered!: () => void;
       const dispatchEntered = new Promise<void>((resolve) => {
         signalDispatchEntered = resolve;
@@ -651,14 +678,10 @@ describe("StorageService native agent sessions", () => {
       });
 
       try {
-        const dispatch = first.dispatchNativeAgentPromptOnce(
-          input.key,
-          "request-1",
-          async () => {
-            signalDispatchEntered();
-            await sendBarrier;
-          },
-        );
+        const dispatch = first.dispatchNativeAgentPromptOnce(input.key, "request-1", async () => {
+          signalDispatchEntered();
+          await sendBarrier;
+        });
         await dispatchEntered;
 
         // Environment deletion runs this from whichever process owns the delete
@@ -667,11 +690,9 @@ describe("StorageService native agent sessions", () => {
         // deleted environment keeps its session record, its provider session id
         // and its pending prompt on disk after the user asked for it to go away.
         let cleanupSettled = false;
-        const cleanup = second
-          .deleteNativeAgentSessionsByEnvironment("env-1")
-          .then(() => {
-            cleanupSettled = true;
-          });
+        const cleanup = second.deleteNativeAgentSessionsByEnvironment("env-1").then(() => {
+          cleanupSettled = true;
+        });
         for (let attempt = 0; attempt < 20; attempt += 1) await Promise.resolve();
         expect(cleanupSettled).toBe(false);
 
@@ -710,9 +731,9 @@ describe("StorageService native agent sessions", () => {
       // start, when no session file exists yet. A missing file has to read as
       // "no sessions" rather than as the failure that would make the sweep
       // warn every two seconds on a fresh install.
-      await expect(fs.access(
-        path.join(first.getDataDir(), "native-agent-sessions.json"),
-      )).rejects.toThrow();
+      await expect(
+        fs.access(path.join(first.getDataDir(), "native-agent-sessions.json")),
+      ).rejects.toThrow();
       await expect(first.listNativeAgentSessions()).resolves.toEqual([]);
     });
   });
@@ -751,18 +772,14 @@ describe("StorageService native agent sessions", () => {
           logicalSessionKey: "env-env-1:opencode-tab",
         },
       ];
-      const expected = await Promise.all(inputs.map((session, index) =>
-        first.getOrCreateNativeAgentSession(
-          session,
-          async () => `provider-${index + 1}`,
-        )
-      ));
+      const expected = await Promise.all(
+        inputs.map((session, index) =>
+          first.getOrCreateNativeAgentSession(session, async () => `provider-${index + 1}`),
+        ),
+      );
 
       const file = path.join(first.getDataDir(), "native-agent-sessions.json");
-      const stored = JSON.parse(await fs.readFile(file, "utf8")) as Record<
-        string,
-        unknown
-      >;
+      const stored = JSON.parse(await fs.readFile(file, "utf8")) as Record<string, unknown>;
       stored["mismatched-storage-key"] = {
         ...expected[0],
         key: "different-record-key",
@@ -795,8 +812,9 @@ describe("StorageService native agent sessions", () => {
 
       expect(dispatch).toHaveBeenCalledTimes(1);
       expect([left.dispatched, right.dispatched].sort()).toEqual([false, true]);
-      expect((await first.getNativeAgentSession(input.key))?.dispatchedRequestIds)
-        .toEqual(["request-1"]);
+      expect((await first.getNativeAgentSession(input.key))?.dispatchedRequestIds).toEqual([
+        "request-1",
+      ]);
     });
   });
 
@@ -806,77 +824,84 @@ describe("StorageService native agent sessions", () => {
       const pendingA = {
         requestId: "request-a",
         prompt: "first prompt",
-        attachments: [{
-          type: "file" as const,
-          path: "/workspace/first.txt",
-          dataUrl: "data:text/plain;base64,Zmlyc3Q=",
-        }],
+        attachments: [
+          {
+            type: "file" as const,
+            path: "/workspace/first.txt",
+            dataUrl: "data:text/plain;base64,Zmlyc3Q=",
+          },
+        ],
         createdAt: new Date(1).toISOString(),
       };
-      await expect(first.dispatchNativeAgentPromptOnce(
-        input.key,
-        pendingA.requestId,
-        async () => { throw new Error("acknowledgement lost"); },
-        pendingA,
-      )).rejects.toThrow("acknowledgement lost");
+      await expect(
+        first.dispatchNativeAgentPromptOnce(
+          input.key,
+          pendingA.requestId,
+          async () => {
+            throw new Error("acknowledgement lost");
+          },
+          pendingA,
+        ),
+      ).rejects.toThrow("acknowledgement lost");
 
       const competingDispatch = mock(async () => undefined);
-      await expect(first.dispatchNativeAgentPromptOnce(
-        input.key,
-        "request-b",
-        competingDispatch,
-        {
+      await expect(
+        first.dispatchNativeAgentPromptOnce(input.key, "request-b", competingDispatch, {
           requestId: "request-b",
           prompt: "second prompt",
           createdAt: new Date(2).toISOString(),
-        },
-      )).rejects.toThrow("request-a is still awaiting recovery");
+        }),
+      ).rejects.toThrow("request-a is still awaiting recovery");
       expect(competingDispatch).not.toHaveBeenCalled();
-      expect((await first.getNativeAgentSession(input.key))?.pendingDispatch)
-        .toEqual(pendingA);
+      expect((await first.getNativeAgentSession(input.key))?.pendingDispatch).toEqual(pendingA);
     });
   });
 
   test("names the parked request when it refuses a competing dispatch", async () => {
     await withStorage(async (first) => {
       await first.getOrCreateNativeAgentSession(input, async () => "provider-session");
-      await expect(first.dispatchNativeAgentPromptOnce(
-        input.key,
-        "request-a",
-        async () => { throw new Error("acknowledgement lost"); },
-        {
-          requestId: "request-a",
-          prompt: "first prompt",
-          createdAt: new Date(1).toISOString(),
-        },
-      )).rejects.toThrow("acknowledgement lost");
+      await expect(
+        first.dispatchNativeAgentPromptOnce(
+          input.key,
+          "request-a",
+          async () => {
+            throw new Error("acknowledgement lost");
+          },
+          {
+            requestId: "request-a",
+            prompt: "first prompt",
+            createdAt: new Date(1).toISOString(),
+          },
+        ),
+      ).rejects.toThrow("acknowledgement lost");
 
       // Callers have to be able to settle the *blocking* request, not just
       // learn that something blocked them.
-      const refusal = await first.dispatchNativeAgentPromptOnce(
-        input.key,
-        "request-b",
-        async () => undefined,
-      ).catch((error: unknown) => error);
+      const refusal = await first
+        .dispatchNativeAgentPromptOnce(input.key, "request-b", async () => undefined)
+        .catch((error: unknown) => error);
       expect(refusal).toBeInstanceOf(PendingNativeAgentDispatchError);
-      expect((refusal as PendingNativeAgentDispatchError).pendingRequestId)
-        .toBe("request-a");
+      expect((refusal as PendingNativeAgentDispatchError).pendingRequestId).toBe("request-a");
     });
   });
 
   test("confirms a parked dispatch as spent instead of merely clearing it", async () => {
     await withStorage(async (first) => {
       await first.getOrCreateNativeAgentSession(input, async () => "provider-session");
-      await expect(first.dispatchNativeAgentPromptOnce(
-        input.key,
-        "request-a",
-        async () => { throw new Error("acknowledgement lost"); },
-        {
-          requestId: "request-a",
-          prompt: "first prompt",
-          createdAt: new Date(1).toISOString(),
-        },
-      )).rejects.toThrow("acknowledgement lost");
+      await expect(
+        first.dispatchNativeAgentPromptOnce(
+          input.key,
+          "request-a",
+          async () => {
+            throw new Error("acknowledgement lost");
+          },
+          {
+            requestId: "request-a",
+            prompt: "first prompt",
+            createdAt: new Date(1).toISOString(),
+          },
+        ),
+      ).rejects.toThrow("acknowledgement lost");
 
       // Only the exact parked id may be confirmed, so a stale caller cannot
       // settle a dispatch it never saw.
@@ -889,11 +914,7 @@ describe("StorageService native agent sessions", () => {
       expect(session?.dispatchedRequestIds).toEqual(["request-a"]);
 
       const replay = mock(async () => undefined);
-      const outcome = await first.dispatchNativeAgentPromptOnce(
-        input.key,
-        "request-a",
-        replay,
-      );
+      const outcome = await first.dispatchNativeAgentPromptOnce(input.key, "request-a", replay);
       expect(replay).not.toHaveBeenCalled();
       expect(outcome.dispatched).toBe(false);
 
@@ -906,55 +927,61 @@ describe("StorageService native agent sessions", () => {
     await withStorage(async (first) => {
       await first.getOrCreateNativeAgentSession(input, async () => "provider-session");
       const file = path.join(first.getDataDir(), "native-agent-sessions.json");
-      const allNativeSessionFiles = async () => Promise.all(
-        (await fs.readdir(first.getDataDir()))
-          .filter((name) => name.startsWith("native-agent-sessions.json"))
-          .map((name) => fs.readFile(path.join(first.getDataDir(), name), "utf8")),
-      );
+      const allNativeSessionFiles = async () =>
+        Promise.all(
+          (await fs.readdir(first.getDataDir()))
+            .filter((name) => name.startsWith("native-agent-sessions.json"))
+            .map((name) => fs.readFile(path.join(first.getDataDir(), name), "utf8")),
+        );
 
       const acceptedSecret = "ACCEPTED-PROMPT-AND-ATTACHMENT-CONTENT";
-      await first.dispatchNativeAgentPromptOnce(
-        input.key,
-        "accepted",
-        async () => undefined,
-        {
-          requestId: "accepted",
-          prompt: acceptedSecret,
-          attachments: [{
+      await first.dispatchNativeAgentPromptOnce(input.key, "accepted", async () => undefined, {
+        requestId: "accepted",
+        prompt: acceptedSecret,
+        attachments: [
+          {
             type: "image",
             path: "/workspace/accepted.png",
             dataUrl: `data:image/png;base64,${acceptedSecret}`,
-          }],
-          createdAt: new Date(1).toISOString(),
-        },
-      );
+          },
+        ],
+        createdAt: new Date(1).toISOString(),
+      });
       expect((await allNativeSessionFiles()).join("\n")).not.toContain(acceptedSecret);
 
       const clearedSecret = "CLEARED-PROMPT-CONTENT";
-      await expect(first.dispatchNativeAgentPromptOnce(
-        input.key,
-        "cleared",
-        async () => { throw new Error("ambiguous"); },
-        {
-          requestId: "cleared",
-          prompt: clearedSecret,
-          createdAt: new Date(2).toISOString(),
-        },
-      )).rejects.toThrow("ambiguous");
+      await expect(
+        first.dispatchNativeAgentPromptOnce(
+          input.key,
+          "cleared",
+          async () => {
+            throw new Error("ambiguous");
+          },
+          {
+            requestId: "cleared",
+            prompt: clearedSecret,
+            createdAt: new Date(2).toISOString(),
+          },
+        ),
+      ).rejects.toThrow("ambiguous");
       expect(await first.clearPendingNativeAgentDispatch(input.key, "cleared")).toBe(true);
       expect((await allNativeSessionFiles()).join("\n")).not.toContain(clearedSecret);
 
       const invalidatedSecret = "INVALIDATED-PROMPT-CONTENT";
-      await expect(first.dispatchNativeAgentPromptOnce(
-        input.key,
-        "invalidated",
-        async () => { throw new Error("ambiguous"); },
-        {
-          requestId: "invalidated",
-          prompt: invalidatedSecret,
-          createdAt: new Date(3).toISOString(),
-        },
-      )).rejects.toThrow("ambiguous");
+      await expect(
+        first.dispatchNativeAgentPromptOnce(
+          input.key,
+          "invalidated",
+          async () => {
+            throw new Error("ambiguous");
+          },
+          {
+            requestId: "invalidated",
+            prompt: invalidatedSecret,
+            createdAt: new Date(3).toISOString(),
+          },
+        ),
+      ).rejects.toThrow("ambiguous");
       expect(await first.invalidateNativeAgentSession(input.key, "provider-session")).toBe(true);
       expect((await allNativeSessionFiles()).join("\n")).not.toContain(invalidatedSecret);
       expect(await fs.readFile(file, "utf8")).not.toContain(input.key);
@@ -965,16 +992,13 @@ describe("StorageService native agent sessions", () => {
     await withStorage(async (first) => {
       await first.getOrCreateNativeAgentSession(input, async () => "provider-session");
       const dispatch = mock(async () => undefined);
-      await expect(first.dispatchNativeAgentPromptOnce(
-        input.key,
-        "oversized",
-        dispatch,
-        {
+      await expect(
+        first.dispatchNativeAgentPromptOnce(input.key, "oversized", dispatch, {
           requestId: "oversized",
           prompt: "x".repeat(32 * 1024 * 1024),
           createdAt: new Date(1).toISOString(),
-        },
-      )).rejects.toThrow("exceeds the 32 MB limit");
+        }),
+      ).rejects.toThrow("exceeds the 32 MB limit");
       expect(dispatch).not.toHaveBeenCalled();
       expect((await first.getNativeAgentSession(input.key))?.pendingDispatch).toBeUndefined();
 
@@ -982,23 +1006,30 @@ describe("StorageService native agent sessions", () => {
         requestId: "recoverable",
         prompt: "round-trip prompt",
         schema: { type: "object" },
-        attachments: [{
-          type: "image" as const,
-          path: "/workspace/round-trip.png",
-          dataUrl: "data:image/png;base64,cG5n",
-        }],
+        attachments: [
+          {
+            type: "image" as const,
+            path: "/workspace/round-trip.png",
+            dataUrl: "data:image/png;base64,cG5n",
+          },
+        ],
         createdAt: new Date(2).toISOString(),
       };
-      await expect(first.dispatchNativeAgentPromptOnce(
-        input.key,
-        recoverable.requestId,
-        async () => { throw new Error("ambiguous"); },
-        recoverable,
-      )).rejects.toThrow("ambiguous");
+      await expect(
+        first.dispatchNativeAgentPromptOnce(
+          input.key,
+          recoverable.requestId,
+          async () => {
+            throw new Error("ambiguous");
+          },
+          recoverable,
+        ),
+      ).rejects.toThrow("ambiguous");
       const restarted = new StorageService(first.getDataDir());
       await restarted.init();
-      expect((await restarted.getNativeAgentSession(input.key))?.pendingDispatch)
-        .toEqual(recoverable);
+      expect((await restarted.getNativeAgentSession(input.key))?.pendingDispatch).toEqual(
+        recoverable,
+      );
     });
   });
 
@@ -1033,13 +1064,9 @@ describe("StorageService native agent sessions", () => {
   test("conditionally invalidates only the provider session that was checked", async () => {
     await withStorage(async (first) => {
       await first.getOrCreateNativeAgentSession(input, async () => "provider-session");
-      expect(
-        await first.invalidateNativeAgentSession(input.key, "another-session"),
-      ).toBe(false);
+      expect(await first.invalidateNativeAgentSession(input.key, "another-session")).toBe(false);
       expect(await first.getNativeAgentSession(input.key)).not.toBeNull();
-      expect(
-        await first.invalidateNativeAgentSession(input.key, "provider-session"),
-      ).toBe(true);
+      expect(await first.invalidateNativeAgentSession(input.key, "provider-session")).toBe(true);
       expect(await first.getNativeAgentSession(input.key)).toBeNull();
     });
   });
@@ -1055,24 +1082,28 @@ describe("StorageService native agent sessions", () => {
           includeLocalSettings: false,
         },
       });
-      expect((await first.adoptNativeAgentSession({
-        ...input,
-        providerSessionId: "provider-old",
-      })).providerSessionId).toBe(adopted.providerSessionId);
-      await first.dispatchNativeAgentPromptOnce(
-        input.key,
-        "request-old",
-        async () => undefined,
-      );
-      await expect(first.adoptNativeAgentSession({
-        ...input,
-        providerSessionId: "provider-new",
-      })).rejects.toThrow("provider collision");
-      await expect(first.adoptNativeAgentSession({
-        ...input,
-        providerSessionId: "provider-new",
-        expectedProviderSessionId: "wrong-old",
-      })).rejects.toThrow("provider collision");
+      expect(
+        (
+          await first.adoptNativeAgentSession({
+            ...input,
+            providerSessionId: "provider-old",
+          })
+        ).providerSessionId,
+      ).toBe(adopted.providerSessionId);
+      await first.dispatchNativeAgentPromptOnce(input.key, "request-old", async () => undefined);
+      await expect(
+        first.adoptNativeAgentSession({
+          ...input,
+          providerSessionId: "provider-new",
+        }),
+      ).rejects.toThrow("provider collision");
+      await expect(
+        first.adoptNativeAgentSession({
+          ...input,
+          providerSessionId: "provider-new",
+          expectedProviderSessionId: "wrong-old",
+        }),
+      ).rejects.toThrow("provider collision");
 
       const replaced = await first.adoptNativeAgentSession({
         ...input,
@@ -1104,11 +1135,7 @@ describe("StorageService native agent sessions", () => {
         providerSessionId: "provider-same",
         controls: { modelId: "old-model", mode: "build", fastMode: false },
       });
-      await first.dispatchNativeAgentPromptOnce(
-        input.key,
-        "request-kept",
-        async () => undefined,
-      );
+      await first.dispatchNativeAgentPromptOnce(input.key, "request-kept", async () => undefined);
 
       // Resuming in place: the provider already received these controls, so
       // storage must not keep reporting the old ones after a restart.
@@ -1128,8 +1155,7 @@ describe("StorageService native agent sessions", () => {
       // and creation time survive.
       expect(resumed.dispatchedRequestIds).toEqual(["request-kept"]);
       expect(resumed.createdAt).toBe(adopted.createdAt);
-      expect((await first.getNativeAgentSession(input.key))?.controls)
-        .toEqual(resumed.controls);
+      expect((await first.getNativeAgentSession(input.key))?.controls).toEqual(resumed.controls);
 
       // An adopt that changes nothing must not rewrite the record.
       const unchanged = await first.adoptNativeAgentSession({
@@ -1150,11 +1176,13 @@ describe("StorageService native agent sessions", () => {
 
   test("rejects a replacement expectation when no mapping exists", async () => {
     await withStorage(async (first) => {
-      await expect(first.adoptNativeAgentSession({
-        ...input,
-        providerSessionId: "provider-new",
-        expectedProviderSessionId: "provider-old",
-      })).rejects.toThrow("replacement target");
+      await expect(
+        first.adoptNativeAgentSession({
+          ...input,
+          providerSessionId: "provider-new",
+          expectedProviderSessionId: "provider-old",
+        }),
+      ).rejects.toThrow("replacement target");
     });
   });
 
@@ -1178,14 +1206,17 @@ describe("StorageService native agent sessions", () => {
         await expect(
           first.getOrCreateNativeAgentSession(collision, createProviderSession),
         ).rejects.toThrow("Native agent session key collision");
-        await expect(first.adoptNativeAgentSession({
-          ...collision,
-          providerSessionId: "provider-other",
-        })).rejects.toThrow("Native agent session key collision");
+        await expect(
+          first.adoptNativeAgentSession({
+            ...collision,
+            providerSessionId: "provider-other",
+          }),
+        ).rejects.toThrow("Native agent session key collision");
       }
       expect(createProviderSession).not.toHaveBeenCalled();
-      expect((await first.getNativeAgentSession(input.key))?.providerSessionId)
-        .toBe("provider-session");
+      expect((await first.getNativeAgentSession(input.key))?.providerSessionId).toBe(
+        "provider-session",
+      );
     });
   });
 
@@ -1204,37 +1235,48 @@ describe("StorageService native agent sessions", () => {
     await withStorage(async (first) => {
       const create = async () => "provider-session";
       await expect(first.getNativeAgentSession("")).rejects.toThrow("must not be blank");
-      await expect(first.getOrCreateNativeAgentSession({ ...input, key: " " }, create))
-        .rejects.toThrow("Native agent session input is invalid");
+      await expect(
+        first.getOrCreateNativeAgentSession({ ...input, key: " " }, create),
+      ).rejects.toThrow("Native agent session input is invalid");
       await expect(
         first.getOrCreateNativeAgentSession({ ...input, environmentId: "" }, create),
       ).rejects.toThrow("Native agent session input is invalid");
       await expect(
         first.getOrCreateNativeAgentSession({ ...input, logicalSessionKey: "" }, create),
       ).rejects.toThrow("Native agent session input is invalid");
-      await expect(first.getOrCreateNativeAgentSession(
-        { ...input, agent: "gemini" as unknown as typeof input.agent },
-        create,
-      )).rejects.toThrow("Native agent session input is invalid");
+      await expect(
+        first.getOrCreateNativeAgentSession(
+          { ...input, agent: "gemini" as unknown as typeof input.agent },
+          create,
+        ),
+      ).rejects.toThrow("Native agent session input is invalid");
 
-      await expect(first.adoptNativeAgentSession({
-        ...input,
-        providerSessionId: " ",
-      })).rejects.toThrow("Native agent session adoption input is invalid");
-      await expect(first.adoptNativeAgentSession({
-        ...input,
-        providerSessionId: "provider-session",
-        expectedProviderSessionId: " ",
-      })).rejects.toThrow("Native agent session adoption input is invalid");
+      await expect(
+        first.adoptNativeAgentSession({
+          ...input,
+          providerSessionId: " ",
+        }),
+      ).rejects.toThrow("Native agent session adoption input is invalid");
+      await expect(
+        first.adoptNativeAgentSession({
+          ...input,
+          providerSessionId: "provider-session",
+          expectedProviderSessionId: " ",
+        }),
+      ).rejects.toThrow("Native agent session adoption input is invalid");
 
-      await expect(first.invalidateNativeAgentSession("", "provider-session"))
-        .rejects.toThrow("identity must not be blank");
-      await expect(first.invalidateNativeAgentSession(input.key, ""))
-        .rejects.toThrow("identity must not be blank");
-      await expect(first.dispatchNativeAgentPromptOnce("", "request-1", async () => undefined))
-        .rejects.toThrow("dispatch key must not be blank");
-      await expect(first.dispatchNativeAgentPromptOnce(input.key, " ", async () => undefined))
-        .rejects.toThrow("dispatch key must not be blank");
+      await expect(first.invalidateNativeAgentSession("", "provider-session")).rejects.toThrow(
+        "identity must not be blank",
+      );
+      await expect(first.invalidateNativeAgentSession(input.key, "")).rejects.toThrow(
+        "identity must not be blank",
+      );
+      await expect(
+        first.dispatchNativeAgentPromptOnce("", "request-1", async () => undefined),
+      ).rejects.toThrow("dispatch key must not be blank");
+      await expect(
+        first.dispatchNativeAgentPromptOnce(input.key, " ", async () => undefined),
+      ).rejects.toThrow("dispatch key must not be blank");
     });
   });
 
@@ -1263,16 +1305,14 @@ describe("StorageService native agent sessions", () => {
       expect(session.dispatchedRequestIds?.[0]).toBe("request-1");
       expect(session.dispatchedRequestIds?.at(-1)).toBe("request-new");
       // The oldest id was evicted, so replaying it is no longer suppressed.
-      expect((await first.dispatchNativeAgentPromptOnce(
-        input.key,
-        "request-0",
-        async () => undefined,
-      )).dispatched).toBe(true);
-      expect((await first.dispatchNativeAgentPromptOnce(
-        input.key,
-        "request-new",
-        async () => undefined,
-      )).dispatched).toBe(false);
+      expect(
+        (await first.dispatchNativeAgentPromptOnce(input.key, "request-0", async () => undefined))
+          .dispatched,
+      ).toBe(true);
+      expect(
+        (await first.dispatchNativeAgentPromptOnce(input.key, "request-new", async () => undefined))
+          .dispatched,
+      ).toBe(false);
     });
   });
 
@@ -1294,8 +1334,7 @@ describe("StorageService native agent sessions", () => {
       await first.deleteNativeAgentSessionsByEnvironment("env-1");
 
       expect(await first.getNativeAgentSession(input.key)).toBeNull();
-      expect((await first.getNativeAgentSession(other.key))?.providerSessionId)
-        .toBe("provider-2");
+      expect((await first.getNativeAgentSession(other.key))?.providerSessionId).toBe("provider-2");
     });
   });
 
@@ -1336,19 +1375,22 @@ describe("StorageService native agent sessions", () => {
     await withStorage(async (first) => {
       await first.getOrCreateNativeAgentSession(input, async () => "provider-current");
       const backup = path.join(first.getDataDir(), "native-agent-sessions.json.bak.1");
-      await fs.writeFile(backup, JSON.stringify({
-        future: {
-          ...input,
-          key: "future",
-          version: 2,
-          logicalSessionKey: "DROP-FUTURE-METADATA",
-          providerSessionId: "provider-future",
-          origin: "interactive-native",
-          interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
-          createdAt: new Date(1).toISOString(),
-          updatedAt: new Date(2).toISOString(),
-        },
-      }));
+      await fs.writeFile(
+        backup,
+        JSON.stringify({
+          future: {
+            ...input,
+            key: "future",
+            version: 2,
+            logicalSessionKey: "DROP-FUTURE-METADATA",
+            providerSessionId: "provider-future",
+            origin: "interactive-native",
+            interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+            createdAt: new Date(1).toISOString(),
+            updatedAt: new Date(2).toISOString(),
+          },
+        }),
+      );
 
       await first.deleteNativeAgentSessionsByEnvironment("env-1");
       const scrubbed = await fs.readFile(backup, "utf8");
@@ -1363,8 +1405,9 @@ describe("StorageService native agent sessions", () => {
       await first.getOrCreateNativeAgentSession(input, async () => "provider-session");
       await first.deleteNativeAgentSessionsByEnvironment("");
       await first.deleteNativeAgentSessionsByEnvironment("env-never-existed");
-      expect((await first.getNativeAgentSession(input.key))?.providerSessionId)
-        .toBe("provider-session");
+      expect((await first.getNativeAgentSession(input.key))?.providerSessionId).toBe(
+        "provider-session",
+      );
     });
   });
 
@@ -1382,18 +1425,22 @@ describe("StorageService native agent sessions", () => {
       });
 
       expect(
-        (await first.acknowledgeStartupAgentSession(
-          "env-1",
-          "provider-old",
-          "2026-07-29T11:00:00.000Z",
-        )).startupAgentSession,
+        (
+          await first.acknowledgeStartupAgentSession(
+            "env-1",
+            "provider-old",
+            "2026-07-29T11:00:00.000Z",
+          )
+        ).startupAgentSession,
       ).toBeDefined();
       expect(
-        (await first.acknowledgeStartupAgentSession(
-          "env-1",
-          "provider-new",
-          "2026-07-29T12:00:00.000Z",
-        )).startupAgentSession,
+        (
+          await first.acknowledgeStartupAgentSession(
+            "env-1",
+            "provider-new",
+            "2026-07-29T12:00:00.000Z",
+          )
+        ).startupAgentSession,
       ).toBeUndefined();
     });
   });

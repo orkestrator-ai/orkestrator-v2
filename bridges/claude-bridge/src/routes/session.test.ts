@@ -21,10 +21,7 @@ const mockCreateSession = mock(() => ({
   createdAt: new Date("2026-01-01"),
   lastActivity: new Date("2026-01-01"),
 }));
-const mockCreateOrRecoverSession = mock(async (
-  title?: string,
-  _clientSessionKey?: string,
-) => ({
+const mockCreateOrRecoverSession = mock(async (title?: string, _clientSessionKey?: string) => ({
   id: "s-1",
   title: title ?? "Test",
   status: "idle" as const,
@@ -51,7 +48,7 @@ const mockGetSession = mock((id: string) =>
         lastActivity: new Date("2026-01-01"),
         taskRegistry: id === "s-tasks" ? sessionTaskRegistry : undefined,
       }
-    : undefined
+    : undefined,
 );
 
 const mockListSessions = mock(() => [
@@ -65,7 +62,13 @@ const mockListSessions = mock(() => [
 ]);
 
 const mockGetSessionMessages = mock(() => [
-  { id: "msg-1", role: "assistant", content: "Hello", parts: [], timestamp: "2026-01-01T00:00:00Z" },
+  {
+    id: "msg-1",
+    role: "assistant",
+    content: "Hello",
+    parts: [],
+    timestamp: "2026-01-01T00:00:00Z",
+  },
 ]);
 
 type SendPromptParams = Parameters<typeof realSessionManager.sendPrompt>;
@@ -86,24 +89,24 @@ const mockGetSessionInitData = mock(() => ({
 const mockAnswerQuestion = mock(() => true);
 const mockDismissQuestion = mock(() => true);
 const mockGetPendingPlanApprovals = mock(() => []);
-const mockGetSessionActivity = mock<
-  typeof realSessionManager.getSessionActivity
->(async (id: string) => (id === "s-1" ? "working" : "missing"));
+const mockGetSessionActivity = mock<typeof realSessionManager.getSessionActivity>(
+  async (id: string) => (id === "s-1" ? "working" : "missing"),
+);
 const mockRespondToPlanApproval = mock(() => true);
 const mockSetSessionPreferences = mock(
   async (_id: string, preferences: { planMode?: boolean }) => preferences,
 );
 const mockClearPromptSuggestion = mock((id: string) => id === "s-1");
-const mockGetPromptDispatchState = mock<
-  typeof realSessionManager.getPromptDispatchState
->(() => "new");
-const mockClaimPromptDispatch = mock<
-  typeof realSessionManager.claimPromptDispatch
->(async (_sessionId, _requestId, startDispatch) => {
-  const dispatch = startDispatch();
-  await dispatch.started;
-  return "claimed";
-});
+const mockGetPromptDispatchState = mock<typeof realSessionManager.getPromptDispatchState>(
+  () => "new",
+);
+const mockClaimPromptDispatch = mock<typeof realSessionManager.claimPromptDispatch>(
+  async (_sessionId, _requestId, startDispatch) => {
+    const dispatch = startDispatch();
+    await dispatch.started;
+    return "claimed";
+  },
+);
 const mockReconcilePersistedSessions = mock(async () => {});
 const mockEnsurePersistedSession = mock(async (id: string) => mockGetSession(id));
 const mockHydratePersistedSessionMessages = mock(async () => mockGetSessionMessages());
@@ -268,11 +271,7 @@ describe("session routes", () => {
     );
     mockRespondToPlanApproval.mockClear();
     mockClaimPromptDispatch.mockReset();
-    mockClaimPromptDispatch.mockImplementation(async (
-      _sessionId,
-      _requestId,
-      startDispatch,
-    ) => {
+    mockClaimPromptDispatch.mockImplementation(async (_sessionId, _requestId, startDispatch) => {
       const dispatch = startDispatch();
       await dispatch.started;
       return "claimed";
@@ -306,10 +305,7 @@ describe("session routes", () => {
       });
 
       expect(res.status).toBe(201);
-      expect(mockCreateOrRecoverSession).toHaveBeenCalledWith(
-        "Startup",
-        "env-env-1:startup-agent",
-      );
+      expect(mockCreateOrRecoverSession).toHaveBeenCalledWith("Startup", "env-env-1:startup-agent");
     });
 
     test("creates a session with no body", async () => {
@@ -333,16 +329,18 @@ describe("session routes", () => {
   describe("GET /session/:id", () => {
     test("returns session details", async () => {
       const turnStartedAt = "2026-01-01T00:00:05.000Z";
-      mockGetSession.mockImplementationOnce((id: string) => id === "s-1"
-        ? {
-            id,
-            title: "Test",
-            status: "running" as const,
-            turnStartedAt,
-            createdAt: new Date("2026-01-01"),
-            lastActivity: new Date("2026-01-01"),
-          }
-        : undefined);
+      mockGetSession.mockImplementationOnce((id: string) =>
+        id === "s-1"
+          ? {
+              id,
+              title: "Test",
+              status: "running" as const,
+              turnStartedAt,
+              createdAt: new Date("2026-01-01"),
+              lastActivity: new Date("2026-01-01"),
+            }
+          : undefined,
+      );
       const res = await app.request("/session/s-1");
       expect(res.status).toBe(200);
       const data = await jsonBody(res);
@@ -388,21 +386,18 @@ describe("session routes", () => {
       expect(mockSetSessionPreferences).toHaveBeenCalledWith("s-1", { planMode: true });
     });
 
-    test.each([
-      [null],
-      [[]],
-      ["plan"],
-      [true],
-      [1],
-    ])("rejects a non-object request body: %p", async (body) => {
-      const res = await jsonRequest("PUT", "/session/s-1/preferences", body);
+    test.each([[null], [[]], ["plan"], [true], [1]])(
+      "rejects a non-object request body: %p",
+      async (body) => {
+        const res = await jsonRequest("PUT", "/session/s-1/preferences", body);
 
-      expect(res.status).toBe(400);
-      expect(await jsonBody(res)).toEqual({
-        error: "Request body must be a JSON object",
-      });
-      expect(mockSetSessionPreferences).not.toHaveBeenCalled();
-    });
+        expect(res.status).toBe(400);
+        expect(await jsonBody(res)).toEqual({
+          error: "Request body must be a JSON object",
+        });
+        expect(mockSetSessionPreferences).not.toHaveBeenCalled();
+      },
+    );
 
     test("rejects a non-boolean plan mode", async () => {
       const res = await jsonRequest("PUT", "/session/s-1/preferences", { planMode: "yes" });
@@ -448,9 +443,7 @@ describe("session routes", () => {
     });
 
     test("maps an unknown session preference update to 404", async () => {
-      mockSetSessionPreferences.mockRejectedValueOnce(
-        refusal("not_found", "Session not found"),
-      );
+      mockSetSessionPreferences.mockRejectedValueOnce(refusal("not_found", "Session not found"));
 
       const res = await jsonRequest("PUT", "/session/missing/preferences", {
         planMode: true,
@@ -506,9 +499,7 @@ describe("session routes", () => {
         lastActivity: new Date("2026-01-01"),
         structuredOutputRequestId: "structured-1",
       }));
-      const mismatch = await app.request(
-        "/session/s-1/structured-output?requestId=structured-2",
-      );
+      const mismatch = await app.request("/session/s-1/structured-output?requestId=structured-2");
       expect(await jsonBody(mismatch)).toEqual({
         structuredOutput: null,
         requestId: "structured-2",
@@ -537,8 +528,9 @@ describe("session routes", () => {
       }));
       const bounded = boundClaudeTranscriptResponse(messages);
 
-      expect(Buffer.byteLength(JSON.stringify(bounded)))
-        .toBeLessThanOrEqual(MAX_CLAUDE_TRANSCRIPT_RESPONSE_BYTES);
+      expect(Buffer.byteLength(JSON.stringify(bounded))).toBeLessThanOrEqual(
+        MAX_CLAUDE_TRANSCRIPT_RESPONSE_BYTES,
+      );
       expect(bounded.messageWindow).toMatchObject({ truncated: true });
       expect(bounded.messages.at(-1)?.id).toBe("message-19");
       expect(bounded.messages[0]?.id).not.toBe("message-0");
@@ -551,17 +543,20 @@ describe("session routes", () => {
         type: "text" as const,
         content: `${index}:${"x".repeat(1024 * 1024)}`,
       }));
-      const bounded = boundClaudeTranscriptResponse([{
-        id: "message-long-turn",
-        role: "assistant" as const,
-        content: "done",
-        parts,
-        createdAt: "2026-01-01T00:00:00.000Z",
-      }]);
+      const bounded = boundClaudeTranscriptResponse([
+        {
+          id: "message-long-turn",
+          role: "assistant" as const,
+          content: "done",
+          parts,
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+      ]);
 
       expect(bounded.messages).toHaveLength(1);
-      expect(Buffer.byteLength(JSON.stringify(bounded)))
-        .toBeLessThanOrEqual(MAX_CLAUDE_TRANSCRIPT_RESPONSE_BYTES);
+      expect(Buffer.byteLength(JSON.stringify(bounded))).toBeLessThanOrEqual(
+        MAX_CLAUDE_TRANSCRIPT_RESPONSE_BYTES,
+      );
       expect(bounded.messageWindow.truncated).toBe(true);
       expect(bounded.messageWindow.omittedParts).toBeGreaterThan(0);
       expect(bounded.messageWindow.omittedMessages).toBeUndefined();
@@ -569,14 +564,16 @@ describe("session routes", () => {
     });
 
     test("gzip-compresses the transcript when the client accepts gzip", async () => {
-      mockGetSessionMessages.mockReturnValueOnce([{
-        id: "msg-compress",
-        role: "assistant",
-        content: "Hello",
-        parts: [{ type: "text", content: "compressible ".repeat(8_192) }],
-        timestamp: "2026-01-01T00:00:00Z",
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      }] as any);
+      mockGetSessionMessages.mockReturnValueOnce([
+        {
+          id: "msg-compress",
+          role: "assistant",
+          content: "Hello",
+          parts: [{ type: "text", content: "compressible ".repeat(8_192) }],
+          timestamp: "2026-01-01T00:00:00Z",
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        },
+      ] as any);
       const request = new Request("http://localhost/session/s-1/messages");
       request.headers.set("Accept-Encoding", "gzip");
       const res = await bridgeApp.request(request);
@@ -586,9 +583,7 @@ describe("session routes", () => {
       // Without Vary a shared cache could hand a gzip body to a client that
       // never asked for one.
       expect(res.headers.get("Vary")).toContain("Accept-Encoding");
-      const decoded = JSON.parse(
-        gunzipSync(Buffer.from(await res.arrayBuffer())).toString(),
-      );
+      const decoded = JSON.parse(gunzipSync(Buffer.from(await res.arrayBuffer())).toString());
       expect(decoded.messages[0]?.id).toBe("msg-compress");
     });
 
@@ -690,16 +685,18 @@ describe("session routes", () => {
 
     test("returns 202 with valid prompt", async () => {
       const turnStartedAt = "2026-01-01T00:00:05.000Z";
-      mockGetSession.mockImplementationOnce((id: string) => id === "s-1"
-        ? {
-            id,
-            title: "Test",
-            status: "idle" as const,
-            turnStartedAt,
-            createdAt: new Date("2026-01-01"),
-            lastActivity: new Date("2026-01-01"),
-          }
-        : undefined);
+      mockGetSession.mockImplementationOnce((id: string) =>
+        id === "s-1"
+          ? {
+              id,
+              title: "Test",
+              status: "idle" as const,
+              turnStartedAt,
+              createdAt: new Date("2026-01-01"),
+              lastActivity: new Date("2026-01-01"),
+            }
+          : undefined,
+      );
       const res = await jsonRequest("POST", "/session/s-1/prompt", {
         prompt: "Hello Claude",
       });
@@ -711,16 +708,18 @@ describe("session routes", () => {
 
     test("durably claims a stable request id before dispatch", async () => {
       const turnStartedAt = "2026-01-01T00:00:06.000Z";
-      mockGetSession.mockImplementationOnce((id: string) => id === "s-1"
-        ? {
-            id,
-            title: "Test",
-            status: "idle" as const,
-            turnStartedAt,
-            createdAt: new Date("2026-01-01"),
-            lastActivity: new Date("2026-01-01"),
-          }
-        : undefined);
+      mockGetSession.mockImplementationOnce((id: string) =>
+        id === "s-1"
+          ? {
+              id,
+              title: "Test",
+              status: "idle" as const,
+              turnStartedAt,
+              createdAt: new Date("2026-01-01"),
+              lastActivity: new Date("2026-01-01"),
+            }
+          : undefined,
+      );
       const res = await jsonRequest("POST", "/session/s-1/prompt", {
         prompt: "Launch once",
         requestId: "initial-prompt:env-1:tab-1",
@@ -854,16 +853,18 @@ describe("session routes", () => {
 
     test("forwards a structured schema and stable request id", async () => {
       const turnStartedAt = "2026-01-01T00:00:07.000Z";
-      mockGetSession.mockImplementationOnce((id: string) => id === "s-1"
-        ? {
-            id,
-            title: "Test",
-            status: "idle" as const,
-            turnStartedAt,
-            createdAt: new Date("2026-01-01"),
-            lastActivity: new Date("2026-01-01"),
-          }
-        : undefined);
+      mockGetSession.mockImplementationOnce((id: string) =>
+        id === "s-1"
+          ? {
+              id,
+              title: "Test",
+              status: "idle" as const,
+              turnStartedAt,
+              createdAt: new Date("2026-01-01"),
+              lastActivity: new Date("2026-01-01"),
+            }
+          : undefined,
+      );
       const outputSchema = { type: "object", properties: { summary: { type: "string" } } };
       const res = await jsonRequest("POST", "/session/s-1/prompt", {
         prompt: "Review",
@@ -937,16 +938,18 @@ describe("session routes", () => {
      */
     test("deduplicates an unstructured prompt carrying a repeated request id", async () => {
       const turnStartedAt = "2026-01-01T00:00:08.000Z";
-      mockGetSession.mockImplementationOnce((id: string) => id === "s-1"
-        ? {
-            id,
-            title: "Test",
-            status: "running" as const,
-            turnStartedAt,
-            createdAt: new Date("2026-01-01"),
-            lastActivity: new Date("2026-01-01"),
-          }
-        : undefined);
+      mockGetSession.mockImplementationOnce((id: string) =>
+        id === "s-1"
+          ? {
+              id,
+              title: "Test",
+              status: "running" as const,
+              turnStartedAt,
+              createdAt: new Date("2026-01-01"),
+              lastActivity: new Date("2026-01-01"),
+            }
+          : undefined,
+      );
       mockGetPromptDispatchState.mockReturnValueOnce("processing");
       const duplicate = await jsonRequest("POST", "/session/s-1/prompt", {
         prompt: "rm the temp dir",
@@ -1039,16 +1042,18 @@ describe("session routes", () => {
     });
 
     test("returns 409 for a requestless prompt while a turn is already running", async () => {
-      mockGetSession.mockImplementationOnce((id: string) => id === "s-1"
-        ? {
-            id,
-            title: "Test",
-            status: "running" as const,
-            turnStartedAt: "2026-01-01T00:00:08.000Z",
-            createdAt: new Date("2026-01-01"),
-            lastActivity: new Date("2026-01-01"),
-          }
-        : undefined);
+      mockGetSession.mockImplementationOnce((id: string) =>
+        id === "s-1"
+          ? {
+              id,
+              title: "Test",
+              status: "running" as const,
+              turnStartedAt: "2026-01-01T00:00:08.000Z",
+              createdAt: new Date("2026-01-01"),
+              lastActivity: new Date("2026-01-01"),
+            }
+          : undefined,
+      );
 
       const res = await jsonRequest("POST", "/session/s-1/prompt", {
         prompt: "Another turn",
@@ -1076,12 +1081,14 @@ describe("session routes", () => {
     test("accepts an image-only prompt", async () => {
       const res = await jsonRequest("POST", "/session/s-1/prompt", {
         prompt: "",
-        attachments: [{
-          type: "image",
-          path: "",
-          filename: "screen.png",
-          dataUrl: "data:image/png;base64,aGVsbG8=",
-        }],
+        attachments: [
+          {
+            type: "image",
+            path: "",
+            filename: "screen.png",
+            dataUrl: "data:image/png;base64,aGVsbG8=",
+          },
+        ],
       });
 
       expect(res.status).toBe(202);
@@ -1109,11 +1116,13 @@ describe("session routes", () => {
     test("rejects malformed image-only data and empty attachment sources", async () => {
       const malformedData = await jsonRequest("POST", "/session/s-1/prompt", {
         prompt: "",
-        attachments: [{
-          type: "image",
-          path: "",
-          dataUrl: "not base64",
-        }],
+        attachments: [
+          {
+            type: "image",
+            path: "",
+            dataUrl: "not base64",
+          },
+        ],
       });
       expect(malformedData.status).toBe(400);
 
@@ -1126,16 +1135,19 @@ describe("session routes", () => {
     });
 
     test("rejects inline image data over the 8MB attachment limit", async () => {
-      const oversizedDataUrl = `data:image/png;base64,${
-        Buffer.alloc((8 * 1024 * 1024) + 1, 1).toString("base64")
-      }`;
+      const oversizedDataUrl = `data:image/png;base64,${Buffer.alloc(
+        8 * 1024 * 1024 + 1,
+        1,
+      ).toString("base64")}`;
       const response = await jsonRequest("POST", "/session/s-1/prompt", {
         prompt: "describe",
-        attachments: [{
-          type: "image",
-          path: "",
-          dataUrl: oversizedDataUrl,
-        }],
+        attachments: [
+          {
+            type: "image",
+            path: "",
+            dataUrl: oversizedDataUrl,
+          },
+        ],
       });
 
       expect(response.status).toBe(400);
@@ -1146,16 +1158,18 @@ describe("session routes", () => {
     });
 
     test("accepts inline image data exactly at the 8MB attachment limit", async () => {
-      const maximumDataUrl = `data:image/png;base64,${
-        Buffer.alloc(8 * 1024 * 1024, 1).toString("base64")
-      }`;
+      const maximumDataUrl = `data:image/png;base64,${Buffer.alloc(8 * 1024 * 1024, 1).toString(
+        "base64",
+      )}`;
       const response = await jsonRequest("POST", "/session/s-1/prompt", {
         prompt: "describe",
-        attachments: [{
-          type: "image",
-          path: "",
-          dataUrl: maximumDataUrl,
-        }],
+        attachments: [
+          {
+            type: "image",
+            path: "",
+            dataUrl: maximumDataUrl,
+          },
+        ],
       });
 
       expect(response.status).toBe(202);
@@ -1293,7 +1307,14 @@ describe("session routes", () => {
     });
 
     test("accepts all valid permission modes", async () => {
-      for (const mode of ["default", "acceptEdits", "bypassPermissions", "plan", "dontAsk", "auto"]) {
+      for (const mode of [
+        "default",
+        "acceptEdits",
+        "bypassPermissions",
+        "plan",
+        "dontAsk",
+        "auto",
+      ]) {
         mockSendPrompt.mockClear();
         await jsonRequest("POST", "/session/s-1/prompt", {
           prompt: "test",
@@ -1486,11 +1507,9 @@ describe("session routes", () => {
         },
       ]);
 
-      const res = await jsonRequest(
-        "POST",
-        "/session/s-1/questions/q-1/answer",
-        { answers: [["blue"]] },
-      );
+      const res = await jsonRequest("POST", "/session/s-1/questions/q-1/answer", {
+        answers: [["blue"]],
+      });
       expect(res.status).toBe(200);
       const data = await jsonBody(res);
       expect(data.status).toBe("answered");
@@ -1519,11 +1538,9 @@ describe("session routes", () => {
       const debugSpy = spyOn(console, "debug").mockImplementation(() => undefined);
 
       try {
-        const res = await jsonRequest(
-          "POST",
-          "/session/s-1/questions/q-private/answer",
-          { answers: [[secretAnswer]] },
-        );
+        const res = await jsonRequest("POST", "/session/s-1/questions/q-private/answer", {
+          answers: [[secretAnswer]],
+        });
 
         expect(res.status).toBe(200);
         expect(JSON.stringify(debugSpy.mock.calls)).not.toContain(secretAnswer);
@@ -1553,11 +1570,9 @@ describe("session routes", () => {
         },
       ]);
 
-      const res = await jsonRequest(
-        "POST",
-        "/session/s-1/questions/q-2/answer",
-        { answers: [["TypeScript, strict", "Python"]] },
-      );
+      const res = await jsonRequest("POST", "/session/s-1/questions/q-2/answer", {
+        answers: [["TypeScript, strict", "Python"]],
+      });
       expect(res.status).toBe(200);
       const callArgs = mockAnswerQuestion.mock.calls[0];
       expect(callArgs[1]).toEqual({
@@ -1581,11 +1596,9 @@ describe("session routes", () => {
         },
       ]);
 
-      const res = await jsonRequest(
-        "POST",
-        "/session/s-1/questions/q-option-custom/answer",
-        { answers: [["Red", "Magenta, with sparkle 🦊"]] },
-      );
+      const res = await jsonRequest("POST", "/session/s-1/questions/q-option-custom/answer", {
+        answers: [["Red", "Magenta, with sparkle 🦊"]],
+      });
       expect(res.status).toBe(200);
       expect(mockAnswerQuestion.mock.calls[0]?.[1]).toEqual({
         "Pick a color": JSON.stringify(["Red", "Magenta, with sparkle 🦊"]),
@@ -1604,11 +1617,9 @@ describe("session routes", () => {
         },
       ]);
 
-      const res = await jsonRequest(
-        "POST",
-        "/session/s-1/questions/q-3/answer",
-        { answers: [["a"], ["b"]] },
-      );
+      const res = await jsonRequest("POST", "/session/s-1/questions/q-3/answer", {
+        answers: [["a"], ["b"]],
+      });
       expect(res.status).toBe(200);
       const callArgs = mockAnswerQuestion.mock.calls[0];
       expect(callArgs[1]).toEqual({ "First?": "a", "Second?": "b" });
@@ -1636,20 +1647,14 @@ describe("session routes", () => {
     });
 
     test("returns 400 when answers is missing", async () => {
-      const res = await jsonRequest(
-        "POST",
-        "/session/s-1/questions/q-1/answer",
-        {},
-      );
+      const res = await jsonRequest("POST", "/session/s-1/questions/q-1/answer", {});
       expect(res.status).toBe(400);
     });
 
     test("returns 400 when answers is not an array", async () => {
-      const res = await jsonRequest(
-        "POST",
-        "/session/s-1/questions/q-1/answer",
-        { answers: "not-an-array" },
-      );
+      const res = await jsonRequest("POST", "/session/s-1/questions/q-1/answer", {
+        answers: "not-an-array",
+      });
       expect(res.status).toBe(400);
     });
 
@@ -1657,21 +1662,13 @@ describe("session routes", () => {
       const pending = {
         id: "q-malformed",
         sessionId: "s-1",
-        questions: [
-          { question: "Pick?", header: "P", options: [{ label: "a" }] },
-        ],
+        questions: [{ question: "Pick?", header: "P", options: [{ label: "a" }] }],
       };
-      for (const answers of [
-        ["not-an-array"],
-        [["valid", 42]],
-        [[{ label: "forged" }]],
-      ]) {
+      for (const answers of [["not-an-array"], [["valid", 42]], [[{ label: "forged" }]]]) {
         mockGetPendingQuestions.mockImplementationOnce(() => [pending]);
-        const res = await jsonRequest(
-          "POST",
-          "/session/s-1/questions/q-malformed/answer",
-          { answers },
-        );
+        const res = await jsonRequest("POST", "/session/s-1/questions/q-malformed/answer", {
+          answers,
+        });
         expect(res.status).toBe(400);
       }
       expect(mockAnswerQuestion).not.toHaveBeenCalled();
@@ -1681,9 +1678,7 @@ describe("session routes", () => {
       const pending = {
         id: "q-bounded",
         sessionId: "s-1",
-        questions: [
-          { question: "Pick?", header: "P", options: [{ label: "a" }] },
-        ],
+        questions: [{ question: "Pick?", header: "P", options: [{ label: "a" }] }],
       };
       const invalidAnswers = [
         [[]],
@@ -1693,11 +1688,9 @@ describe("session routes", () => {
       ];
       for (const answers of invalidAnswers) {
         mockGetPendingQuestions.mockImplementationOnce(() => [pending]);
-        const res = await jsonRequest(
-          "POST",
-          "/session/s-1/questions/q-bounded/answer",
-          { answers },
-        );
+        const res = await jsonRequest("POST", "/session/s-1/questions/q-bounded/answer", {
+          answers,
+        });
         expect(res.status).toBe(400);
       }
       expect(mockAnswerQuestion).not.toHaveBeenCalled();
@@ -1709,20 +1702,21 @@ describe("session routes", () => {
         header: String(index),
         options: [],
       }));
-      mockGetPendingQuestions.mockImplementationOnce(() => [{
-        id: "q-oversized",
-        sessionId: "s-1",
-        questions,
-      }]);
+      mockGetPendingQuestions.mockImplementationOnce(() => [
+        {
+          id: "q-oversized",
+          sessionId: "s-1",
+          questions,
+        },
+      ]);
       const answers = questions.map(() =>
         // Large enough to exceed the semantic 256 KiB answer limit, but small
         // enough to pass the request-body cap and exercise this validator.
-        Array.from({ length: 16 }, () => "x".repeat(1_021)));
-      const res = await jsonRequest(
-        "POST",
-        "/session/s-1/questions/q-oversized/answer",
-        { answers },
+        Array.from({ length: 16 }, () => "x".repeat(1_021)),
       );
+      const res = await jsonRequest("POST", "/session/s-1/questions/q-oversized/answer", {
+        answers,
+      });
       expect(res.status).toBe(400);
       expect(mockAnswerQuestion).not.toHaveBeenCalled();
     });
@@ -1751,11 +1745,9 @@ describe("session routes", () => {
      */
     test("returns 409 stale when the pending question does not exist", async () => {
       mockGetPendingQuestions.mockImplementationOnce(() => []);
-      const res = await jsonRequest(
-        "POST",
-        "/session/s-1/questions/q-missing/answer",
-        { answers: [["x"]] },
-      );
+      const res = await jsonRequest("POST", "/session/s-1/questions/q-missing/answer", {
+        answers: [["x"]],
+      });
       expect(res.status).toBe(409);
       expect(await jsonBody(res)).toMatchObject({ status: "stale" });
     });
@@ -1765,18 +1757,14 @@ describe("session routes", () => {
         {
           id: "q-5",
           sessionId: "s-1",
-          questions: [
-            { question: "Stale?", header: "S", options: [{ label: "x" }] },
-          ],
+          questions: [{ question: "Stale?", header: "S", options: [{ label: "x" }] }],
         },
       ]);
       mockAnswerQuestion.mockImplementationOnce(() => false);
 
-      const res = await jsonRequest(
-        "POST",
-        "/session/s-1/questions/q-5/answer",
-        { answers: [["x"]] },
-      );
+      const res = await jsonRequest("POST", "/session/s-1/questions/q-5/answer", {
+        answers: [["x"]],
+      });
       expect(res.status).toBe(409);
       expect(await jsonBody(res)).toMatchObject({ status: "stale" });
     });
@@ -1784,11 +1772,9 @@ describe("session routes", () => {
     // Still a 404: the session itself is unknown, which is a genuine error the
     // client must surface rather than silently discard.
     test("returns 404 for unknown session", async () => {
-      const res = await jsonRequest(
-        "POST",
-        "/session/s-unknown/questions/q-1/answer",
-        { answers: [["x"]] },
-      );
+      const res = await jsonRequest("POST", "/session/s-unknown/questions/q-1/answer", {
+        answers: [["x"]],
+      });
       expect(res.status).toBe(404);
     });
 
@@ -1804,11 +1790,13 @@ describe("session routes", () => {
 
   describe("DELETE /session/:id/questions/:questionId", () => {
     test("dismisses a pending question owned by the session", async () => {
-      mockGetPendingQuestions.mockImplementationOnce(() => [{
-        id: "q-1",
-        sessionId: "s-1",
-        questions: [],
-      }]);
+      mockGetPendingQuestions.mockImplementationOnce(() => [
+        {
+          id: "q-1",
+          sessionId: "s-1",
+          questions: [],
+        },
+      ]);
 
       const res = await app.request("/session/s-1/questions/q-1", { method: "DELETE" });
 
@@ -1833,11 +1821,13 @@ describe("session routes", () => {
     });
 
     test("returns 409 stale when the question resolves between snapshot and dismissal", async () => {
-      mockGetPendingQuestions.mockImplementationOnce(() => [{
-        id: "q-1",
-        sessionId: "s-1",
-        questions: [],
-      }]);
+      mockGetPendingQuestions.mockImplementationOnce(() => [
+        {
+          id: "q-1",
+          sessionId: "s-1",
+          questions: [],
+        },
+      ]);
       mockDismissQuestion.mockImplementationOnce(() => false);
 
       const res = await app.request("/session/s-1/questions/q-1", { method: "DELETE" });
@@ -1880,11 +1870,13 @@ describe("session routes", () => {
   // --- POST /session/:id/plan-approvals/:approvalId/respond ---
   describe("POST /session/:id/plan-approvals/:approvalId/respond", () => {
     test("returns approved status", async () => {
-      mockGetPendingPlanApprovals.mockImplementationOnce(() => [{
-        id: "a-1",
-        sessionId: "s-1",
-        toolUseId: "tool-1",
-      }]);
+      mockGetPendingPlanApprovals.mockImplementationOnce(() => [
+        {
+          id: "a-1",
+          sessionId: "s-1",
+          toolUseId: "tool-1",
+        },
+      ]);
       const res = await jsonRequest("POST", "/session/s-1/plan-approvals/a-1/respond", {
         approved: true,
       });
@@ -1894,11 +1886,13 @@ describe("session routes", () => {
     });
 
     test("returns rejected status with feedback", async () => {
-      mockGetPendingPlanApprovals.mockImplementationOnce(() => [{
-        id: "a-1",
-        sessionId: "s-1",
-        toolUseId: "tool-1",
-      }]);
+      mockGetPendingPlanApprovals.mockImplementationOnce(() => [
+        {
+          id: "a-1",
+          sessionId: "s-1",
+          toolUseId: "tool-1",
+        },
+      ]);
       const res = await jsonRequest("POST", "/session/s-1/plan-approvals/a-1/respond", {
         approved: false,
         feedback: "needs work",
@@ -1910,19 +1904,20 @@ describe("session routes", () => {
 
     test("does not write plan feedback to bridge logs", async () => {
       const privateFeedback = "private-plan-feedback-that-must-not-be-logged";
-      mockGetPendingPlanApprovals.mockImplementationOnce(() => [{
-        id: "a-private",
-        sessionId: "s-1",
-        toolUseId: "tool-private",
-      }]);
+      mockGetPendingPlanApprovals.mockImplementationOnce(() => [
+        {
+          id: "a-private",
+          sessionId: "s-1",
+          toolUseId: "tool-private",
+        },
+      ]);
       const logSpy = spyOn(console, "log").mockImplementation(() => undefined);
 
       try {
-        const res = await jsonRequest(
-          "POST",
-          "/session/s-1/plan-approvals/a-private/respond",
-          { approved: false, feedback: privateFeedback },
-        );
+        const res = await jsonRequest("POST", "/session/s-1/plan-approvals/a-private/respond", {
+          approved: false,
+          feedback: privateFeedback,
+        });
 
         expect(res.status).toBe(200);
         expect(JSON.stringify(logSpy.mock.calls)).not.toContain(privateFeedback);
@@ -1963,10 +1958,12 @@ describe("session routes", () => {
     });
 
     test("returns 409 stale when the approval resolves between snapshot and response", async () => {
-      mockGetPendingPlanApprovals.mockImplementationOnce(() => [{
-        id: "a-1",
-        sessionId: "s-1",
-      }]);
+      mockGetPendingPlanApprovals.mockImplementationOnce(() => [
+        {
+          id: "a-1",
+          sessionId: "s-1",
+        },
+      ]);
       mockRespondToPlanApproval.mockImplementationOnce(() => false);
       const res = await jsonRequest("POST", "/session/s-1/plan-approvals/a-1/respond", {
         approved: true,
@@ -2047,17 +2044,18 @@ describe("persisted session routes", () => {
         lastActivity: new Date("2026-01-01"),
         persistedMessagesLoaded: false,
         backgroundTasks: undefined as
-          | Record<string, {
-              id: string;
-              toolUseId: string;
-              status: "failed";
-              error: string;
-            }>
+          | Record<
+              string,
+              {
+                id: string;
+                toolUseId: string;
+                status: "failed";
+                error: string;
+              }
+            >
           | undefined,
       };
-      mockGetSession.mockImplementationOnce(
-        () => persisted as ReturnType<typeof mockGetSession>,
-      );
+      mockGetSession.mockImplementationOnce(() => persisted as ReturnType<typeof mockGetSession>);
       mockHydratePersistedSessionMessages.mockImplementationOnce(async () => {
         persisted.persistedMessagesLoaded = true;
         persisted.backgroundTasks = {
@@ -2156,14 +2154,17 @@ describe("persisted session routes", () => {
   describe("GET /session/:id/messages", () => {
     test("hydrates a session whose transcript has not been read yet", async () => {
       mockGetSession.mockReturnValueOnce(undefined as ReturnType<typeof mockGetSession>);
-      mockEnsurePersistedSession.mockImplementation(async () => ({
-        id: "s-persisted",
-        title: "From disk",
-        status: "idle" as const,
-        createdAt: new Date("2026-01-01"),
-        lastActivity: new Date("2026-01-01"),
-        persistedMessagesLoaded: false,
-      }) as Awaited<ReturnType<typeof mockEnsurePersistedSession>>);
+      mockEnsurePersistedSession.mockImplementation(
+        async () =>
+          ({
+            id: "s-persisted",
+            title: "From disk",
+            status: "idle" as const,
+            createdAt: new Date("2026-01-01"),
+            lastActivity: new Date("2026-01-01"),
+            persistedMessagesLoaded: false,
+          }) as Awaited<ReturnType<typeof mockEnsurePersistedSession>>,
+      );
       mockHydratePersistedSessionMessages.mockImplementation(async () => [
         {
           id: "u-1",
@@ -2265,7 +2266,11 @@ describe("persisted session routes", () => {
       expect(mockForkPersistedSession).not.toHaveBeenCalled();
     });
 
-    const forkRefusals: Array<{ code: "not_found" | "conflict" | "invalid"; message: string; status: number }> = [
+    const forkRefusals: Array<{
+      code: "not_found" | "conflict" | "invalid";
+      message: string;
+      status: number;
+    }> = [
       { code: "not_found", message: "Session has not been materialized", status: 404 },
       { code: "conflict", message: "Cannot fork a running session", status: 409 },
       {
@@ -2351,7 +2356,11 @@ describe("persisted session routes", () => {
       expect(mockRewindSessionFiles).not.toHaveBeenCalled();
     });
 
-    const rewindRefusals: Array<{ code: "not_found" | "conflict" | "invalid"; message: string; status: number }> = [
+    const rewindRefusals: Array<{
+      code: "not_found" | "conflict" | "invalid";
+      message: string;
+      status: number;
+    }> = [
       { code: "not_found", message: "Session has not been materialized", status: 404 },
       { code: "conflict", message: "Cannot rewind a running session", status: 409 },
       {

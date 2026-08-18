@@ -13,8 +13,10 @@ import { reviewWorktreeProbeReasonCode } from "./review-worktree-fingerprint.js"
  * tree held nothing worth reviewing. Probing from the backend makes the state
  * the workflow's own evidence.
  */
-export type ReviewWorktreeProbeInvoker =
-  <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
+export type ReviewWorktreeProbeInvoker = <T>(
+  command: string,
+  args?: Record<string, unknown>,
+) => Promise<T>;
 
 export interface ReviewWorktreeProbeOptions {
   /**
@@ -34,18 +36,14 @@ export interface ReviewWorktreeProbeOptions {
  * stripped, because the message can quote repository paths.
  */
 function unknownReason(error: unknown): string {
-  const code = error instanceof Error
-    ? reviewWorktreeProbeReasonCode(error.message)
-    : null;
+  const code = error instanceof Error ? reviewWorktreeProbeReasonCode(error.message) : null;
   if (code) return `probe failed (${code})`;
   const details = (error ?? {}) as { executableMissing?: unknown; timedOut?: unknown };
   // A missing interpreter is the one failure a retry can never clear, so it is
   // worth naming separately from an ordinary command error.
   if (details.executableMissing === true) return "probe failed (interpreter-missing)";
   if (details.timedOut === true) return "probe failed (timeout)";
-  const name = error instanceof Error
-    ? error.name.replace(/[^A-Za-z0-9_]/g, "").slice(0, 40)
-    : "";
+  const name = error instanceof Error ? error.name.replace(/[^A-Za-z0-9_]/g, "").slice(0, 40) : "";
   return name ? `probe failed (${name})` : "probe failed";
 }
 
@@ -63,12 +61,12 @@ export async function probeReviewWorktreeOnce(
     const head = result?.head;
     const fingerprint = result?.fingerprint;
     if (
-      typeof head !== "string"
-      || !/^[0-9a-f]{40,64}$/i.test(head)
-      || !Array.isArray(paths)
-      || paths.some((entry) => typeof entry !== "string")
-      || (fingerprint !== undefined
-        && (typeof fingerprint !== "string" || !/^[0-9a-f]{64}$/i.test(fingerprint)))
+      typeof head !== "string" ||
+      !/^[0-9a-f]{40,64}$/i.test(head) ||
+      !Array.isArray(paths) ||
+      paths.some((entry) => typeof entry !== "string") ||
+      (fingerprint !== undefined &&
+        (typeof fingerprint !== "string" || !/^[0-9a-f]{64}$/i.test(fingerprint)))
     ) {
       return { status: "unknown", reason: "the worktree probe returned an unusable result" };
     }
@@ -79,7 +77,12 @@ export async function probeReviewWorktreeOnce(
     }
     return paths.length === 0
       ? { status: "clean", head, ...(fingerprint ? { fingerprint } : {}) }
-      : { status: "dirty", paths: paths as string[], head, ...(fingerprint ? { fingerprint } : {}) };
+      : {
+          status: "dirty",
+          paths: paths as string[],
+          head,
+          ...(fingerprint ? { fingerprint } : {}),
+        };
   } catch (error) {
     return { status: "unknown", reason: unknownReason(error) };
   }
@@ -98,11 +101,7 @@ export const REVIEW_WORKTREE_PROBE_ATTEMPTS = 3;
  * Failures a retry cannot clear. Re-running a missing interpreter or a worktree
  * that exceeds the probe's byte caps just spends the same time again.
  */
-const UNRETRYABLE_REASONS = [
-  "interpreter-missing",
-  "git-missing",
-  "too-large",
-];
+const UNRETRYABLE_REASONS = ["interpreter-missing", "git-missing", "too-large"];
 
 function retryable(snapshot: ReviewWorktreeSnapshot): boolean {
   if (snapshot.status !== "unknown") return false;

@@ -5,11 +5,9 @@ import {
   dockerOwnerNamespace,
 } from "../../../apps/backend/src/core/docker-ownership";
 
-const {
-  countPrunedDockerResources,
-  dockerOwnerMatches,
-  parseDockerByteSize,
-} = (await import("../../../apps/backend/src/core/commands")).__testing;
+const { countPrunedDockerResources, dockerOwnerMatches, parseDockerByteSize } = (
+  await import("../../../apps/backend/src/core/commands")
+).__testing;
 
 describe("Docker registry ownership", () => {
   test("is stable for one resolved data directory and distinct across registries", () => {
@@ -19,9 +17,7 @@ describe("Docker registry ownership", () => {
     expect(dockerOwnerNamespace(packagedData)).toBe(
       dockerOwnerNamespace(path.join(packagedData, ".")),
     );
-    expect(dockerOwnerNamespace(packagedData)).not.toBe(
-      dockerOwnerNamespace(developmentData),
-    );
+    expect(dockerOwnerNamespace(packagedData)).not.toBe(dockerOwnerNamespace(developmentData));
   });
 
   test("makes daemon-global container names owner-specific and Docker-safe", () => {
@@ -103,15 +99,17 @@ describe("dockerOwnerMatches", () => {
 
 describe("countPrunedDockerResources", () => {
   test("counts every id listed under the deleted heading", () => {
-    expect(countPrunedDockerResources(
-      "Deleted Containers:\nabc\ndef\n\nTotal reclaimed space: 1.25GB\n",
-    )).toBe(2);
+    expect(
+      countPrunedDockerResources(
+        "Deleted Containers:\nabc\ndef\n\nTotal reclaimed space: 1.25GB\n",
+      ),
+    ).toBe(2);
   });
 
   test("stops at the reclaimed-space line when no blank line separates it", () => {
-    expect(countPrunedDockerResources(
-      "Deleted Containers:\nabc\nTotal reclaimed space: 10B\n",
-    )).toBe(1);
+    expect(
+      countPrunedDockerResources("Deleted Containers:\nabc\nTotal reclaimed space: 10B\n"),
+    ).toBe(1);
   });
 
   test("reports zero when the prune removed nothing", () => {

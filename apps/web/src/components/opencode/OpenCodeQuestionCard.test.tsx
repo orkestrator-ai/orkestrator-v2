@@ -1,25 +1,7 @@
-import {
-  afterAll,
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  mock,
-  test,
-} from "bun:test";
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
-import {
-  openCodeQuestionDraftKey,
-  usePromptDraftStore,
-} from "@/stores/promptDraftStore";
+import { openCodeQuestionDraftKey, usePromptDraftStore } from "@/stores/promptDraftStore";
 import type {
   OpenCodeInteractionResponseResult,
   OpencodeClient,
@@ -49,9 +31,7 @@ const CLIENT = {
   baseUrl: "http://127.0.0.1:9999",
 } as unknown as OpencodeClient;
 
-function makeQuestion(
-  overrides: Partial<QuestionRequest> = {},
-): QuestionRequest {
+function makeQuestion(overrides: Partial<QuestionRequest> = {}): QuestionRequest {
   return {
     id: "question-1",
     sessionId: "session-1",
@@ -100,26 +80,24 @@ describe("OpenCodeQuestionCard", () => {
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
     await waitFor(() => {
-      expect(replyMock).toHaveBeenCalledWith(
-        CLIENT,
-        "question-1",
-        [["Web", "Desktop"]],
-      );
+      expect(replyMock).toHaveBeenCalledWith(CLIENT, "question-1", [["Web", "Desktop"]]);
     });
   });
 
   test("keeps duplicate option labels independently selectable", async () => {
     const question = makeQuestion({
-      questions: [{
-        question: "Choose both matching targets",
-        header: "Targets",
-        options: [
-          { label: "Same", description: "First target" },
-          { label: "Same", description: "Second target" },
-        ],
-        multiple: true,
-        custom: false,
-      }],
+      questions: [
+        {
+          question: "Choose both matching targets",
+          header: "Targets",
+          options: [
+            { label: "Same", description: "First target" },
+            { label: "Same", description: "Second target" },
+          ],
+          multiple: true,
+          custom: false,
+        },
+      ],
     });
     render(<OpenCodeQuestionCard question={question} client={CLIENT} />);
 
@@ -128,11 +106,7 @@ describe("OpenCodeQuestionCard", () => {
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
     await waitFor(() => {
-      expect(replyMock).toHaveBeenCalledWith(
-        CLIENT,
-        question.id,
-        [["Same", "Same"]],
-      );
+      expect(replyMock).toHaveBeenCalledWith(CLIENT, question.id, [["Same", "Same"]]);
     });
   });
 
@@ -162,11 +136,7 @@ describe("OpenCodeQuestionCard", () => {
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
     await waitFor(() => {
-      expect(replyMock).toHaveBeenCalledWith(
-        CLIENT,
-        "question-1",
-        [["Incremental"]],
-      );
+      expect(replyMock).toHaveBeenCalledWith(CLIENT, "question-1", [["Incremental"]]);
     });
   });
 
@@ -202,18 +172,17 @@ describe("OpenCodeQuestionCard", () => {
   test("locks submission while the reply is in flight", async () => {
     let resolveReply!: (value: OpenCodeInteractionResponseResult) => void;
     replyMock.mockImplementation(
-      () => new Promise<OpenCodeInteractionResponseResult>((resolve) => {
-        resolveReply = resolve;
-      }),
+      () =>
+        new Promise<OpenCodeInteractionResponseResult>((resolve) => {
+          resolveReply = resolve;
+        }),
     );
     render(<OpenCodeQuestionCard question={makeQuestion()} client={CLIENT} />);
 
     fireEvent.click(screen.getByRole("button", { name: /Web/ }));
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Submit" }).hasAttribute("disabled")).toBe(
-        true,
-      );
+      expect(screen.getByRole("button", { name: "Submit" }).hasAttribute("disabled")).toBe(true);
     });
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
     expect(replyMock).toHaveBeenCalledTimes(1);
@@ -228,9 +197,7 @@ describe("OpenCodeQuestionCard", () => {
     // from the store, and so must the half-entered answer.
     const question = makeQuestion();
     useOpenCodeStore.getState().addPendingQuestion(question);
-    const { unmount } = render(
-      <OpenCodeQuestionCard question={question} client={CLIENT} />,
-    );
+    const { unmount } = render(<OpenCodeQuestionCard question={question} client={CLIENT} />);
     fireEvent.click(screen.getByRole("button", { name: /Web/ }));
 
     unmount();
@@ -276,12 +243,9 @@ describe("OpenCodeQuestionCard", () => {
     expect(screen.getByRole("alert").textContent).toContain(
       "OpenCode is still waiting for a response. Please try again.",
     );
-    expect(mockToastError).toHaveBeenCalledWith(
-      "Failed to dismiss this question",
-      {
-        description: "OpenCode is still waiting for a response. Please try again.",
-      },
-    );
+    expect(mockToastError).toHaveBeenCalledWith("Failed to dismiss this question", {
+      description: "OpenCode is still waiting for a response. Please try again.",
+    });
 
     const dismiss = screen.getByRole("button", { name: "Dismiss" });
     expect(dismiss.hasAttribute("disabled")).toBe(false);

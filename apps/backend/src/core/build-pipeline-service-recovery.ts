@@ -1,13 +1,50 @@
 import { randomUUID } from "node:crypto";
-import type { BuildPipeline, BuildPipelineAgent, PipelineSession, PendingPipelineInteractionResolution, PipelineInteractionTranscriptEntry, PipelineSessionPhase } from "@orkestrator/protocol/build-pipeline";
-import { stepKeyForSessionPhase, isVerificationVerdict, type VerificationVerdict } from "@orkestrator/protocol/build-pipeline";
+import type {
+  BuildPipeline,
+  BuildPipelineAgent,
+  PipelineSession,
+  PendingPipelineInteractionResolution,
+  PipelineInteractionTranscriptEntry,
+  PipelineSessionPhase,
+} from "@orkestrator/protocol/build-pipeline";
+import {
+  stepKeyForSessionPhase,
+  isVerificationVerdict,
+  type VerificationVerdict,
+} from "@orkestrator/protocol/build-pipeline";
 import { type ReviewContractValidationError } from "@orkestrator/protocol/structured-review";
-import { AGENT_INTERACTION_JOURNAL_VERSION, AGENT_INTERACTION_LIMITS, UNATTENDED_AGENT_INTERACTION_POLICY, agentInteractionPolicyAction, type AgentInteractionOutcome, type AgentInteractionRequest, type AgentInteractionResolutionJournalEntry } from "@orkestrator/protocol/agent-interactions";
-import { createBuildPipelineProvider, ProviderUnavailableError, type BuildPipelineProvider } from "./build-pipeline-provider.js";
+import {
+  AGENT_INTERACTION_JOURNAL_VERSION,
+  AGENT_INTERACTION_LIMITS,
+  UNATTENDED_AGENT_INTERACTION_POLICY,
+  agentInteractionPolicyAction,
+  type AgentInteractionOutcome,
+  type AgentInteractionRequest,
+  type AgentInteractionResolutionJournalEntry,
+} from "@orkestrator/protocol/agent-interactions";
+import {
+  createBuildPipelineProvider,
+  ProviderUnavailableError,
+  type BuildPipelineProvider,
+} from "./build-pipeline-provider.js";
 import { stagePromptImages } from "./prompt-attachments.js";
-import { MAX_STRUCTURED_REPORT_REPAIR_PROMPT_BYTES, structuredReportRepairPrompt } from "./build-pipeline-prompts.js";
+import {
+  MAX_STRUCTURED_REPORT_REPAIR_PROMPT_BYTES,
+  structuredReportRepairPrompt,
+} from "./build-pipeline-prompts.js";
 import { BuildPipelineServiceSupervisor } from "./build-pipeline-service-supervisor.js";
-import { errorMessage, resumablePhase, connectionDefaultsFor, sessionAgent, stepModel, MAX_STRUCTURED_REPORT_REPAIR_ATTEMPTS, DEFAULT_INTERACTION_PROCESSING_LEASE_MS, withUnattendedPolicy, elapsedSince, appendInteractionSummary } from "./build-pipeline-service-helpers.js";
+import {
+  errorMessage,
+  resumablePhase,
+  connectionDefaultsFor,
+  sessionAgent,
+  stepModel,
+  MAX_STRUCTURED_REPORT_REPAIR_ATTEMPTS,
+  DEFAULT_INTERACTION_PROCESSING_LEASE_MS,
+  withUnattendedPolicy,
+  elapsedSince,
+  appendInteractionSummary,
+} from "./build-pipeline-service-helpers.js";
 import type { PullRequestDetection } from "./build-pipeline-service-helpers.js";
 
 export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceSupervisor {
@@ -29,11 +66,9 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     session.structuredRequestId = requestId;
     session.structuredResultStatus = "pending";
     session.turnStartedAt = startedAt;
-    const prompt = withUnattendedPolicy(structuredReportRepairPrompt(
-      error.issues,
-      attempt,
-      MAX_STRUCTURED_REPORT_REPAIR_ATTEMPTS,
-    ));
+    const prompt = withUnattendedPolicy(
+      structuredReportRepairPrompt(error.issues, attempt, MAX_STRUCTURED_REPORT_REPAIR_ATTEMPTS),
+    );
     if (Buffer.byteLength(prompt, "utf8") > MAX_STRUCTURED_REPORT_REPAIR_PROMPT_BYTES) {
       throw new Error("Structured report repair prompt exceeds its byte limit");
     }
@@ -65,8 +100,8 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     // reaches this branch, so the session's own key is the only durable copy.
     // A snapshot written before that field existed has none, and there the
     // providers' own transcript metadata carries the last structured request.
-    const resolvedRequestId = session.structuredRequestId
-      ?? this.structuredRequestId(session.messages);
+    const resolvedRequestId =
+      session.structuredRequestId ?? this.structuredRequestId(session.messages);
     if (!resolvedRequestId) throw new Error("Verification result key is missing");
     const result = await provider.structured<VerificationVerdict>(
       session.sdkSessionId,
@@ -96,7 +131,9 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
       return;
     }
     if (pipeline.iteration >= pipeline.maxIterations) {
-      throw new Error(`Verification failed after ${pipeline.maxIterations} iterations: ${rationale}`);
+      throw new Error(
+        `Verification failed after ${pipeline.maxIterations} iterations: ${rationale}`,
+      );
     }
     pipeline.iteration += 1;
     await this.startStage(pipeline, "fix", "fixing");
@@ -125,9 +162,7 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
       return;
     }
     if (elapsed >= this.structuredResultDeadlineMs) {
-      throw new Error(
-        `The ${label} finished without returning its required structured result`,
-      );
+      throw new Error(`The ${label} finished without returning its required structured result`);
     }
   }
 
@@ -136,9 +171,10 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     for (const entry of [...messages].reverse()) {
       if (!entry || typeof entry !== "object") continue;
       const record = entry as Record<string, unknown>;
-      const info = record.info && typeof record.info === "object"
-        ? record.info as Record<string, unknown>
-        : record;
+      const info =
+        record.info && typeof record.info === "object"
+          ? (record.info as Record<string, unknown>)
+          : record;
       if (info.role === "user" && typeof info.id === "string") return info.id;
       if (typeof record.requestId === "string") return record.requestId;
       if (typeof record.id === "string" && record.role === "user") return record.id;
@@ -184,33 +220,29 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     await this.complete(pipeline);
   }
 
-  protected async detectPullRequest(
-    pipeline: BuildPipeline,
-  ): Promise<PullRequestDetection | null> {
+  protected async detectPullRequest(pipeline: BuildPipeline): Promise<PullRequestDetection | null> {
     const environment = await this.storage.getEnvironment(pipeline.environmentId);
     if (!environment) throw new Error("Build environment no longer exists");
-    const result = environment.environmentType === "local"
-      ? await this.invoke<PullRequestDetection | null>("detect_pr_local", {
-          environmentId: environment.id,
-          branch: environment.branch,
-        })
-      : environment.containerId
-        ? await this.invoke<PullRequestDetection | null>("detect_pr", {
-            containerId: environment.containerId,
+    const result =
+      environment.environmentType === "local"
+        ? await this.invoke<PullRequestDetection | null>("detect_pr_local", {
+            environmentId: environment.id,
             branch: environment.branch,
           })
-        : (() => {
-            throw new Error("Build container is unavailable");
-          })();
+        : environment.containerId
+          ? await this.invoke<PullRequestDetection | null>("detect_pr", {
+              containerId: environment.containerId,
+              branch: environment.branch,
+            })
+          : (() => {
+              throw new Error("Build container is unavailable");
+            })();
     if (!result) return null;
     if (
-      typeof result.url !== "string"
-      || !result.url
-      || !["open", "merged", "closed"].includes(result.state)
-      || (
-        result.hasMergeConflicts !== null
-        && typeof result.hasMergeConflicts !== "boolean"
-      )
+      typeof result.url !== "string" ||
+      !result.url ||
+      !["open", "merged", "closed"].includes(result.state) ||
+      (result.hasMergeConflicts !== null && typeof result.hasMergeConflicts !== "boolean")
     ) {
       throw new Error("Pull request detection returned an invalid result");
     }
@@ -254,29 +286,31 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     if (pipeline.completionCommentStatus === "posted") return;
     pipeline.completionCommentStatus = "posting";
     await this.save(pipeline, pipeline.backendRevision);
-    const body = pipeline.phase === "complete"
-      ? `✅ Orkestrator build completed for **${pipeline.taskTitle}**.`
-      : `❌ Orkestrator build failed for **${pipeline.taskTitle}**: ${pipeline.error ?? "Unknown error"}`;
-    const result = source.type === "linear"
-      ? await this.invoke<{ commentId?: string; postedAt?: string }>(
-          "post_linear_completion_comment",
-          {
-            pipelineId: pipeline.id,
-            issueId: source.issueId,
-            body,
-          },
-        )
-      : await this.invoke<{ commentId?: string; postedAt?: string }>(
-          "post_github_completion_comment",
-          {
-            pipelineId: pipeline.id,
-            projectId: pipeline.projectId,
-            repositoryOwner: source.repositoryOwner,
-            repositoryName: source.repositoryName,
-            issueNumber: source.issueNumber,
-            body,
-          },
-        );
+    const body =
+      pipeline.phase === "complete"
+        ? `✅ Orkestrator build completed for **${pipeline.taskTitle}**.`
+        : `❌ Orkestrator build failed for **${pipeline.taskTitle}**: ${pipeline.error ?? "Unknown error"}`;
+    const result =
+      source.type === "linear"
+        ? await this.invoke<{ commentId?: string; postedAt?: string }>(
+            "post_linear_completion_comment",
+            {
+              pipelineId: pipeline.id,
+              issueId: source.issueId,
+              body,
+            },
+          )
+        : await this.invoke<{ commentId?: string; postedAt?: string }>(
+            "post_github_completion_comment",
+            {
+              pipelineId: pipeline.id,
+              projectId: pipeline.projectId,
+              repositoryOwner: source.repositoryOwner,
+              repositoryName: source.repositoryName,
+              issueNumber: source.issueNumber,
+              body,
+            },
+          );
     pipeline.completionCommentStatus = "posted";
     pipeline.completionCommentId = result.commentId;
     pipeline.completionCommentPostedAt = result.postedAt ?? new Date().toISOString();
@@ -287,9 +321,9 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
   protected needsTerminalReconciliation(pipeline: BuildPipeline): boolean {
     if (pipeline.phase !== "complete" && pipeline.phase !== "failed") return false;
     return Boolean(
-      pipeline.source
-      && pipeline.completionCommentStatus !== "posted"
-      && pipeline.completionCommentStatus !== "failed",
+      pipeline.source &&
+      pipeline.completionCommentStatus !== "posted" &&
+      pipeline.completionCommentStatus !== "failed",
     );
   }
 
@@ -335,20 +369,21 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
   ): Promise<void> {
     const source = pipeline.source;
     if (source?.type !== "kanban") return;
-    const tasks = await this.invoke<Array<{
-      id: string;
-      status: string;
-      prUrl?: string;
-      prState?: string;
-      comments: Array<{ text: string }>;
-    }>>("get_kanban_tasks", { projectId: pipeline.projectId });
-    const task = tasks
-      .find((candidate) => candidate.id === source.taskId);
+    const tasks = await this.invoke<
+      Array<{
+        id: string;
+        status: string;
+        prUrl?: string;
+        prState?: string;
+        comments: Array<{ text: string }>;
+      }>
+    >("get_kanban_tasks", { projectId: pipeline.projectId });
+    const task = tasks.find((candidate) => candidate.id === source.taskId);
     if (!task) throw new Error(`Kanban task not found: ${source.taskId}`);
     if (
-      (updates.status && task.status !== updates.status)
-      || (updates.prUrl && task.prUrl !== updates.prUrl)
-      || (updates.prState && task.prState !== updates.prState)
+      (updates.status && task.status !== updates.status) ||
+      (updates.prUrl && task.prUrl !== updates.prUrl) ||
+      (updates.prState && task.prState !== updates.prState)
     ) {
       await this.invoke("update_kanban_task", {
         taskId: task.id,
@@ -357,10 +392,7 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
         ...(updates.prState ? { prState: updates.prState } : {}),
       });
     }
-    if (
-      updates.comment
-      && !task.comments.some((comment) => comment.text === updates.comment)
-    ) {
+    if (updates.comment && !task.comments.some((comment) => comment.text === updates.comment)) {
       await this.invoke("add_kanban_comment", {
         taskId: task.id,
         text: updates.comment,
@@ -435,8 +467,7 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
       for (const session of ownSessions) {
         cached.registerSession?.(session.sdkSessionId, {
           origin: session.origin ?? "build-pipeline",
-          interactionPolicy: session.interactionPolicy
-            ?? UNATTENDED_AGENT_INTERACTION_POLICY,
+          interactionPolicy: session.interactionPolicy ?? UNATTENDED_AGENT_INTERACTION_POLICY,
           phase: session.phase,
           workflowId: pipeline.id,
           provider: agent,
@@ -450,8 +481,7 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
       for (const session of ownSessions) {
         provider.registerSession?.(session.sdkSessionId, {
           origin: session.origin ?? "build-pipeline",
-          interactionPolicy: session.interactionPolicy
-            ?? UNATTENDED_AGENT_INTERACTION_POLICY,
+          interactionPolicy: session.interactionPolicy ?? UNATTENDED_AGENT_INTERACTION_POLICY,
           phase: session.phase,
           workflowId: pipeline.id,
           provider: agent,
@@ -466,46 +496,47 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     const config = await this.storage.loadConfig();
     const repository = await this.storage.getRepositoryConfig(pipeline.projectId);
     const connection = await this.bridgeConnection(agent, environment);
-    const provider = createBuildPipelineProvider({
-      ...connection,
-      // Connection-level defaults only, and only this harness's own. Every
-      // pipeline turn passes the step's model and effort per call, which take
-      // precedence; these fill in whatever the step left unset.
-      ...connectionDefaultsFor(agent, config, repository),
-    }, {
-      ...this.options.providerDependencies,
-      // Milestone 4 resolves every provider through the same journaled backend
-      // path. The OpenCode event-loop compatibility path used to grant an
-      // unexpected permission once and fail questions before the common
-      // monitor could see them; leaving it enabled would violate both rules.
-      autoAnswerRequests: false,
-      // Task-snapshot images arrive as base64. Both bridges require a workspace
-      // path, so they have to be written into the environment before they can be
-      // attached to a prompt.
-      stageImages: (images) =>
-        stagePromptImages(this.invoke, environment, images),
-      onInteractionObservation: async (event) => {
-        const enriched = {
-          ...event,
-          environmentId: pipeline.environmentId,
-          provider: agent,
-        };
-        try {
-          await this.options.onInteractionObservation?.(enriched);
-        } catch {
-          // Passive diagnostics never control workflow behavior.
-        }
+    const provider = createBuildPipelineProvider(
+      {
+        ...connection,
+        // Connection-level defaults only, and only this harness's own. Every
+        // pipeline turn passes the step's model and effort per call, which take
+        // precedence; these fill in whatever the step left unset.
+        ...connectionDefaultsFor(agent, config, repository),
       },
-    });
+      {
+        ...this.options.providerDependencies,
+        // Milestone 4 resolves every provider through the same journaled backend
+        // path. The OpenCode event-loop compatibility path used to grant an
+        // unexpected permission once and fail questions before the common
+        // monitor could see them; leaving it enabled would violate both rules.
+        autoAnswerRequests: false,
+        // Task-snapshot images arrive as base64. Both bridges require a workspace
+        // path, so they have to be written into the environment before they can be
+        // attached to a prompt.
+        stageImages: (images) => stagePromptImages(this.invoke, environment, images),
+        onInteractionObservation: async (event) => {
+          const enriched = {
+            ...event,
+            environmentId: pipeline.environmentId,
+            provider: agent,
+          };
+          try {
+            await this.options.onInteractionObservation?.(enriched);
+          } catch {
+            // Passive diagnostics never control workflow behavior.
+          }
+        },
+      },
+    );
     for (const session of ownSessions) {
       provider.registerSession?.(session.sdkSessionId, {
         origin: session.origin ?? "build-pipeline",
-        interactionPolicy: session.interactionPolicy
-          ?? UNATTENDED_AGENT_INTERACTION_POLICY,
-          phase: session.phase,
-          workflowId: pipeline.id,
-          provider: agent,
-          fence: session.sessionKey,
+        interactionPolicy: session.interactionPolicy ?? UNATTENDED_AGENT_INTERACTION_POLICY,
+        phase: session.phase,
+        workflowId: pipeline.id,
+        provider: agent,
+        fence: session.sessionKey,
       });
     }
     this.providers.set(providerKey, provider);
@@ -517,8 +548,8 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     sessionId: string,
     interactionId: string,
   ): AgentInteractionResolutionJournalEntry | undefined {
-    return entries.find((entry) =>
-      entry.sessionId === sessionId && entry.interactionId === interactionId
+    return entries.find(
+      (entry) => entry.sessionId === sessionId && entry.interactionId === interactionId,
     );
   }
 
@@ -565,9 +596,9 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     });
     const entry = selected!;
     if (
-      entry.claim.workflowType !== "build-pipeline"
-      || entry.claim.workflowId !== pipeline.id
-      || entry.claim.fence !== session.sessionKey
+      entry.claim.workflowType !== "build-pipeline" ||
+      entry.claim.workflowId !== pipeline.id ||
+      entry.claim.fence !== session.sessionKey
     ) {
       throw new ProviderUnavailableError(
         "A pending interaction belongs to a different workflow generation",
@@ -587,11 +618,12 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
       ...journal,
       entries: journal.entries.map((entry) => {
         if (
-          entry.id !== pending.journalId
-          || entry.state !== "claimed"
-          || entry.processing?.ownerId !== this.interactionOwnerId
-          || entry.processing.token !== processingToken
-        ) return entry;
+          entry.id !== pending.journalId ||
+          entry.state !== "claimed" ||
+          entry.processing?.ownerId !== this.interactionOwnerId ||
+          entry.processing.token !== processingToken
+        )
+          return entry;
         recorded = true;
         const { processing: _processing, ...resolved } = entry;
         return {
@@ -694,9 +726,7 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
       phase: session.phase,
       requestedAt: entry.claim.claimedAt,
       claimedAt: entry.claim.claimedAt,
-      action: action === "decline-and-continue"
-        ? "decline-and-continue"
-        : "deny-and-fail",
+      action: action === "decline-and-continue" ? "decline-and-continue" : "deny-and-fail",
       title: "Provider interaction recovered after restart",
       body: "The provider no longer exposes the original bounded presentation.",
       questions: [],
@@ -707,14 +737,13 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     pipeline: BuildPipeline,
     pending: PendingPipelineInteractionResolution,
   ): boolean {
-    return pipeline.sessions.some((candidate) =>
-      candidate.interactionTranscript?.some((entry) =>
-        entry.id === pending.interactionId
-      )
-    ) || (
-      pipeline.phase === "failed"
-      && pipeline.failureContext?.kind === "interactive-request"
-      && pipeline.failureContext.requestId === pending.interactionId
+    return (
+      pipeline.sessions.some((candidate) =>
+        candidate.interactionTranscript?.some((entry) => entry.id === pending.interactionId),
+      ) ||
+      (pipeline.phase === "failed" &&
+        pipeline.failureContext?.kind === "interactive-request" &&
+        pipeline.failureContext.requestId === pending.interactionId)
     );
   }
 
@@ -776,8 +805,8 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
       if (errorMessage(error) !== "Build pipeline revision conflict") throw error;
       const latest = (await this.requireRecord(pipeline.id)).snapshot as BuildPipeline;
       if (
-        latest.pendingInteractionResolution?.journalId !== pending.journalId
-        && !this.interactionOutcomeIsDurable(latest, pending)
+        latest.pendingInteractionResolution?.journalId !== pending.journalId &&
+        !this.interactionOutcomeIsDurable(latest, pending)
       ) {
         throw error;
       }
@@ -791,16 +820,15 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     outcome: AgentInteractionOutcome,
     resolvedAt: number,
   ): void {
-    const session = pipeline.sessions.find((candidate) =>
-      candidate.sessionKey === pending.sessionKey
+    const session = pipeline.sessions.find(
+      (candidate) => candidate.sessionKey === pending.sessionKey,
     );
     if (!session) {
       throw new ProviderUnavailableError(
         "The interaction belongs to an unavailable pipeline session",
       );
     }
-    const inputSucceeded = pending.action === "decline-and-continue"
-      && outcome === "auto-declined";
+    const inputSucceeded = pending.action === "decline-and-continue" && outcome === "auto-declined";
     if (inputSucceeded) {
       const transcript = session.interactionTranscript ?? [];
       if (!transcript.some((entry) => entry.id === pending.interactionId)) {
@@ -818,10 +846,9 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
           ...(pending.body ? { body: pending.body } : {}),
           questions: pending.questions,
         };
-        session.interactionTranscript = [
-          ...transcript,
-          entry,
-        ].slice(-AGENT_INTERACTION_LIMITS.maxWorkflowSummaries);
+        session.interactionTranscript = [...transcript, entry].slice(
+          -AGENT_INTERACTION_LIMITS.maxWorkflowSummaries,
+        );
         session.autoDeclineCount = (session.autoDeclineCount ?? 0) + 1;
         pipeline.autoDeclineCount = (pipeline.autoDeclineCount ?? 0) + 1;
         session.interactionSummary = appendInteractionSummary(
@@ -842,8 +869,9 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
       return;
     }
 
-    const failurePhase = resumablePhase(pipeline.phase)
-      ?? (pipeline.phase === "paused" ? pipeline.pausedFromPhase : null);
+    const failurePhase =
+      resumablePhase(pipeline.phase) ??
+      (pipeline.phase === "paused" ? pipeline.pausedFromPhase : null);
     if (!failurePhase) {
       // A distinct terminal action (most importantly an explicit user cancel)
       // wins over a provider result that was concurrently in flight. The
@@ -890,6 +918,4 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
       resolvedAt,
     );
   }
-
 }
-

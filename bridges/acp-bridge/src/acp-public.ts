@@ -49,14 +49,11 @@ export function boundTranscriptForRead(state: SessionState): void {
     0,
   );
   const truncatedCurrentMessage = boundTranscript(state);
-  const nextPartCount = state.messages.reduce(
-    (total, message) => total + message.parts.length,
-    0,
-  );
+  const nextPartCount = state.messages.reduce((total, message) => total + message.parts.length, 0);
   if (
-    truncatedCurrentMessage
-    || state.droppedMessages !== previousBaseIndex
-    || nextPartCount !== previousPartCount
+    truncatedCurrentMessage ||
+    state.droppedMessages !== previousBaseIndex ||
+    nextPartCount !== previousPartCount
   ) {
     state.revision += 1;
     schedulePersist();
@@ -86,9 +83,10 @@ export function publicContextUsage(state: SessionState) {
  * bounded below 16 MiB and would otherwise be re-sent on every poll.
  */
 export function messageWindow(state: SessionState, fromIndex: number | null): JsonObject {
-  const start = fromIndex === null
-    ? 0
-    : Math.min(Math.max(fromIndex - state.droppedMessages, 0), state.messages.length);
+  const start =
+    fromIndex === null
+      ? 0
+      : Math.min(Math.max(fromIndex - state.droppedMessages, 0), state.messages.length);
   return {
     messages: state.messages.slice(start),
     baseIndex: state.droppedMessages + start,

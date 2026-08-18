@@ -20,9 +20,7 @@ export const DEFAULT_TERMINAL_APPEARANCE: TerminalAppearance = {
 /**
  * Returns a safe terminal background color with fallback to defaults.
  */
-export function resolveTerminalBackgroundColor(
-  backgroundColor: string | undefined,
-): string {
+export function resolveTerminalBackgroundColor(backgroundColor: string | undefined): string {
   if (!backgroundColor || !isValidHexColor(backgroundColor)) {
     return DEFAULT_TERMINAL_APPEARANCE.backgroundColor;
   }
@@ -68,9 +66,13 @@ export function getLuminance(hex: string): number {
   const color = hex.replace("#", "");
 
   // Handle 3-character hex
-  const fullHex = color.length === 3
-    ? color.split("").map(c => c + c).join("")
-    : color;
+  const fullHex =
+    color.length === 3
+      ? color
+          .split("")
+          .map((c) => c + c)
+          .join("")
+      : color;
 
   const r = parseInt(fullHex.slice(0, 2), 16) / 255;
   const g = parseInt(fullHex.slice(2, 4), 16) / 255;
@@ -112,13 +114,13 @@ export function getPreviewColors(backgroundColor: string): {
 
   return useLightText
     ? {
-        foreground: "#e4e4e7",  // Light gray
-        prompt: "#4ade80",      // Green
-        path: "#60a5fa",        // Blue
+        foreground: "#e4e4e7", // Light gray
+        prompt: "#4ade80", // Green
+        path: "#60a5fa", // Blue
       }
     : {
-        foreground: "#1e1e1e",  // Dark gray
-        prompt: "#166534",      // Dark green
-        path: "#1e40af",        // Dark blue
+        foreground: "#1e1e1e", // Dark gray
+        prompt: "#166534", // Dark green
+        path: "#1e40af", // Dark blue
       };
 }

@@ -26,17 +26,11 @@ function containsActiveWork(parts: NativeMessagePart[]): boolean {
  * authoritative: transcript hydration can retain stale pending descendants
  * after Codex or OpenCode has reported the agent's final result.
  */
-export function getNativeAgentStatus(
-  part: NativeAgentActivityPart,
-): NativeAgentStatus {
-  const agentState = part.type === "task-group"
-    ? part.task.agentState
-    : part.agentState;
+export function getNativeAgentStatus(part: NativeAgentActivityPart): NativeAgentStatus {
+  const agentState = part.type === "task-group" ? part.task.agentState : part.agentState;
   if (agentState) return agentState;
 
-  const toolState = part.type === "task-group"
-    ? part.task.toolState
-    : part.toolState;
+  const toolState = part.type === "task-group" ? part.task.toolState : part.toolState;
 
   if (toolState === "failure") {
     return "failed";
@@ -46,9 +40,7 @@ export function getNativeAgentStatus(
     return "finished";
   }
 
-  const childParts = part.type === "task-group"
-    ? part.childTools
-    : part.subagentActions ?? [];
+  const childParts = part.type === "task-group" ? part.childTools : (part.subagentActions ?? []);
 
   if (containsActiveWork(childParts)) {
     return "active";

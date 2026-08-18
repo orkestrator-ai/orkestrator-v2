@@ -16,7 +16,12 @@ afterEach(() => {
 
 describe("direct gateway authentication transport", () => {
   test("adds current bearer credentials only to the configured gateway namespace", async () => {
-    const requests: Array<{ url: string; authorization: string | null; custom: string | null; credentials?: RequestCredentials }> = [];
+    const requests: Array<{
+      url: string;
+      authorization: string | null;
+      custom: string | null;
+      credentials?: RequestCredentials;
+    }> = [];
     globalThis.fetch = mock(async (input, init) => {
       const request = input instanceof Request ? input : null;
       const headers = new Headers(init?.headers ?? request?.headers);
@@ -30,10 +35,12 @@ describe("direct gateway authentication transport", () => {
     }) as unknown as typeof fetch;
     configureDirectGatewayTransport("https://workstation.example/", "first-token-123456");
 
-    await fetch(new Request(
-      "https://workstation.example/__orkestrator/status",
-      { headers: { "x-custom": "request" } },
-    ), { headers: { "x-custom": "override" }, credentials: "include" });
+    await fetch(
+      new Request("https://workstation.example/__orkestrator/status", {
+        headers: { "x-custom": "request" },
+      }),
+      { headers: { "x-custom": "override" }, credentials: "include" },
+    );
     await fetch("https://workstation.example/not-gateway");
     await fetch("https://other.example/__orkestrator/status");
     updateDirectGatewayToken("second-token-123456");
@@ -69,14 +76,22 @@ describe("direct gateway authentication transport", () => {
 
   test("parses named CRLF events when delimiter bytes cross stream chunks", async () => {
     const encoder = new TextEncoder();
-    globalThis.fetch = mock(async () => new Response(new ReadableStream({
-      start(controller) {
-        controller.enqueue(encoder.encode("event: message.updated\r\ndata: first\r"));
-        controller.enqueue(encoder.encode("\n\r"));
-        controller.enqueue(encoder.encode("\nevent: message.updated\r\ndata: second\r\n\r\n"));
-        controller.close();
-      },
-    }), { status: 200 })) as unknown as typeof fetch;
+    globalThis.fetch = mock(
+      async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(encoder.encode("event: message.updated\r\ndata: first\r"));
+              controller.enqueue(encoder.encode("\n\r"));
+              controller.enqueue(
+                encoder.encode("\nevent: message.updated\r\ndata: second\r\n\r\n"),
+              );
+              controller.close();
+            },
+          }),
+          { status: 200 },
+        ),
+    ) as unknown as typeof fetch;
     globalThis.EventSource = class {} as unknown as typeof EventSource;
     configureDirectGatewayTransport("https://workstation.example", "gateway-token-123456");
 
@@ -98,12 +113,15 @@ describe("direct gateway authentication transport", () => {
     const seenAuthorization: Array<string | null> = [];
     const mockedFetch = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
       seenAuthorization.push(new Headers(init?.headers).get("authorization"));
-      return new Response(new ReadableStream({
-        start(controller) {
-          controller.enqueue(encoder.encode("id: 42\ndata: hello\n\n"));
-          controller.close();
-        },
-      }), { status: 200 });
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode("id: 42\ndata: hello\n\n"));
+            controller.close();
+          },
+        }),
+        { status: 200 },
+      );
     }) as unknown as typeof fetch;
     globalThis.fetch = mockedFetch;
     const stubEventSource = class {} as unknown as typeof EventSource;
@@ -134,7 +152,9 @@ describe("direct gateway authentication transport", () => {
   });
 
   test("dispatches an error for rejected event streams and supports listener removal", async () => {
-    globalThis.fetch = mock(async () => new Response(null, { status: 503 })) as unknown as typeof fetch;
+    globalThis.fetch = mock(
+      async () => new Response(null, { status: 503 }),
+    ) as unknown as typeof fetch;
     globalThis.EventSource = class {} as unknown as typeof EventSource;
     configureDirectGatewayTransport("https://workstation.example", "gateway-token-123456");
 

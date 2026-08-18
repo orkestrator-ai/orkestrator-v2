@@ -24,26 +24,22 @@ const configured = {
 };
 
 describe("resolveCreateEnvironmentAgentDefaults", () => {
-  test("restores the last platform, mode, model, and reasoning selection", () => {
+  test("restores the last platform and mode, but takes model and reasoning from settings", () => {
     expect(
       resolveCreateEnvironmentAgentDefaults({
         catalog,
         enabledAgents: ["claude", "codex", "opencode"],
         configured,
-        remembered: {
-          platform: "codex",
-          mode: "terminal",
-          model: "gpt-remembered",
-          reasoningEffort: "xhigh",
-        },
+        remembered: { platform: "codex", mode: "terminal" },
       }),
     ).toEqual({
       agent: "codex",
       claudeMode: "terminal",
       opencodeMode: "terminal",
       codexMode: "terminal",
-      model: "gpt-remembered",
-      reasoningEffort: "xhigh",
+      // From `configured`, not from whatever the last create happened to pick.
+      model: "gpt-default",
+      reasoningEffort: "medium",
     });
   });
 
@@ -53,12 +49,7 @@ describe("resolveCreateEnvironmentAgentDefaults", () => {
         catalog,
         enabledAgents: ["claude", "opencode"],
         configured,
-        remembered: {
-          platform: "codex",
-          mode: "terminal",
-          model: "gpt-remembered",
-          reasoningEffort: "xhigh",
-        },
+        remembered: { platform: "codex", mode: "terminal" },
       }),
     ).toMatchObject({
       agent: "claude",
@@ -80,11 +71,7 @@ describe("resolveCreateEnvironmentAgentDefaults", () => {
         catalog,
         enabledAgents: ["claude", "codex"],
         configured: { ...configured, agent: "codex" },
-        remembered: {
-          platform: "opencode",
-          mode: "native",
-          model: "open/default",
-        },
+        remembered: { platform: "opencode", mode: "native" },
       }),
     ).toMatchObject({
       agent: "codex",
@@ -126,18 +113,19 @@ describe("resolveCreateEnvironmentAgentDefaults", () => {
     });
   });
 
-  test("uses safe current-catalog fallbacks for retired model controls", () => {
+  test("uses safe current-catalog fallbacks for a retired configured model", () => {
     expect(
       resolveCreateEnvironmentAgentDefaults({
         catalog,
         enabledAgents: ["codex"],
-        configured: { ...configured, agent: "codex" },
-        remembered: {
-          platform: "codex",
-          mode: "native",
-          model: "retired-model",
-          reasoningEffort: "ultra",
+        configured: {
+          ...configured,
+          agent: "codex",
+          // Neither survives in the current catalogue.
+          models: { codex: "retired-model" },
+          reasoningEfforts: { codex: "ultra" },
         },
+        remembered: { platform: "codex", mode: "native" },
       }),
     ).toMatchObject({
       agent: "codex",
@@ -160,12 +148,11 @@ describe("resolveCreateEnvironmentAgentDefaults", () => {
         configured: {
           ...configured,
           agent: "opencode",
-          models: { opencode: "open/default" },
+          // The literal provider-default id, which must survive rather than
+          // being resolved to a concrete model.
+          models: { opencode: "default" },
         },
-        remembered: {
-          platform: "opencode",
-          mode: "native",
-        },
+        remembered: { platform: "opencode", mode: "native" },
       }),
     ).toMatchObject({
       agent: "opencode",
@@ -184,7 +171,8 @@ describe("resolveCreateEnvironmentAgentDefaults", () => {
    */
   test("honours the shipped global Claude preference exactly as the other launchers do", () => {
     useClaudeStore.setState({ models: [] });
-    const shippedClaudeModel = useConfigStore.getInitialState().config.global.claudeModel;
+    const shippedClaudeModel =
+      useConfigStore.getInitialState().config.global.agentSettings?.platforms?.claude?.model;
     expect(shippedClaudeModel).toBe("claude-sonnet-5");
 
     const shippedCatalog = buildReviewModelCatalog(undefined);

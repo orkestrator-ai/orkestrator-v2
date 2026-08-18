@@ -1,10 +1,12 @@
+import { resolvedDefaultAgent } from "@/lib/agent-settings";
+import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { AppConfig, ClaudeMode, CodexMode, DefaultAgent, OpenCodeMode } from "@/types";
 import { firstEnabledAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 
 export function resolveBuildPipelineAgent(config: AppConfig, projectId: string): DefaultAgent {
   return firstEnabledAgentPlatform(
     config.global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"],
-    config.repositories[projectId]?.defaultAgent ?? config.global.defaultAgent ?? "claude",
+    resolvedDefaultAgent(config, projectId),
   );
 }
 
@@ -39,6 +41,13 @@ export type AgentModeSettings = {
  * settings must null the other two, which is why this lives here rather than
  * being restated at each call site.
  */
+/**
+ * The environment overrides a newly created environment should carry.
+ *
+ * Only the launching agent's own column is pinned. The other platforms are left
+ * unset so they keep inheriting — writing all three would freeze this
+ * environment against later repository or app changes it never opted out of.
+ */
 export function resolveAgentModeSettings(
   agentType: DefaultAgent,
   modes: {
@@ -46,16 +55,17 @@ export function resolveAgentModeSettings(
     opencodeMode: OpenCodeMode;
     codexMode: CodexMode;
   },
-): AgentModeSettings {
-  return {
-    defaultAgent: agentType,
-    claudeMode: agentType === "claude" ? modes.claudeMode : null,
-    opencodeMode: agentType === "opencode" ? modes.opencodeMode : null,
-    codexMode: agentType === "codex" ? modes.codexMode : null,
-  };
+): AgentSettingsTier {
+  const mode =
+    agentType === "claude"
+      ? modes.claudeMode
+      : agentType === "codex"
+        ? modes.codexMode
+        : modes.opencodeMode;
+  return { defaultAgent: agentType, platforms: { [agentType]: { mode } } };
 }
 
-export type BuildEnvironmentAgentSettings = AgentModeSettings & {
+export type BuildEnvironmentAgentSettings = AgentSettingsTier & {
   /**
    * Which agent this pipeline will open, for both the transient options store
    * and the durable `pendingAgentLaunch` intent.

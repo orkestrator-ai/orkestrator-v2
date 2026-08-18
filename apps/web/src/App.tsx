@@ -1,3 +1,4 @@
+import { resolvedDefaultAgent } from "@/lib/agent-settings";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@/lib/native/events";
 import { exit } from "@/lib/native/process";
@@ -587,9 +588,7 @@ function App() {
           launchAgent: true,
           agentType:
             existingOptions?.agentType ??
-            environment?.defaultAgent ??
-            config.global.defaultAgent ??
-            "claude",
+            resolvedDefaultAgent(config, environment?.projectId, environment),
           initialPrompt: launchPrompt,
           initialPromptAttachments: existingOptions?.initialPromptAttachments ?? storedAttachments,
         });
@@ -609,7 +608,7 @@ function App() {
     },
     [
       clearClaudeOptions,
-      config.global.defaultAgent,
+      config,
       dockerAvailable,
       getEnvironmentById,
       setClaudeOptions,
@@ -620,7 +619,7 @@ function App() {
   const handleCreateScriptFromOverlay = useCallback(
     async (environmentId: string, initialPrompt: string) => {
       const environment = getEnvironmentById(environmentId);
-      const agentType = environment?.defaultAgent || config.global.defaultAgent || "claude";
+      const agentType = resolvedDefaultAgent(config, environment?.projectId, environment);
 
       setClaudeOptions(environmentId, {
         launchAgent: true,
@@ -635,7 +634,7 @@ function App() {
     },
     [
       clearClaudeOptions,
-      config.global.defaultAgent,
+      config,
       getEnvironmentById,
       handleStartEnvironmentFromOverlay,
       setClaudeOptions,

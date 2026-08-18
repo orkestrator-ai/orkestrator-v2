@@ -131,8 +131,20 @@ describe("Electron StorageService", () => {
 
     const global = {
       ...defaultConfig().global,
-      defaultAgent: "codex" as const,
-      claudeModel: "claude-opus-4",
+      // Carries the same Claude model the concurrent per-platform write sets,
+      // so this asserts the mutations are all preserved rather than which of
+      // the two racing writers happened to land last.
+      agentSettings: {
+        ...defaultConfig().global.agentSettings,
+        defaultAgent: "codex" as const,
+        platforms: {
+          ...defaultConfig().global.agentSettings?.platforms,
+          claude: {
+            ...defaultConfig().global.agentSettings?.platforms?.claude,
+            model: "claude-opus-4",
+          },
+        },
+      },
     };
     const desktopConnections = {
       activeConnectionId: "remote-1",
@@ -149,7 +161,6 @@ describe("Electron StorageService", () => {
     await Promise.all([
       first.saveDesktopConnections(desktopConnections),
       second.updateGlobalConfig(global),
-      first.updateAgentModelDefault("claudeModel", "claude-opus-4"),
       first.updateRepositoryConfig("project-1", {
         defaultBranch: "develop",
         prBaseBranch: "develop",
@@ -158,42 +169,13 @@ describe("Electron StorageService", () => {
 
     const config = await second.loadConfig();
     expect(config.desktopConnections).toEqual(desktopConnections);
-    expect(config.global.defaultAgent).toBe("codex");
-    expect(config.global.claudeModel).toBe("claude-opus-4");
+    expect(config.global.agentSettings?.defaultAgent).toBe("codex");
+    // The concurrent per-platform write survives the whole-config write beside it.
+    expect(config.global.agentSettings?.platforms?.claude?.model).toBe("claude-opus-4");
     expect(config.repositories["project-1"]).toMatchObject({
       defaultBranch: "develop",
       prBaseBranch: "develop",
     });
-  });
-
-  test("updates one agent model default at a time and leaves its siblings alone", async () => {
-    const dataDir = await createTempDir("ork-storage-agent-model-");
-    const storage = new StorageService(dataDir);
-    await storage.init();
-    await storage.saveConfig(defaultConfig());
-    const defaults = defaultConfig().global;
-
-    for (const [key, modelId] of [
-      ["claudeModel", "claude-opus-4"],
-      ["codexModel", "gpt-5.4-codex"],
-      ["opencodeModel", "opencode/gpt-5.4"],
-    ] as const) {
-      // Reset so each key is proven in isolation rather than riding on the
-      // previous iteration's write.
-      await storage.saveConfig(defaultConfig());
-      const returned = await storage.updateAgentModelDefault(key, modelId);
-      const persisted = (await storage.loadConfig()).global;
-
-      expect(returned.global[key]).toBe(modelId);
-      expect(persisted[key]).toBe(modelId);
-      for (const sibling of ["claudeModel", "codexModel", "opencodeModel"] as const) {
-        if (sibling === key) continue;
-        expect(persisted[sibling]).toBe(defaults[sibling]);
-      }
-      // Nothing outside the model defaults may move.
-      expect(persisted.defaultAgent).toBe(defaults.defaultAgent);
-      expect(persisted.allowedDomains).toEqual(defaults.allowedDomains);
-    }
   });
 
   test("keeps managed ACP vendor endpoints out of the default allowlist", () => {
@@ -218,37 +200,6 @@ describe("Electron StorageService", () => {
     // The endpoints the shipped agents genuinely need are still present.
     expect(domains).toContain("api.anthropic.com");
     expect(domains).toContain("registry.npmjs.org");
-  });
-
-  test("keeps concurrent unrelated global mutations that a whole-config write would clobber", async () => {
-    const dataDir = await createTempDir("ork-storage-agent-model-merge-");
-    const first = new StorageService(dataDir);
-    const second = new StorageService(dataDir);
-    await Promise.all([first.init(), second.init()]);
-    await first.saveConfig(defaultConfig());
-
-    // A caller holding a global snapshot taken before someone else's change...
-    const stale = { ...(await first.loadConfig()).global };
-
-    // ...loses that change when it writes the whole object back.
-    await first.setGitHubToken("token-written-after-the-snapshot");
-    await second.updateGlobalConfig({ ...stale, defaultAgent: "claude" });
-    expect((await first.loadConfig()).global.githubToken).toBeUndefined();
-
-    // updateAgentModelDefault exists so a model default does not have to take
-    // that risk: it re-reads under the config lock and writes a single key, so
-    // an unrelated concurrent global mutation survives in either interleaving.
-    await Promise.all([
-      first.updateAgentModelDefault("codexModel", "gpt-5.4-codex"),
-      second.setGitHubToken("token-written-concurrently"),
-      first.updateAgentModelDefault("opencodeModel", "opencode/gpt-5.4"),
-    ]);
-
-    const merged = (await second.loadConfig()).global;
-    expect(merged.codexModel).toBe("gpt-5.4-codex");
-    expect(merged.opencodeModel).toBe("opencode/gpt-5.4");
-    expect(merged.githubToken).toBe("token-written-concurrently");
-    expect(merged.defaultAgent).toBe("claude");
   });
 
   test("preserves write-only credentials during renderer config writes and mutates API keys explicitly", async () => {
@@ -334,22 +285,6 @@ describe("Electron StorageService", () => {
     expect(cleared.cursorApiKey).toBeUndefined();
   });
 
-  test("persists an agent model default for a StorageService instance created later", async () => {
-    const dataDir = await createTempDir("ork-storage-agent-model-reload-");
-    const writer = new StorageService(dataDir);
-    await writer.init();
-
-    // Driven by this method alone: no saveConfig/updateGlobalConfig write follows
-    // it, so a no-op implementation could not be masked by another writer.
-    await writer.updateAgentModelDefault("claudeModel", "claude-opus-4");
-
-    const reader = new StorageService(dataDir);
-    await reader.init();
-    const reloaded = (await reader.loadConfig()).global;
-    expect(reloaded.claudeModel).toBe("claude-opus-4");
-    expect(reloaded.codexModel).toBe(defaultConfig().global.codexModel);
-  });
-
   test("sanitizes names, extracts repository names, and rejects non-record updates", () => {
     expect(sanitizeEnvironmentName("  My Feature/🚀  ")).toBe("my-feature");
     expect(sanitizeEnvironmentName("🚀")).toBe("env");
@@ -424,16 +359,18 @@ describe("Electron StorageService", () => {
     await storage.init();
 
     const first = defaultConfig();
-    first.global.defaultAgent = "claude";
+    first.global.agentSettings = { ...first.global.agentSettings, defaultAgent: "claude" };
     await storage.saveConfig(first);
 
     const second = defaultConfig();
-    second.global.defaultAgent = "codex";
+    second.global.agentSettings = { ...second.global.agentSettings, defaultAgent: "codex" };
     await storage.saveConfig(second);
     await fs.writeFile(path.join(dataDir, "config.json"), "{not-json");
 
     await expect(storage.loadConfig()).resolves.toMatchObject({
-      global: expect.objectContaining({ defaultAgent: "claude" }),
+      global: expect.objectContaining({
+        agentSettings: expect.objectContaining({ defaultAgent: "claude" }),
+      }),
     });
   });
 
@@ -643,12 +580,12 @@ describe("Electron StorageService", () => {
         global: Record<string, unknown>;
         repositories: Record<string, unknown>;
       };
-      config.global.defaultAgent = "codex";
+      config.global.agentSettings = { ...config.global.agentSettings, defaultAgent: "codex" };
       config.global.reviewInstruction = reviewInstruction;
       await fs.writeFile(path.join(dataDir, "config.json"), `${JSON.stringify(config)}\n`);
 
       const loaded = await storage.loadConfig();
-      expect(loaded.global.defaultAgent).toBe("codex");
+      expect(loaded.global.agentSettings?.defaultAgent).toBe("codex");
       expect(loaded.global.reviewInstruction).toBeUndefined();
     }
   });
@@ -762,16 +699,18 @@ describe("Electron StorageService", () => {
     // cannot see being configured.
     await storage.updateGlobalConfig({
       ...defaultConfig().global,
-      actionDefaults: {
-        review: { platform: "codex", model: "  gpt-5.4  ", reasoningEffort: " high " },
-        pr: { model: "sonnet" },
-        resolve: { platform: "not-an-agent", model: "sonnet" },
-        push: { platform: "opencode", model: "default" },
-        deploy: { platform: "claude" },
+      agentSettings: {
+        actionDefaults: {
+          review: { platform: "codex", model: "  gpt-5.4  ", reasoningEffort: " high " },
+          pr: { model: "sonnet" },
+          resolve: { platform: "not-an-agent", model: "sonnet" },
+          push: { platform: "opencode", model: "default" },
+          deploy: { platform: "claude" },
+        },
       },
     } as never);
 
-    expect((await storage.loadConfig()).global.actionDefaults).toEqual({
+    expect((await storage.loadConfig()).global.agentSettings?.actionDefaults).toEqual({
       review: { platform: "codex", model: "gpt-5.4", reasoningEffort: "high" },
       // A model without a platform, an unknown platform, and an unknown action
       // key are all dropped; OpenCode's `default` is a UI placeholder no
@@ -783,7 +722,7 @@ describe("Electron StorageService", () => {
     // that omits the field clears it rather than leaving it untouched. Every
     // save path in the renderer has to resend it for this reason.
     await storage.updateGlobalConfig({ ...defaultConfig().global } as never);
-    expect((await storage.loadConfig()).global.actionDefaults).toEqual({});
+    expect((await storage.loadConfig()).global.agentSettings?.actionDefaults).toBeUndefined();
   });
 
   test("preserves concurrent environment mutations across storage instances", async () => {
@@ -1680,17 +1619,25 @@ describe("Electron StorageService", () => {
     await storage.init();
 
     const config = defaultConfig();
-    config.global.codexModel = "gpt-5.6-sol";
-    config.global.codexReasoningEffort = "ultra";
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      platforms: {
+        ...config.global.agentSettings?.platforms,
+        codex: {
+          ...config.global.agentSettings?.platforms?.codex,
+          model: "gpt-5.6-sol",
+          reasoningEffort: "ultra",
+        },
+      },
+    };
     config.global.codexMaxConcurrentThreads = 8;
     await storage.saveConfig(config);
-    await expect(storage.loadConfig()).resolves.toMatchObject({
-      global: {
-        codexModel: "gpt-5.6-sol",
-        codexReasoningEffort: "ultra",
-        codexMaxConcurrentThreads: 8,
-      },
+    const loaded = await storage.loadConfig();
+    expect(loaded.global.agentSettings?.platforms?.codex).toMatchObject({
+      model: "gpt-5.6-sol",
+      reasoningEffort: "ultra",
     });
+    expect(loaded.global.codexMaxConcurrentThreads).toBe(8);
 
     await storage.updateGlobalConfig({
       ...config.global,

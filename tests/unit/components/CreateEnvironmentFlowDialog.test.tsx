@@ -59,6 +59,8 @@ const baseOptions: ClaudeOptions = {
   environmentName: "",
   launchAgent: true,
   agentType: "claude",
+  // The create dialog's own transient selection, which keeps a flat mode per
+  // platform. Only the launching agent's is written to durable settings.
   claudeMode: "terminal",
   opencodeMode: "terminal",
   codexMode: "native",
@@ -493,9 +495,9 @@ describe("CreateEnvironmentFlowDialog", () => {
   test("persists the durable launch intent when the agent will be launched", async () => {
     const call = await submitCreateFlow();
     expect(call[0]).toBe("env-created");
-    expect(call[6]).toBe(true);
-    expect(call[7]).toBe("sonnet");
-    expect(call[8]).toBeUndefined();
+    expect(call[2]).toBe(true);
+    expect(call[3]).toBe("sonnet");
+    expect(call[4]).toBeUndefined();
   });
 
   test("starts a newly created environment as a backend-owned background task", async () => {
@@ -588,12 +590,12 @@ describe("CreateEnvironmentFlowDialog", () => {
     const call = await submitCreateFlow({ turnOffLaunchAgent: true });
     // Recording `false` explicitly is what stops an environment created with the
     // agent off from ever being treated as awaiting a launch.
-    expect(call[6]).toBe(false);
-    expect(call[7]).toBeUndefined();
-    expect(call[8]).toBeUndefined();
+    expect(call[2]).toBe(false);
+    expect(call[3]).toBeUndefined();
+    expect(call[4]).toBeUndefined();
   });
 
-  test("persists a selected model and effort in both durable and transient launch state", async () => {
+  test("keeps selected model and effort in launch state while remembering only agent and mode", async () => {
     const created = { id: "env-selected-options" } as Environment;
     render(
       <CreateEnvironmentFlowDialog
@@ -621,14 +623,12 @@ describe("CreateEnvironmentFlowDialog", () => {
 
     await waitFor(() => expect(updateEnvironmentAgentSettingsMock).toHaveBeenCalled());
     const call = updateEnvironmentAgentSettingsMock.mock.calls[0]!;
-    expect(call[6]).toBe(true);
-    expect(call[7]).toBe("gpt-5.4-mini");
-    expect(call[8]).toBe("high");
+    expect(call[2]).toBe(true);
+    expect(call[3]).toBe("gpt-5.4-mini");
+    expect(call[4]).toBe("high");
     expect(rememberEnvironmentAgentSelectionMock).toHaveBeenCalledWith("project-1", {
       platform: "codex",
       mode: "native",
-      model: "gpt-5.4-mini",
-      reasoningEffort: "high",
     });
     // The write is deliberately not awaited by the create flow, so the store
     // catches up on its own tick.
@@ -638,8 +638,6 @@ describe("CreateEnvironmentFlowDialog", () => {
       ).toEqual({
         platform: "codex",
         mode: "native",
-        model: "gpt-5.4-mini",
-        reasoningEffort: "high",
       });
     });
     expect(useClaudeOptionsStore.getState().getOptions("env-selected-options")).toEqual(
@@ -730,7 +728,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     });
   });
 
-  test("restores the durably remembered selection after closing and reopening", async () => {
+  test("restores remembered agent and mode while taking model and reasoning from defaults", async () => {
     function Harness() {
       const [open, setOpen] = useState(true);
       return (
@@ -761,15 +759,13 @@ describe("CreateEnvironmentFlowDialog", () => {
         lastEnvironmentAgentSelection: {
           platform: "codex",
           mode: "native",
-          model: "gpt-5.4-mini",
-          reasoningEffort: "high",
         },
       };
       useConfigStore.getState().setConfig(config);
     });
     fireEvent.click(screen.getByRole("button", { name: "Reopen creator" }));
     const picker = await screen.findByRole("combobox", { name: "Agent, model and reasoning" });
-    expect(picker.textContent).toContain("GPT-5.4-Mini");
+    expect(picker.textContent).toContain("gpt-5.4");
     expect(picker.textContent).toContain("High");
     fireEvent.pointerDown(picker, { button: 0, ctrlKey: false });
     expect(
@@ -817,10 +813,10 @@ describe("CreateEnvironmentFlowDialog", () => {
     expect(screen.queryByRole("menuitemradio", { name: /Late Claude/ }) === null).toBe(true);
   });
 
-  // The mirror of the test above, and the reason the re-apply effect exists: an
-  // untouched dialog must keep picking up the remembered selection until the
-  // catalogue that can actually resolve it has loaded.
-  test("applies a remembered selection once a late catalog makes it resolvable", async () => {
+  // An untouched dialog keeps resolving its configured default while model
+  // catalogues load asynchronously. Remembered state contributes only the
+  // platform and mode.
+  test("applies a configured default once a late catalog makes it resolvable", async () => {
     act(() => {
       const config = structuredClone(useConfigStore.getState().config);
       config.repositories["project-1"] = {
@@ -829,7 +825,13 @@ describe("CreateEnvironmentFlowDialog", () => {
         lastEnvironmentAgentSelection: {
           platform: "claude",
           mode: "native",
-          model: "late-claude",
+        },
+      };
+      config.global.agentSettings = {
+        ...config.global.agentSettings,
+        actionDefaults: {
+          ...config.global.agentSettings?.actionDefaults,
+          newProject: { platform: "claude", model: "late-claude" },
         },
       };
       useConfigStore.getState().setConfig(config);
@@ -846,7 +848,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       />,
     );
 
-    // The remembered model is not in the fallback catalogue, so the dialog shows
+    // The configured model is not in the fallback catalogue, so the dialog shows
     // a safe current-catalogue choice rather than pinning a model that is not
     // offered yet.
     expect(
@@ -855,7 +857,7 @@ describe("CreateEnvironmentFlowDialog", () => {
 
     // The late catalogue keeps `default` on offer, so the pre-existing
     // "selected model vanished" effect stays quiet. Only the re-apply effect can
-    // move the dialog onto the newly resolvable remembered model.
+    // move the dialog onto the newly resolvable configured model.
     act(() => {
       useClaudeStore.setState({
         models: [
@@ -1054,12 +1056,13 @@ describe("CreateEnvironmentFlowDialog", () => {
     );
   });
 
-  test("maps each agent mode to its backend slot", () => {
+  test("pins only the launching agent's own column", () => {
+    // The other platforms are left unset so they keep inheriting. Writing all
+    // three would freeze this environment against later repository or app
+    // changes it never opted out of.
     expect(resolveEnvironmentAgentSettings(baseOptions)).toEqual({
       defaultAgent: "claude",
-      claudeMode: "terminal",
-      opencodeMode: null,
-      codexMode: null,
+      platforms: { claude: { mode: "terminal" } },
     });
     expect(
       resolveEnvironmentAgentSettings({
@@ -1067,23 +1070,13 @@ describe("CreateEnvironmentFlowDialog", () => {
         agentType: "opencode",
         opencodeMode: "native",
       }),
-    ).toEqual({
-      defaultAgent: "opencode",
-      claudeMode: null,
-      opencodeMode: "native",
-      codexMode: null,
-    });
+    ).toEqual({ defaultAgent: "opencode", platforms: { opencode: { mode: "native" } } });
     expect(
       resolveEnvironmentAgentSettings({
         ...baseOptions,
         agentType: "codex",
         codexMode: "terminal",
       }),
-    ).toEqual({
-      defaultAgent: "codex",
-      claudeMode: null,
-      opencodeMode: null,
-      codexMode: "terminal",
-    });
+    ).toEqual({ defaultAgent: "codex", platforms: { codex: { mode: "terminal" } } });
   });
 });

@@ -59,23 +59,12 @@ let extensionHandler: (
   options?: { refresh?: boolean },
 ) => Promise<AgentExtensionCatalog[]> = async () => defaultExtensionCatalogs();
 
-let mockSection = "agent";
+let mockSection = "defaults";
 const mockUpdateEnvironmentAgentSettings = mock(
-  async (
-    environmentId: string,
-    defaultAgent: string | null,
-    claudeMode: string | null,
-    claudeNativeBackend: string | null,
-    opencodeMode: string | null,
-    codexMode: string | null,
-  ) => ({
+  async (environmentId: string, agentSettings: unknown) => ({
     ...makeEnvironment(),
     id: environmentId,
-    defaultAgent: defaultAgent ?? undefined,
-    claudeMode: claudeMode ?? undefined,
-    claudeNativeBackend: claudeNativeBackend ?? undefined,
-    opencodeMode: opencodeMode ?? undefined,
-    codexMode: codexMode ?? undefined,
+    agentSettings: agentSettings as Environment["agentSettings"],
   }),
 );
 const mockGetEnvironmentExtensions = mock(
@@ -183,7 +172,7 @@ function makeEnvironment(overrides: Partial<Environment> = {}): Environment {
 describe("EnvironmentSettingsDialog", () => {
   beforeEach(() => {
     cleanup();
-    mockSection = "agent";
+    mockSection = "defaults";
     mockUpdateEnvironmentAgentSettings.mockClear();
     mockGetEnvironmentExtensions.mockClear();
     mockListEnvironmentAgentSkills.mockClear();
@@ -202,14 +191,15 @@ describe("EnvironmentSettingsDialog", () => {
           containerResources: { cpuCores: 2, memoryGb: 4 },
           envFilePatterns: [],
           allowedDomains: [],
-          defaultAgent: "claude",
-          opencodeModel: "opencode/grok-code",
-          codexModel: "gpt-5.3-codex",
-          codexReasoningEffort: "medium",
-          opencodeMode: "terminal",
-          claudeMode: "terminal",
-          claudeNativeBackend: "sdk",
-          codexMode: "native",
+          enabledAgentPlatforms: ["claude", "codex", "opencode"],
+          agentSettings: {
+            defaultAgent: "claude",
+            platforms: {
+              claude: { mode: "terminal", claudeNativeBackend: "sdk" },
+              codex: { mode: "native", model: "gpt-5.3-codex", reasoningEffort: "medium" },
+              opencode: { mode: "terminal", model: "opencode/grok-code" },
+            },
+          },
           terminalAppearance: {
             fontFamily: "Fira Code",
             fontSize: 14,
@@ -234,7 +224,8 @@ describe("EnvironmentSettingsDialog", () => {
     cleanup();
   });
 
-  test("saves a codex mode override", async () => {
+  test("saves a Codex mode override from the Codex tab", async () => {
+    mockSection = "codex";
     const onUpdate = mock(() => {});
 
     render(
@@ -246,36 +237,28 @@ describe("EnvironmentSettingsDialog", () => {
       />,
     );
 
-    const codexSection = screen.getByText("Codex Mode").parentElement;
-    if (!codexSection) {
-      throw new Error("Expected Codex Mode section");
-    }
-
-    fireEvent.click(within(codexSection).getByRole("button", { name: "Terminal" }));
+    // Each platform has its own tab now, so choosing a mode for Codex cannot
+    // move Claude or OpenCode the way the old shared control did.
+    fireEvent.click(screen.getByRole("radio", { name: /^Terminal/ }));
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => {
-      expect(mockUpdateEnvironmentAgentSettings).toHaveBeenCalledWith(
-        "env-1",
-        null,
-        null,
-        null,
-        null,
-        "terminal",
-      );
+      expect(mockUpdateEnvironmentAgentSettings).toHaveBeenCalledWith("env-1", {
+        platforms: { codex: { mode: "terminal" } },
+      });
     });
-    // Editing settings must leave any pending launch intent alone: the argument is
-    // omitted rather than sent as `false`, which the backend would apply.
-    expect(mockUpdateEnvironmentAgentSettings.mock.calls[0]).toHaveLength(6);
+    // Editing settings must leave any pending launch intent alone: the argument
+    // is omitted rather than sent as `false`, which the backend would apply.
+    expect(mockUpdateEnvironmentAgentSettings.mock.calls[0]).toHaveLength(2);
 
     expect(onUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
-        codexMode: "terminal",
+        agentSettings: { platforms: { codex: { mode: "terminal" } } },
       }),
     );
   });
 
-  test("orders agent controls alphabetically", () => {
+  test("offers a tab per enabled platform, in platform order", () => {
     extensionHandler = () => new Promise(() => undefined);
     render(
       <EnvironmentSettingsDialog
@@ -286,17 +269,20 @@ describe("EnvironmentSettingsDialog", () => {
       />,
     );
 
-    expect(
-      screen
-        .getAllByRole("button")
-        .map((button) => button.textContent?.trim())
-        .filter((label) => ["Claude Code", "Codex", "OpenCode"].includes(label ?? "")),
-    ).toEqual(["Claude Code", "Codex", "OpenCode"]);
-    expect(
-      Array.from(document.querySelectorAll("label"))
-        .map((label) => label.textContent?.trim())
-        .filter((label) => ["Claude Mode", "Codex Mode", "OpenCode Mode"].includes(label ?? "")),
-    ).toEqual(["Claude Mode", "Codex Mode", "OpenCode Mode"]);
+    // The section list is the tab strip. Every enabled platform gets one, in
+    // the order `AGENT_PLATFORMS` declares, so the three dialogs agree.
+    // Every enabled platform gets a tab, in the order `AGENT_PLATFORMS`
+    // declares, so all three settings dialogs list them identically.
+    expect(capturedMenuItems.map((item) => item.id)).toEqual([
+      "general",
+      "defaults",
+      "claude",
+      "codex",
+      "opencode",
+      "network",
+      "ports",
+      "extensions",
+    ]);
   });
 
   test("uses top agent tabs and shows MCP servers, plugins, and skills for each agent", async () => {

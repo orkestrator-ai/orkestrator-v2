@@ -1,3 +1,13 @@
+import { AgentDefaultsPane } from "@/components/settings/agent/AgentDefaultsPane";
+import { AgentPlatformPane } from "@/components/settings/agent/AgentPlatformPane";
+import { SlidersHorizontal } from "lucide-react";
+import { agentSettingsTiers } from "@/lib/agent-settings";
+import { useProjectModelCatalog } from "@/hooks/useBuildLaunchOptions";
+import {
+  normalizeAgentSettings,
+  type AgentSettingsTier,
+} from "@orkestrator/protocol/agent-settings";
+import { normalizeAgentPlatforms } from "@orkestrator/protocol/agent-platforms";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { toast } from "sonner";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
@@ -39,8 +49,6 @@ import {
   FolderOpen,
   Puzzle,
   Server,
-  Bot,
-  Terminal,
   RefreshCw,
 } from "lucide-react";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
@@ -53,17 +61,7 @@ import {
 import { SkillsSettings } from "@/components/settings/SkillsSettings";
 import * as backend from "@/lib/backend";
 import { useConfigStore } from "@/stores";
-import type {
-  ClaudeMode,
-  ClaudeNativeBackend,
-  CodexMode,
-  DefaultAgent,
-  DomainTestResult,
-  Environment,
-  OpenCodeMode,
-  PortMapping,
-  PortProtocol,
-} from "@/types";
+import type { DomainTestResult, Environment, PortMapping, PortProtocol } from "@/types";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 
 // Domain validation regex
@@ -340,18 +338,20 @@ export function EnvironmentSettingsDialog({
   const [isRestarting, setIsRestarting] = useState(false);
 
   // Agent settings state
-  const [envDefaultAgent, setEnvDefaultAgent] = useState<string>(
-    environment.defaultAgent ?? "global",
+  // One block, the same shape the repository and app tiers store. Absent means
+  // "inherit from the repository, then the app".
+  const [agentSettings, setAgentSettings] = useState<AgentSettingsTier>(() =>
+    normalizeAgentSettings(environment.agentSettings),
   );
-  const [envClaudeMode, setEnvClaudeMode] = useState<string>(environment.claudeMode ?? "global");
-  // "default" = inherit from repo, then global. "sdk" / "tmux" = override.
-  const [envClaudeNativeBackend, setEnvClaudeNativeBackend] = useState<string>(
-    environment.claudeNativeBackend ?? "default",
+  const enabledPlatforms = useMemo(
+    () => normalizeAgentPlatforms(config.global.enabledAgentPlatforms),
+    [config.global.enabledAgentPlatforms],
   );
-  const [envOpencodeMode, setEnvOpencodeMode] = useState<string>(
-    environment.opencodeMode ?? "global",
+  const modelCatalog = useProjectModelCatalog(environment.projectId, open);
+  const tiers = useMemo(
+    () => ({ ...agentSettingsTiers(config, environment.projectId), environment: agentSettings }),
+    [config, environment.projectId, agentSettings],
   );
-  const [envCodexMode, setEnvCodexMode] = useState<string>(environment.codexMode ?? "global");
 
   // Effective MCP server and plugin state for every supported agent.
   const [extensionCatalogs, setExtensionCatalogs] =
@@ -375,15 +375,8 @@ export function EnvironmentSettingsDialog({
     JSON.stringify(portMappings) !== JSON.stringify(environment.portMappings || []);
 
   const agentSettingsChanged =
-    (envDefaultAgent === "global" ? undefined : envDefaultAgent) !==
-      (environment.defaultAgent ?? undefined) ||
-    (envClaudeMode === "global" ? undefined : envClaudeMode) !==
-      (environment.claudeMode ?? undefined) ||
-    (envClaudeNativeBackend === "default" ? undefined : envClaudeNativeBackend) !==
-      (environment.claudeNativeBackend ?? undefined) ||
-    (envOpencodeMode === "global" ? undefined : envOpencodeMode) !==
-      (environment.opencodeMode ?? undefined) ||
-    (envCodexMode === "global" ? undefined : envCodexMode) !== (environment.codexMode ?? undefined);
+    JSON.stringify(agentSettings) !==
+    JSON.stringify(normalizeAgentSettings(environment.agentSettings));
 
   // Reset state when dialog opens
   useEffect(() => {
@@ -409,11 +402,7 @@ export function EnvironmentSettingsDialog({
       setIsRestarting(false);
 
       // Reset agent settings
-      setEnvDefaultAgent(environment.defaultAgent ?? "global");
-      setEnvClaudeMode(environment.claudeMode ?? "global");
-      setEnvClaudeNativeBackend(environment.claudeNativeBackend ?? "default");
-      setEnvOpencodeMode(environment.opencodeMode ?? "global");
-      setEnvCodexMode(environment.codexMode ?? "global");
+      setAgentSettings(normalizeAgentSettings(environment.agentSettings));
       setActiveExtensionAgent("claude");
     }
   }, [
@@ -421,11 +410,7 @@ export function EnvironmentSettingsDialog({
     environment.name,
     environment.allowedDomains,
     environment.portMappings,
-    environment.defaultAgent,
-    environment.claudeMode,
-    environment.claudeNativeBackend,
-    environment.opencodeMode,
-    environment.codexMode,
+    environment.agentSettings,
     globalDomains,
   ]);
 
@@ -684,16 +669,7 @@ export function EnvironmentSettingsDialog({
 
       // Update agent settings if changed
       if (agentSettingsChanged) {
-        updated = await backend.updateEnvironmentAgentSettings(
-          environment.id,
-          envDefaultAgent === "global" ? null : (envDefaultAgent as DefaultAgent),
-          envClaudeMode === "global" ? null : (envClaudeMode as ClaudeMode),
-          envClaudeNativeBackend === "default"
-            ? null
-            : (envClaudeNativeBackend as ClaudeNativeBackend),
-          envOpencodeMode === "global" ? null : (envOpencodeMode as OpenCodeMode),
-          envCodexMode === "global" ? null : (envCodexMode as CodexMode),
-        );
+        updated = await backend.updateEnvironmentAgentSettings(environment.id, agentSettings);
       }
 
       onUpdate(updated);
@@ -719,7 +695,12 @@ export function EnvironmentSettingsDialog({
 
   const menuItems: SettingsMenuItem[] = [
     { id: "general", label: "General", icon: <Settings2 className="h-4 w-4" /> },
-    { id: "agent", label: "Agent", icon: <Bot className="h-4 w-4" /> },
+    { id: "defaults", label: "Defaults", icon: <SlidersHorizontal className="h-4 w-4" /> },
+    ...enabledPlatforms.map((platform) => ({
+      id: platform,
+      label: AGENT_PLATFORM_LABELS[platform],
+      icon: <AgentPlatformIcon platform={platform} accent className="h-4 w-4" />,
+    })),
     ...(!isLocalEnvironment
       ? [
           { id: "network", label: "Network", icon: <Shield className="h-4 w-4" /> },
@@ -769,238 +750,32 @@ export function EnvironmentSettingsDialog({
             )}
           </div>
         );
-      case "agent":
+      case "defaults":
         return (
-          <div className="max-w-2xl space-y-8">
-            <p className="text-xs text-muted-foreground">
-              Override global defaults for this environment. "Use global default" inherits from app
-              settings.
-            </p>
-
-            {/* Default Agent */}
-            <div className="space-y-3">
-              <Label className="text-sm">Default Agent</Label>
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                {(
-                  [
-                    {
-                      value: "global",
-                      label: `Global (${AGENT_PLATFORM_LABELS[config.global.defaultAgent ?? "claude"]})`,
-                      icon: <Bot className="h-4 w-4" />,
-                    },
-                    {
-                      value: "claude",
-                      label: "Claude Code",
-                      icon: <AgentPlatformIcon platform="claude" accent className="h-4 w-4" />,
-                    },
-                    {
-                      value: "codex",
-                      label: "Codex",
-                      icon: <AgentPlatformIcon platform="codex" accent className="h-4 w-4" />,
-                    },
-                    {
-                      value: "cursor",
-                      label: "Cursor Agent",
-                      icon: <AgentPlatformIcon platform="cursor" accent className="h-4 w-4" />,
-                    },
-                    {
-                      value: "grok",
-                      label: "Grok Build",
-                      icon: <AgentPlatformIcon platform="grok" accent className="h-4 w-4" />,
-                    },
-                    {
-                      value: "opencode",
-                      label: "OpenCode",
-                      icon: <AgentPlatformIcon platform="opencode" accent className="h-4 w-4" />,
-                    },
-                  ] as const
-                )
-                  .filter(
-                    (opt) =>
-                      opt.value === "global" ||
-                      (
-                        config.global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]
-                      ).includes(opt.value),
-                  )
-                  .map((opt) => (
-                    <button
-                      key={opt.value}
-                      type="button"
-                      onClick={() => setEnvDefaultAgent(opt.value)}
-                      className={cn(
-                        "p-3 rounded-lg border-2 text-left transition-colors",
-                        envDefaultAgent === opt.value
-                          ? "border-primary bg-primary/5"
-                          : "border-transparent bg-zinc-900 hover:border-zinc-600",
-                      )}
-                    >
-                      <div className="flex items-center gap-2 text-sm font-medium">
-                        {opt.icon}
-                        {opt.label}
-                      </div>
-                    </button>
-                  ))}
-              </div>
-            </div>
-
-            {/* Claude Mode */}
-            <div className="space-y-3">
-              <Label className="text-sm">Claude Mode</Label>
-              <div className="grid max-w-md grid-cols-1 gap-2 sm:grid-cols-3">
-                {(
-                  [
-                    {
-                      value: "global",
-                      label: `Global (${config.global.claudeMode === "native" ? "Native" : "Terminal"})`,
-                      icon: <Bot className="h-3.5 w-3.5" />,
-                    },
-                    {
-                      value: "terminal",
-                      label: "Terminal",
-                      icon: <Terminal className="h-3.5 w-3.5" />,
-                    },
-                    { value: "native", label: "Native", icon: <Bot className="h-3.5 w-3.5" /> },
-                  ] as const
-                ).map((opt) => (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    onClick={() => setEnvClaudeMode(opt.value)}
-                    className={cn(
-                      "p-2 rounded-lg border-2 text-left transition-colors",
-                      envClaudeMode === opt.value
-                        ? "border-primary bg-primary/5"
-                        : "border-transparent bg-zinc-900 hover:border-zinc-600",
-                    )}
-                  >
-                    <div className="flex items-center gap-2 text-sm font-medium">
-                      {opt.icon}
-                      {opt.label}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Claude Native backend (only meaningful when resolved mode is Native) */}
-            <div className="space-y-3">
-              <Label className="text-sm">Claude Native backend</Label>
-              <div className="grid max-w-md grid-cols-1 gap-2 sm:grid-cols-3">
-                {(
-                  [
-                    {
-                      value: "default",
-                      label: `Default (${
-                        (config.repositories[environment.projectId]?.claudeNativeBackend ??
-                          config.global.claudeNativeBackend ??
-                          "sdk") === "tmux"
-                          ? "Tmux"
-                          : "Agent SDK"
-                      })`,
-                    },
-                    { value: "sdk", label: "Agent SDK" },
-                    { value: "tmux", label: "Tmux" },
-                  ] as const
-                ).map((opt) => (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    onClick={() => setEnvClaudeNativeBackend(opt.value)}
-                    className={cn(
-                      "p-2 rounded-lg border-2 text-left text-sm font-medium transition-colors",
-                      envClaudeNativeBackend === opt.value
-                        ? "border-primary bg-primary/5"
-                        : "border-transparent bg-zinc-900 hover:border-zinc-600",
-                    )}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Only applies when Claude Mode is Native. Default inherits from the repository
-                setting, then the app default.
-              </p>
-            </div>
-
-            {/* Codex Mode */}
-            <div className="space-y-3">
-              <Label className="text-sm">Codex Mode</Label>
-              <div className="grid max-w-md grid-cols-1 gap-2 sm:grid-cols-3">
-                {(
-                  [
-                    {
-                      value: "global",
-                      label: `Global (${(config.global.codexMode || "native") === "native" ? "Native" : "Terminal"})`,
-                      icon: <Bot className="h-3.5 w-3.5" />,
-                    },
-                    {
-                      value: "terminal",
-                      label: "Terminal",
-                      icon: <Terminal className="h-3.5 w-3.5" />,
-                    },
-                    { value: "native", label: "Native", icon: <Bot className="h-3.5 w-3.5" /> },
-                  ] as const
-                ).map((opt) => (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    onClick={() => setEnvCodexMode(opt.value)}
-                    className={cn(
-                      "p-2 rounded-lg border-2 text-left transition-colors",
-                      envCodexMode === opt.value
-                        ? "border-primary bg-primary/5"
-                        : "border-transparent bg-zinc-900 hover:border-zinc-600",
-                    )}
-                  >
-                    <div className="flex items-center gap-2 text-sm font-medium">
-                      {opt.icon}
-                      {opt.label}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* OpenCode Mode */}
-            <div className="space-y-3">
-              <Label className="text-sm">OpenCode Mode</Label>
-              <div className="grid max-w-md grid-cols-1 gap-2 sm:grid-cols-3">
-                {(
-                  [
-                    {
-                      value: "global",
-                      label: `Global (${(config.global.opencodeMode || "terminal") === "native" ? "Native" : "Terminal"})`,
-                      icon: <Bot className="h-3.5 w-3.5" />,
-                    },
-                    {
-                      value: "terminal",
-                      label: "Terminal",
-                      icon: <Terminal className="h-3.5 w-3.5" />,
-                    },
-                    { value: "native", label: "Native", icon: <Bot className="h-3.5 w-3.5" /> },
-                  ] as const
-                ).map((opt) => (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    onClick={() => setEnvOpencodeMode(opt.value)}
-                    className={cn(
-                      "p-2 rounded-lg border-2 text-left transition-colors",
-                      envOpencodeMode === opt.value
-                        ? "border-primary bg-primary/5"
-                        : "border-transparent bg-zinc-900 hover:border-zinc-600",
-                    )}
-                  >
-                    <div className="flex items-center gap-2 text-sm font-medium">
-                      {opt.icon}
-                      {opt.label}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
+          <AgentDefaultsPane
+            tier={agentSettings}
+            onChange={setAgentSettings}
+            tiers={tiers}
+            canInherit
+            enabledPlatforms={enabledPlatforms}
+            catalog={modelCatalog}
+            scopeLabel="this environment"
+          />
+        );
+      case "claude":
+      case "codex":
+      case "cursor":
+      case "grok":
+      case "opencode":
+        return (
+          <AgentPlatformPane
+            platform={section}
+            tier={agentSettings}
+            onChange={setAgentSettings}
+            tiers={tiers}
+            canInherit
+            catalog={modelCatalog}
+          />
         );
       case "network":
         return (

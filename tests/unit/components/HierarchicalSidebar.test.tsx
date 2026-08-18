@@ -286,10 +286,19 @@ describe("HierarchicalSidebar", () => {
         ...state.config,
         global: {
           ...state.config.global,
-          defaultAgent: "claude",
-          claudeMode: "terminal",
-          opencodeMode: "terminal",
-          codexMode: "native",
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            defaultAgent: "claude",
+            platforms: {
+              ...state.config.global.agentSettings?.platforms,
+              claude: { ...state.config.global.agentSettings?.platforms?.claude, mode: "terminal" },
+              opencode: {
+                ...state.config.global.agentSettings?.platforms?.opencode,
+                mode: "terminal",
+              },
+              codex: { ...state.config.global.agentSettings?.platforms?.codex, mode: "native" },
+            },
+          },
         },
         repositories: {},
       },
@@ -1124,11 +1133,7 @@ describe("HierarchicalSidebar", () => {
     await waitFor(() => {
       expect(updateEnvironmentAgentSettingsMock).toHaveBeenCalledWith(
         "env-created",
-        "claude",
-        "terminal",
-        null,
-        null,
-        null,
+        { defaultAgent: "claude", platforms: { claude: { mode: "terminal" } } },
         true,
         "sonnet",
         undefined,

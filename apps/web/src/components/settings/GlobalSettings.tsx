@@ -9,14 +9,9 @@ import { getReviewInstructionValidationError } from "@orkestrator/protocol/revie
 import { useTimedCopyFeedback } from "@/hooks";
 import { DEFAULT_REVIEW_INSTRUCTION } from "@/prompts";
 import type {
-  ClaudeMode,
-  ClaudeNativeBackend,
-  CodexMode,
-  DefaultAgent,
   DomainTestResult,
   GatewayTokenSettings,
   GlobalConfig,
-  OpenCodeMode,
   PreferredEditor,
   TerminalAppearance,
   WebClientStatus,
@@ -28,11 +23,10 @@ import {
 } from "@/constants/terminal";
 import { type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
-  normalizeActionDefaults,
-  type ActionDefaults,
-} from "@orkestrator/protocol/action-defaults";
+  normalizeAgentSettings,
+  type AgentSettingsTier,
+} from "@orkestrator/protocol/agent-settings";
 import { normalizeOpenCodeModelProviders } from "@orkestrator/protocol/native-agent";
-import { DEFAULT_CLAUDE_MODE } from "@orkestrator/protocol/startup-launch";
 import { GlobalSettingsSections } from "./GlobalSettings.sections";
 
 // Domain validation regex
@@ -65,16 +59,8 @@ function globalFormSignature(global: GlobalConfig): string {
     global.useHostClaudeCredentials ?? true,
     global.allowedDomains ?? [],
     global.preferredEditor ?? "vscode",
-    global.defaultAgent ?? "claude",
     global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"],
-    global.opencodeModel ?? "",
-    global.opencodeMode ?? "",
     normalizeOpenCodeModelProviders(global.openCodeModelProviders),
-    global.claudeMode ?? "",
-    global.claudeNativeBackend ?? "",
-    global.claudeNativeFastModeDefault ?? false,
-    global.codexMode ?? "",
-    global.codexNativeFastModeDefault ?? false,
     global.codexMaxConcurrentThreads ?? DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
     global.terminalAppearance?.fontFamily ?? "",
     global.terminalAppearance?.fontSize ?? 0,
@@ -84,8 +70,8 @@ function globalFormSignature(global: GlobalConfig): string {
     global.debugLogging ?? false,
     global.webClientEnabled ?? true,
     getSavedReviewInstruction(global.reviewInstruction),
-    // Canonical key order, so an edit that only reorders keys is not a change.
-    normalizeActionDefaults(global.actionDefaults),
+    // Canonical shape, so an edit that only reorders keys is not a change.
+    normalizeAgentSettings(global.agentSettings),
   ]);
 }
 
@@ -118,31 +104,19 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const [preferredEditor, setPreferredEditor] = useState<PreferredEditor>(
     global.preferredEditor || "vscode",
   );
-  const [defaultAgent, setDefaultAgent] = useState<DefaultAgent>(global.defaultAgent || "claude");
+  // One block for every agent setting. Each pane edits a slice of it and the
+  // whole thing is written on save, which is what makes the three tiers
+  // identical in shape.
+  const [agentSettings, setAgentSettings] = useState<AgentSettingsTier>(() =>
+    normalizeAgentSettings(global.agentSettings),
+  );
   const [enabledAgentPlatforms, setEnabledAgentPlatforms] = useState<AgentPlatform[]>(
     global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"],
   );
-  const [opencodeModel, setOpencodeModel] = useState(
-    global.opencodeModel || "opencode/claude-sonnet-5",
-  );
-  const [opencodeMode, setOpencodeMode] = useState<OpenCodeMode>(global.opencodeMode || "terminal");
   const [openCodeModelProviders, setOpenCodeModelProviders] = useState<string[]>(() =>
     normalizeOpenCodeModelProviders(global.openCodeModelProviders),
   );
   const [openCodeProviderDraft, setOpenCodeProviderDraft] = useState("");
-  const [claudeMode, setClaudeMode] = useState<ClaudeMode>(
-    global.claudeMode || DEFAULT_CLAUDE_MODE,
-  );
-  const [claudeNativeBackend, setClaudeNativeBackend] = useState<ClaudeNativeBackend>(
-    global.claudeNativeBackend || "sdk",
-  );
-  const [claudeNativeFastModeDefault, setClaudeNativeFastModeDefault] = useState(
-    global.claudeNativeFastModeDefault ?? false,
-  );
-  const [codexMode, setCodexMode] = useState<CodexMode>(global.codexMode || "native");
-  const [codexNativeFastModeDefault, setCodexNativeFastModeDefault] = useState(
-    global.codexNativeFastModeDefault ?? false,
-  );
   const [codexMaxConcurrentThreads, setCodexMaxConcurrentThreads] = useState(
     global.codexMaxConcurrentThreads ?? DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
   );
@@ -167,9 +141,6 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const [webClientEnabled, setWebClientEnabled] = useState(global.webClientEnabled ?? true);
   const [reviewInstruction, setReviewInstruction] = useState(
     getSavedReviewInstruction(global.reviewInstruction),
-  );
-  const [actionDefaults, setActionDefaults] = useState<ActionDefaults>(() =>
-    normalizeActionDefaults(global.actionDefaults),
   );
   const [webClientStatus, setWebClientStatus] = useState<WebClientStatus | null>(null);
   const [webClientApplyError, setWebClientApplyError] = useState<string | null>(null);
@@ -237,39 +208,21 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setClearGithubToken(pendingGitHubCredentialEditRef.current?.clear ?? false);
     setAllowedDomains((global.allowedDomains || []).join("\n"));
     setPreferredEditor(global.preferredEditor || "vscode");
-    setDefaultAgent(global.defaultAgent || "claude");
     setEnabledAgentPlatforms(global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]);
-    setOpencodeModel(global.opencodeModel || "opencode/claude-sonnet-5");
-    setOpencodeMode(global.opencodeMode || "terminal");
+    setAgentSettings(normalizeAgentSettings(global.agentSettings));
     setOpenCodeModelProviders(normalizeOpenCodeModelProviders(global.openCodeModelProviders));
-    setOpenCodeProviderDraft("");
-    setClaudeMode(global.claudeMode || DEFAULT_CLAUDE_MODE);
-    setClaudeNativeBackend(global.claudeNativeBackend || "sdk");
-    setClaudeNativeFastModeDefault(global.claudeNativeFastModeDefault ?? false);
-    setCodexMode(global.codexMode || "native");
-    setCodexNativeFastModeDefault(global.codexNativeFastModeDefault ?? false);
     setCodexMaxConcurrentThreads(
       global.codexMaxConcurrentThreads ?? DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
     );
-    setTerminalFontFamily(
-      global.terminalAppearance?.fontFamily || DEFAULT_TERMINAL_APPEARANCE.fontFamily,
-    );
-    setTerminalFontSize(
-      global.terminalAppearance?.fontSize || DEFAULT_TERMINAL_APPEARANCE.fontSize,
-    );
-    setTerminalBackgroundColor(
-      global.terminalAppearance?.backgroundColor || DEFAULT_TERMINAL_APPEARANCE.backgroundColor,
-    );
-    setTerminalScrollback(
-      typeof global.terminalScrollback === "number"
-        ? global.terminalScrollback
-        : DEFAULT_TERMINAL_SCROLLBACK,
-    );
+    const appearance = global.terminalAppearance || DEFAULT_TERMINAL_APPEARANCE;
+    setTerminalFontFamily(appearance.fontFamily);
+    setTerminalFontSize(appearance.fontSize);
+    setTerminalBackgroundColor(appearance.backgroundColor);
+    setTerminalScrollback(global.terminalScrollback ?? DEFAULT_TERMINAL_SCROLLBACK);
     setExperimentalCodexRawEventLogging(global.experimentalCodexRawEventLogging ?? true);
     setDebugLogging(global.debugLogging ?? false);
     setWebClientEnabled(global.webClientEnabled ?? true);
     setReviewInstruction(getSavedReviewInstruction(global.reviewInstruction));
-    setActionDefaults(normalizeActionDefaults(global.actionDefaults));
   }, [global]);
 
   const refreshWebClientStatus = useCallback(async () => {
@@ -356,16 +309,10 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       preferredEditor !== (global.preferredEditor || "vscode") ||
       JSON.stringify(enabledAgentPlatforms) !==
         JSON.stringify(global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]) ||
-      defaultAgent !== (global.defaultAgent || "claude") ||
-      opencodeModel !== (global.opencodeModel || "opencode/claude-sonnet-5") ||
-      opencodeMode !== (global.opencodeMode || "terminal") ||
+      JSON.stringify(agentSettings) !==
+        JSON.stringify(normalizeAgentSettings(global.agentSettings)) ||
       JSON.stringify(openCodeModelProviders) !==
         JSON.stringify(normalizeOpenCodeModelProviders(global.openCodeModelProviders)) ||
-      claudeMode !== (global.claudeMode || DEFAULT_CLAUDE_MODE) ||
-      claudeNativeBackend !== (global.claudeNativeBackend || "sdk") ||
-      claudeNativeFastModeDefault !== (global.claudeNativeFastModeDefault ?? false) ||
-      codexMode !== (global.codexMode || "native") ||
-      codexNativeFastModeDefault !== (global.codexNativeFastModeDefault ?? false) ||
       codexMaxConcurrentThreads !==
         (global.codexMaxConcurrentThreads ?? DEFAULT_CODEX_MAX_CONCURRENT_THREADS) ||
       terminalFontFamily !== terminalAppearance.fontFamily ||
@@ -376,10 +323,6 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       debugLogging !== (global.debugLogging ?? false) ||
       webClientEnabled !== (global.webClientEnabled ?? true) ||
       reviewInstruction !== getSavedReviewInstruction(global.reviewInstruction) ||
-      // Both sides go through the normalizer so key order, which the editing
-      // path can change without changing the value, cannot report a change.
-      JSON.stringify(normalizeActionDefaults(actionDefaults)) !==
-        JSON.stringify(normalizeActionDefaults(global.actionDefaults)) ||
       webClientApplyError !== null ||
       gatewayToken !== savedGatewayToken;
     setHasChanges(changed);
@@ -402,15 +345,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     allowedDomains,
     preferredEditor,
     enabledAgentPlatforms,
-    defaultAgent,
-    opencodeModel,
-    opencodeMode,
+    agentSettings,
     openCodeModelProviders,
-    claudeMode,
-    claudeNativeBackend,
-    claudeNativeFastModeDefault,
-    codexMode,
-    codexNativeFastModeDefault,
     codexMaxConcurrentThreads,
     terminalFontFamily,
     terminalFontSize,
@@ -420,7 +356,6 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     debugLogging,
     webClientEnabled,
     reviewInstruction,
-    actionDefaults,
     webClientApplyError,
     gatewayToken,
     savedGatewayToken,
@@ -512,25 +447,14 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         preferredEditor?: PreferredEditor;
         enabledAgentPlatforms: AgentPlatform[];
         favoriteModels: Array<{ platform: AgentPlatform; modelId: string }>;
-        defaultAgent: DefaultAgent;
-        opencodeModel: string;
-        claudeModel: string;
-        codexModel: string;
-        codexReasoningEffort: "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
-        opencodeMode: OpenCodeMode;
+        agentSettings: AgentSettingsTier;
         openCodeModelProviders: string[];
-        claudeMode: ClaudeMode;
-        claudeNativeBackend: ClaudeNativeBackend;
-        claudeNativeFastModeDefault: boolean;
-        codexMode: CodexMode;
-        codexNativeFastModeDefault: boolean;
         codexMaxConcurrentThreads: number;
         terminalAppearance: TerminalAppearance;
         terminalScrollback: number;
         experimentalCodexRawEventLogging: boolean;
         debugLogging: boolean;
         webClientEnabled: boolean;
-        actionDefaults: ActionDefaults;
         reviewInstruction?: string;
       } = {
         containerResources: { cpuCores, memoryGb },
@@ -541,18 +465,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         preferredEditor,
         enabledAgentPlatforms,
         favoriteModels: global.favoriteModels ?? [],
-        defaultAgent,
-        opencodeModel,
+        agentSettings: normalizeAgentSettings(agentSettings),
         openCodeModelProviders: normalizeOpenCodeModelProviders(openCodeModelProviders),
-        claudeModel: global.claudeModel || "claude-sonnet-5",
-        codexModel: global.codexModel || "gpt-5.4",
-        codexReasoningEffort: global.codexReasoningEffort || "high",
-        opencodeMode,
-        claudeMode,
-        claudeNativeBackend,
-        claudeNativeFastModeDefault,
-        codexMode,
-        codexNativeFastModeDefault,
         codexMaxConcurrentThreads,
         terminalAppearance: {
           fontFamily: terminalFontFamily,
@@ -565,7 +479,6 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         webClientEnabled,
         // `update_global_config` replaces the stored global wholesale, so this
         // has to be sent from every section's save, not only the Defaults tab.
-        actionDefaults: normalizeActionDefaults(actionDefaults),
       };
 
       if (reviewInstruction !== DEFAULT_REVIEW_INSTRUCTION) {
@@ -739,38 +652,21 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setAllowedDomains((global.allowedDomains || []).join("\n"));
     setPreferredEditor(global.preferredEditor || "vscode");
     setEnabledAgentPlatforms(global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]);
-    setDefaultAgent(global.defaultAgent || "claude");
-    setOpencodeModel(global.opencodeModel || "opencode/claude-sonnet-5");
-    setOpencodeMode(global.opencodeMode || "terminal");
+    setAgentSettings(normalizeAgentSettings(global.agentSettings));
     setOpenCodeModelProviders(normalizeOpenCodeModelProviders(global.openCodeModelProviders));
     setOpenCodeProviderDraft("");
-    setClaudeMode(global.claudeMode || DEFAULT_CLAUDE_MODE);
-    setClaudeNativeBackend(global.claudeNativeBackend || "sdk");
-    setClaudeNativeFastModeDefault(global.claudeNativeFastModeDefault ?? false);
-    setCodexMode(global.codexMode || "native");
-    setCodexNativeFastModeDefault(global.codexNativeFastModeDefault ?? false);
     setCodexMaxConcurrentThreads(
       global.codexMaxConcurrentThreads ?? DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
     );
-    setTerminalFontFamily(
-      global.terminalAppearance?.fontFamily || DEFAULT_TERMINAL_APPEARANCE.fontFamily,
-    );
-    setTerminalFontSize(
-      global.terminalAppearance?.fontSize || DEFAULT_TERMINAL_APPEARANCE.fontSize,
-    );
-    setTerminalBackgroundColor(
-      global.terminalAppearance?.backgroundColor || DEFAULT_TERMINAL_APPEARANCE.backgroundColor,
-    );
-    setTerminalScrollback(
-      typeof global.terminalScrollback === "number"
-        ? global.terminalScrollback
-        : DEFAULT_TERMINAL_SCROLLBACK,
-    );
+    const appearance = global.terminalAppearance || DEFAULT_TERMINAL_APPEARANCE;
+    setTerminalFontFamily(appearance.fontFamily);
+    setTerminalFontSize(appearance.fontSize);
+    setTerminalBackgroundColor(appearance.backgroundColor);
+    setTerminalScrollback(global.terminalScrollback ?? DEFAULT_TERMINAL_SCROLLBACK);
     setExperimentalCodexRawEventLogging(global.experimentalCodexRawEventLogging ?? true);
     setDebugLogging(global.debugLogging ?? false);
     setWebClientEnabled(global.webClientEnabled ?? true);
     setReviewInstruction(getSavedReviewInstruction(global.reviewInstruction));
-    setActionDefaults(normalizeActionDefaults(global.actionDefaults));
     setWebClientApplyError(null);
     setGatewayToken(savedGatewayToken);
     setDomainErrors([]);
@@ -811,28 +707,14 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setAllowedDomains,
     preferredEditor,
     setPreferredEditor,
-    defaultAgent,
-    setDefaultAgent,
+    agentSettings,
+    setAgentSettings,
     enabledAgentPlatforms,
     setEnabledAgentPlatforms,
-    opencodeModel,
-    setOpencodeModel,
-    opencodeMode,
-    setOpencodeMode,
     openCodeModelProviders,
     setOpenCodeModelProviders,
     openCodeProviderDraft,
     setOpenCodeProviderDraft,
-    claudeMode,
-    setClaudeMode,
-    claudeNativeBackend,
-    setClaudeNativeBackend,
-    claudeNativeFastModeDefault,
-    setClaudeNativeFastModeDefault,
-    codexMode,
-    setCodexMode,
-    codexNativeFastModeDefault,
-    setCodexNativeFastModeDefault,
     codexMaxConcurrentThreads,
     setCodexMaxConcurrentThreads,
     terminalFontFamily,
@@ -851,8 +733,6 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setWebClientEnabled,
     reviewInstruction,
     setReviewInstruction,
-    actionDefaults,
-    setActionDefaults,
     webClientStatus,
     setWebClientStatus,
     webClientApplyError,

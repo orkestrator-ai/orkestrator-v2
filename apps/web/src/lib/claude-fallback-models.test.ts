@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { FALLBACK_CLAUDE_MODELS } from "./RepositorySettings";
+import { FALLBACK_CLAUDE_MODELS } from "@/lib/claude-fallback-models";
 
 // These are the Claude models offered in the settings UI when no bridge server
 // is reachable. They mirror the bridge-side fallback list
 // (bridges/claude-bridge/src/services/session-manager.ts getAvailableModels);
 // this test guards the renderer copy against drift.
-describe("RepositorySettings FALLBACK_CLAUDE_MODELS", () => {
+describe("FALLBACK_CLAUDE_MODELS", () => {
   test("offers the current Claude model line-up in priority order", () => {
     expect(FALLBACK_CLAUDE_MODELS.map((m) => m.id)).toEqual([
       "default",

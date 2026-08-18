@@ -1,3 +1,4 @@
+import { resolveAgentPlatformSettings } from "@orkestrator/protocol/agent-settings";
 import { randomUUID } from "node:crypto";
 import {
   FEATURE_PLANNING_LIMITS,
@@ -474,13 +475,11 @@ export class FeaturePlanningService {
       current.providerSessionId = sessionId;
     });
     if (await this.clearIfCancellationRequested(record)) return;
-    const config = await this.storage.loadConfig();
     try {
-      await provider.send(sessionId, prompt, {
-        requestId,
-        mode: "plan",
-        ...(config.global.codexNativeFastModeDefault ? { fastMode: true } : {}),
-      });
+      // Fast mode is deliberately not forced here. It is a per-session choice
+      // the user makes in the model picker, not a stored default a background
+      // planning turn should apply on their behalf.
+      await provider.send(sessionId, prompt, { requestId, mode: "plan" });
     } catch (error) {
       if (error instanceof AmbiguousPromptDispatchError) {
         await this.evictProvider(environment.id, provider);
@@ -856,14 +855,19 @@ export class FeaturePlanningService {
     }
     const config = await this.storage.loadConfig();
     const repository = config.repositories[record.projectId];
+    const codexDefaults = resolveAgentPlatformSettings(
+      { repository: repository?.agentSettings, global: config.global.agentSettings },
+      "codex",
+    );
     const created = await this.providerOperation(environmentId, provider, () =>
       provider.createSession("review", plan?.title || "Feature planning", {
         clientSessionKey: `feature-planning:${record.featureId}`,
         mode: "plan",
-        ...(repository?.defaultModel || config.global.codexModel
-          ? { model: repository?.defaultModel || config.global.codexModel }
-          : {}),
-        effort: repository?.defaultEffort || config.global.codexReasoningEffort || "high",
+        // Feature planning always runs on Codex, so it reads Codex's own
+        // column rather than a repository-wide model that may belong to
+        // another platform's catalogue.
+        ...(codexDefaults.model ? { model: codexDefaults.model } : {}),
+        effort: codexDefaults.reasoningEffort || "high",
       }),
     );
     await this.storage.updateFeaturePlan(record.featureId, { codexSessionId: created });

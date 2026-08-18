@@ -71,11 +71,7 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useConfigStore } from "@/stores/configStore";
 import { enqueueAgentPrompt, removeAgentPrompt } from "@/lib/prompt-queue-sources";
-import {
-  getClaudeModelCatalog,
-  renameEnvironmentFromPrompt,
-  updateGlobalConfig,
-} from "@/lib/backend";
+import { getClaudeModelCatalog, renameEnvironmentFromPrompt } from "@/lib/backend";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import type { ClaudeTmuxData } from "@/types/paneLayout";
 
@@ -173,8 +169,9 @@ export function ClaudeTmuxChatTab({
   const clearSelectionPrompt = useClaudeTmuxStore((s) => s.clearSelectionPrompt);
   const clearTabInitialPrompt = usePaneLayoutStore((s) => s.clearTabInitialPrompt);
   const clearTabInitialAgentOptions = usePaneLayoutStore((s) => s.clearTabInitialAgentOptions);
-  const setConfig = useConfigStore((s) => s.setConfig);
-  const persistedClaudeModel = useConfigStore((s) => s.config.global.claudeModel);
+  const persistedClaudeModel = useConfigStore(
+    (s) => s.config.global.agentSettings?.platforms?.claude?.model,
+  );
 
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -199,7 +196,8 @@ export function ClaudeTmuxChatTab({
   );
   const [selectedModel, setSelectedModel] = useState<string>(() =>
     resolveTmuxModelPreference(
-      initialLaunchModel ?? useConfigStore.getState().config.global.claudeModel,
+      initialLaunchModel ??
+        useConfigStore.getState().config.global.agentSettings?.platforms?.claude?.model,
       tmuxModelList(useClaudeStore.getState().getModels(environmentId)),
     ),
   );
@@ -356,33 +354,6 @@ export function ClaudeTmuxChatTab({
     persistedClaudeModel,
     sdkModels,
   ]);
-
-  const persistSelectedModel = useCallback(
-    async (modelId: string) => {
-      const currentConfig = useConfigStore.getState().config;
-      if (currentConfig.global.claudeModel === modelId) return;
-
-      const nextGlobal = {
-        ...currentConfig.global,
-        claudeModel: modelId,
-      };
-      setConfig({ ...currentConfig, global: nextGlobal });
-
-      try {
-        const updatedConfig = await updateGlobalConfig(nextGlobal);
-        if (useConfigStore.getState().config.global.claudeModel === modelId) {
-          setConfig(updatedConfig);
-        }
-      } catch (e) {
-        console.error("[ClaudeTmuxChatTab] Failed to persist Claude model default:", e);
-        if (useConfigStore.getState().config.global.claudeModel === modelId) {
-          setConfig(currentConfig);
-          setError("Failed to save Claude model default");
-        }
-      }
-    },
-    [setConfig],
-  );
 
   // 0. Reconnect to any already-running backend session and replay the full
   // transcript. backend events are only delivered to mounted listeners, so a
@@ -1049,7 +1020,6 @@ export function ClaudeTmuxChatTab({
       setSelectedModel(modelId);
       clampEffortToModel(modelId);
       if (!nextSupportsFastMode) applyFastMode(false);
-      void persistSelectedModel(modelId);
       return;
     }
 
@@ -1065,7 +1035,6 @@ export function ClaudeTmuxChatTab({
       await switchModel(tabId, modelId, environmentId);
       setSelectedModel(modelId);
       clampEffortToModel(modelId);
-      void persistSelectedModel(modelId);
     } catch (e) {
       setError(String(e));
     } finally {

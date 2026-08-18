@@ -179,9 +179,7 @@ export function buildReviewModelCatalog(
 
 export function resolveDefaultReviewTabType(options: {
   defaultAgent: DefaultAgent;
-  environment:
-    | Pick<Environment, "claudeMode" | "claudeNativeBackend" | "opencodeMode" | "codexMode">
-    | undefined;
+  environment: Pick<Environment, "agentSettings"> | undefined;
   global: GlobalConfig;
   repositoryConfig?: RepositoryConfig;
 }): ReviewTabType {

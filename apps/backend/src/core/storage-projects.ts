@@ -1,5 +1,10 @@
 import * as shared from "./storage-shared.js";
 import {
+  LEGACY_ENVIRONMENT_AGENT_KEYS,
+  migrateEnvironmentAgentSettings,
+} from "./storage-agent-settings.js";
+import { isEmptyAgentSettings, normalizeAgentSettings } from "@orkestrator/protocol/agent-settings";
+import {
   AGENT_ACTIVITY_MAX_FUTURE_SKEW_MS,
   AGENT_ACTIVITY_SOURCES,
   AGENT_ACTIVITY_STATES,
@@ -12,7 +17,6 @@ import {
   frontendAgentActivityObserverKey,
   fs,
   isAgentActivityTimestamp,
-  isAgentPlatform,
   isClaudeModelCatalogSnapshot,
   isInitialPromptImageAttachment,
   isNonBlankString,
@@ -47,7 +51,6 @@ type AgentModel = shared.AgentModel;
 type AgentActivityState = shared.AgentActivityState;
 type AgentActivitySource = shared.AgentActivitySource;
 type AgentModelCatalogCache = shared.AgentModelCatalogCache;
-type AgentModelConfigKey = shared.AgentModelConfigKey;
 type AppConfig = shared.AppConfig;
 type ClaudeModelCatalogSnapshot = shared.ClaudeModelCatalogSnapshot;
 type ClaudeModelCatalogEntry = shared.ClaudeModelCatalogEntry;
@@ -114,7 +117,6 @@ export type StorageLayerTypes = [
   AgentActivityState,
   AgentActivitySource,
   AgentModelCatalogCache,
-  AgentModelConfigKey,
   AppConfig,
   ClaudeModelCatalogSnapshot,
   ClaudeModelCatalogEntry,
@@ -256,6 +258,20 @@ export abstract class StorageProjects extends StorageBase {
     for (const environment of environments) {
       environment.setupPhase ??= environment.setupScriptsComplete ? "ready" : "pending";
       environment.setupOverride ??= false;
+      // Fold the five per-platform agent fields onto the shared tier shape. The
+      // legacy keys are deleted here rather than left beside the new block, so
+      // a stale value cannot be read back by anything that still remembers the
+      // old name and the two shapes cannot drift while both sit on disk.
+      const migrated = migrateEnvironmentAgentSettings(
+        environment as unknown as Record<string, unknown>,
+      );
+      // Absence already means "inherit everything", so an empty tier is not
+      // written back onto every environment record.
+      if (isEmptyAgentSettings(migrated)) delete environment.agentSettings;
+      else environment.agentSettings = migrated;
+      for (const key of LEGACY_ENVIRONMENT_AGENT_KEYS) {
+        delete (environment as unknown as Record<string, unknown>)[key];
+      }
     }
     return environments.sort((a, b) => a.order - b.order);
   }
@@ -584,30 +600,14 @@ export abstract class StorageProjects extends StorageBase {
       ) {
         environment.networkAccessMode = updates.networkAccessMode;
       }
-      if ("defaultAgent" in updates) {
-        if (updates.defaultAgent == null) environment.defaultAgent = undefined;
-        else if (isAgentPlatform(updates.defaultAgent))
-          environment.defaultAgent = updates.defaultAgent;
-      }
-      if ("claudeMode" in updates) {
-        if (updates.claudeMode == null) environment.claudeMode = undefined;
-        else if (isOneOf(updates.claudeMode, ["terminal", "native"]))
-          environment.claudeMode = updates.claudeMode;
-      }
-      if ("claudeNativeBackend" in updates) {
-        if (updates.claudeNativeBackend == null) environment.claudeNativeBackend = undefined;
-        else if (isOneOf(updates.claudeNativeBackend, ["sdk", "tmux"]))
-          environment.claudeNativeBackend = updates.claudeNativeBackend;
-      }
-      if ("opencodeMode" in updates) {
-        if (updates.opencodeMode == null) environment.opencodeMode = undefined;
-        else if (isOneOf(updates.opencodeMode, ["terminal", "native"]))
-          environment.opencodeMode = updates.opencodeMode;
-      }
-      if ("codexMode" in updates) {
-        if (updates.codexMode == null) environment.codexMode = undefined;
-        else if (isOneOf(updates.codexMode, ["terminal", "native"]))
-          environment.codexMode = updates.codexMode;
+      if ("agentSettings" in updates) {
+        // The settings panes write this block wholesale, and an absent field
+        // inside it is the user choosing "Inherit". Normalizing here keeps a
+        // malformed or partial write out of persisted config, exactly as the
+        // action-defaults normalizer does for its own object.
+        environment.agentSettings = updates.agentSettings
+          ? normalizeAgentSettings(updates.agentSettings)
+          : undefined;
       }
 
       // A merge that changed nothing persists nothing. Rewriting the whole

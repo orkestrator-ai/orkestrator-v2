@@ -1715,13 +1715,25 @@ describe("KanbanTaskDialog", () => {
     useConfigStore.setState({
       config: {
         ...initialConfig,
-        global: { ...initialConfig.global, codexModel: "gpt-5.4-mini" },
+        global: {
+          ...initialConfig.global,
+          agentSettings: {
+            ...initialConfig.global.agentSettings,
+            platforms: {
+              ...initialConfig.global.agentSettings?.platforms,
+              codex: {
+                ...initialConfig.global.agentSettings?.platforms?.codex,
+                model: "gpt-5.4-mini",
+              },
+            },
+          },
+        },
         repositories: {
           ...initialConfig.repositories,
           "project-1": {
             defaultBranch: "main",
             prBaseBranch: "main",
-            defaultAgent: "codex",
+            agentSettings: { defaultAgent: "codex" },
           },
         },
       },

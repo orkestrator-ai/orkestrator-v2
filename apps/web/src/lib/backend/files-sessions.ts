@@ -1,3 +1,4 @@
+import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import { invoke } from "@/lib/native/backend";
 import type { EnvironmentDiffStatsSnapshot } from "@orkestrator/protocol/diff-stats";
 import type { PrMonitorMode, PrMonitorSnapshot } from "@orkestrator/protocol/pr-monitor";
@@ -7,11 +8,6 @@ import type {
   Session,
   SessionType,
   SessionStatus,
-  DefaultAgent,
-  ClaudeMode,
-  ClaudeNativeBackend,
-  CodexMode,
-  OpenCodeMode,
   InitialPromptImageAttachment,
   PersistedPaneLayout,
   PersistedPaneLayoutInput,
@@ -351,13 +347,16 @@ export async function updatePortMappings(
 }
 
 /** Update per-environment agent settings (pass null to use global defaults) */
+/**
+ * Persist an environment's agent overrides.
+ *
+ * One `agentSettings` block replaces the five positional nullable arguments this
+ * took before. The launch-intent arguments below are deliberately separate:
+ * they describe one pending run, not a durable setting.
+ */
 export async function updateEnvironmentAgentSettings(
   environmentId: string,
-  defaultAgent: DefaultAgent | null,
-  claudeMode: ClaudeMode | null,
-  claudeNativeBackend: ClaudeNativeBackend | null,
-  opencodeMode: OpenCodeMode | null,
-  codexMode: CodexMode | null,
+  agentSettings: AgentSettingsTier,
   pendingAgentLaunch?: boolean,
   initialAgentModel?: string,
   initialReasoningEffort?: string,
@@ -365,11 +364,7 @@ export async function updateEnvironmentAgentSettings(
 ): Promise<Environment> {
   return invoke<Environment>("update_environment_agent_settings", {
     environmentId,
-    defaultAgent,
-    claudeMode,
-    claudeNativeBackend,
-    opencodeMode,
-    codexMode,
+    agentSettings,
     ...(typeof pendingAgentLaunch === "boolean" ? { pendingAgentLaunch } : {}),
     ...(initialAgentModel ? { initialAgentModel } : {}),
     ...(initialReasoningEffort ? { initialReasoningEffort } : {}),

@@ -283,8 +283,7 @@ afterEach(() => {
   useEnvironmentStore.setState({ environments: [] });
   useConfigStore.getState().updateGlobalConfig({
     enabledAgentPlatforms: ["claude", "codex", "opencode"],
-    claudeModel: "claude-sonnet-5",
-    claudeNativeFastModeDefault: false,
+    agentSettings: { platforms: { claude: { model: "claude-sonnet-5" } } },
   });
   usePaneLayoutStore.setState({
     environments: new Map(),
@@ -1413,8 +1412,7 @@ describe("AgentNativeTab", () => {
 
   test("does not overwrite a resumed session with configured defaults", async () => {
     useConfigStore.getState().updateGlobalConfig({
-      claudeModel: "configured-default",
-      claudeNativeFastModeDefault: true,
+      agentSettings: { platforms: { claude: { model: "configured-default" } } },
     });
 
     render(
@@ -1429,8 +1427,7 @@ describe("AgentNativeTab", () => {
     expect(adopted).not.toHaveProperty("fastMode");
 
     useConfigStore.getState().updateGlobalConfig({
-      claudeModel: "claude-sonnet-5",
-      claudeNativeFastModeDefault: false,
+      agentSettings: { platforms: { claude: { model: "claude-sonnet-5" } } },
     });
   });
 

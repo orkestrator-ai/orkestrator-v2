@@ -471,10 +471,15 @@ describe("TerminalContainer", () => {
         ...state.config,
         global: {
           ...state.config.global,
-          opencodeMode: "terminal",
-          claudeMode: "terminal",
-          claudeNativeBackend: "sdk",
-          codexMode: "native",
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            platforms: {
+              ...state.config.global.agentSettings?.platforms,
+              opencode: { mode: "terminal" },
+              claude: { mode: "terminal", claudeNativeBackend: "sdk" },
+              codex: { mode: "native" },
+            },
+          },
         },
         repositories: {},
       },
@@ -2280,7 +2285,16 @@ describe("TerminalContainer", () => {
         ...state,
         config: {
           ...state.config,
-          global: { ...state.config.global, claudeMode: "native" },
+          global: {
+            ...state.config.global,
+            agentSettings: {
+              ...state.config.global.agentSettings,
+              platforms: {
+                ...state.config.global.agentSettings?.platforms,
+                claude: { ...state.config.global.agentSettings?.platforms?.claude, mode: "native" },
+              },
+            },
+          },
           repositories: {},
         },
       }));
@@ -2312,8 +2326,13 @@ describe("TerminalContainer", () => {
           ...state.config,
           global: {
             ...state.config.global,
-            claudeMode: "native",
-            claudeNativeBackend: "tmux",
+            agentSettings: {
+              ...state.config.global.agentSettings,
+              platforms: {
+                ...state.config.global.agentSettings?.platforms,
+                claude: { mode: "native", claudeNativeBackend: "tmux" },
+              },
+            },
           },
           repositories: {},
         },
@@ -2351,15 +2370,21 @@ describe("TerminalContainer", () => {
           ...state.config,
           global: {
             ...state.config.global,
-            claudeMode: "terminal",
-            claudeNativeBackend: "sdk",
+            agentSettings: {
+              ...state.config.global.agentSettings,
+              platforms: {
+                ...state.config.global.agentSettings?.platforms,
+                claude: { mode: "terminal", claudeNativeBackend: "sdk" },
+              },
+            },
           },
           repositories: {
             "project-1": {
               defaultBranch: "main",
               prBaseBranch: "main",
-              agentStyle: "native",
-              claudeNativeBackend: "tmux",
+              agentSettings: {
+                platforms: { claude: { mode: "native", claudeNativeBackend: "tmux" } },
+              },
             },
           },
         },
@@ -2390,7 +2415,16 @@ describe("TerminalContainer", () => {
         ...state,
         config: {
           ...state.config,
-          global: { ...state.config.global, codexMode: "native" },
+          global: {
+            ...state.config.global,
+            agentSettings: {
+              ...state.config.global.agentSettings,
+              platforms: {
+                ...state.config.global.agentSettings?.platforms,
+                codex: { ...state.config.global.agentSettings?.platforms?.codex, mode: "native" },
+              },
+            },
+          },
           repositories: {},
         },
       }));
@@ -2421,7 +2455,19 @@ describe("TerminalContainer", () => {
         ...state,
         config: {
           ...state.config,
-          global: { ...state.config.global, opencodeMode: "native" },
+          global: {
+            ...state.config.global,
+            agentSettings: {
+              ...state.config.global.agentSettings,
+              platforms: {
+                ...state.config.global.agentSettings?.platforms,
+                opencode: {
+                  ...state.config.global.agentSettings?.platforms?.opencode,
+                  mode: "native",
+                },
+              },
+            },
+          },
           repositories: {},
         },
       }));
@@ -2453,8 +2499,13 @@ describe("TerminalContainer", () => {
           ...state.config,
           global: {
             ...state.config.global,
-            claudeMode: "terminal",
-            claudeNativeBackend: "sdk",
+            agentSettings: {
+              ...state.config.global.agentSettings,
+              platforms: {
+                ...state.config.global.agentSettings?.platforms,
+                claude: { mode: "terminal", claudeNativeBackend: "sdk" },
+              },
+            },
           },
           repositories: {},
         },
@@ -2488,7 +2539,16 @@ describe("TerminalContainer", () => {
         ...state,
         config: {
           ...state.config,
-          global: { ...state.config.global, codexMode: "terminal" },
+          global: {
+            ...state.config.global,
+            agentSettings: {
+              ...state.config.global.agentSettings,
+              platforms: {
+                ...state.config.global.agentSettings?.platforms,
+                codex: { ...state.config.global.agentSettings?.platforms?.codex, mode: "terminal" },
+              },
+            },
+          },
           repositories: {},
         },
       }));
@@ -2703,7 +2763,19 @@ describe("TerminalContainer", () => {
         ...state,
         config: {
           ...state.config,
-          global: { ...state.config.global, opencodeMode: "native" },
+          global: {
+            ...state.config.global,
+            agentSettings: {
+              ...state.config.global.agentSettings,
+              platforms: {
+                ...state.config.global.agentSettings?.platforms,
+                opencode: {
+                  ...state.config.global.agentSettings?.platforms?.opencode,
+                  mode: "native",
+                },
+              },
+            },
+          },
           repositories: {},
         },
       }));
@@ -2738,8 +2810,13 @@ describe("TerminalContainer", () => {
           ...state.config,
           global: {
             ...state.config.global,
-            claudeMode: "native",
-            claudeNativeBackend: "tmux",
+            agentSettings: {
+              ...state.config.global.agentSettings,
+              platforms: {
+                ...state.config.global.agentSettings?.platforms,
+                claude: { mode: "native", claudeNativeBackend: "tmux" },
+              },
+            },
           },
           repositories: {},
         },
@@ -2775,8 +2852,13 @@ describe("TerminalContainer", () => {
           ...state.config,
           global: {
             ...state.config.global,
-            claudeMode: "native",
-            claudeNativeBackend: "tmux",
+            agentSettings: {
+              ...state.config.global.agentSettings,
+              platforms: {
+                ...state.config.global.agentSettings?.platforms,
+                claude: { mode: "native", claudeNativeBackend: "tmux" },
+              },
+            },
           },
           repositories: {},
         },
@@ -2811,7 +2893,16 @@ describe("TerminalContainer", () => {
         ...state,
         config: {
           ...state.config,
-          global: { ...state.config.global, codexMode: "native" },
+          global: {
+            ...state.config.global,
+            agentSettings: {
+              ...state.config.global.agentSettings,
+              platforms: {
+                ...state.config.global.agentSettings?.platforms,
+                codex: { ...state.config.global.agentSettings?.platforms?.codex, mode: "native" },
+              },
+            },
+          },
           repositories: {},
         },
       }));
@@ -2844,7 +2935,19 @@ describe("TerminalContainer", () => {
         ...state,
         config: {
           ...state.config,
-          global: { ...state.config.global, opencodeMode: "terminal" },
+          global: {
+            ...state.config.global,
+            agentSettings: {
+              ...state.config.global.agentSettings,
+              platforms: {
+                ...state.config.global.agentSettings?.platforms,
+                opencode: {
+                  ...state.config.global.agentSettings?.platforms?.opencode,
+                  mode: "terminal",
+                },
+              },
+            },
+          },
           repositories: {},
         },
       }));

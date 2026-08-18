@@ -37,8 +37,12 @@ import {
   buildInitialPromptWithAttachmentReferences,
   saveInitialPromptAttachments,
 } from "@/lib/initial-prompt-attachments";
-import { resolveClaudeConfig } from "@/lib/claude-mode-resolver";
-import { resolveStartupLaunch } from "@orkestrator/protocol/startup-launch";
+import { agentSettingsTiers } from "@/lib/agent-settings";
+import {
+  resolveAgentPlatformSettings,
+  resolveDefaultAgent,
+} from "@orkestrator/protocol/agent-settings";
+import { resolveStartupLaunchFromSettings } from "@orkestrator/protocol/startup-launch";
 import { reconcilePersistedLayout } from "@/lib/pane-layout-restore";
 import {
   createPersistedPaneLayoutInput,
@@ -116,60 +120,32 @@ export function TerminalContainer({
 
   // Get config for agent modes - per-environment overrides take precedence over global
   const config = useConfigStore((state) => state.config);
-  const {
-    envDefaultAgent,
-    envOpencodeMode,
-    envClaudeMode,
-    envClaudeNativeBackend,
-    envCodexMode,
-    envProjectId,
-  } = useEnvironmentStore(
+  const { envAgentSettings, envProjectId } = useEnvironmentStore(
     useShallow((state) => {
       const env = state.environments.find((e) => e.id === environmentId);
-      return {
-        envDefaultAgent: env?.defaultAgent,
-        envOpencodeMode: env?.opencodeMode,
-        envClaudeMode: env?.claudeMode,
-        envClaudeNativeBackend: env?.claudeNativeBackend,
-        envCodexMode: env?.codexMode,
-        envProjectId: env?.projectId,
-      };
+      return { envAgentSettings: env?.agentSettings, envProjectId: env?.projectId };
     }),
   );
-  const opencodeMode = envOpencodeMode || config.global.opencodeMode || "terminal";
-  const codexMode = envCodexMode || config.global.codexMode || "native";
-  const resolvedClaudeConfig = resolveClaudeConfig(
-    config.global,
-    envProjectId ? config.repositories[envProjectId] : undefined,
-    {
-      claudeMode: envClaudeMode,
-      claudeNativeBackend: envClaudeNativeBackend,
-    },
-  );
-  const claudeMode = resolvedClaudeConfig.mode;
-  const claudeNativeBackend = resolvedClaudeConfig.nativeBackend;
+  // One assembly of the three tiers, then every question is asked of the shared
+  // resolver. The renderer used to keep its own copy of the tiering rule in
+  // `claude-mode-resolver.ts`, which defaulted Codex to native while the shared
+  // resolver defaulted it to terminal — exactly the kind of drift that costs a
+  // launch its attachments.
+  const tiers = agentSettingsTiers(config, envProjectId, { agentSettings: envAgentSettings });
+  const opencodeMode = resolveAgentPlatformSettings(tiers, "opencode").mode;
+  const codexMode = resolveAgentPlatformSettings(tiers, "codex").mode;
+  const claude = resolveAgentPlatformSettings(tiers, "claude");
+  const claudeMode = claude.mode;
+  const claudeNativeBackend = claude.claudeNativeBackend;
   /*
    * Whether the backend's native agent service will dispatch this environment's
    * pending launch itself — which is also whether it owns the initial prompt's
-   * image attachments.
-   *
-   * Deliberately the shared resolver rather than the mode values above: those
-   * are the renderer's own view (they default Codex to native and are used for
-   * tab creation), while this question must be answered exactly as
-   * `reconcileInitialLaunchOnce` answers it. When the two disagree, either both
+   * image attachments. It must be answered exactly as
+   * `reconcileInitialLaunchOnce` answers it: when the two disagree, either both
    * sides consume the attachments or neither delivers them.
    */
-  const startupLaunchDispatchedByBackend = resolveStartupLaunch({
-    environment: {
-      defaultAgent: envDefaultAgent,
-      claudeMode: envClaudeMode,
-      codexMode: envCodexMode,
-      opencodeMode: envOpencodeMode,
-      claudeNativeBackend: envClaudeNativeBackend,
-    },
-    repository: envProjectId ? config.repositories[envProjectId] : undefined,
-    global: config.global,
-  }).dispatchedByBackend;
+  const startupLaunchDispatchedByBackend =
+    resolveStartupLaunchFromSettings(tiers).dispatchedByBackend;
 
   // Check if this is a local environment (no container)
   const environment = useEnvironmentStore((state) =>
@@ -594,8 +570,7 @@ export function TerminalContainer({
       // missing startup tab means the user closed it — re-creating it here
       // would resurrect it on every render and permanently defeat the close.
       if (!environment.pendingAgentLaunch) return;
-      const agentType =
-        startupSession?.agent ?? environment.defaultAgent ?? config.global.defaultAgent ?? "claude";
+      const agentType = startupSession?.agent ?? resolveDefaultAgent(tiers);
       setPendingNativeLaunch(environmentId, {
         containerId: isLocalEnvironment ? null : containerId,
         environmentId,
@@ -661,7 +636,7 @@ export function TerminalContainer({
     if (claudeOptions?.launchAgent) return;
     if (!isEnvironmentRunning || pendingNativeLaunch) return;
 
-    const agentType = environment.defaultAgent ?? config.global.defaultAgent ?? "claude";
+    const agentType = resolveDefaultAgent(tiers);
     const launchMode =
       (agentType === "claude" && claudeMode === "native") ||
       (agentType === "codex" && codexMode === "native") ||
@@ -686,7 +661,7 @@ export function TerminalContainer({
     claudeNativeBackend,
     claudeOptions?.launchAgent,
     codexMode,
-    config.global.defaultAgent,
+    tiers,
     containerId,
     currentEnvState,
     clearPendingNativeLaunch,

@@ -14,6 +14,7 @@ import type {
   AgentInteractionWorkflowSummary,
 } from "@orkestrator/protocol/agent-interactions";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 
 export type {
@@ -252,11 +253,15 @@ export interface Environment {
   localGrokPort?: number;
   /** Last backend-owned Claude model catalog for this environment. */
   claudeModelCatalog?: ClaudeModelCatalogSnapshot;
-  defaultAgent?: DefaultAgent;
-  claudeMode?: ClaudeMode;
-  claudeNativeBackend?: ClaudeNativeBackend;
-  opencodeMode?: OpenCodeMode;
-  codexMode?: CodexMode;
+  /**
+   * This environment's agent overrides — the narrowest of the three tiers.
+   *
+   * An absent field means "inherit from the repository, then the application",
+   * which is what the settings panes write when a control returns to Inherit.
+   *
+   * @see the five `@deprecated` fields below, which this replaces.
+   */
+  agentSettings?: AgentSettingsTier;
   setupScriptsComplete?: boolean;
   /** Single backend-owned setup lifecycle projection. */
   setupPhase?: EnvironmentSetupPhase;
@@ -597,24 +602,26 @@ export interface RepositoryConfig {
   defaultBranch: string;
   prBaseBranch: string;
   lastEnvironmentType?: EnvironmentType;
-  /** Agent controls used by the most recently created agent-enabled environment. */
+  /**
+   * Agent and mode used by the most recently created agent-enabled environment.
+   *
+   * Model and reasoning are deliberately absent: they come from
+   * `agentSettings`, so the Defaults page is the only place they are decided.
+   */
   lastEnvironmentAgentSelection?: {
     platform: DefaultAgent;
     mode: AgentStyle;
-    model?: string;
-    reasoningEffort?: string;
   };
   defaultPortMappings?: PortMapping[];
   filesToCopy?: string[];
-  defaultModel?: string;
-  defaultEffort?: string;
   entryPort?: number;
-  defaultAgent?: DefaultAgent;
-  agentStyle?: AgentStyle;
-  claudeNativeBackend?: ClaudeNativeBackend;
+  /**
+   * This repository's agent overrides — the middle tier.
+   *
+   * @see the five `@deprecated` fields below, which this replaces.
+   */
+  agentSettings?: AgentSettingsTier;
 }
-
-export type AgentModelConfigKey = "claudeModel" | "codexModel" | "opencodeModel";
 
 export interface AppConfig {
   version: string;
@@ -641,23 +648,22 @@ export interface AppConfig {
     useHostClaudeCredentials?: boolean;
     allowedDomains: string[];
     preferredEditor?: "vscode" | "cursor";
-    defaultAgent: DefaultAgent;
-    opencodeModel: string;
-    claudeModel?: string;
-    codexModel: string;
-    codexReasoningEffort: "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
-    opencodeMode: OpenCodeMode;
+    /**
+     * Application-wide agent defaults — the widest of the three tiers, and the
+     * only one with a shipped fallback beneath it.
+     *
+     * @see the `@deprecated` fields below, which this replaces. The two
+     * `*NativeFastModeDefault` fields are dropped rather than migrated: speed
+     * is a per-session choice made in the model picker, and OpenCode expresses
+     * it as a `-fast` model id rather than a toggle.
+     */
+    agentSettings?: AgentSettingsTier;
     /**
      * OpenCode provider catalogues offered in model pickers. Filtering happens
      * in the backend so the renderer never receives the full OpenCode
      * catalogue. An empty list means unrestricted.
      */
     openCodeModelProviders?: string[];
-    claudeMode: ClaudeMode;
-    claudeNativeBackend: ClaudeNativeBackend;
-    claudeNativeFastModeDefault?: boolean;
-    codexMode: CodexMode;
-    codexNativeFastModeDefault?: boolean;
     /** Maximum concurrently open spawned-agent threads per native Codex session. */
     codexMaxConcurrentThreads: number;
     terminalAppearance: {
@@ -671,11 +677,6 @@ export interface AppConfig {
     webClientEnabled?: boolean;
     /** Editable preference embedded inside Orkestrator's fixed review contract. */
     reviewInstruction?: string;
-    /**
-     * Agent, model and reasoning level applied when a toolbar action is
-     * launched with a plain click rather than through its launch dialog.
-     */
-    actionDefaults?: import("@orkestrator/protocol/action-defaults").ActionDefaults;
   };
   repositories: Record<string, RepositoryConfig>;
 }

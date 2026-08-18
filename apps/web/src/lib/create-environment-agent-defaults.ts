@@ -50,9 +50,9 @@ function withRememberedMode(
 
 /**
  * Resolve the initial agent controls independently from repository defaults.
- * A remembered selection wins only for its own platform and only while that
- * platform remains enabled. Removed models and reasoning levels safely fall
- * back through the current catalogue.
+ * A remembered selection covers the agent and its mode only, wins only for its
+ * own platform, and only while that platform remains enabled. The model and
+ * reasoning level always come from settings.
  *
  * Model resolution goes through `firstModelFor`, the same helper the review,
  * multi-review and build launchers use. That matters for Claude: configuration
@@ -78,18 +78,11 @@ export function resolveCreateEnvironmentAgentDefaults(options: {
       : configured.agent;
   const agent = firstEnabledAgentPlatform(options.enabledAgents, preferredPlatform);
   const rememberedForAgent = remembered?.platform === agent ? remembered : undefined;
-  const rememberedModel = rememberedForAgent ? (rememberedForAgent.model ?? "default") : undefined;
-  const model = firstModelFor(agent, catalog, {
-    ...configured.models,
-    ...(rememberedModel ? { [agent]: rememberedModel } : {}),
-  });
-  const reasoningEffort = rememberedForAgent
-    ? rememberedForAgent.reasoningEffort
-      ? defaultEffortFor(agent, model, catalog, {
-          [agent]: rememberedForAgent.reasoningEffort,
-        })
-      : "default"
-    : defaultEffortFor(agent, model, catalog, configured.reasoningEfforts);
+  // Model and reasoning come from settings only. They used to be remembered
+  // from the last create, so a one-off choice in this dialog silently outranked
+  // the configured default for every environment after it.
+  const model = firstModelFor(agent, catalog, configured.models);
+  const reasoningEffort = defaultEffortFor(agent, model, catalog, configured.reasoningEfforts);
 
   return {
     agent,

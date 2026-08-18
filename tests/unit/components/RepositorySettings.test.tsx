@@ -8,7 +8,7 @@ import type { OpenCodeModelCatalogSnapshot } from "@/lib/backend";
 // Mocks — must be declared BEFORE importing the component under test
 // ---------------------------------------------------------------------------
 
-let mockSection = "agent";
+let mockSection = "defaults";
 let nextDialogResult: string | null = null;
 let dialogError: Error | null = null;
 let updateRepositoryConfigImpl = (_projectId: string, repoConfig: unknown) =>
@@ -202,7 +202,7 @@ function resetStores(config = makeConfig()) {
 function renderSettings({
   project,
   config,
-  section = "agent",
+  section = "defaults",
   onOpenChange,
   onUpdateProject,
   prepareStores,
@@ -270,7 +270,7 @@ function getSavedConfig() {
 
 describe("RepositorySettings", () => {
   beforeEach(() => {
-    mockSection = "agent";
+    mockSection = "defaults";
     nextDialogResult = null;
     dialogError = null;
     updateRepositoryConfigImpl = (_projectId: string, repoConfig: unknown) =>
@@ -295,516 +295,74 @@ describe("RepositorySettings", () => {
     cleanup();
   });
 
-  describe("agent section", () => {
-    test("renders accessible agent tiles and keeps app default selected by default", () => {
-      renderSettings();
+  describe("agent settings", () => {
+    test("every control starts on Inherit", () => {
+      renderSettings({ section: "defaults" });
 
-      expect(screen.getByText("Agent Style")).toBeTruthy();
-
-      const group = getAgentGroup();
+      const agents = screen.getByRole("radiogroup", { name: "Default agent" });
       expect(
-        within(group)
-          .getByRole("radio", { name: "Use App Default (Claude Code)" })
+        within(agents)
+          .getByRole("radio", { name: /^Inherit/ })
           .getAttribute("aria-checked"),
       ).toBe("true");
-      expect(within(group).getByRole("radio", { name: "Claude Code" })).toBeTruthy();
-      expect(within(group).getByRole("radio", { name: "OpenCode" })).toBeTruthy();
-      expect(within(group).getByRole("radio", { name: "Codex" })).toBeTruthy();
-      expect(
-        within(group)
-          .getAllByRole("radio")
-          .map((radio) => radio.textContent?.trim()),
-      ).toEqual(["Use App Default (Claude Code)", "Claude Code", "Codex", "OpenCode"]);
-
-      const [styleSelect] = getMockSelects();
-      expect(styleSelect.value).toBe("__app_default__");
-    });
-
-    test("shows the project override and keeps the app-default tile label tied to the global default", () => {
-      const { container } = renderSettings({
-        config: {
-          global: { defaultAgent: "claude" } as AppConfig["global"],
-          repositories: {
-            "project-1": {
-              defaultBranch: "main",
-              prBaseBranch: "main",
-              defaultAgent: "opencode",
-            },
-          },
-        },
-      });
-
-      expect(getAgentRadio("Use App Default (Claude Code)")).toBeTruthy();
-      expect(getAgentRadio("OpenCode").getAttribute("aria-checked")).toBe("true");
-      expect(
-        container.querySelector("span.text-xs.text-muted-foreground.bg-zinc-800")?.textContent,
-      ).toBe("OpenCode");
-    });
-
-    test("clicking an agent tile updates the effective badge and clears model and effort on save", async () => {
-      const { container } = renderSettings({
-        config: {
-          repositories: {
-            "project-1": {
-              defaultBranch: "main",
-              prBaseBranch: "main",
-              defaultModel: "claude-sonnet-4-6",
-              defaultEffort: "high",
-            },
-          },
-        },
-      });
-
-      fireEvent.click(getAgentRadio("OpenCode"));
-      expect(
-        container.querySelector("span.text-xs.text-muted-foreground.bg-zinc-800")?.textContent,
-      ).toBe("OpenCode");
-
-      fireEvent.click(getSaveButton());
-
-      await waitFor(() => expect(mockUpdateRepositoryConfig).toHaveBeenCalledTimes(1));
-
-      const savedConfig = getSavedConfig();
-      expect(savedConfig.defaultAgent).toBe("opencode");
-      expect(savedConfig.defaultModel).toBeUndefined();
-      expect(savedConfig.defaultEffort).toBeUndefined();
-    });
-
-    test("saves explicit agent and style overrides", async () => {
-      renderSettings();
-
-      fireEvent.click(getAgentRadio("OpenCode"));
-
-      const [styleSelect] = getMockSelects();
-      fireEvent.change(styleSelect, { target: { value: "native" } });
-      fireEvent.click(getSaveButton());
-
-      await waitFor(() => expect(mockUpdateRepositoryConfig).toHaveBeenCalledTimes(1));
-
-      const savedConfig = getSavedConfig();
-      expect(savedConfig.defaultAgent).toBe("opencode");
-      expect(savedConfig.agentStyle).toBe("native");
-    });
-
-    test("omits agent and style overrides when reset to app default", async () => {
-      renderSettings({
-        config: {
-          repositories: {
-            "project-1": {
-              defaultBranch: "main",
-              prBaseBranch: "main",
-              defaultAgent: "opencode",
-              agentStyle: "native",
-            },
-          },
-        },
-      });
-
-      fireEvent.click(getAgentRadio(/^Use App Default/));
-
-      const [styleSelect] = getMockSelects();
-      fireEvent.change(styleSelect, { target: { value: "__app_default__" } });
-      fireEvent.click(getSaveButton());
-
-      await waitFor(() => expect(mockUpdateRepositoryConfig).toHaveBeenCalledTimes(1));
-
-      const savedConfig = getSavedConfig();
-      expect(savedConfig.defaultAgent).toBeUndefined();
-      expect(savedConfig.agentStyle).toBeUndefined();
-    });
-
-    test("uses cached OpenCode model variants when the effective agent is OpenCode", async () => {
-      mockGetCachedOpenCodeModelCatalog.mockResolvedValueOnce({
-        schemaVersion: 2,
-        projectId: "project-1",
-        catalogVersion: "catalog-variants",
-        updatedAt: "2026-08-07T12:00:00.000Z",
-        models: [
-          {
-            id: "openai/gpt-5",
-            name: "GPT-5",
-            provider: "openai",
-            variants: ["low", "deep"],
-          },
-        ],
-      });
-      renderSettings({
-        config: {
-          global: { defaultAgent: "opencode" } as AppConfig["global"],
-          repositories: {
-            "project-1": {
-              defaultBranch: "main",
-              prBaseBranch: "main",
-              defaultAgent: "opencode",
-              defaultModel: "openai/gpt-5",
-            },
-          },
-        },
-      });
-
-      await waitFor(() => {
-        const effortSelect = getMockSelects()[3]!;
-        const values = Array.from(effortSelect.options).map((option) => option.value);
-        expect(values).toContain("low");
-        expect(values).toContain("deep");
-        expect(values).not.toContain("xhigh");
-      });
-    });
-
-    test("loads the project-scoped OpenCode model cache", async () => {
-      mockGetCachedOpenCodeModelCatalog.mockResolvedValueOnce({
-        schemaVersion: 2,
-        projectId: "project-1",
-        catalogVersion: "catalog-1",
-        updatedAt: "2026-08-07T12:00:00.000Z",
-        models: [
-          {
-            id: "openrouter/cached-model",
-            name: "Cached Model",
-            provider: "openrouter",
-            variants: ["fast", "deep"],
-          },
-        ],
-      });
-      renderSettings({
-        config: {
-          global: { defaultAgent: "opencode" } as AppConfig["global"],
-          repositories: {
-            "project-1": {
-              defaultBranch: "main",
-              prBaseBranch: "main",
-              defaultAgent: "opencode",
-            },
-          },
-        },
-      });
-
-      await waitFor(() => {
-        expect(mockGetCachedOpenCodeModelCatalog).toHaveBeenCalledWith("project-1");
-        expect(screen.queryByText("Start an environment to load available models") === null).toBe(
-          true,
-        );
-      });
-      const modelSelect = getMockSelects()[2]!;
-      expect(Array.from(modelSelect.options).map((option) => option.value)).toContain(
-        "openrouter/cached-model",
+      // The inherit label names the value *and* where it comes from, so a
+      // deliberate app choice is distinguishable from a shipped default.
+      expect(within(agents).getByRole("radio", { name: /^Inherit/ }).textContent).toContain(
+        "Claude Code",
       );
-      expect(modelSelect.textContent).toContain("Cached Model");
     });
 
-    for (const platform of ["cursor", "grok"] as const) {
-      const label = platform === "cursor" ? "Cursor Agent" : "Grok Build";
-      test(`uses cached ${label} models and reasoning without a running environment`, () => {
-        renderSettings({
-          config: {
-            global: {
-              defaultAgent: platform,
-              enabledAgentPlatforms: ["claude", "codex", platform, "opencode"],
-            } as AppConfig["global"],
-            repositories: {
-              "project-1": {
-                defaultBranch: "main",
-                prBaseBranch: "main",
-                defaultAgent: platform,
-                defaultModel: `${platform}-cached-model`,
-              },
-            },
-          },
-          prepareStores: () => {
-            useAgentModelCatalogStore.getState().setAcpModels([
-              {
-                id: `${platform}-cached-model`,
-                label: `${label} Cached Model`,
-                platform,
-                reasoning: [
-                  { id: "default", label: "Default" },
-                  { id: "high", label: "High" },
-                ],
-              },
-            ]);
-          },
-        });
+    test("saves a default agent override", async () => {
+      renderSettings({ section: "defaults" });
 
-        expect(screen.queryByText("Start an environment to load available models") === null).toBe(
-          true,
-        );
-        const selects = getMockSelects();
-        expect(Array.from(selects[2]!.options).map((option) => option.value)).toContain(
-          `${platform}-cached-model`,
-        );
-        expect(selects[2]!.textContent).toContain(`${label} Cached Model`);
-        expect(Array.from(selects[3]!.options).map((option) => option.value)).toContain("high");
-      });
-
-      test(`does not expose the synthetic ${label} fallback without a cached catalogue`, () => {
-        renderSettings({
-          config: {
-            global: {
-              defaultAgent: platform,
-              enabledAgentPlatforms: ["claude", "codex", platform, "opencode"],
-            } as AppConfig["global"],
-            repositories: {
-              "project-1": {
-                defaultBranch: "main",
-                prBaseBranch: "main",
-                defaultAgent: platform,
-              },
-            },
-          },
-        });
-
-        expect(screen.getByText("Start an environment to load available models")).toBeTruthy();
-        expect(
-          screen.queryByText(platform === "cursor" ? "Cursor automatic" : "Grok Build default") ===
-            null,
-        ).toBe(true);
-      });
-
-      test(`clears an incompatible ${label} effort when the model changes`, async () => {
-        renderSettings({
-          config: {
-            global: {
-              defaultAgent: platform,
-              enabledAgentPlatforms: ["claude", "codex", platform, "opencode"],
-            } as AppConfig["global"],
-            repositories: {
-              "project-1": {
-                defaultBranch: "main",
-                prBaseBranch: "main",
-                defaultAgent: platform,
-                defaultModel: `${platform}-high-model`,
-                defaultEffort: "high",
-              },
-            },
-          },
-          prepareStores: () => {
-            useAgentModelCatalogStore.getState().setAcpModels([
-              {
-                id: `${platform}-high-model`,
-                label: `${label} High Model`,
-                platform,
-                reasoning: [{ id: "high", label: "High" }],
-              },
-              {
-                id: `${platform}-low-model`,
-                label: `${label} Low Model`,
-                platform,
-                reasoning: [{ id: "low", label: "Low" }],
-              },
-            ]);
-          },
-        });
-
-        const modelSelect = getMockSelects()[2]!;
-        fireEvent.change(modelSelect, {
-          target: { value: `${platform}-low-model` },
-        });
-
-        await waitFor(() => {
-          const effortSelect = getMockSelects()[3]!;
-          expect(effortSelect.value).toBe("__app_default__");
-          expect(Array.from(effortSelect.options).map((option) => option.value)).toContain("low");
-        });
-
-        fireEvent.click(getSaveButton());
-        await waitFor(() => expect(mockUpdateRepositoryConfig).toHaveBeenCalledTimes(1));
-        expect(getSavedConfig()).toMatchObject({
-          defaultAgent: platform,
-          defaultModel: `${platform}-low-model`,
-        });
-        expect(getSavedConfig().defaultEffort).toBeUndefined();
-      });
-    }
-
-    test("filters Codex efforts by model and clears an unsupported saved effort", async () => {
-      renderSettings({
-        config: {
-          global: { defaultAgent: "codex" } as AppConfig["global"],
-          repositories: {
-            "project-1": {
-              defaultBranch: "main",
-              prBaseBranch: "main",
-              defaultAgent: "codex",
-              defaultModel: "gpt-5.4",
-              defaultEffort: "ultra",
-            },
-          },
-        },
-        prepareStores: () => {
-          useCodexStore.setState({
-            models: [
-              {
-                id: "gpt-5.4",
-                name: "GPT-5.4",
-                reasoningEfforts: ["low", "medium", "high", "xhigh"],
-              },
-              {
-                id: "gpt-5.6-sol",
-                name: "GPT-5.6 Sol",
-                reasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
-              },
-            ],
-          });
-        },
-      });
-
-      let selects = getMockSelects();
-      let effortSelect = selects[3]!;
-      let effortValues = Array.from(effortSelect.options).map((option) => option.value);
-      expect(effortValues).not.toContain("max");
-      expect(effortValues).not.toContain("ultra");
-      await waitFor(() => expect(effortSelect.value).toBe("__app_default__"));
-
-      const modelSelect = selects[2]!;
-      fireEvent.change(modelSelect, { target: { value: "gpt-5.6-sol" } });
-
-      selects = getMockSelects();
-      effortSelect = selects[3]!;
-      effortValues = Array.from(effortSelect.options).map((option) => option.value);
-      expect(effortValues).toContain("max");
-      expect(effortValues).toContain("ultra");
-
-      fireEvent.change(effortSelect, { target: { value: "ultra" } });
-      fireEvent.click(getSaveButton());
-      await waitFor(() => expect(mockUpdateRepositoryConfig).toHaveBeenCalledTimes(1));
-      expect(getSavedConfig()).toEqual(
-        expect.objectContaining({
-          defaultModel: "gpt-5.6-sol",
-          defaultEffort: "ultra",
+      fireEvent.click(
+        within(screen.getByRole("radiogroup", { name: "Default agent" })).getByRole("radio", {
+          name: "Codex",
         }),
       );
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+      await waitFor(() =>
+        expect(mockUpdateRepositoryConfig).toHaveBeenCalledWith(
+          "project-1",
+          expect.objectContaining({
+            agentSettings: expect.objectContaining({ defaultAgent: "codex" }),
+          }),
+        ),
+      );
     });
 
-    test("can reset repository model and effort overrides to the agent defaults", async () => {
-      renderSettings({
-        config: {
-          global: { defaultAgent: "codex" } as AppConfig["global"],
-          repositories: {
-            "project-1": {
-              defaultBranch: "main",
-              prBaseBranch: "main",
-              defaultAgent: "codex",
-              defaultModel: "gpt-5.4",
-              defaultEffort: "high",
-            },
-          },
-        },
-      });
+    test("saves a per-platform mode without moving the other platforms", async () => {
+      // The repository used to store one `agentStyle` that Claude alone read
+      // while the UI implied it covered every agent.
+      renderSettings({ section: "codex" });
 
-      const selects = getMockSelects();
-      fireEvent.change(selects[2]!, { target: { value: "__app_default__" } });
-      fireEvent.change(selects[3]!, { target: { value: "__app_default__" } });
-      fireEvent.click(getSaveButton());
-
-      await waitFor(() => expect(mockUpdateRepositoryConfig).toHaveBeenCalledTimes(1));
-      expect(getSavedConfig().defaultModel).toBeUndefined();
-      expect(getSavedConfig().defaultEffort).toBeUndefined();
-    });
-
-    test("clears a model-specific OpenCode effort when only the model is reset", async () => {
-      mockGetCachedOpenCodeModelCatalog.mockResolvedValueOnce({
-        schemaVersion: 2,
-        projectId: "project-1",
-        catalogVersion: "catalog-reset",
-        updatedAt: "2026-08-07T12:00:00.000Z",
-        models: [
-          {
-            id: "openai/global-model",
-            name: "Global Model",
-            provider: "openai",
-            variants: ["low"],
-          },
-          {
-            id: "openai/project-model",
-            name: "Project Model",
-            provider: "openai",
-            variants: ["deep"],
-          },
-        ],
-      });
-      renderSettings({
-        config: {
-          global: {
-            defaultAgent: "opencode",
-            opencodeModel: "openai/global-model",
-          } as AppConfig["global"],
-          repositories: {
-            "project-1": {
-              defaultBranch: "main",
-              prBaseBranch: "main",
-              defaultAgent: "opencode",
-              defaultModel: "openai/project-model",
-              defaultEffort: "deep",
-            },
-          },
-        },
-      });
+      fireEvent.click(
+        within(screen.getByRole("radiogroup", { name: "Codex mode" })).getByRole("radio", {
+          name: /^Terminal/,
+        }),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
       await waitFor(() => {
-        const effortValues = Array.from(getMockSelects()[3]!.options).map((option) => option.value);
-        expect(effortValues).toContain("deep");
+        const saved = mockUpdateRepositoryConfig.mock.calls.at(-1)?.[1] as {
+          agentSettings?: { platforms?: Record<string, unknown> };
+        };
+        expect(saved.agentSettings?.platforms).toEqual({ codex: { mode: "terminal" } });
       });
-      fireEvent.change(getMockSelects()[2]!, {
-        target: { value: "__app_default__" },
-      });
-      expect(getMockSelects()[3]!.value).toBe("__app_default__");
-
-      fireEvent.click(getSaveButton());
-
-      await waitFor(() => expect(mockUpdateRepositoryConfig).toHaveBeenCalledTimes(1));
-      expect(getSavedConfig().defaultModel).toBeUndefined();
-      expect(getSavedConfig().defaultEffort).toBeUndefined();
     });
 
-    test("filters Codex efforts using the inherited global model", () => {
-      renderSettings({
-        config: {
-          global: {
-            defaultAgent: "codex",
-            codexModel: "gpt-5.4",
-          } as AppConfig["global"],
-          repositories: {
-            "project-1": {
-              defaultBranch: "main",
-              prBaseBranch: "main",
-              defaultAgent: "codex",
-            },
-          },
-        },
-        prepareStores: () => {
-          useCodexStore.setState({
-            models: [
-              {
-                id: "gpt-5.4",
-                name: "GPT-5.4",
-                reasoningEfforts: ["low", "medium", "high", "xhigh"],
-              },
-            ],
-          });
-        },
-      });
+    test("omits the block entirely when nothing is overridden", async () => {
+      renderSettings({ section: "defaults" });
 
-      const effortSelect = getMockSelects()[3]!;
-      const effortValues = Array.from(effortSelect.options).map((option) => option.value);
-      expect(effortValues).not.toContain("max");
-      expect(effortValues).not.toContain("ultra");
-    });
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
-    test("shows a no-models hint when the effective agent has no available models", () => {
-      renderSettings({
-        config: {
-          global: { defaultAgent: "opencode" } as AppConfig["global"],
-          repositories: {
-            "project-1": {
-              defaultBranch: "main",
-              prBaseBranch: "main",
-              defaultAgent: "opencode",
-            },
-          },
-        },
-      });
-
-      expect(screen.getByText("Start an environment to load available models")).toBeTruthy();
+      await waitFor(() =>
+        expect(mockUpdateRepositoryConfig).toHaveBeenCalledWith(
+          "project-1",
+          expect.objectContaining({ agentSettings: {} }),
+        ),
+      );
     });
   });
 

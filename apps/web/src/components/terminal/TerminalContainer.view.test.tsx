@@ -571,10 +571,15 @@ describe("TerminalContainer", () => {
         ...state.config,
         global: {
           ...state.config.global,
-          opencodeMode: "terminal",
-          claudeMode: "terminal",
-          claudeNativeBackend: "sdk",
-          codexMode: "native",
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            platforms: {
+              ...state.config.global.agentSettings?.platforms,
+              opencode: { mode: "terminal" },
+              claude: { mode: "terminal", claudeNativeBackend: "sdk" },
+              codex: { mode: "native" },
+            },
+          },
         },
         repositories: {},
       },
@@ -730,8 +735,7 @@ describe("TerminalContainer", () => {
         ...state.config,
         global: {
           ...state.config.global,
-          defaultAgent: "codex",
-          codexMode: "native",
+          agentSettings: { defaultAgent: "codex", platforms: { codex: { mode: "native" } } },
         },
         repositories: {},
       },
@@ -765,8 +769,7 @@ describe("TerminalContainer", () => {
               worktreePath: `/tmp/${environmentId}-worktree`,
               setupPhase: options.setupReady ? "ready" : "running",
               setupScriptsComplete: options.setupReady,
-              defaultAgent: "codex",
-              codexMode: "native",
+              agentSettings: { defaultAgent: "codex", platforms: { codex: { mode: "native" } } },
               pendingAgentLaunch: true,
               startupAgentSession: {
                 tabId: "startup-agent",
@@ -784,8 +787,7 @@ describe("TerminalContainer", () => {
     "does not project or clear a backend-owned %s startup session",
     async (status) => {
       setupDurableLaunchEnvironment({
-        defaultAgent: "codex",
-        codexMode: "native",
+        agentSettings: { defaultAgent: "codex", platforms: { codex: { mode: "native" } } },
         pendingAgentLaunch: true,
         startupAgentSession: {
           tabId: "startup-agent",
@@ -821,19 +823,25 @@ describe("TerminalContainer", () => {
   test.each([
     {
       label: "Claude native",
-      overrides: { defaultAgent: "claude", claudeMode: "native" },
+      overrides: {
+        agentSettings: { defaultAgent: "claude", platforms: { claude: { mode: "native" } } },
+      },
       expectedType: "agent-native",
       model: "claude-fable-5[1m]",
     },
     {
       label: "OpenCode native",
-      overrides: { defaultAgent: "opencode", opencodeMode: "native" },
+      overrides: {
+        agentSettings: { defaultAgent: "opencode", platforms: { opencode: { mode: "native" } } },
+      },
       expectedType: "agent-native",
       model: "provider/review-model",
     },
     {
       label: "Claude terminal",
-      overrides: { defaultAgent: "claude", claudeMode: "terminal" },
+      overrides: {
+        agentSettings: { defaultAgent: "claude", platforms: { claude: { mode: "terminal" } } },
+      },
       expectedType: "claude",
       model: "sonnet",
     },
@@ -888,8 +896,7 @@ describe("TerminalContainer", () => {
           environment.id === "env-hidden"
             ? {
                 ...environment,
-                defaultAgent: "codex",
-                codexMode: "native",
+                agentSettings: { defaultAgent: "codex", platforms: { codex: { mode: "native" } } },
                 setupScriptsComplete: true,
                 pendingAgentLaunch: true,
               }
@@ -2216,7 +2223,13 @@ describe("TerminalContainer", () => {
         ...state.config,
         global: {
           ...state.config.global,
-          codexMode: "terminal",
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            platforms: {
+              ...state.config.global.agentSettings?.platforms,
+              codex: { mode: "terminal" },
+            },
+          },
         },
         repositories: {},
       },
@@ -2263,7 +2276,13 @@ describe("TerminalContainer", () => {
         ...state.config,
         global: {
           ...state.config.global,
-          codexMode: "terminal",
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            platforms: {
+              ...state.config.global.agentSettings?.platforms,
+              codex: { mode: "terminal" },
+            },
+          },
         },
         repositories: {},
       },
@@ -2372,7 +2391,16 @@ describe("TerminalContainer", () => {
       ...state,
       config: {
         ...state.config,
-        global: { ...state.config.global, codexMode: "terminal" },
+        global: {
+          ...state.config.global,
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            platforms: {
+              ...state.config.global.agentSettings?.platforms,
+              codex: { ...state.config.global.agentSettings?.platforms?.codex, mode: "terminal" },
+            },
+          },
+        },
         repositories: {},
       },
     }));
@@ -2448,7 +2476,13 @@ describe("TerminalContainer", () => {
         ...state.config,
         global: {
           ...state.config.global,
-          codexMode: "terminal",
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            platforms: {
+              ...state.config.global.agentSettings?.platforms,
+              codex: { mode: "terminal" },
+            },
+          },
         },
         repositories: {},
       },
@@ -2513,7 +2547,13 @@ describe("TerminalContainer", () => {
         ...state.config,
         global: {
           ...state.config.global,
-          codexMode: "terminal",
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            platforms: {
+              ...state.config.global.agentSettings?.platforms,
+              codex: { mode: "terminal" },
+            },
+          },
         },
         repositories: {},
       },
@@ -2572,7 +2612,13 @@ describe("TerminalContainer", () => {
         ...state.config,
         global: {
           ...state.config.global,
-          codexMode: "native",
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            platforms: {
+              ...state.config.global.agentSettings?.platforms,
+              codex: { mode: "native" },
+            },
+          },
         },
         repositories: {},
       },
@@ -2634,8 +2680,7 @@ describe("TerminalContainer", () => {
               worktreePath: "/tmp/env-hidden-worktree",
               setupPhase: "ready",
               setupScriptsComplete: true,
-              defaultAgent: "codex",
-              codexMode: "native",
+              agentSettings: { defaultAgent: "codex", platforms: { codex: { mode: "native" } } },
               initialPrompt: "Inspect this screenshot",
               pendingAgentLaunch: true,
             }
@@ -2703,8 +2748,7 @@ describe("TerminalContainer", () => {
               worktreePath: "/tmp/env-hidden-worktree",
               setupPhase: "ready",
               setupScriptsComplete: true,
-              defaultAgent: "codex",
-              codexMode: "native",
+              agentSettings: { defaultAgent: "codex", platforms: { codex: { mode: "native" } } },
               initialPrompt: "",
               pendingAgentLaunch: true,
             }
@@ -2766,9 +2810,10 @@ describe("TerminalContainer", () => {
               worktreePath: "/tmp/env-hidden-worktree",
               setupPhase: "ready",
               setupScriptsComplete: true,
-              defaultAgent: "claude",
-              claudeMode: "native",
-              claudeNativeBackend: "tmux",
+              agentSettings: {
+                defaultAgent: "claude",
+                platforms: { claude: { mode: "native", claudeNativeBackend: "tmux" } },
+              },
               initialPrompt: "Inspect this screenshot",
               pendingAgentLaunch: true,
             }
@@ -2817,14 +2862,23 @@ describe("TerminalContainer", () => {
       ...state,
       config: {
         ...state.config,
-        global: { ...state.config.global, claudeMode: "terminal" },
+        global: {
+          ...state.config.global,
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            platforms: {
+              ...state.config.global.agentSettings?.platforms,
+              claude: { ...state.config.global.agentSettings?.platforms?.claude, mode: "terminal" },
+            },
+          },
+        },
         repositories: {
           ...state.config.repositories,
           "project-1": {
             defaultBranch: "main",
             prBaseBranch: "main",
             ...state.config.repositories["project-1"],
-            agentStyle: "native" as const,
+            agentSettings: { platforms: { claude: { mode: "native" as const } } },
           },
         },
       },
@@ -2841,9 +2895,10 @@ describe("TerminalContainer", () => {
               worktreePath: "/tmp/env-hidden-worktree",
               setupPhase: "ready",
               setupScriptsComplete: true,
-              defaultAgent: "claude",
-              claudeMode: undefined,
-              claudeNativeBackend: undefined,
+              agentSettings: {
+                defaultAgent: "claude",
+                platforms: { claude: { mode: undefined, claudeNativeBackend: undefined } },
+              },
               initialPrompt: "Inspect this screenshot",
               pendingAgentLaunch: true,
             }
@@ -2887,7 +2942,16 @@ describe("TerminalContainer", () => {
       ...state,
       config: {
         ...state.config,
-        global: { ...state.config.global, codexMode: "terminal" },
+        global: {
+          ...state.config.global,
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            platforms: {
+              ...state.config.global.agentSettings?.platforms,
+              codex: { ...state.config.global.agentSettings?.platforms?.codex, mode: "terminal" },
+            },
+          },
+        },
         repositories: {},
       },
     }));
@@ -2907,8 +2971,7 @@ describe("TerminalContainer", () => {
               containerId: null,
               environmentType: "local",
               worktreePath: "/tmp/env-hidden-worktree",
-              defaultAgent: "codex",
-              codexMode: "terminal",
+              agentSettings: { defaultAgent: "codex", platforms: { codex: { mode: "terminal" } } },
               initialPrompt: "Inspect this screenshot",
               pendingAgentLaunch: true,
             }
@@ -2969,8 +3032,13 @@ describe("TerminalContainer", () => {
         ...state.config,
         global: {
           ...state.config.global,
-          claudeMode: "native",
-          claudeNativeBackend: "tmux",
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            platforms: {
+              ...state.config.global.agentSettings?.platforms,
+              claude: { mode: "native", claudeNativeBackend: "tmux" },
+            },
+          },
         },
         repositories: {},
       },
@@ -3032,8 +3100,13 @@ describe("TerminalContainer", () => {
         ...state.config,
         global: {
           ...state.config.global,
-          claudeMode: "native",
-          claudeNativeBackend: "tmux",
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            platforms: {
+              ...state.config.global.agentSettings?.platforms,
+              claude: { mode: "native", claudeNativeBackend: "tmux" },
+            },
+          },
         },
         repositories: {},
       },
@@ -3120,7 +3193,19 @@ describe("TerminalContainer", () => {
       ...state,
       config: {
         ...state.config,
-        global: { ...state.config.global, opencodeMode: "terminal" },
+        global: {
+          ...state.config.global,
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            platforms: {
+              ...state.config.global.agentSettings?.platforms,
+              opencode: {
+                ...state.config.global.agentSettings?.platforms?.opencode,
+                mode: "terminal",
+              },
+            },
+          },
+        },
         repositories: {},
       },
     }));
@@ -3171,8 +3256,14 @@ describe("TerminalContainer", () => {
         ...state.config,
         global: {
           ...state.config.global,
-          codexMode: "native",
-          opencodeMode: "native",
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            platforms: {
+              ...state.config.global.agentSettings?.platforms,
+              codex: { mode: "native" },
+              opencode: { mode: "native" },
+            },
+          },
         },
         repositories: {},
       },
@@ -3242,9 +3333,14 @@ describe("TerminalContainer", () => {
         ...state.config,
         global: {
           ...state.config.global,
-          opencodeMode: "native",
-          claudeMode: "native",
-          claudeNativeBackend: "sdk",
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            platforms: {
+              ...state.config.global.agentSettings?.platforms,
+              opencode: { mode: "native" },
+              claude: { mode: "native", claudeNativeBackend: "sdk" },
+            },
+          },
         },
         repositories: {},
       },
@@ -3308,9 +3404,14 @@ describe("TerminalContainer", () => {
         ...state.config,
         global: {
           ...state.config.global,
-          opencodeMode: "native",
-          claudeMode: "native",
-          claudeNativeBackend: "sdk",
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            platforms: {
+              ...state.config.global.agentSettings?.platforms,
+              opencode: { mode: "native" },
+              claude: { mode: "native", claudeNativeBackend: "sdk" },
+            },
+          },
         },
         repositories: {},
       },
@@ -3416,7 +3517,13 @@ describe("TerminalContainer", () => {
         ...state.config,
         global: {
           ...state.config.global,
-          codexMode: "native",
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            platforms: {
+              ...state.config.global.agentSettings?.platforms,
+              codex: { mode: "native" },
+            },
+          },
         },
         repositories: {},
       },
@@ -3659,8 +3766,7 @@ describe("TerminalContainer", () => {
         environment.id === "env-hidden"
           ? {
               ...environment,
-              defaultAgent: "codex",
-              codexMode: "native",
+              agentSettings: { defaultAgent: "codex", platforms: { codex: { mode: "native" } } },
               setupScriptsComplete: true,
               pendingAgentLaunch: true,
               initialPrompt: "Recover after mobile reload",
@@ -3711,8 +3817,7 @@ describe("TerminalContainer", () => {
 
   test("projects a backend-created session into one stable tab without acknowledging it", async () => {
     setupDurableLaunchEnvironment({
-      defaultAgent: "codex",
-      codexMode: "native",
+      agentSettings: { defaultAgent: "codex", platforms: { codex: { mode: "native" } } },
       pendingAgentLaunch: false,
       initialPrompt: undefined,
       initialAgentModel: undefined,
@@ -3984,8 +4089,7 @@ describe("TerminalContainer", () => {
 
   test("replaces a stale renderer launch with the backend running session", async () => {
     setupDurableLaunchEnvironment({
-      defaultAgent: "codex",
-      codexMode: "native",
+      agentSettings: { defaultAgent: "codex", platforms: { codex: { mode: "native" } } },
       pendingAgentLaunch: false,
       startupAgentSession: {
         tabId: "startup-agent",
@@ -4159,7 +4263,9 @@ describe("TerminalContainer", () => {
   });
 
   test("stops carrying the options once the agent surface acknowledges them", async () => {
-    setupDurableLaunchEnvironment({ defaultAgent: "codex", codexMode: "native" });
+    setupDurableLaunchEnvironment({
+      agentSettings: { defaultAgent: "codex", platforms: { codex: { mode: "native" } } },
+    });
     renderHiddenTerminal();
     const tabId = await waitForDurableAgentTab();
 
@@ -4178,8 +4284,7 @@ describe("TerminalContainer", () => {
 
   test("carries an effort-only durable launch with no model", async () => {
     setupDurableLaunchEnvironment({
-      defaultAgent: "codex",
-      codexMode: "native",
+      agentSettings: { defaultAgent: "codex", platforms: { codex: { mode: "native" } } },
       initialAgentModel: undefined,
       initialReasoningEffort: "xhigh",
     });
@@ -4196,7 +4301,9 @@ describe("TerminalContainer", () => {
   });
 
   test("records the durable model and effort on the pending native launch itself", async () => {
-    setupDurableLaunchEnvironment({ defaultAgent: "codex", codexMode: "native" });
+    setupDurableLaunchEnvironment({
+      agentSettings: { defaultAgent: "codex", platforms: { codex: { mode: "native" } } },
+    });
 
     // The record is consumed into a tab on the very next render, so sample every
     // value the store holds rather than polling for a state that has already
@@ -4219,7 +4326,9 @@ describe("TerminalContainer", () => {
   });
 
   test("does not make a backend-owned native launch depend on renderer persistence", async () => {
-    setupDurableLaunchEnvironment({ defaultAgent: "codex", codexMode: "native" });
+    setupDurableLaunchEnvironment({
+      agentSettings: { defaultAgent: "codex", platforms: { codex: { mode: "native" } } },
+    });
     renderHiddenTerminal();
     await waitForDurableAgentTab();
 
@@ -4231,7 +4340,9 @@ describe("TerminalContainer", () => {
   });
 
   test("leaves native launch consumption to the backend across rerenders", async () => {
-    setupDurableLaunchEnvironment({ defaultAgent: "codex", codexMode: "native" });
+    setupDurableLaunchEnvironment({
+      agentSettings: { defaultAgent: "codex", platforms: { codex: { mode: "native" } } },
+    });
     renderHiddenTerminal();
     await waitForDurableAgentTab();
     await act(async () => {
@@ -4246,7 +4357,9 @@ describe("TerminalContainer", () => {
   });
 
   test("keeps the authoritative setup phase while representing a durable launch", async () => {
-    setupDurableLaunchEnvironment({ defaultAgent: "codex", codexMode: "native" });
+    setupDurableLaunchEnvironment({
+      agentSettings: { defaultAgent: "codex", platforms: { codex: { mode: "native" } } },
+    });
 
     renderHiddenTerminal();
     await waitForDurableAgentTab();
@@ -4262,8 +4375,7 @@ describe("TerminalContainer", () => {
     // consumed, and the user has since closed the startup tab. Re-projecting it
     // here would recreate it on every render and make the close impossible.
     setupDurableLaunchEnvironment({
-      defaultAgent: "codex",
-      codexMode: "native",
+      agentSettings: { defaultAgent: "codex", platforms: { codex: { mode: "native" } } },
       pendingAgentLaunch: false,
       startupAgentSession: {
         tabId: "startup-agent",
@@ -4298,8 +4410,7 @@ describe("TerminalContainer", () => {
     // The converged-launch guard must not cost the binding that a renderer
     // which was inactive during the launch still depends on.
     setupDurableLaunchEnvironment({
-      defaultAgent: "codex",
-      codexMode: "native",
+      agentSettings: { defaultAgent: "codex", platforms: { codex: { mode: "native" } } },
       pendingAgentLaunch: false,
       startupAgentSession: {
         tabId: "startup-agent",
@@ -4380,8 +4491,7 @@ describe("TerminalContainer", () => {
         environment.id === "env-hidden"
           ? {
               ...environment,
-              defaultAgent: "codex",
-              codexMode: "native",
+              agentSettings: { defaultAgent: "codex", platforms: { codex: { mode: "native" } } },
               setupScriptsComplete: true,
               pendingAgentLaunch: true,
               initialAgentModel: "gpt-5.6-sol",
@@ -4409,7 +4519,9 @@ describe("TerminalContainer", () => {
   });
 
   test("does not reconstruct a durable launch while the environment is not running", async () => {
-    setupDurableLaunchEnvironment({ defaultAgent: "codex", codexMode: "native" });
+    setupDurableLaunchEnvironment({
+      agentSettings: { defaultAgent: "codex", platforms: { codex: { mode: "native" } } },
+    });
 
     render(
       <TerminalProvider>
@@ -4430,7 +4542,9 @@ describe("TerminalContainer", () => {
   });
 
   test("does not queue a second launch when one is already pending", async () => {
-    setupDurableLaunchEnvironment({ defaultAgent: "codex", codexMode: "native" });
+    setupDurableLaunchEnvironment({
+      agentSettings: { defaultAgent: "codex", platforms: { codex: { mode: "native" } } },
+    });
     const existing = {
       containerId: "container-hidden",
       environmentId: "env-hidden",
@@ -4460,7 +4574,9 @@ describe("TerminalContainer", () => {
   });
 
   test("reconstructs a terminal-mode agent launch when the agent is not in native mode", async () => {
-    setupDurableLaunchEnvironment({ defaultAgent: "codex", codexMode: "terminal" });
+    setupDurableLaunchEnvironment({
+      agentSettings: { defaultAgent: "codex", platforms: { codex: { mode: "terminal" } } },
+    });
 
     renderHiddenTerminal();
 
@@ -4483,9 +4599,10 @@ describe("TerminalContainer", () => {
 
   test("reconstructs a native Claude launch carrying the resolved native backend", async () => {
     setupDurableLaunchEnvironment({
-      defaultAgent: "claude",
-      claudeMode: "native",
-      claudeNativeBackend: "tmux",
+      agentSettings: {
+        defaultAgent: "claude",
+        platforms: { claude: { mode: "native", claudeNativeBackend: "tmux" } },
+      },
     });
 
     renderHiddenTerminal();
@@ -4504,11 +4621,16 @@ describe("TerminalContainer", () => {
   });
 
   test("falls back to the global default agent when the environment has none", async () => {
-    setupDurableLaunchEnvironment({ defaultAgent: undefined, opencodeMode: "native" });
+    setupDurableLaunchEnvironment({
+      agentSettings: { platforms: { opencode: { mode: "native" } } },
+    });
     useConfigStore.setState((state) => ({
       config: {
         ...state.config,
-        global: { ...state.config.global, defaultAgent: "opencode" },
+        global: {
+          ...state.config.global,
+          agentSettings: { ...state.config.global.agentSettings, defaultAgent: "opencode" },
+        },
       },
     }));
 
@@ -4526,8 +4648,7 @@ describe("TerminalContainer", () => {
 
   test("reconstructs a local environment launch with no container id", async () => {
     setupDurableLaunchEnvironment({
-      defaultAgent: "codex",
-      codexMode: "native",
+      agentSettings: { defaultAgent: "codex", platforms: { codex: { mode: "native" } } },
       environmentType: "local",
       worktreePath: "/tmp/worktree-hidden",
     });
@@ -4556,8 +4677,7 @@ describe("TerminalContainer", () => {
 
   test("treats a whitespace-only stored prompt as no prompt", async () => {
     setupDurableLaunchEnvironment({
-      defaultAgent: "codex",
-      codexMode: "native",
+      agentSettings: { defaultAgent: "codex", platforms: { codex: { mode: "native" } } },
       initialPrompt: "   \n  ",
     });
 
@@ -4575,7 +4695,9 @@ describe("TerminalContainer", () => {
   });
 
   test("finds a backend-owned agent tab nested in a split pane without relaunching", async () => {
-    setupDurableLaunchEnvironment({ defaultAgent: "codex", codexMode: "native" });
+    setupDurableLaunchEnvironment({
+      agentSettings: { defaultAgent: "codex", platforms: { codex: { mode: "native" } } },
+    });
     // The agent lives in the second leaf of a split, so the check must walk the
     // whole tree rather than only the root leaf.
     usePaneLayoutStore.setState({
@@ -4622,7 +4744,9 @@ describe("TerminalContainer", () => {
   });
 
   test("does not treat a build or review tab as the launched startup agent", async () => {
-    setupDurableLaunchEnvironment({ defaultAgent: "codex", codexMode: "native" });
+    setupDurableLaunchEnvironment({
+      agentSettings: { defaultAgent: "codex", platforms: { codex: { mode: "native" } } },
+    });
     usePaneLayoutStore.setState({
       environments: new Map([
         [
@@ -4734,8 +4858,13 @@ describe("TerminalContainer", () => {
         ...state.config,
         global: {
           ...state.config.global,
-          claudeMode: "native",
-          claudeNativeBackend: "tmux",
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            platforms: {
+              ...state.config.global.agentSettings?.platforms,
+              claude: { mode: "native", claudeNativeBackend: "tmux" },
+            },
+          },
         },
         repositories: {},
       },
@@ -4981,7 +5110,13 @@ describe("TerminalContainer", () => {
         ...state.config,
         global: {
           ...state.config.global,
-          codexMode: "native",
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            platforms: {
+              ...state.config.global.agentSettings?.platforms,
+              codex: { mode: "native" },
+            },
+          },
         },
         repositories: {},
       },
@@ -5901,7 +6036,13 @@ describe("TerminalContainer", () => {
         ...state.config,
         global: {
           ...state.config.global,
-          codexMode: "native",
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            platforms: {
+              ...state.config.global.agentSettings?.platforms,
+              codex: { mode: "native" },
+            },
+          },
         },
         repositories: {},
       },

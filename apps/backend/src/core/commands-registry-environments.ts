@@ -1,3 +1,4 @@
+import { normalizeAgentSettings } from "@orkestrator/protocol/agent-settings";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import {
   createEnvironment,
@@ -459,11 +460,7 @@ export function registerEnvironmentCommands(
     async (
       {
         environmentId,
-        defaultAgent,
-        claudeMode,
-        claudeNativeBackend,
-        opencodeMode,
-        codexMode,
+        agentSettings,
         pendingAgentLaunch,
         initialAgentModel,
         initialReasoningEffort,
@@ -472,12 +469,11 @@ export function registerEnvironmentCommands(
       { storage },
     ) => {
       const id = asString(environmentId, "environmentId");
+      // Normalized at the boundary, as the global config's own settings are: a
+      // malformed block accepted here is later applied to a launch the user
+      // cannot see being configured.
       const updates = {
-        defaultAgent,
-        claudeMode,
-        claudeNativeBackend,
-        opencodeMode,
-        codexMode,
+        agentSettings: normalizeAgentSettings(agentSettings),
       } as Partial<Environment>;
       if (typeof pendingAgentLaunch === "boolean") {
         updates.pendingAgentLaunch = pendingAgentLaunch;

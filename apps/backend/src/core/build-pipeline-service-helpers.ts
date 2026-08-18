@@ -1,4 +1,8 @@
 import { createHash } from "node:crypto";
+import {
+  resolveAgentPlatformSettings,
+  type AgentSettingsTier,
+} from "@orkestrator/protocol/agent-settings";
 import type {
   BuildPhase,
   BuildPipeline,
@@ -136,60 +140,38 @@ export function resumablePhase(phase: BuildPhase): ResumableBuildPhase | null {
  * be gated on this.
  */
 export function repositoryAgent(
-  global: { defaultAgent?: BuildPipelineAgent },
-  repository: { defaultAgent?: BuildPipelineAgent },
+  global: { agentSettings?: AgentSettingsTier },
+  repository: { agentSettings?: AgentSettingsTier },
 ): BuildPipelineAgent {
-  return repository.defaultAgent ?? global.defaultAgent ?? "claude";
-}
-
-/**
- * The default model for one harness.
- *
- * `repositoryDefault` is only passed when the caller has established that
- * `agent` is the repository's default agent; handing a Codex model id to the
- * Claude bridge is what happens otherwise.
- */
-export function modelFor(
-  agent: BuildPipelineAgent,
-  global: {
-    claudeModel?: string;
-    codexModel: string;
-    opencodeModel: string;
-  },
-  repositoryDefault?: string,
-): string | undefined {
-  if (repositoryDefault && repositoryDefault !== "default") return repositoryDefault;
-  const model =
-    agent === "claude"
-      ? global.claudeModel
-      : agent === "codex"
-        ? global.codexModel
-        : global.opencodeModel;
-  return model && model !== "default" ? model : undefined;
+  return (repository.agentSettings?.defaultAgent ??
+    global.agentSettings?.defaultAgent ??
+    "claude") as BuildPipelineAgent;
 }
 
 /**
  * The connection-level model and reasoning effort for one harness.
  *
- * The repository defaults apply only to the repository's own default agent. A
- * step that pinned a different harness falls back to that harness's global
- * default instead, which is exactly what the launcher displayed for it.
+ * Both come from the shared tier resolver, so a step that pinned a harness
+ * other than the repository's default gets *that* harness's own model rather
+ * than one from a catalogue it does not have. The `owns` guard this used to
+ * need is gone: a model now lives in its own platform column, so there is no
+ * longer a single repository field that could be handed to the wrong agent.
+ *
+ * `"default"` is still discarded. It is a placeholder id that no provider
+ * knows, so sending it would suppress the harness's real default.
  */
 export function connectionDefaultsFor(
   agent: BuildPipelineAgent,
   config: Pick<AppConfig, "global">,
-  repository: {
-    defaultAgent?: BuildPipelineAgent;
-    defaultModel?: string;
-    defaultEffort?: string;
-  },
+  repository: { agentSettings?: AgentSettingsTier },
 ): { model?: string; effort?: string } {
-  const owns = agent === repositoryAgent(config.global, repository);
+  const resolved = resolveAgentPlatformSettings(
+    { repository: repository.agentSettings, global: config.global.agentSettings },
+    agent,
+  );
   return {
-    model: modelFor(agent, config.global, owns ? repository.defaultModel : undefined),
-    effort:
-      (owns ? repository.defaultEffort : undefined) ??
-      (agent === "codex" ? config.global.codexReasoningEffort : undefined),
+    ...(resolved.model && resolved.model !== "default" ? { model: resolved.model } : {}),
+    ...(resolved.reasoningEffort ? { effort: resolved.reasoningEffort } : {}),
   };
 }
 

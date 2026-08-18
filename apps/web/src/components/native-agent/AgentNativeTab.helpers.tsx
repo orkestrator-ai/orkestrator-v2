@@ -1,3 +1,4 @@
+import { resolvedDefaultAgent } from "@/lib/agent-settings";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, History } from "lucide-react";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -335,8 +336,7 @@ export function UnassignedNativeAgentComposer({
   const draft = useNativeComposeStore((state) => nativeComposeDraft(state, sessionKey));
   const hasDraft = useNativeComposeStore((state) => state.drafts.has(sessionKey));
   const updateStoreDraft = useNativeComposeStore((state) => state.updateDraft);
-  const defaultPlatform = useConfigStore((state) => state.config.global.defaultAgent ?? "claude");
-  const globalConfig = useConfigStore((state) => state.config.global);
+  const defaultPlatform = useConfigStore((state) => resolvedDefaultAgent(state.config));
   const environment = useEnvironmentStore((state) => state.getEnvironmentById(environmentId));
   const worktreePath = environment?.worktreePath;
   const { favorites, enabledPlatforms, toggleFavorite, reorderFavorites } =
@@ -345,29 +345,18 @@ export function UnassignedNativeAgentComposer({
   const [models, setModels] = useState<AgentModel[]>([]);
   const platform = draft.platform ?? defaultPlatform;
   const selectedAdapter = findNativeAgentAdapter(platform);
-  const platformFastModeDefault =
-    platform === "claude"
-      ? (globalConfig.claudeNativeFastModeDefault ?? false)
-      : platform === "codex"
-        ? (globalConfig.codexNativeFastModeDefault ?? false)
-        : false;
-  const effectiveFastMode = hasDraft ? draft.fastMode : platformFastModeDefault;
+  // Speed is a per-session choice made in the model picker, so a draft with no
+  // explicit choice starts at normal rather than inheriting a stored default.
+  const effectiveFastMode = hasDraft ? draft.fastMode : false;
   const updateDraft = useCallback(
     (key: string, update: Partial<typeof draft>) => {
       const current = useNativeComposeStore.getState().drafts.get(key);
-      const nextPlatform = update.platform ?? current?.platform ?? platform;
-      const defaultFastMode =
-        nextPlatform === "claude"
-          ? (useConfigStore.getState().config.global.claudeNativeFastModeDefault ?? false)
-          : nextPlatform === "codex"
-            ? (useConfigStore.getState().config.global.codexNativeFastModeDefault ?? false)
-            : false;
       updateStoreDraft(key, {
-        ...(current ? {} : { fastMode: defaultFastMode }),
+        ...(current ? {} : { fastMode: false }),
         ...update,
       });
     },
-    [platform, updateStoreDraft],
+    [updateStoreDraft],
   );
   useNativeComposeDraftPersistence(
     "agent-native",
@@ -663,12 +652,7 @@ export function UnassignedNativeAgentComposer({
                     modelId: undefined,
                     reasoningId: undefined,
                     executionProfileId: undefined,
-                    fastMode:
-                      next === "claude"
-                        ? (globalConfig.claudeNativeFastModeDefault ?? false)
-                        : next === "codex"
-                          ? (globalConfig.codexNativeFastModeDefault ?? false)
-                          : false,
+                    fastMode: false,
                     // Per type, not all-or-nothing: Codex takes images and
                     // refuses files, and its bridge rejects the entire prompt
                     // rather than dropping the entry it cannot use.

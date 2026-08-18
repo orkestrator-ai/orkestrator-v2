@@ -1,3 +1,9 @@
+import { agentSettingsTiers, resolvedDefaultAgent } from "@/lib/agent-settings";
+import {
+  resolveAgentPlatformSettings,
+  resolveDefaultAgent,
+  type AgentSettingsTiers,
+} from "@orkestrator/protocol/agent-settings";
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import {
   Dialog,
@@ -78,7 +84,6 @@ import {
   normalizeOpenCodeModelProviders,
   openCodeModelDisplayLabel,
 } from "@orkestrator/protocol/native-agent";
-import { DEFAULT_CLAUDE_MODE } from "@orkestrator/protocol/startup-launch";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 
 // Stable empty array reference to prevent infinite re-renders when no default port mappings are provided
@@ -105,23 +110,22 @@ function normalizeCachedOpenCodeModels(value: unknown): CachedOpenCodeModel[] | 
 }
 
 /**
- * Resolves the effective agent defaults by applying project-level overrides
- * over app-level settings, with final fallbacks.
+ * The effective agent defaults for a new environment in this repository.
+ *
+ * Every mode comes from that platform's own column now. The previous version
+ * read the repository's single `agentStyle` for all three platforms, which meant
+ * choosing "Native" for Claude silently moved Codex and OpenCode too.
  */
 export function resolveAgentDefaults(
-  globalConfig: {
-    defaultAgent?: string;
-    claudeMode?: string;
-    opencodeMode?: string;
-    codexMode?: string;
-  },
-  repoConfig?: { defaultAgent?: string; agentStyle?: string },
+  tiers: AgentSettingsTiers,
+  defaultAgentOverride?: AgentPlatform,
 ) {
-  const defaultAgent = repoConfig?.defaultAgent || globalConfig.defaultAgent || "claude";
-  const claudeMode = repoConfig?.agentStyle || globalConfig.claudeMode || DEFAULT_CLAUDE_MODE;
-  const opencodeMode = repoConfig?.agentStyle || globalConfig.opencodeMode || "terminal";
-  const codexMode = repoConfig?.agentStyle || globalConfig.codexMode || "native";
-  return { defaultAgent, claudeMode, opencodeMode, codexMode } as const;
+  return {
+    defaultAgent: defaultAgentOverride ?? resolveDefaultAgent(tiers),
+    claudeMode: resolveAgentPlatformSettings(tiers, "claude").mode,
+    opencodeMode: resolveAgentPlatformSettings(tiers, "opencode").mode,
+    codexMode: resolveAgentPlatformSettings(tiers, "codex").mode,
+  } as const;
 }
 
 const UNSELECTED_CARD_CLASSES = "border-transparent bg-zinc-900 hover:border-zinc-600";
@@ -217,17 +221,18 @@ export function CreateEnvironmentDialog({
    */
   const newProjectDefault = useMemo(
     () =>
-      resolveActionDefault(config.global.actionDefaults, "newProject", {
-        fallbackAgent: (config.global.defaultAgent ?? "claude") as AgentPlatform,
+      resolveActionDefault(config.global.agentSettings?.actionDefaults, "newProject", {
+        fallbackAgent: resolvedDefaultAgent(config, projectId ?? undefined),
         enabledAgents: enabledAgentPlatforms,
       }),
-    [config.global.actionDefaults, config.global.defaultAgent, enabledAgentPlatforms],
+    [config, projectId, enabledAgentPlatforms],
+  );
+  const agentTiers = useMemo(
+    () => agentSettingsTiers(config, projectId ?? undefined),
+    [config, projectId],
   );
   // Resolve effective defaults: project-level overrides > app-level
-  const resolved = resolveAgentDefaults(
-    { ...config.global, defaultAgent: newProjectDefault.agent },
-    repoConfig,
-  );
+  const resolved = resolveAgentDefaults(agentTiers, newProjectDefault.agent);
   const configDefaultAgent = firstEnabledAgentPlatform(
     enabledAgentPlatforms,
     resolved.defaultAgent as AgentType,
@@ -253,13 +258,23 @@ export function CreateEnvironmentDialog({
     toggleFavorite: toggleFavoriteModel,
     reorderFavorites,
   } = useAgentModelFavorites();
+  const { resolvedModelsByPlatform, resolvedEffortsByPlatform } = useMemo(() => {
+    const models: Partial<Record<AgentPlatform, string>> = {};
+    const efforts: Partial<Record<AgentPlatform, string>> = {};
+    for (const platform of enabledAgentPlatforms) {
+      const resolved = resolveAgentPlatformSettings(agentTiers, platform);
+      if (resolved.model) models[platform] = resolved.model;
+      if (resolved.reasoningEffort) efforts[platform] = resolved.reasoningEffort;
+    }
+    return { resolvedModelsByPlatform: models, resolvedEffortsByPlatform: efforts };
+  }, [agentTiers, enabledAgentPlatforms]);
+  const openCodeDefaults = resolveAgentPlatformSettings(agentTiers, "opencode");
   const configuredOpenCodeModel =
-    (configDefaultAgent === "opencode" ? repoConfig?.defaultModel : undefined) ??
     (newProjectDefault.agent === "opencode" ? newProjectDefault.model : undefined) ??
-    config.global.opencodeModel;
+    openCodeDefaults.model;
   const configuredOpenCodeEffort =
-    (configDefaultAgent === "opencode" ? repoConfig?.defaultEffort : undefined) ??
-    (newProjectDefault.agent === "opencode" ? newProjectDefault.reasoningEffort : undefined);
+    (newProjectDefault.agent === "opencode" ? newProjectDefault.reasoningEffort : undefined) ??
+    openCodeDefaults.reasoningEffort;
   /**
    * `buildReviewModelCatalog` synthesises a single `{ id: "default" }` OpenCode
    * entry when no environment has cached a live catalog yet. That id is a UI
@@ -364,33 +379,27 @@ export function CreateEnvironmentDialog({
       claudeMode: configClaudeMode,
       opencodeMode: configOpencodeMode,
       codexMode: configCodexMode,
+      // Each platform's own resolved column, so a model is only ever offered to
+      // the platform whose catalogue it came from.
       models: {
-        ...(config.global.claudeModel ? { claude: config.global.claudeModel } : {}),
-        codex: config.global.codexModel,
-        opencode: config.global.opencodeModel,
+        ...resolvedModelsByPlatform,
         ...(newProjectDefault.model ? { [newProjectDefault.agent]: newProjectDefault.model } : {}),
-        ...(repoConfig?.defaultModel ? { [configDefaultAgent]: repoConfig.defaultModel } : {}),
       },
       reasoningEfforts: {
-        codex: config.global.codexReasoningEffort,
+        ...resolvedEffortsByPlatform,
         ...(newProjectDefault.reasoningEffort
           ? { [newProjectDefault.agent]: newProjectDefault.reasoningEffort }
           : {}),
-        ...(repoConfig?.defaultEffort ? { [configDefaultAgent]: repoConfig.defaultEffort } : {}),
       },
     }),
     [
-      config.global.claudeModel,
-      config.global.codexModel,
-      config.global.codexReasoningEffort,
-      config.global.opencodeModel,
+      resolvedModelsByPlatform,
+      resolvedEffortsByPlatform,
       configClaudeMode,
       configCodexMode,
       configDefaultAgent,
       configOpencodeMode,
       newProjectDefault,
-      repoConfig?.defaultEffort,
-      repoConfig?.defaultModel,
     ],
   );
   const initialAgentDefaults = useMemo(

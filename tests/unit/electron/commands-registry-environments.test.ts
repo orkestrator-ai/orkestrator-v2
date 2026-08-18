@@ -972,11 +972,15 @@ exit 0
     await commands.get("update_environment_agent_settings")?.(
       {
         environmentId: environment.id,
-        defaultAgent: "codex",
-        claudeMode: "native",
-        claudeNativeBackend: "bridge",
-        opencodeMode: "native",
-        codexMode: "native",
+        agentSettings: {
+          defaultAgent: "codex",
+          platforms: {
+            // "bridge" is not a Claude backend, so normalization drops it.
+            claude: { mode: "native", claudeNativeBackend: "bridge" },
+            opencode: { mode: "native" },
+            codex: { mode: "native" },
+          },
+        },
         pendingAgentLaunch: true,
         initialAgentModel: "gpt-5.6-sol",
         initialReasoningEffort: "high",
@@ -984,11 +988,14 @@ exit 0
       context,
     );
     expect(updates).toContainEqual({
-      defaultAgent: "codex",
-      claudeMode: "native",
-      claudeNativeBackend: "bridge",
-      opencodeMode: "native",
-      codexMode: "native",
+      agentSettings: {
+        defaultAgent: "codex",
+        platforms: {
+          claude: { mode: "native" },
+          opencode: { mode: "native" },
+          codex: { mode: "native" },
+        },
+      },
       pendingAgentLaunch: true,
       initialAgentModel: "gpt-5.6-sol",
       initialReasoningEffort: "high",
@@ -996,11 +1003,14 @@ exit 0
     await commands.get("update_environment_agent_settings")?.(
       {
         environmentId: environment.id,
-        defaultAgent: "codex",
-        claudeMode: null,
-        claudeNativeBackend: null,
-        opencodeMode: null,
-        codexMode: "native",
+        agentSettings: {
+          defaultAgent: "codex",
+          platforms: {
+            claude: { mode: null, claudeNativeBackend: null },
+            opencode: { mode: null },
+            codex: { mode: "native" },
+          },
+        },
         pendingAgentLaunch: false,
         initialAgentModel: "must-not-survive",
         initialReasoningEffort: "ultra",
@@ -1011,11 +1021,8 @@ exit 0
     // only clears a stored field when the key is present, so dropping the keys
     // here would leave the previous run's model on the environment.
     expect(updates.at(-1)).toEqual({
-      defaultAgent: "codex",
-      claudeMode: null,
-      claudeNativeBackend: null,
-      opencodeMode: null,
-      codexMode: "native",
+      // Every cleared field normalizes away, leaving only what is still set.
+      agentSettings: { defaultAgent: "codex", platforms: { codex: { mode: "native" } } },
       pendingAgentLaunch: false,
       initialAgentModel: undefined,
       initialReasoningEffort: undefined,
@@ -1030,22 +1037,26 @@ exit 0
     await commands.get("update_environment_agent_settings")?.(
       {
         environmentId: environment.id,
-        defaultAgent: "codex",
-        claudeMode: null,
-        claudeNativeBackend: null,
-        opencodeMode: null,
-        codexMode: "native",
+        agentSettings: {
+          defaultAgent: "codex",
+          platforms: {
+            claude: { mode: null, claudeNativeBackend: null },
+            opencode: { mode: null },
+            codex: { mode: "native" },
+          },
+        },
         initialAgentModel: "gpt-5.4-mini",
         initialReasoningEffort: "medium",
       },
       context,
     );
     expect(updates.at(-1)).toEqual({
-      defaultAgent: "codex",
-      claudeMode: null,
-      claudeNativeBackend: null,
-      opencodeMode: null,
-      codexMode: "native",
+      agentSettings: {
+        defaultAgent: "codex",
+        platforms: {
+          codex: { mode: "native" },
+        },
+      },
       initialAgentModel: "gpt-5.4-mini",
       initialReasoningEffort: "medium",
     });
@@ -1053,22 +1064,26 @@ exit 0
     await commands.get("update_environment_agent_settings")?.(
       {
         environmentId: environment.id,
-        defaultAgent: "codex",
-        claudeMode: null,
-        claudeNativeBackend: null,
-        opencodeMode: null,
-        codexMode: "native",
+        agentSettings: {
+          defaultAgent: "codex",
+          platforms: {
+            claude: { mode: null, claudeNativeBackend: null },
+            opencode: { mode: null },
+            codex: { mode: "native" },
+          },
+        },
         initialAgentModel: 42,
         initialReasoningEffort: {},
       },
       context,
     );
     expect(updates.at(-1)).toEqual({
-      defaultAgent: "codex",
-      claudeMode: null,
-      claudeNativeBackend: null,
-      opencodeMode: null,
-      codexMode: "native",
+      agentSettings: {
+        defaultAgent: "codex",
+        platforms: {
+          codex: { mode: "native" },
+        },
+      },
     });
     // Omitting the flag must leave an in-flight launch intent alone: the settings
     // dialog, FeaturesView and the non-Claude pipeline lanes all call this
@@ -1076,31 +1091,36 @@ exit 0
     await commands.get("update_environment_agent_settings")?.(
       {
         environmentId: environment.id,
-        defaultAgent: "claude",
-        claudeMode: "terminal",
-        claudeNativeBackend: null,
-        opencodeMode: null,
-        codexMode: null,
+        agentSettings: {
+          defaultAgent: "claude",
+          platforms: {
+            claude: { mode: "terminal", claudeNativeBackend: null },
+            opencode: { mode: null },
+            codex: { mode: null },
+          },
+        },
       },
       context,
     );
     expect(updates).toContainEqual({
-      defaultAgent: "claude",
-      claudeMode: "terminal",
-      claudeNativeBackend: null,
-      opencodeMode: null,
-      codexMode: null,
+      agentSettings: {
+        defaultAgent: "claude",
+        platforms: { claude: { mode: "terminal" } },
+      },
     });
     expect(updates.at(-1)).not.toHaveProperty("pendingAgentLaunch");
     // A non-boolean must not be coerced either.
     await commands.get("update_environment_agent_settings")?.(
       {
         environmentId: environment.id,
-        defaultAgent: "claude",
-        claudeMode: "terminal",
-        claudeNativeBackend: null,
-        opencodeMode: null,
-        codexMode: null,
+        agentSettings: {
+          defaultAgent: "claude",
+          platforms: {
+            claude: { mode: "terminal", claudeNativeBackend: null },
+            opencode: { mode: null },
+            codex: { mode: null },
+          },
+        },
         pendingAgentLaunch: "true",
       },
       context,
@@ -1111,11 +1131,14 @@ exit 0
     await commands.get("update_environment_agent_settings")?.(
       {
         environmentId: environment.id,
-        defaultAgent: "codex",
-        claudeMode: null,
-        claudeNativeBackend: null,
-        opencodeMode: null,
-        codexMode: "native",
+        agentSettings: {
+          defaultAgent: "codex",
+          platforms: {
+            claude: { mode: null, claudeNativeBackend: null },
+            opencode: { mode: null },
+            codex: { mode: "native" },
+          },
+        },
         pendingAgentLaunch: true,
         initialAgentModel: "gpt-5.6-sol",
         initialReasoningEffort: "high",

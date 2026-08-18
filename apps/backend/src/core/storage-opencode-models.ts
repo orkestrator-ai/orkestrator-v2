@@ -26,7 +26,11 @@ export function storedOpenCodeModelIds(
   global: JsonRecord,
   repositories: AppConfig["repositories"] | undefined,
 ): unknown[] {
-  const ids: unknown[] = [global.opencodeModel];
+  // Read the legacy key as well as the migrated block: the allowlist migration
+  // runs against a config that may not have been through the agent-settings
+  // migration yet, and a provider the user selected from must be preserved
+  // whichever shape it is currently stored in.
+  const ids: unknown[] = [global.opencodeModel, openCodeModelOf(global)];
   if (Array.isArray(global.favoriteModels)) {
     for (const favorite of global.favoriteModels) {
       if (isRecord(favorite) && favorite.platform === "opencode") {
@@ -36,10 +40,20 @@ export function storedOpenCodeModelIds(
   }
   if (isRecord(repositories)) {
     for (const repository of Object.values(repositories)) {
-      if (isRecord(repository)) ids.push(repository.defaultModel);
+      if (isRecord(repository)) ids.push(repository.defaultModel, openCodeModelOf(repository));
     }
   }
   return ids;
+}
+
+/** The OpenCode model id inside a migrated tier, if it has one. */
+function openCodeModelOf(tier: JsonRecord): unknown {
+  const settings = tier.agentSettings;
+  if (!isRecord(settings)) return undefined;
+  const platforms = settings.platforms;
+  if (!isRecord(platforms)) return undefined;
+  const opencode = platforms.opencode;
+  return isRecord(opencode) ? opencode.model : undefined;
 }
 
 /** The OpenCode default a fresh install ships with. */
@@ -92,36 +106,26 @@ export function selectableOpenCodeDefaultModel(
 }
 
 /**
- * The agent a repository's `defaultModel` was chosen for.
- *
- * Mirrors `repositoryAgent` in `build-pipeline-service-helpers.ts`. It is
- * duplicated rather than imported because that module sits above storage in the
- * dependency order, and normalization runs while the config is still being
- * loaded.
- */
-function repositoryDefaultAgent(repository: JsonRecord, globalDefaultAgent: unknown): unknown {
-  return repository.defaultAgent ?? globalDefaultAgent ?? "claude";
-}
-
-/**
  * Apply the allowlist repointing to every repository-scoped OpenCode default.
  *
- * `repository.defaultModel` is read *before* `global.opencodeModel` on both
- * paths the global repointing exists for — `connectionDefaultsFor` in the build
+ * A repository's OpenCode model is read *before* the global one on both paths
+ * the global repointing exists for — `connectionDefaultsFor` in the build
  * pipeline and the startup-agent launch in `native-agent-service-reconciliation`
  * — so normalizing only the global default leaves the unreachable id in charge
  * for any repository that set one.
  *
- * Only a repository whose effective agent is OpenCode is touched. The field
- * holds a single model id shared by every agent, so a Claude or Codex id must
- * not be reinterpreted as `provider/model` and repointed at an OpenCode model.
+ * Since the agent-settings migration this reads `platforms.opencode.model`,
+ * which removes the guesswork the previous version needed: the old
+ * `defaultModel` was one field shared by every agent, so it had to infer
+ * whether the repository's effective agent was OpenCode before daring to
+ * reinterpret the value as `provider/model`. A model in the `opencode` column
+ * is an OpenCode model by construction.
  *
  * Returns the original reference when nothing changed, so callers can use
  * identity to decide whether the config needs rewriting at all.
  */
 export function normalizeOpenCodeRepositoryDefaults<T>(
   repositories: T,
-  globalDefaultAgent: unknown,
   favoriteModels: readonly { platform: string; modelId: string }[],
   allowedProviders: readonly string[],
 ): T {
@@ -129,24 +133,29 @@ export function normalizeOpenCodeRepositoryDefaults<T>(
   let changed = false;
   const next: JsonRecord = {};
   for (const [id, repository] of Object.entries(repositories)) {
-    if (
-      !isRecord(repository) ||
-      repositoryDefaultAgent(repository, globalDefaultAgent) !== "opencode"
-    ) {
+    const stored = isRecord(repository) ? openCodeModelOf(repository) : undefined;
+    if (stored === undefined) {
       next[id] = repository;
       continue;
     }
-    const defaultModel = selectableOpenCodeDefaultModel(
-      repository.defaultModel,
-      favoriteModels,
-      allowedProviders,
-    );
-    if (defaultModel === repository.defaultModel) {
+    const model = selectableOpenCodeDefaultModel(stored, favoriteModels, allowedProviders);
+    if (model === stored) {
       next[id] = repository;
       continue;
     }
     changed = true;
-    next[id] = { ...repository, defaultModel };
+    const settings = (repository as JsonRecord).agentSettings as JsonRecord;
+    const platforms = settings.platforms as JsonRecord;
+    next[id] = {
+      ...(repository as JsonRecord),
+      agentSettings: {
+        ...settings,
+        platforms: {
+          ...platforms,
+          opencode: { ...(platforms.opencode as JsonRecord), model },
+        },
+      },
+    };
   }
   return changed ? (next as T) : repositories;
 }

@@ -789,9 +789,10 @@ describe("BuildPipelineService", () => {
     await storage.updateRepositoryConfig("project-1", {
       defaultBranch: "main",
       prBaseBranch: "main",
-      defaultAgent: "codex",
-      defaultModel: "repo-codex",
-      defaultEffort: "xhigh",
+      agentSettings: {
+        defaultAgent: "codex",
+        platforms: { codex: { model: "repo-codex", reasoningEffort: "xhigh" } },
+      },
     });
 
     const requests: Array<{ url: string; init: RequestInit }> = [];

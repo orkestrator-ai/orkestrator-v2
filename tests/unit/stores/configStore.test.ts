@@ -15,9 +15,7 @@ describe("configStore", () => {
           },
           envFilePatterns: [".env.local", ".env"],
           experimentalCodexRawEventLogging: true,
-          claudeModel: "claude-sonnet-4-6",
-          claudeNativeFastModeDefault: false,
-          codexNativeFastModeDefault: false,
+          agentSettings: { platforms: { claude: { model: "claude-sonnet-4-6" } } },
         },
         repositories: {},
       },
@@ -33,9 +31,7 @@ describe("configStore", () => {
     expect(state.config.global.containerResources.memoryGb).toBe(4);
     expect(state.config.global.envFilePatterns).toEqual([".env.local", ".env"]);
     expect(state.config.global.experimentalCodexRawEventLogging).toBe(true);
-    expect(state.config.global.claudeModel).toBe("claude-sonnet-4-6");
-    expect(state.config.global.claudeNativeFastModeDefault).toBe(false);
-    expect(state.config.global.codexNativeFastModeDefault).toBe(false);
+    expect(state.config.global.agentSettings?.platforms?.claude?.model).toBe("claude-sonnet-4-6");
     expect(state.config.repositories).toEqual({});
     expect(state.isLoading).toBe(false);
     expect(state.error).toBeNull();
@@ -136,7 +132,13 @@ describe("configStore", () => {
         ...state.config,
         global: {
           ...state.config.global,
-          codexMode: "native",
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            platforms: {
+              ...state.config.global.agentSettings?.platforms,
+              codex: { mode: "native" },
+            },
+          },
         },
       },
     }));
@@ -150,34 +152,44 @@ describe("configStore", () => {
     expect(state.config.global.containerResources.cpuCores).toBe(2);
     expect(state.config.global.containerResources.memoryGb).toBe(4);
     expect(state.config.global.envFilePatterns).toEqual([".env.production"]);
-    expect(state.config.global.codexMode).toBe("native");
+    expect(state.config.global.agentSettings?.platforms?.codex?.mode).toBe("native");
   });
 
-  test("updateGlobalConfig updates codexMode", () => {
+  test("updateGlobalConfig updates the Codex mode", () => {
     useConfigStore.setState((state) => ({
       ...state,
       config: {
         ...state.config,
         global: {
           ...state.config.global,
-          codexMode: "native",
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            platforms: {
+              ...state.config.global.agentSettings?.platforms,
+              codex: { mode: "native" },
+            },
+          },
         },
       },
     }));
 
     useConfigStore.getState().updateGlobalConfig({
-      codexMode: "terminal",
+      agentSettings: { platforms: { codex: { mode: "terminal" } } },
     });
 
-    expect(useConfigStore.getState().config.global.codexMode).toBe("terminal");
+    expect(useConfigStore.getState().config.global.agentSettings?.platforms?.codex?.mode).toBe(
+      "terminal",
+    );
   });
 
-  test("updateGlobalConfig updates claudeModel", () => {
+  test("updateGlobalConfig updates the Claude model", () => {
     useConfigStore.getState().updateGlobalConfig({
-      claudeModel: "default",
+      agentSettings: { platforms: { claude: { model: "default" } } },
     });
 
-    expect(useConfigStore.getState().config.global.claudeModel).toBe("default");
+    expect(useConfigStore.getState().config.global.agentSettings?.platforms?.claude?.model).toBe(
+      "default",
+    );
   });
 
   test("updateGlobalConfig updates experimentalCodexRawEventLogging", () => {
@@ -186,16 +198,6 @@ describe("configStore", () => {
     });
 
     expect(useConfigStore.getState().config.global.experimentalCodexRawEventLogging).toBe(false);
-  });
-
-  test("updateGlobalConfig updates native fast mode defaults", () => {
-    useConfigStore.getState().updateGlobalConfig({
-      claudeNativeFastModeDefault: true,
-      codexNativeFastModeDefault: true,
-    });
-
-    expect(useConfigStore.getState().config.global.claudeNativeFastModeDefault).toBe(true);
-    expect(useConfigStore.getState().config.global.codexNativeFastModeDefault).toBe(true);
   });
 
   test("updateGlobalConfig updates web client enablement", () => {
@@ -354,15 +356,16 @@ describe("configStore", () => {
     const repoConfig: RepositoryConfig = {
       defaultBranch: "main",
       prBaseBranch: "main",
-      defaultAgent: "opencode",
-      agentStyle: "native",
+      agentSettings: { defaultAgent: "opencode", platforms: { claude: { mode: "native" } } },
     };
 
     useConfigStore.getState().setRepositoryConfig("repo-1", repoConfig);
 
     const state = useConfigStore.getState();
-    expect(state.config.repositories["repo-1"]?.defaultAgent).toBe("opencode");
-    expect(state.config.repositories["repo-1"]?.agentStyle).toBe("native");
+    expect(state.config.repositories["repo-1"]?.agentSettings?.defaultAgent).toBe("opencode");
+    expect(state.config.repositories["repo-1"]?.agentSettings?.platforms?.claude?.mode).toBe(
+      "native",
+    );
   });
 
   test("setRepositoryConfig stores config without agent overrides", () => {
@@ -374,36 +377,37 @@ describe("configStore", () => {
     useConfigStore.getState().setRepositoryConfig("repo-1", repoConfig);
 
     const state = useConfigStore.getState();
-    expect(state.config.repositories["repo-1"]?.defaultAgent).toBeUndefined();
-    expect(state.config.repositories["repo-1"]?.agentStyle).toBeUndefined();
+    expect(state.config.repositories["repo-1"]?.agentSettings?.defaultAgent).toBeUndefined();
+    expect(
+      state.config.repositories["repo-1"]?.agentSettings?.platforms?.claude?.mode,
+    ).toBeUndefined();
   });
 
   test("setRepositoryConfig can update agent override to a different value", () => {
     useConfigStore.getState().setRepositoryConfig("repo-1", {
       defaultBranch: "main",
       prBaseBranch: "main",
-      defaultAgent: "claude",
-      agentStyle: "terminal",
+      agentSettings: { defaultAgent: "claude", platforms: { claude: { mode: "terminal" } } },
     });
 
     useConfigStore.getState().setRepositoryConfig("repo-1", {
       defaultBranch: "main",
       prBaseBranch: "main",
-      defaultAgent: "codex",
-      agentStyle: "native",
+      agentSettings: { defaultAgent: "codex", platforms: { claude: { mode: "native" } } },
     });
 
     const state = useConfigStore.getState();
-    expect(state.config.repositories["repo-1"]?.defaultAgent).toBe("codex");
-    expect(state.config.repositories["repo-1"]?.agentStyle).toBe("native");
+    expect(state.config.repositories["repo-1"]?.agentSettings?.defaultAgent).toBe("codex");
+    expect(state.config.repositories["repo-1"]?.agentSettings?.platforms?.claude?.mode).toBe(
+      "native",
+    );
   });
 
   test("setRepositoryConfig can clear agent override by omitting fields", () => {
     useConfigStore.getState().setRepositoryConfig("repo-1", {
       defaultBranch: "main",
       prBaseBranch: "main",
-      defaultAgent: "opencode",
-      agentStyle: "native",
+      agentSettings: { defaultAgent: "opencode", platforms: { claude: { mode: "native" } } },
     });
 
     // Update without agent fields (clearing the override)
@@ -413,7 +417,9 @@ describe("configStore", () => {
     });
 
     const state = useConfigStore.getState();
-    expect(state.config.repositories["repo-1"]?.defaultAgent).toBeUndefined();
-    expect(state.config.repositories["repo-1"]?.agentStyle).toBeUndefined();
+    expect(state.config.repositories["repo-1"]?.agentSettings?.defaultAgent).toBeUndefined();
+    expect(
+      state.config.repositories["repo-1"]?.agentSettings?.platforms?.claude?.mode,
+    ).toBeUndefined();
   });
 });

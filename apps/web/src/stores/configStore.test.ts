@@ -9,22 +9,23 @@ const initialGlobal = useConfigStore.getInitialState().config.global;
 
 describe("configStore DEFAULT_CONFIG defaults", () => {
   test("uses the current default model selection", () => {
-    expect(initialGlobal.opencodeModel).toBe("opencode/claude-sonnet-5");
-    expect(initialGlobal.claudeModel).toBe("claude-sonnet-5");
-    expect(initialGlobal.codexModel).toBe("gpt-5.4");
-    expect(initialGlobal.codexReasoningEffort).toBe("high");
+    const platforms = initialGlobal.agentSettings?.platforms;
+    expect(platforms?.opencode?.model).toBe("opencode/claude-sonnet-5");
+    expect(platforms?.claude?.model).toBe("claude-sonnet-5");
+    expect(platforms?.codex?.model).toBe("gpt-5.4");
+    expect(platforms?.codex?.reasoningEffort).toBe("high");
     expect(initialGlobal.codexMaxConcurrentThreads).toBe(5);
     expect(initialGlobal.useHostGitHubCredentials).toBe(true);
-    expect(initialGlobal.claudeMode).toBe("native");
+    expect(platforms?.claude?.mode).toBe("native");
     expectTypeOf<GlobalConfig["codexMaxConcurrentThreads"]>().toEqualTypeOf<number | undefined>();
     expectTypeOf<GlobalConfig["useHostGitHubCredentials"]>().toEqualTypeOf<boolean | undefined>();
   });
 
   test("does not default to any retired model id", () => {
     const selected = [
-      initialGlobal.opencodeModel,
-      initialGlobal.claudeModel,
-      initialGlobal.codexModel,
+      initialGlobal.agentSettings?.platforms?.opencode?.model,
+      initialGlobal.agentSettings?.platforms?.claude?.model,
+      initialGlobal.agentSettings?.platforms?.codex?.model,
     ];
     for (const retired of ["opencode/grok-code", "claude-sonnet-4-6", "gpt-5.3-codex"]) {
       expect(selected).not.toContain(retired);
@@ -36,13 +37,10 @@ describe("configStore DEFAULT_CONFIG defaults", () => {
   // two disagree, a user's first-run defaults differ from what gets saved.
   test("agrees with the backend defaultConfig() model selection", () => {
     const backendGlobal = defaultConfig().global;
-    expect(initialGlobal.opencodeModel).toBe(backendGlobal.opencodeModel);
-    expect(initialGlobal.claudeModel).toBe(backendGlobal.claudeModel);
-    expect(initialGlobal.codexModel).toBe(backendGlobal.codexModel);
-    expect(initialGlobal.codexReasoningEffort).toBe(backendGlobal.codexReasoningEffort);
+    // The whole agent block has to match, not just the models: it is now one
+    // object, so a divergence anywhere in it is the same first-run mismatch.
+    expect(initialGlobal.agentSettings).toEqual(backendGlobal.agentSettings);
     expect(initialGlobal.codexMaxConcurrentThreads).toBe(backendGlobal.codexMaxConcurrentThreads);
-    expect(initialGlobal.defaultAgent).toBe(backendGlobal.defaultAgent);
-    expect(initialGlobal.claudeMode).toBe(backendGlobal.claudeMode);
     expect(initialGlobal.webClientEnabled).toBe(backendGlobal.webClientEnabled);
     expect(initialGlobal.reviewInstruction).toBe(backendGlobal.reviewInstruction);
     expect(initialGlobal.useHostGitHubCredentials).toBe(backendGlobal.useHostGitHubCredentials);
@@ -59,7 +57,7 @@ describe("configStore review instruction updates", () => {
   });
 
   test("sets and removes a custom review instruction without changing sibling config", () => {
-    const originalAgent = useConfigStore.getState().config.global.defaultAgent;
+    const originalAgent = useConfigStore.getState().config.global.agentSettings?.defaultAgent;
 
     useConfigStore.getState().updateGlobalConfig({
       reviewInstruction: "Review {{targetBranch}}.",
@@ -72,6 +70,6 @@ describe("configStore review instruction updates", () => {
     const global = useConfigStore.getState().config.global;
     expect(global.reviewInstruction).toBeUndefined();
     expect(Object.hasOwn(global, "reviewInstruction")).toBe(false);
-    expect(global.defaultAgent).toBe(originalAgent);
+    expect(global.agentSettings?.defaultAgent).toBe(originalAgent);
   });
 });

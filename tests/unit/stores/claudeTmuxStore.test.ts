@@ -154,7 +154,7 @@ describe("claudeTmuxStore", () => {
       const after = useClaudeTmuxStore.getState();
       expect(after.draftText.get("tab-1")).toBeUndefined();
       expect(after.messageQueue.get("tab-1")).toBeUndefined();
-      // Effort is a per-tab preference (like the model default) and must
+      // Effort is a per-tab preference (like the current model selection) and must
       // survive resetTab so it seeds the next launch in that tab.
       expect(after.effortLevels.get("tab-1")).toBe("xhigh");
     });

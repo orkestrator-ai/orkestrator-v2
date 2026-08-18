@@ -137,15 +137,18 @@ describe("resolveAgentDefaults", () => {
     HTMLCanvasElement.prototype.toDataURL = originalToDataURL;
   });
 
+  const tiers = (global: unknown, repository?: unknown) => ({ global, repository }) as never;
+
   test("uses app-level defaults when no repo config provided", () => {
     const result = resolveAgentDefaults(
-      {
+      tiers({
         defaultAgent: "claude",
-        claudeMode: "native",
-        opencodeMode: "terminal",
-        codexMode: "native",
-      },
-      undefined,
+        platforms: {
+          claude: { mode: "native" },
+          opencode: { mode: "terminal" },
+          codex: { mode: "native" },
+        },
+      }),
     );
     expect(result.defaultAgent).toBe("claude");
     expect(result.claudeMode).toBe("native");
@@ -219,18 +222,19 @@ describe("resolveAgentDefaults", () => {
     expect(onCreate).not.toHaveBeenCalled();
   });
 
-  test("uses app-level defaults when repo config has no overrides", () => {
+  test("uses app-level defaults when the repository overrides nothing", () => {
     const result = resolveAgentDefaults(
-      {
-        defaultAgent: "opencode",
-        claudeMode: "terminal",
-        opencodeMode: "native",
-        codexMode: "terminal",
-      },
-      { defaultBranch: "main", prBaseBranch: "main" } as {
-        defaultAgent?: string;
-        agentStyle?: string;
-      },
+      tiers(
+        {
+          defaultAgent: "opencode",
+          platforms: {
+            claude: { mode: "terminal" },
+            opencode: { mode: "native" },
+            codex: { mode: "terminal" },
+          },
+        },
+        {},
+      ),
     );
     expect(result.defaultAgent).toBe("opencode");
     expect(result.claudeMode).toBe("terminal");
@@ -238,72 +242,66 @@ describe("resolveAgentDefaults", () => {
     expect(result.codexMode).toBe("terminal");
   });
 
-  test("project-level defaultAgent overrides app-level", () => {
+  test("a repository default agent overrides the app one", () => {
     const result = resolveAgentDefaults(
-      { defaultAgent: "claude", claudeMode: "terminal", opencodeMode: "terminal" },
-      { defaultAgent: "opencode" },
+      tiers({ defaultAgent: "claude" }, { defaultAgent: "opencode" }),
     );
     expect(result.defaultAgent).toBe("opencode");
   });
 
-  test("project-level agentStyle overrides both claudeMode and opencodeMode", () => {
+  test("a repository mode overrides only its own platform", () => {
+    // The repository used to carry one `agentStyle` that moved Claude, Codex
+    // and OpenCode together, so choosing Native for Claude silently moved the
+    // other two. Each platform now has its own column.
     const result = resolveAgentDefaults(
-      {
-        defaultAgent: "claude",
-        claudeMode: "terminal",
-        opencodeMode: "terminal",
-        codexMode: "native",
-      },
-      { agentStyle: "native" },
+      tiers(
+        {
+          defaultAgent: "claude",
+          platforms: {
+            claude: { mode: "terminal" },
+            opencode: { mode: "terminal" },
+            codex: { mode: "native" },
+          },
+        },
+        { platforms: { claude: { mode: "native" } } },
+      ),
     );
-    expect(result.claudeMode).toBe("native");
-    expect(result.opencodeMode).toBe("native");
-    expect(result.codexMode).toBe("native");
-  });
-
-  test("project-level overrides take precedence over app-level for all fields", () => {
-    const result = resolveAgentDefaults(
-      {
-        defaultAgent: "claude",
-        claudeMode: "terminal",
-        opencodeMode: "terminal",
-        codexMode: "native",
-      },
-      { defaultAgent: "codex", agentStyle: "native" },
-    );
-    expect(result.defaultAgent).toBe("codex");
-    expect(result.claudeMode).toBe("native");
-    expect(result.opencodeMode).toBe("native");
-    expect(result.codexMode).toBe("native");
-  });
-
-  test("falls back to hardcoded defaults when both levels are undefined", () => {
-    const result = resolveAgentDefaults({}, undefined);
-    expect(result.defaultAgent).toBe("claude");
     expect(result.claudeMode).toBe("native");
     expect(result.opencodeMode).toBe("terminal");
     expect(result.codexMode).toBe("native");
   });
 
-  test("project agentStyle does not affect defaultAgent resolution", () => {
-    const result = resolveAgentDefaults({ defaultAgent: "claude" }, { agentStyle: "native" });
-    // defaultAgent should still come from app-level
+  test("falls back to the shipped defaults when no tier decides", () => {
+    const result = resolveAgentDefaults(tiers(undefined));
     expect(result.defaultAgent).toBe("claude");
     expect(result.claudeMode).toBe("native");
-    expect(result.codexMode).toBe("native");
+    expect(result.opencodeMode).toBe("terminal");
+    // Codex ships terminal; only Claude ships native.
+    expect(result.codexMode).toBe("terminal");
   });
 
-  test("project defaultAgent does not affect mode resolution", () => {
+  test("a repository mode does not affect which agent is default", () => {
     const result = resolveAgentDefaults(
-      {
-        defaultAgent: "claude",
-        claudeMode: "native",
-        opencodeMode: "native",
-        codexMode: "terminal",
-      },
-      { defaultAgent: "opencode" },
+      tiers({ defaultAgent: "claude" }, { platforms: { claude: { mode: "terminal" } } }),
     );
-    // Modes should still come from app-level since no agentStyle override
+    expect(result.defaultAgent).toBe("claude");
+    expect(result.claudeMode).toBe("terminal");
+  });
+
+  test("a repository default agent does not affect mode resolution", () => {
+    const result = resolveAgentDefaults(
+      tiers(
+        {
+          defaultAgent: "claude",
+          platforms: {
+            claude: { mode: "native" },
+            opencode: { mode: "native" },
+            codex: { mode: "terminal" },
+          },
+        },
+        { defaultAgent: "opencode" },
+      ),
+    );
     expect(result.defaultAgent).toBe("opencode");
     expect(result.claudeMode).toBe("native");
     expect(result.opencodeMode).toBe("native");
@@ -729,13 +727,14 @@ describe("resolveAgentDefaults", () => {
           containerResources: { cpuCores: 2, memoryGb: 4 },
           envFilePatterns: [],
           allowedDomains: [],
-          defaultAgent: "claude",
-          opencodeModel: "opencode/grok-code",
-          codexModel: "gpt-5.3-codex",
-          codexReasoningEffort: "medium",
-          opencodeMode: "terminal",
-          claudeMode: "terminal",
-          codexMode: "native",
+          agentSettings: {
+            defaultAgent: "claude",
+            platforms: {
+              opencode: { model: "opencode/grok-code", mode: "terminal" },
+              codex: { model: "gpt-5.3-codex", reasoningEffort: "medium", mode: "native" },
+              claude: { mode: "terminal" },
+            },
+          },
           terminalAppearance: {
             fontFamily: "Fira Code",
             fontSize: 14,
@@ -811,12 +810,27 @@ describe("resolveAgentDefaults", () => {
     const config = structuredClone(defaultConfig);
     // Deliberately different from the New projects default, so the assertion
     // distinguishes the two rather than passing on the app default agent.
-    config.global.defaultAgent = "claude";
+    config.global.agentSettings = { ...config.global.agentSettings, defaultAgent: "claude" };
     config.global.enabledAgentPlatforms = ["claude", "codex"];
-    config.global.codexModel = "codex-a";
-    config.global.codexReasoningEffort = "medium";
-    config.global.actionDefaults = {
-      newProject: { platform: "codex", model: "codex-b", reasoningEffort: "high" },
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      platforms: {
+        ...config.global.agentSettings?.platforms,
+        codex: { ...config.global.agentSettings?.platforms?.codex, model: "codex-a" },
+      },
+    };
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      platforms: {
+        ...config.global.agentSettings?.platforms,
+        codex: { ...config.global.agentSettings?.platforms?.codex, reasoningEffort: "medium" },
+      },
+    };
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      actionDefaults: {
+        newProject: { platform: "codex", model: "codex-b", reasoningEffort: "high" },
+      },
     };
     useConfigStore.setState({ config });
     const onCreate = mock(async () => {});
@@ -837,7 +851,7 @@ describe("resolveAgentDefaults", () => {
     );
   });
 
-  test("keeps a project's remembered selection ahead of the New projects default", async () => {
+  test("takes model and reasoning from New projects defaults, not remembered selection", async () => {
     useCodexStore.setState({
       models: [
         {
@@ -855,10 +869,13 @@ describe("resolveAgentDefaults", () => {
       ],
     });
     const config = structuredClone(defaultConfig);
-    config.global.defaultAgent = "claude";
+    config.global.agentSettings = { ...config.global.agentSettings, defaultAgent: "claude" };
     config.global.enabledAgentPlatforms = ["claude", "codex"];
-    config.global.actionDefaults = {
-      newProject: { platform: "codex", model: "codex-b", reasoningEffort: "high" },
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      actionDefaults: {
+        newProject: { platform: "codex", model: "codex-b", reasoningEffort: "high" },
+      },
     };
     config.repositories["project-1"] = {
       defaultBranch: "main",
@@ -866,8 +883,6 @@ describe("resolveAgentDefaults", () => {
       lastEnvironmentAgentSelection: {
         platform: "codex",
         mode: "native",
-        model: "codex-a",
-        reasoningEffort: "medium",
       },
     };
     useConfigStore.setState({ config });
@@ -882,15 +897,15 @@ describe("resolveAgentDefaults", () => {
       />,
     );
 
-    await waitFor(() => expect(getAgentModelPicker().textContent).toContain("Codex A"));
+    await waitFor(() => expect(getAgentModelPicker().textContent).toContain("Codex B"));
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
     await waitFor(() =>
       expect(onCreate).toHaveBeenCalledWith(
         expect.objectContaining({
           agentType: "codex",
-          model: "codex-a",
-          reasoningEffort: "medium",
+          model: "codex-b",
+          reasoningEffort: "high",
         }),
       ),
     );
@@ -898,11 +913,20 @@ describe("resolveAgentDefaults", () => {
 
   test("ignores a New projects default whose platform is no longer enabled", async () => {
     const config = structuredClone(defaultConfig);
-    config.global.defaultAgent = "claude";
+    config.global.agentSettings = { ...config.global.agentSettings, defaultAgent: "claude" };
     config.global.enabledAgentPlatforms = ["claude"];
-    config.global.claudeModel = "claude-sonnet-5";
-    config.global.actionDefaults = {
-      newProject: { platform: "codex", model: "codex-b", reasoningEffort: "high" },
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      platforms: {
+        ...config.global.agentSettings?.platforms,
+        claude: { ...config.global.agentSettings?.platforms?.claude, model: "claude-sonnet-5" },
+      },
+    };
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      actionDefaults: {
+        newProject: { platform: "codex", model: "codex-b", reasoningEffort: "high" },
+      },
     };
     useConfigStore.setState({ config });
     const onCreate = mock(async () => {});
@@ -925,7 +949,7 @@ describe("resolveAgentDefaults", () => {
 
   test("offers the durable Cursor catalogue when creating a new environment", async () => {
     const config = structuredClone(defaultConfig);
-    config.global.defaultAgent = "cursor";
+    config.global.agentSettings = { ...config.global.agentSettings, defaultAgent: "cursor" };
     config.global.enabledAgentPlatforms = ["cursor"];
     useConfigStore.setState({ config });
     useAgentModelCatalogStore.getState().setAcpModels([
@@ -989,12 +1013,24 @@ describe("resolveAgentDefaults", () => {
       ],
     });
     const config = structuredClone(defaultConfig);
-    config.global.defaultAgent = "codex";
-    config.global.codexModel = "codex-a";
+    config.global.agentSettings = { ...config.global.agentSettings, defaultAgent: "codex" };
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      platforms: {
+        ...config.global.agentSettings?.platforms,
+        codex: { ...config.global.agentSettings?.platforms?.codex, model: "codex-a" },
+      },
+    };
     // Deliberately different from the effort the user picks below, so falling
     // back to the agent's configured default is distinguishable from keeping
     // the user's choice.
-    config.global.codexReasoningEffort = "medium";
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      platforms: {
+        ...config.global.agentSettings?.platforms,
+        codex: { ...config.global.agentSettings?.platforms?.codex, reasoningEffort: "medium" },
+      },
+    };
     useConfigStore.setState({ config });
     const onCreate = mock(async () => {});
 
@@ -1046,8 +1082,14 @@ describe("resolveAgentDefaults", () => {
       ],
     });
     const config = structuredClone(defaultConfig);
-    config.global.defaultAgent = "codex";
-    config.global.codexModel = "codex-a";
+    config.global.agentSettings = { ...config.global.agentSettings, defaultAgent: "codex" };
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      platforms: {
+        ...config.global.agentSettings?.platforms,
+        codex: { ...config.global.agentSettings?.platforms?.codex, model: "codex-a" },
+      },
+    };
     useConfigStore.setState({ config });
     const onCreate = mock(async () => {});
 
@@ -1078,7 +1120,13 @@ describe("resolveAgentDefaults", () => {
     // No configured default either, so nothing real gets injected into the
     // catalog and the placeholder is genuinely all there is.
     const config = structuredClone(defaultConfig);
-    config.global.opencodeModel = undefined;
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      platforms: {
+        ...config.global.agentSettings?.platforms,
+        opencode: { ...config.global.agentSettings?.platforms?.opencode, model: undefined },
+      },
+    };
     useConfigStore.setState({ config });
     const onCreate = mock(async () => {});
     render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
@@ -1143,12 +1191,18 @@ describe("resolveAgentDefaults", () => {
 
   test("honors project mode defaults in the checkbox and submission", async () => {
     const config = structuredClone(defaultConfig);
-    config.global.defaultAgent = "claude";
-    config.global.claudeMode = "terminal";
+    config.global.agentSettings = { ...config.global.agentSettings, defaultAgent: "claude" };
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      platforms: {
+        ...config.global.agentSettings?.platforms,
+        claude: { ...config.global.agentSettings?.platforms?.claude, mode: "terminal" },
+      },
+    };
     config.repositories["project-mode"] = {
       defaultBranch: "main",
       prBaseBranch: "main",
-      agentStyle: "native",
+      agentSettings: { platforms: { claude: { mode: "native" } } },
     };
     useConfigStore.setState({ config });
     const onCreate = mock(async () => {});
@@ -1185,14 +1239,25 @@ describe("resolveAgentDefaults", () => {
       ],
     });
     const config = structuredClone(defaultConfig);
-    config.global.defaultAgent = "codex";
-    config.global.codexModel = "codex-preferred";
-    config.global.codexReasoningEffort = "high";
+    config.global.agentSettings = { ...config.global.agentSettings, defaultAgent: "codex" };
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      platforms: {
+        ...config.global.agentSettings?.platforms,
+        codex: { ...config.global.agentSettings?.platforms?.codex, model: "codex-preferred" },
+      },
+    };
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      platforms: {
+        ...config.global.agentSettings?.platforms,
+        codex: { ...config.global.agentSettings?.platforms?.codex, reasoningEffort: "high" },
+      },
+    };
     config.repositories["project-codex"] = {
       defaultBranch: "main",
       prBaseBranch: "main",
-      defaultAgent: "codex",
-      defaultModel: "codex-preferred",
+      agentSettings: { defaultAgent: "codex", platforms: { codex: { model: "codex-preferred" } } },
     };
     useConfigStore.setState({ config });
     const onCreate = mock(async () => {});
@@ -1231,15 +1296,28 @@ describe("resolveAgentDefaults", () => {
       ],
     });
     const config = structuredClone(defaultConfig);
-    config.global.defaultAgent = "codex";
-    config.global.codexModel = "codex-medium-only";
-    config.global.codexReasoningEffort = "high";
+    config.global.agentSettings = { ...config.global.agentSettings, defaultAgent: "codex" };
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      platforms: {
+        ...config.global.agentSettings?.platforms,
+        codex: { ...config.global.agentSettings?.platforms?.codex, model: "codex-medium-only" },
+      },
+    };
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      platforms: {
+        ...config.global.agentSettings?.platforms,
+        codex: { ...config.global.agentSettings?.platforms?.codex, reasoningEffort: "high" },
+      },
+    };
     config.repositories["project-codex"] = {
       defaultBranch: "main",
       prBaseBranch: "main",
-      defaultAgent: "codex",
-      defaultModel: "codex-medium-only",
-      defaultEffort: "medium",
+      agentSettings: {
+        defaultAgent: "codex",
+        platforms: { codex: { model: "codex-medium-only", reasoningEffort: "medium" } },
+      },
     };
     useConfigStore.setState({ config });
     const onCreate = mock(async () => {});
@@ -1255,7 +1333,12 @@ describe("resolveAgentDefaults", () => {
     expect(getAgentModelPicker().textContent).toContain("Medium");
 
     unmount();
-    config.repositories["project-codex"]!.defaultEffort = "high";
+    // "high" is not in this model's catalogue, so the picker must drop it
+    // rather than showing an effort the model cannot accept.
+    config.repositories["project-codex"]!.agentSettings = {
+      ...config.repositories["project-codex"]!.agentSettings,
+      platforms: { codex: { model: "codex-medium-only", reasoningEffort: "high" } },
+    };
     useConfigStore.setState({ config: structuredClone(config) });
     render(
       <CreateEnvironmentDialog
@@ -1284,14 +1367,24 @@ describe("resolveAgentDefaults", () => {
       },
     ]);
     const config = structuredClone(defaultConfig);
-    config.global.defaultAgent = "opencode";
-    config.global.opencodeModel = "provider/model-a";
+    config.global.agentSettings = { ...config.global.agentSettings, defaultAgent: "opencode" };
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      platforms: {
+        ...config.global.agentSettings?.platforms,
+        opencode: {
+          ...config.global.agentSettings?.platforms?.opencode,
+          model: "provider/model-a",
+        },
+      },
+    };
     config.repositories["project-opencode"] = {
       defaultBranch: "main",
       prBaseBranch: "main",
-      defaultAgent: "opencode",
-      defaultModel: "provider/model-b",
-      defaultEffort: "deep",
+      agentSettings: {
+        defaultAgent: "opencode",
+        platforms: { opencode: { model: "provider/model-b", reasoningEffort: "deep" } },
+      },
     };
     useConfigStore.setState({ config });
     const onCreate = mock(async () => {});
@@ -1329,14 +1422,21 @@ describe("resolveAgentDefaults", () => {
   test("loads the project-scoped durable OpenCode catalog, switches models, resets an incompatible effort, and submits", async () => {
     useOpenCodeStore.setState({ models: new Map() });
     const config = structuredClone(defaultConfig);
-    config.global.defaultAgent = "opencode";
-    config.global.opencodeModel = undefined;
+    config.global.agentSettings = { ...config.global.agentSettings, defaultAgent: "opencode" };
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      platforms: {
+        ...config.global.agentSettings?.platforms,
+        opencode: { ...config.global.agentSettings?.platforms?.opencode, model: undefined },
+      },
+    };
     config.repositories["durable-project"] = {
       defaultBranch: "main",
       prBaseBranch: "main",
-      defaultAgent: "opencode",
-      defaultModel: "provider/model-a",
-      defaultEffort: "fast",
+      agentSettings: {
+        defaultAgent: "opencode",
+        platforms: { opencode: { model: "provider/model-a", reasoningEffort: "fast" } },
+      },
     };
     useConfigStore.setState({ config });
     invokeMock.mockImplementation((command: string, args?: Record<string, unknown>) => {
@@ -1410,7 +1510,13 @@ describe("resolveAgentDefaults", () => {
   test("shows Orkestrator-owned OpenCode favorites in their configured order", async () => {
     useOpenCodeStore.setState({ models: new Map() });
     const config = structuredClone(defaultConfig);
-    config.global.opencodeModel = undefined;
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      platforms: {
+        ...config.global.agentSettings?.platforms,
+        opencode: { ...config.global.agentSettings?.platforms?.opencode, model: undefined },
+      },
+    };
     config.global.favoriteModels = [
       { platform: "opencode", modelId: "provider/model-b" },
       { platform: "opencode", modelId: "provider/model-a" },
@@ -1482,17 +1588,36 @@ describe("resolveAgentDefaults", () => {
       ],
     });
     const config = structuredClone(defaultConfig);
-    config.global.defaultAgent = "opencode";
-    config.global.opencodeModel = "provider/source";
-    config.global.codexModel = "codex-favorite";
-    config.global.codexReasoningEffort = "high";
+    config.global.agentSettings = { ...config.global.agentSettings, defaultAgent: "opencode" };
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      platforms: {
+        ...config.global.agentSettings?.platforms,
+        opencode: { ...config.global.agentSettings?.platforms?.opencode, model: "provider/source" },
+      },
+    };
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      platforms: {
+        ...config.global.agentSettings?.platforms,
+        codex: { ...config.global.agentSettings?.platforms?.codex, model: "codex-favorite" },
+      },
+    };
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      platforms: {
+        ...config.global.agentSettings?.platforms,
+        codex: { ...config.global.agentSettings?.platforms?.codex, reasoningEffort: "high" },
+      },
+    };
     config.global.favoriteModels = [{ platform: "codex", modelId: "codex-favorite" }];
     config.repositories["cross-platform"] = {
       defaultBranch: "main",
       prBaseBranch: "main",
-      defaultAgent: "opencode",
-      defaultModel: "provider/source",
-      defaultEffort: "deep",
+      agentSettings: {
+        defaultAgent: "opencode",
+        platforms: { opencode: { model: "provider/source", reasoningEffort: "deep" } },
+      },
     };
     useConfigStore.setState({ config });
     const onCreate = mock(async () => {});
@@ -1546,7 +1671,13 @@ describe("resolveAgentDefaults", () => {
       ]),
     });
     const config = structuredClone(defaultConfig);
-    config.global.opencodeModel = undefined;
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      platforms: {
+        ...config.global.agentSettings?.platforms,
+        opencode: { ...config.global.agentSettings?.platforms?.opencode, model: undefined },
+      },
+    };
     useConfigStore.setState({ config });
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_opencode_model_catalog_cache") {
@@ -1588,7 +1719,13 @@ describe("resolveAgentDefaults", () => {
   test("does not read an unscoped durable catalog without a project id", async () => {
     useOpenCodeStore.setState({ models: new Map() });
     const config = structuredClone(defaultConfig);
-    config.global.opencodeModel = undefined;
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      platforms: {
+        ...config.global.agentSettings?.platforms,
+        opencode: { ...config.global.agentSettings?.platforms?.opencode, model: undefined },
+      },
+    };
     useConfigStore.setState({ config });
 
     render(
@@ -1605,7 +1742,13 @@ describe("resolveAgentDefaults", () => {
   test("ignores a late cache response after the project changes", async () => {
     useOpenCodeStore.setState({ models: new Map() });
     const config = structuredClone(defaultConfig);
-    config.global.opencodeModel = undefined;
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      platforms: {
+        ...config.global.agentSettings?.platforms,
+        opencode: { ...config.global.agentSettings?.platforms?.opencode, model: undefined },
+      },
+    };
     useConfigStore.setState({ config });
     const projectA = deferred<Record<string, unknown>>();
     invokeMock.mockImplementation((command: string, args?: Record<string, unknown>) => {
@@ -1662,7 +1805,13 @@ describe("resolveAgentDefaults", () => {
   test("clears a previous durable catalog when a repeated open returns empty", async () => {
     useOpenCodeStore.setState({ models: new Map() });
     const config = structuredClone(defaultConfig);
-    config.global.opencodeModel = undefined;
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      platforms: {
+        ...config.global.agentSettings?.platforms,
+        opencode: { ...config.global.agentSettings?.platforms?.opencode, model: undefined },
+      },
+    };
     useConfigStore.setState({ config });
     let cacheRead = 0;
     invokeMock.mockImplementation((command: string) => {
@@ -1730,7 +1879,13 @@ describe("resolveAgentDefaults", () => {
   ])("keeps durable state empty for a $name cache payload", async ({ cacheResult }) => {
     useOpenCodeStore.setState({ models: new Map() });
     const config = structuredClone(defaultConfig);
-    config.global.opencodeModel = undefined;
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      platforms: {
+        ...config.global.agentSettings?.platforms,
+        opencode: { ...config.global.agentSettings?.platforms?.opencode, model: undefined },
+      },
+    };
     useConfigStore.setState({ config });
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_opencode_model_catalog_cache") return cacheResult();
@@ -1760,14 +1915,21 @@ describe("resolveAgentDefaults", () => {
   test("augments the durable catalog with a missing configured OpenCode model and effort", async () => {
     useOpenCodeStore.setState({ models: new Map() });
     const config = structuredClone(defaultConfig);
-    config.global.defaultAgent = "opencode";
-    config.global.opencodeModel = undefined;
+    config.global.agentSettings = { ...config.global.agentSettings, defaultAgent: "opencode" };
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      platforms: {
+        ...config.global.agentSettings?.platforms,
+        opencode: { ...config.global.agentSettings?.platforms?.opencode, model: undefined },
+      },
+    };
     config.repositories["configured-project"] = {
       defaultBranch: "main",
       prBaseBranch: "main",
-      defaultAgent: "opencode",
-      defaultModel: "configured/missing-model",
-      defaultEffort: "turbo",
+      agentSettings: {
+        defaultAgent: "opencode",
+        platforms: { opencode: { model: "configured/missing-model", reasoningEffort: "turbo" } },
+      },
     };
     useConfigStore.setState({ config });
     invokeMock.mockImplementation((command: string) => {
@@ -1829,14 +1991,21 @@ describe("resolveAgentDefaults", () => {
   test("augments an existing durable OpenCode model with a missing configured effort", async () => {
     useOpenCodeStore.setState({ models: new Map() });
     const config = structuredClone(defaultConfig);
-    config.global.defaultAgent = "opencode";
-    config.global.opencodeModel = undefined;
+    config.global.agentSettings = { ...config.global.agentSettings, defaultAgent: "opencode" };
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      platforms: {
+        ...config.global.agentSettings?.platforms,
+        opencode: { ...config.global.agentSettings?.platforms?.opencode, model: undefined },
+      },
+    };
     config.repositories["configured-effort-project"] = {
       defaultBranch: "main",
       prBaseBranch: "main",
-      defaultAgent: "opencode",
-      defaultModel: "provider/configured-model",
-      defaultEffort: "turbo",
+      agentSettings: {
+        defaultAgent: "opencode",
+        platforms: { opencode: { model: "provider/configured-model", reasoningEffort: "turbo" } },
+      },
     };
     useConfigStore.setState({ config });
     invokeMock.mockImplementation((command: string) => {
@@ -1880,8 +2049,14 @@ describe("resolveAgentDefaults", () => {
   test("keeps the durable catalog usable when loading favorites fails", async () => {
     useOpenCodeStore.setState({ models: new Map() });
     const config = structuredClone(defaultConfig);
-    config.global.defaultAgent = "opencode";
-    config.global.opencodeModel = undefined;
+    config.global.agentSettings = { ...config.global.agentSettings, defaultAgent: "opencode" };
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      platforms: {
+        ...config.global.agentSettings?.platforms,
+        opencode: { ...config.global.agentSettings?.platforms?.opencode, model: undefined },
+      },
+    };
     useConfigStore.setState({ config });
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_opencode_model_catalog_cache") {
@@ -1928,8 +2103,14 @@ describe("resolveAgentDefaults", () => {
   ])("ignores a $name preferences payload", async ({ preferences }) => {
     useOpenCodeStore.setState({ models: new Map() });
     const config = structuredClone(defaultConfig);
-    config.global.defaultAgent = "opencode";
-    config.global.opencodeModel = undefined;
+    config.global.agentSettings = { ...config.global.agentSettings, defaultAgent: "opencode" };
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      platforms: {
+        ...config.global.agentSettings?.platforms,
+        opencode: { ...config.global.agentSettings?.platforms?.opencode, model: undefined },
+      },
+    };
     useConfigStore.setState({ config });
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_opencode_model_catalog_cache") {
@@ -1971,10 +2152,19 @@ describe("resolveAgentDefaults", () => {
   test("keeps a model chosen before the durable catalog arrives", async () => {
     useOpenCodeStore.setState({ models: new Map() });
     const config = structuredClone(defaultConfig);
-    config.global.defaultAgent = "opencode";
+    config.global.agentSettings = { ...config.global.agentSettings, defaultAgent: "opencode" };
     // A configured default is a real selectable entry before the cache lands,
     // so the user can pick it while the read is still in flight.
-    config.global.opencodeModel = "provider/configured";
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      platforms: {
+        ...config.global.agentSettings?.platforms,
+        opencode: {
+          ...config.global.agentSettings?.platforms?.opencode,
+          model: "provider/configured",
+        },
+      },
+    };
     useConfigStore.setState({ config });
     let resolveCache: (value: unknown) => void = () => {};
     const cacheRead = new Promise((resolve) => {
@@ -2046,9 +2236,21 @@ describe("resolveAgentDefaults", () => {
       ],
     });
     const config = structuredClone(defaultConfig);
-    config.global.defaultAgent = "codex";
-    config.global.codexModel = "codex-high";
-    config.global.codexReasoningEffort = "high";
+    config.global.agentSettings = { ...config.global.agentSettings, defaultAgent: "codex" };
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      platforms: {
+        ...config.global.agentSettings?.platforms,
+        codex: { ...config.global.agentSettings?.platforms?.codex, model: "codex-high" },
+      },
+    };
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      platforms: {
+        ...config.global.agentSettings?.platforms,
+        codex: { ...config.global.agentSettings?.platforms?.codex, reasoningEffort: "high" },
+      },
+    };
     useConfigStore.setState({ config });
 
     render(
@@ -2167,13 +2369,14 @@ describe("resolveAgentDefaults", () => {
           containerResources: { cpuCores: 2, memoryGb: 4 },
           envFilePatterns: [],
           allowedDomains: [],
-          defaultAgent: "claude",
-          opencodeModel: "opencode/grok-code",
-          codexModel: "gpt-5.3-codex",
-          codexReasoningEffort: "medium",
-          opencodeMode: "terminal",
-          claudeMode: "terminal",
-          codexMode: "native",
+          agentSettings: {
+            defaultAgent: "claude",
+            platforms: {
+              opencode: { model: "opencode/grok-code", mode: "terminal" },
+              codex: { model: "gpt-5.3-codex", reasoningEffort: "medium", mode: "native" },
+              claude: { mode: "terminal" },
+            },
+          },
           terminalAppearance: {
             fontFamily: "Fira Code",
             fontSize: 14,
@@ -2223,13 +2426,14 @@ describe("resolveAgentDefaults", () => {
           containerResources: { cpuCores: 2, memoryGb: 4 },
           envFilePatterns: [],
           allowedDomains: [],
-          defaultAgent: "claude",
-          opencodeModel: "opencode/grok-code",
-          codexModel: "gpt-5.3-codex",
-          codexReasoningEffort: "medium",
-          opencodeMode: "terminal",
-          claudeMode: "terminal",
-          codexMode: "native",
+          agentSettings: {
+            defaultAgent: "claude",
+            platforms: {
+              opencode: { model: "opencode/grok-code", mode: "terminal" },
+              codex: { model: "gpt-5.3-codex", reasoningEffort: "medium", mode: "native" },
+              claude: { mode: "terminal" },
+            },
+          },
           terminalAppearance: {
             fontFamily: "Fira Code",
             fontSize: 14,

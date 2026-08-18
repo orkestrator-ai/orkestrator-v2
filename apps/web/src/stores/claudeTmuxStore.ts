@@ -212,7 +212,7 @@ interface ClaudeTmuxState {
   draftText: Map<string, string>;
   draftMentions: Map<string, FileMention[]>;
   messageQueue: Map<string, TmuxQueuedMessage[]>;
-  // Effort is a per-tab *preference* (like the model default), so it
+  // Effort is a per-tab *preference* (like the current model selection), so it
   // intentionally survives resetTab and seeds the next launch in that tab.
   effortLevels: Map<string, ClaudeEffortLevel>;
 

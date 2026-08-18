@@ -197,8 +197,25 @@ function createContext(initialEnvironment = environment()): {
   globalConfig: Record<string, unknown>;
   /** Mutable so a test can change the per-environment allowlist. */
   environment: Environment;
+  /** Mutable so a test can exercise agent-test-only repository handling. */
+  project: {
+    id: string;
+    name: string;
+    gitUrl: string;
+    localPath: string | null;
+    addedAt: string;
+    order: number;
+  };
 } {
   const globalConfig: Record<string, unknown> = { allowedDomains: [] };
+  const project = {
+    id: "project-1",
+    name: "Project",
+    gitUrl: "https://github.com/example/project.git",
+    localPath: null,
+    addedAt: new Date(0).toISOString(),
+    order: 0,
+  };
   const updates: Array<Record<string, unknown>> = [];
   const added: Environment[] = [];
   const events: Array<{ event: string; payload: unknown }> = [];
@@ -216,14 +233,7 @@ function createContext(initialEnvironment = environment()): {
         Object.assign(initialEnvironment, update);
         return initialEnvironment;
       }),
-      getProject: mock(async (id: string) => id === "project-1" ? {
-        id: "project-1",
-        name: "Project",
-        gitUrl: "https://github.com/example/project.git",
-        localPath: null,
-        addedAt: new Date(0).toISOString(),
-        order: 0,
-      } : null),
+      getProject: mock(async (id: string) => id === "project-1" ? project : null),
       loadConfig: mock(async () => ({
         version: "1.0.0",
         global: globalConfig,
@@ -235,7 +245,15 @@ function createContext(initialEnvironment = environment()): {
       }),
     },
   } as unknown as CommandContext;
-  return { context, updates, added, events, globalConfig, environment: initialEnvironment };
+  return {
+    context,
+    updates,
+    added,
+    events,
+    globalConfig,
+    environment: initialEnvironment,
+    project,
+  };
 }
 
 let registry: ReturnType<typeof createCommandRegistry>;
@@ -500,6 +518,7 @@ describe("process and platform command behavior", () => {
     expect(log).toContain(
       `docker create --name ${dockerContainerRuntimeName(owner, "environment-1")}`,
     );
+    expect(log).toContain("--shm-size 1g");
     expect(log).toContain("--label environment-name=feature-environment");
     expect(log).toContain(`--label orkestrator-owner=${owner}`);
     expect(log).toContain("ALLOWED_DOMAINS=");
@@ -516,6 +535,38 @@ describe("process and platform command behavior", () => {
     expect(log).toContain("docker start container-a");
     expect(log).toContain("docker stop container-a");
     expect(log).toContain("docker rm -f container-a");
+  });
+
+  test("mounts an agent-test local Git remote read-write for container cloning", async () => {
+    const profileDataDir = path.join(root, "profile", "data");
+    const originPath = path.join(root, "profile", "fixtures", "origin.git");
+    await fs.mkdir(originPath, { recursive: true });
+    fixture.context.runtimeFlavor = "agent-test";
+    fixture.context.storage.getDataDir = () => profileDataDir;
+    fixture.project.gitUrl = originPath;
+
+    await invoke("provision_environment", { environmentId: "environment-1" });
+
+    const log = await readCommandLog();
+    expect(log).toContain(
+      `-v ${originPath}:/orkestrator-agent-test-origin.git`,
+    );
+    expect(log).not.toContain(`${originPath}:/orkestrator-agent-test-origin.git:ro`);
+    expect(log).toContain("GIT_URL=/orkestrator-agent-test-origin.git");
+    expect(log).not.toContain(`GIT_URL=${originPath}`);
+  });
+
+  test("does not mount arbitrary absolute Git paths in agent-test mode", async () => {
+    const unrelatedRemote = path.join(root, "unrelated-origin.git");
+    await fs.mkdir(unrelatedRemote);
+    fixture.context.runtimeFlavor = "agent-test";
+    fixture.project.gitUrl = unrelatedRemote;
+
+    await invoke("provision_environment", { environmentId: "environment-1" });
+
+    const log = await readCommandLog();
+    expect(log).not.toContain("/orkestrator-agent-test-origin.git");
+    expect(log).toContain(`GIT_URL=${unrelatedRemote}`);
   });
 
   test("adds ACP vendor hosts only for the platforms that are enabled", async () => {

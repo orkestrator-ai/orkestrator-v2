@@ -574,9 +574,9 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
   });
 
   test("Playwright: the container pin tracks the version the repo actually resolves", () => {
-    // Browser revisions are tied to the Playwright minor, so a container pinned
-    // to a different minor than the repo's harness downloads a second Chromium
-    // at runtime — over a firewall that only allowlists the CDN as a fallback.
+    // Browser revisions are tied to the Playwright package. Keep the complete
+    // resolved version aligned so a lockfile update cannot leave the image on a
+    // different package/browser manifest while this guard still passes.
     //
     // Compared against the lockfile, not the `^`/`~` range in package.json: the
     // range's floor stays put across a resolution bump, so asserting on it would
@@ -585,8 +585,7 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     const resolved = lockfileResolvedVersion("bun.lock", "playwright");
 
     expect(dockerfilePin).toMatch(/^\d+\.\d+\.\d+$/);
-    const minor = (version: string) => version.split(".").slice(0, 2).join(".");
-    expect(minor(dockerfilePin)).toBe(minor(resolved));
+    expect(dockerfilePin).toBe(resolved);
 
     // `@playwright/test` drags in its own pinned `playwright`, so a split
     // between the two would silently resolve a second browser revision.
@@ -619,16 +618,20 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     // root-terminal path a separate claim from the `node` path, and the image
     // build is the only place either is proven — so both must be exercised.
     const instructions = dockerfileInstructions();
-    const verify = /node\s+\/usr\/local\/share\/verify-playwright\.cjs/g;
-    expect(instructions.match(verify)?.length).toBe(2);
+    const verifyRuns = [...instructions.matchAll(
+      /node\s+\/usr\/local\/share\/verify-playwright\.cjs/g,
+    )].map((match) => match.index);
+    expect(verifyRuns).toHaveLength(2);
 
     // The two runs must straddle the USER switch; two checks as the same user
     // would satisfy the count above while proving only one identity.
-    const rootRun = instructions.indexOf("/usr/local/share/verify-playwright.cjs");
+    const [rootRun, nodeRun] = verifyRuns as [number, number];
+    const rootUser = instructions.lastIndexOf("USER root", rootRun);
     const userNode = instructions.indexOf("USER node", rootRun);
+    expect(rootUser).toBeGreaterThan(-1);
+    expect(rootRun).toBeGreaterThan(rootUser);
     expect(userNode).toBeGreaterThan(rootRun);
-    expect(instructions.indexOf("/usr/local/share/verify-playwright.cjs", userNode))
-      .toBeGreaterThan(userNode);
+    expect(nodeRun).toBeGreaterThan(userNode);
 
     // Default options only: an explicit `chromiumSandbox: true` or a hand-added
     // --no-sandbox would make the check stop resembling how an agent launches it.

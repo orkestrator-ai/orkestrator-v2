@@ -204,7 +204,8 @@ test("Docker fixture ships a Playwright browser that launches for both container
   // argv that asked for it.
   const shm = spawnSync("docker", [
     "exec", containerId, "sh", "-c", "df -k /dev/shm | awk 'NR==2 {print $2}'",
-  ], { encoding: "utf8" });
+  ], { encoding: "utf8", timeout: 30_000, killSignal: "SIGKILL" });
+  expect(shm.error, shm.stderr).toBeUndefined();
   expect(shm.status, shm.stderr).toBe(0);
   const shmMegabytes = Number(shm.stdout.trim()) / 1024;
   expect(shmMegabytes).toBeGreaterThanOrEqual(512);
@@ -220,7 +221,8 @@ test("Docker fixture ships a Playwright browser that launches for both container
       "-e", "NODE_PATH=/usr/local/share/npm-global/lib/node_modules",
       containerId,
       "node", "/usr/local/share/verify-playwright.cjs",
-    ], { encoding: "utf8" });
+    ], { encoding: "utf8", timeout: 60_000, killSignal: "SIGKILL" });
+    expect(launch.error, `${user}: ${launch.stderr}`).toBeUndefined();
     expect(launch.status, `${user}: ${launch.stderr}`).toBe(0);
     expect(launch.stdout).toContain("chromium launch verified");
   }

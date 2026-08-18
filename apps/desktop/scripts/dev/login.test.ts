@@ -24,6 +24,7 @@ const cliArgs: DevArguments = {
   stopFirst: false,
   agentCredentialsDisabled: false,
   credentialSources: [],
+  agentPlatforms: [],
 };
 
 const fakeProfile: RuntimeProfile = {
@@ -46,6 +47,7 @@ const fakeProfile: RuntimeProfile = {
   gatewayPort: 2,
   electronTitle: "login-qa",
   credentialSources: [],
+  agentPlatforms: [],
 };
 
 const liveStatus: RuntimeStatusManifest = {

@@ -27,7 +27,7 @@ export function OpenCodeQuestionCard({ question, client }: OpenCodeQuestionCardP
         multiSelect: info.multiple,
         allowCustomAnswer: info.custom !== false,
       })),
-    [question.questions],
+    [question.id, question.questions],
   );
 
   const handleSubmit = useCallback(

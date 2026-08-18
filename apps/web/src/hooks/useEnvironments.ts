@@ -594,13 +594,6 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
 
   const showError = useErrorDialogStore((state) => state.showError);
 
-  // Load environments when projectId changes
-  useEffect(() => {
-    if (projectId) {
-      loadEnvironments(projectId);
-    }
-  }, [projectId]);
-
   // Listen for background environment rename events
   useEffect(() => {
     if (!listenForRenameEvents) {
@@ -698,6 +691,14 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
     },
     [mergeEnvironmentsForProject, setLoading, setError],
   );
+
+  // Declared after loadEnvironments so the callback can be a real dependency;
+  // referencing it above would read the const before initialisation.
+  useEffect(() => {
+    if (projectId) {
+      loadEnvironments(projectId);
+    }
+  }, [projectId, loadEnvironments]);
 
   const createEnvironment = useCallback(
     async (

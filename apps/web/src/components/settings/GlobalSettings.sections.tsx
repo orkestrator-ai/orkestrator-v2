@@ -1398,7 +1398,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     } finally {
       setIsResettingTailscaleServe(false);
     }
-  }, [webClientEnabled]);
+  }, [webClientEnabled, setIsResettingTailscaleServe, setWebClientStatus, setWebClientApplyError]);
 
   const renderWebClient = () => {
     const isRemoteClient = window.orkestratorGateway?.enabled === true;

@@ -165,7 +165,7 @@ export function useDurableComposeDraft<T>({
         });
       }
     };
-  }, [enabled, key, persistValue, reportPersistenceError, revisionState]);
+  }, [enabled, key, namespace, persistValue, reportPersistenceError, revisionState]);
 
   useEffect(() => {
     if (!enabled || hydratedKey !== key) return;

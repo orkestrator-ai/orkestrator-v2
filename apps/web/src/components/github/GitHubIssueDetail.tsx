@@ -125,7 +125,7 @@ function GitHubComment({
 
   useEffect(() => {
     if (!editing) setDraft(comment.body);
-  }, [comment.body, editing]);
+  }, [comment.body, editing, setDraft]);
 
   const handleSave = async () => {
     const body = draft.trim();
@@ -341,7 +341,7 @@ export function GitHubIssueDetailContent({
     if (!detail || editing) return;
     setTitleDraft(detail.title);
     setBodyDraft(detail.body);
-  }, [detail, editing]);
+  }, [detail, editing, setTitleDraft, setBodyDraft]);
 
   const handleSave = async () => {
     if (!detail || saving || !titleDraft.trim()) return;

@@ -26,7 +26,10 @@ export function usePromptDeadline(expiresAt?: number): {
     expiresAt === undefined || invalid ? null : formatPromptDeadline(expiresAt - Date.now());
 
   useEffect(() => {
-    if (expiresAt === undefined || invalid || remaining === null) return;
+    if (expiresAt === undefined || invalid) return;
+    // Derived here rather than from `remaining`, which is recomputed from
+    // Date.now() every render and would re-create the interval each second.
+    if (expiresAt - Date.now() <= 0) return;
     const timer = setInterval(() => {
       setTick((tick) => tick + 1);
       if (Date.now() >= expiresAt) clearInterval(timer);

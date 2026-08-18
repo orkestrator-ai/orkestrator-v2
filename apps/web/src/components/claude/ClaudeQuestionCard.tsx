@@ -72,7 +72,7 @@ export function ClaudeQuestionCard({
         })),
         multiSelect: info.multiSelect,
       })),
-    [question.questions],
+    [question.id, question.questions],
   );
 
   const handleSubmit = useCallback<SubmitAnswersHandler>(

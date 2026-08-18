@@ -118,7 +118,7 @@ export function useAgentHandoff(
     return () => {
       cancelled = true;
     };
-  }, [destinationProvider, environmentId, handoffId]);
+  }, [destinationProvider, environmentId, handoffId, requestKey]);
 
   /*
    * Effects run after paint, so the state from a previous/no handoff would

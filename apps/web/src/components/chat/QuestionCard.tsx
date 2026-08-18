@@ -549,7 +549,7 @@ export function QuestionCard({
         };
       });
     },
-    [currentQuestionIndex, questions],
+    [currentQuestionIndex, questions, setAnswers],
   );
 
   const handleCustomTextChange = useCallback(
@@ -569,7 +569,7 @@ export function QuestionCard({
         };
       });
     },
-    [currentQuestionIndex, questions],
+    [currentQuestionIndex, questions, setCustomTexts],
   );
 
   const submitAnswers = useCallback(
@@ -633,6 +633,7 @@ export function QuestionCard({
     questionHasAnswer,
     mergeAnswerForIndex,
     submitAnswers,
+    setCurrentQuestionIndex,
   ]);
 
   const handleOptionSelect = useCallback(

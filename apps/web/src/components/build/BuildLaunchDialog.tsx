@@ -313,7 +313,7 @@ export function BuildLaunchDialog({
         effort: string;
       }
     >;
-  }, [catalog, steps, uniform]);
+  }, [catalog, steps]);
 
   // While uniform, every step is edited together, so the submitted payload needs
   // no special case and unticking leaves the steps where the shared value was.

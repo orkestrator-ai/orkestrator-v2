@@ -133,6 +133,11 @@ export function useProjectModelCatalog(projectId: string, enabled: boolean) {
       ...baseCatalog,
       opencode: includeMissingOpenCodeModels(mapped, favoriteOpenCodeIds, allowedProviders),
     };
+    // buildReviewModelCatalog reads the Claude/Codex/Cursor/Grok stores through
+    // getState(), which does not subscribe. These selectors are the subscription:
+    // the rule sees them as unused because the body never names them, but dropping
+    // them freezes the catalog at whatever was loaded on first render.
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [
     claudeModels,
     codexModels,

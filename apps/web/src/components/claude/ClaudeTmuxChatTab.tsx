@@ -228,7 +228,9 @@ export function ClaudeTmuxChatTab({
   // Auto-start unless the user is presented with a choice (no initial prompt
   // and there are prior sessions to resume — they should pick first).
   const hasInitialPrompt = Boolean(initialPrompt?.trim());
-  const messages = tabState?.messages ?? [];
+  // Both memoised for identity: the `?? []` fallbacks otherwise handed the
+  // transcript memos a fresh array on every render.
+  const messages = useMemo(() => tabState?.messages ?? [], [tabState?.messages]);
   const pendingApprovals = tabState?.pendingApprovals ?? [];
   const pendingQuestions = tabState?.pendingQuestions ?? [];
   const pendingPlans = tabState?.pendingPlans ?? [];
@@ -249,7 +251,10 @@ export function ClaudeTmuxChatTab({
       pendingElicitations.length >
     0;
   const visibleSelectionPrompt = hasPendingHookCards ? null : selectionPrompt;
-  const agentUsageSummaries = tabState?.observation.usage ?? [];
+  const agentUsageSummaries = useMemo(
+    () => tabState?.observation.usage ?? [],
+    [tabState?.observation.usage],
+  );
   const transcriptMessages = useMemo(
     () =>
       applyTmuxAgentUsageSummaries(

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import {
   Dialog,
   DialogContent,
@@ -33,7 +33,14 @@ export function NetworkWhitelistDialog({
   onUpdate,
 }: NetworkWhitelistDialogProps) {
   const config = useConfigStore((state) => state.config);
-  const globalDomains = config.global.allowedDomains || [];
+  // Memoised so the identity only changes when the domains do. Left inline, the
+  // `?? []` fallback produced a fresh array every render, so the effects below
+  // re-ran on every render and re-set state with a fresh `[]` — an unbounded
+  // render loop whenever the config has no allowedDomains yet.
+  const globalDomains = useMemo(
+    () => config.global.allowedDomains ?? [],
+    [config.global.allowedDomains],
+  );
 
   const [useGlobalDefaults, setUseGlobalDefaults] = useState(
     !environment.allowedDomains || environment.allowedDomains.length === 0,

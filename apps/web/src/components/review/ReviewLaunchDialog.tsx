@@ -135,8 +135,12 @@ export function ReviewLaunchDialog({
   // already answers "the preferred one, or the first enabled one, or Claude", so
   // the empty case resolves to the same single platform the picker is given.
   const defaultEnabledTabType = firstEnabledAgentPlatform(enabledPlatforms, defaultTabType);
-  const reviewPlatforms: ReviewAgent[] =
-    enabledPlatforms.length > 0 ? enabledPlatforms : [defaultEnabledTabType];
+  // The single-platform branch builds a new array every render, so both memos
+  // below recomputed unconditionally without this.
+  const reviewPlatforms = useMemo<ReviewAgent[]>(
+    () => (enabledPlatforms.length > 0 ? enabledPlatforms : [defaultEnabledTabType]),
+    [enabledPlatforms, defaultEnabledTabType],
+  );
   const initialModel = firstModelFor(
     getReviewAgent(defaultEnabledTabType),
     catalog,

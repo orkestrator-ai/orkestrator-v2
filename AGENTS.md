@@ -156,6 +156,12 @@ Clean them up opportunistically in files you are already touching. Do not
 silence the rule, and do not raise it to `error` until the backlog is actually
 gone.
 
+The `jsx-a11y` plugin is not enabled. Its interaction rules reported 58
+findings that are real accessibility gaps, but fixing them means adding keyboard
+handlers, roles and focus targets to live UI — behaviour changes that belong in
+their own reviewed change, not in a lint rollout. Turning the plugin back on is
+a deliberate decision with that work attached, not a config tidy-up.
+
 `no-control-regex` is off. Orkestrator strips ANSI escapes and control
 characters as a matter of course — terminal output, tmux capture, transcript
 sanitising — so a control character in a regex here is the intent rather than

@@ -833,7 +833,6 @@ export function SharedNativeAgentController({
       enqueue,
       handoff.pendingHistory,
       isDispatching,
-      isSubmitting,
       isRunning,
       label,
       performAction,

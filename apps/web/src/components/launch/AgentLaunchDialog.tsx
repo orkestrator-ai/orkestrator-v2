@@ -110,7 +110,12 @@ export function AgentLaunchDialog({
 
   const models = modelsForAgent(catalog, agent);
   const selectedModel = models.find((option) => option.id === model) ?? models[0];
-  const reasoningEfforts = selectedModel?.reasoningEfforts ?? [];
+  // Stable identity: the `?? []` fallback otherwise re-created the array every
+  // render, defeating the reasoningOptions memo below.
+  const reasoningEfforts = useMemo(
+    () => selectedModel?.reasoningEfforts ?? [],
+    [selectedModel?.reasoningEfforts],
+  );
   const effortAvailable = reasoningEfforts.length > 0;
   const effectiveEffort =
     effortAvailable && (reasoningEffort === "default" || reasoningEfforts.includes(reasoningEffort))

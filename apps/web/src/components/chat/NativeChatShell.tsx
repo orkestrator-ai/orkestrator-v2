@@ -76,6 +76,14 @@ interface NativeChatShellProps<TMessage extends NativeMessageType> {
    * visible without scrolling and must not move as messages stream in.
    */
   blockingCards?: ReactNode;
+  /**
+   * Blocking content that belongs to the conversation rather than above it,
+   * currently the agent's questions. Rendered as the last thing in the
+   * transcript, in the transcript's own column and card treatment, so it reads
+   * as the agent's turn instead of a translucent panel over the messages
+   * behind it. The dock spacer already keeps it clear of the composer.
+   */
+  transcriptCards?: ReactNode;
   /** Extra pinned content below the blocking cards, e.g. Codex's plan card. */
   pinnedAccessory?: ReactNode;
   /** Rendered above the oldest message, e.g. "load earlier messages". */
@@ -152,6 +160,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
   elapsedSeconds,
   finalElapsedSeconds,
   blockingCards,
+  transcriptCards,
   pinnedAccessory,
   transcriptHeader,
   bottomSpacerClassName = "h-32",
@@ -268,6 +277,15 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
   const measuredDockHeight =
     composeDockHeight !== null && composeDockHeight > 0 ? composeDockHeight : null;
 
+  /**
+   * A transcript card is only reachable through the transcript, and the
+   * centered-composer layout hides the transcript entirely. A question that
+   * arrives before the first message would otherwise block the turn behind an
+   * invisible card, so its presence ends the centered state.
+   */
+  const hasTranscriptCards = Children.count(transcriptCards) > 0;
+  const composerCentered = centerCompose && !hasTranscriptCards;
+
   return (
     <div className="@container relative flex h-full min-h-0 flex-col overflow-hidden bg-background">
       {/*
@@ -290,7 +308,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
       <div
         className={cn(
           "flex min-h-0 flex-1 flex-col transition-[opacity,transform] duration-300 ease-out motion-reduce:transition-none",
-          centerCompose && "pointer-events-none scale-[0.995] opacity-0",
+          composerCentered && "pointer-events-none scale-[0.995] opacity-0",
         )}
       >
         <VirtualizedMessageList
@@ -313,7 +331,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
           )}
           header={transcriptHeader}
           emptyState={
-            !centerCompose ? (
+            !composerCentered ? (
               <div className="flex h-full min-h-[200px] flex-col items-center justify-center gap-3 text-muted-foreground">
                 <p className="text-sm">
                   {emptyStateMessage ?? `No messages yet. Start a conversation with ${agentLabel}!`}
@@ -353,6 +371,14 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
                   </div>
                 </div>
               )}
+
+              {hasTranscriptCards && (
+                <div data-testid="transcript-cards" className="px-3 py-3 @sm:px-6">
+                  <div className="mx-auto flex max-w-3xl min-w-0 flex-col gap-3">
+                    {transcriptCards}
+                  </div>
+                </div>
+              )}
               {/*
                 The dock floats over the transcript, so its full live height must
                 be reserved here. That keeps a growing composer — plus any pinned
@@ -384,7 +410,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
 
       <NativeComposeDock
         rootRef={composeDockRef}
-        centered={centerCompose}
+        centered={composerCentered}
         pinnedContent={
           hasPinnedContent ? (
             <>
@@ -433,8 +459,8 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
               size="sm"
               onClick={onResumeClick}
               className="rounded-full text-muted-foreground transition-colors hover:text-foreground"
-              aria-hidden={!centerCompose}
-              tabIndex={centerCompose ? 0 : -1}
+              aria-hidden={!composerCentered}
+              tabIndex={composerCentered ? 0 : -1}
             >
               <History className="mr-2 h-4 w-4" />
               Resume Session

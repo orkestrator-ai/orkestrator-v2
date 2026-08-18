@@ -6,6 +6,10 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
+import {
+  AGENT_INTERACTION_CONTRACT_VERSION,
+  type AgentInteractionRequest,
+} from "@orkestrator/protocol/agent-interactions";
 import type {
   NativeAgentSessionProjection,
   NativeAgentTabData,
@@ -307,6 +311,47 @@ function identity(platform: NativeAgentTabData["platform"]): NativeAgentTabData 
   };
 }
 
+function pendingInteraction(
+  kind: AgentInteractionRequest["kind"],
+  id: string,
+): AgentInteractionRequest {
+  const question = kind === "question";
+  return {
+    version: AGENT_INTERACTION_CONTRACT_VERSION,
+    id,
+    provider: "claude",
+    kind,
+    origin: "interactive-native",
+    sessionId: "claude-session",
+    state: "pending",
+    revision: 1,
+    createdAt: 1,
+    updatedAt: 1,
+    presentation: question
+      ? {
+          title: "Claude needs input",
+          questions: [
+            {
+              id: "q0",
+              prompt: "Which approach?",
+              required: true,
+              multiple: false,
+              secret: false,
+              allowFreeText: true,
+              options: [],
+            },
+          ],
+        }
+      : {
+          title: "Approve command",
+          body: "Command: bun test",
+          questions: [],
+          confirmLabel: "Approve",
+          declineLabel: "Deny",
+        },
+  };
+}
+
 /**
  * A tab the user has just created.
  *
@@ -465,6 +510,33 @@ function seedAssignedPane(
 }
 
 describe("AgentNativeTab", () => {
+  test("routes questions into the transcript while approvals stay pinned and docks the empty-session composer", async () => {
+    renderVirtualizedMessages = true;
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      interactions: [
+        pendingInteraction("question", "question-1"),
+        pendingInteraction("command-approval", "approval-1"),
+      ],
+    }));
+
+    render(<AgentNativeTab tabId="tab-question-routing" data={identity("claude")} isActive />);
+
+    const question = await screen.findByTestId("agent-question-card");
+    const transcript = screen.getByTestId("native-agent-transcript-test-list");
+    const composeDock = screen.getByTestId("compose-dock");
+    const composer = screen.getByTestId("shared-native-compose-bar");
+    const approval = screen.getByText("Approve command");
+
+    expect(transcript.contains(question)).toBe(true);
+    expect(composeDock.contains(question)).toBe(false);
+    expect(composeDock.contains(approval)).toBe(true);
+    expect(composeDock.className).not.toContain("top-1/2");
+    expect(composer.className).toContain("mb-4");
+    expect(composer.className).toContain("mt-2");
+    expect(composer.className).not.toContain("my-0");
+  });
+
   test.each(AGENT_PLATFORMS.map((platform) => [platform] as const))(
     "does not render a context-window control in the %s compose bar before usage arrives",
     async (platform) => {

@@ -407,6 +407,51 @@ describe("NativeChatShell", () => {
     );
   });
 
+  test("renders transcript cards inside the transcript, not the pinned dock", () => {
+    render(<NativeChatShell {...shellProps()} transcriptCards={<div>Which approach?</div>} />);
+
+    const card = screen.getByText("Which approach?");
+    expect(screen.getByTestId("compose-dock").contains(card)).toBe(false);
+    // Above the spacer, so the dock's reserved height still clears it.
+    expect(
+      card.compareDocumentPosition(screen.getByTestId("transcript-bottom-spacer")) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
+  test("leaves the spacer alone for transcript cards, which take their own space", () => {
+    // Unlike a pinned card, a transcript card is part of the scrolled content.
+    // Widening the spacer for it would open a gap below the conversation.
+    render(<NativeChatShell {...shellProps()} transcriptCards={<div>Which approach?</div>} />);
+
+    expect(screen.getByTestId("transcript-bottom-spacer").className).toContain("h-32");
+  });
+
+  test("treats an empty transcriptCards array as no transcript card", () => {
+    render(<NativeChatShell {...shellProps()} transcriptCards={[]} centerCompose />);
+
+    expect(screen.queryByTestId("transcript-cards") === null).toBe(true);
+    expect(screen.getByTestId("compose-dock").className).toContain("top-1/2");
+  });
+
+  test("un-centers the composer so a question before the first message is visible", () => {
+    /**
+     * The centered layout hides the transcript entirely. A question that
+     * arrives with no messages yet would otherwise block the turn behind an
+     * invisible card the user cannot answer.
+     */
+    render(
+      <NativeChatShell
+        {...shellProps()}
+        centerCompose
+        transcriptCards={<div>Which approach?</div>}
+      />,
+    );
+
+    expect(screen.getByText("Which approach?")).toBeTruthy();
+    expect(screen.getByTestId("compose-dock").className).not.toContain("top-1/2");
+  });
+
   test("forwards shortcut ownership and canonical searchable message text", () => {
     const message = {
       id: "assistant-1",

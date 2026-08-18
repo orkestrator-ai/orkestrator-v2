@@ -99,6 +99,7 @@ import {
   useNativeAgentActivityAnnouncement,
 } from "./AgentNativeTab.helpers";
 import { NativeAgentInteractionCard } from "./NativeAgentInteractionCard";
+import { NativeAgentQuestionCard } from "./NativeAgentQuestionCard";
 import { CodexPlanModeCard } from "@/components/codex/CodexPlanModeCard";
 import { useElapsedTimer } from "@/hooks/useElapsedTimer";
 import {
@@ -1215,6 +1216,22 @@ export function SharedNativeAgentController({
   }
 
   /**
+   * Questions render in the transcript; everything else the turn is blocked on
+   * stays pinned above the composer. An approval gates a command that is about
+   * to run and must not scroll away, whereas a question is a turn in the
+   * conversation and belongs where the conversation is.
+   */
+  const allInteractions = projection?.interactions ?? [];
+  const questionInteractions = allInteractions.filter(
+    (interaction) => interaction.kind === "question",
+  );
+  const pinnedInteractions = allInteractions.filter(
+    (interaction) => interaction.kind !== "question",
+  );
+  const composerCentered =
+    messages.length === 0 && !isTurnActive && questionInteractions.length === 0;
+
+  /**
    * The rendered list is also what decides whether anything is pinned at all, so
    * a card added here cannot be left out of the count. `NativeChatShell` measures
    * this with `Children.count`, where a non-empty fragment always counts as one —
@@ -1334,7 +1351,7 @@ export function SharedNativeAgentController({
       statusLabel={phaseStatusLabel}
       elapsedSeconds={elapsedSeconds}
       finalElapsedSeconds={finalElapsedSeconds}
-      centerCompose={messages.length === 0 && !isTurnActive}
+      centerCompose={composerCentered}
       emptyStateMessage={`Ask ${label} to work on this repository.`}
       transcriptHeader={
         projection?.messageWindow?.truncated ? (
@@ -1371,11 +1388,18 @@ export function SharedNativeAgentController({
       scrollToBottom={scrollToBottom}
       scrollProps={scrollProps}
       virtuosoRef={virtuosoRef}
-      blockingCards={(projection?.interactions ?? []).map((interaction) => (
+      blockingCards={pinnedInteractions.map((interaction) => (
         <NativeAgentInteractionCard
           key={interaction.id}
           interaction={interaction}
           planContent={interaction.kind === "plan-approval" ? planContent : undefined}
+          onResolve={(resolution) => resolveInteraction(interaction.id, resolution)}
+        />
+      ))}
+      transcriptCards={questionInteractions.map((interaction) => (
+        <NativeAgentQuestionCard
+          key={interaction.id}
+          interaction={interaction}
           onResolve={(resolution) => resolveInteraction(interaction.id, resolution)}
         />
       ))}
@@ -1458,7 +1482,7 @@ export function SharedNativeAgentController({
       composer={
         <NativeComposeBar
           testId="shared-native-compose-bar"
-          layout={messages.length === 0 && !isTurnActive ? "centered" : "bottom"}
+          layout={composerCentered ? "centered" : "bottom"}
           attachments={draft.attachments}
           onRemoveAttachment={(attachmentId) =>
             updateDraft(sessionKey, {

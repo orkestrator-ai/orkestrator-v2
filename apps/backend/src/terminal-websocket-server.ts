@@ -262,8 +262,8 @@ export class TerminalWebSocketGateway {
 
   /** Revoke every credential latched by an existing or in-flight upgrade. */
   revokeConnections(): void {
-    for (const state of [...this.sockets]) state.ws.terminate();
-    for (const socket of [...this.upgradeSockets]) socket.destroy();
+    for (const state of Array.from(this.sockets)) state.ws.terminate();
+    for (const socket of Array.from(this.upgradeSockets)) socket.destroy();
     this.upgradeSockets.clear();
   }
 

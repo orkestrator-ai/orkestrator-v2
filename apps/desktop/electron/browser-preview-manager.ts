@@ -283,7 +283,7 @@ export class BrowserPreviewManager {
   }
 
   destroyAll(): void {
-    for (const tabId of [...this.previews.keys()]) this.destroy(tabId);
+    for (const tabId of Array.from(this.previews.keys())) this.destroy(tabId);
   }
 
   private createPreview(tabId: string, url: string, navigationScope: string): ManagedPreview {

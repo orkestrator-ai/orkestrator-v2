@@ -97,7 +97,7 @@ export function emitViewportChange(isMobile: boolean): void {
       matches: queryMatches(list.query, simulatedWidth),
       media: list.query,
     } as MediaQueryListEvent;
-    for (const listener of [...list.listeners]) listener(event);
+    for (const listener of Array.from(list.listeners)) listener(event);
   }
 }
 

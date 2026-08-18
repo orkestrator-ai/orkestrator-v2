@@ -250,11 +250,11 @@ export class ServerRequestRouter {
    * UI still has a card on screen and the transcript needs to say what happened.
    */
   abandonGeneration(generation: EngineGeneration): void {
-    for (const parked of [...this.parkedApprovals.values()]) {
+    for (const parked of Array.from(this.parkedApprovals.values())) {
       if (parked.generation !== generation) continue;
       void this.settleApproval(parked, "deny", "engine-restarted", { skipSend: true });
     }
-    for (const parked of [...this.parkedInteractions.values()]) {
+    for (const parked of Array.from(this.parkedInteractions.values())) {
       if (parked.generation !== generation) continue;
       void this.settleInteraction(parked, { action: "cancel" }, "engine-restarted", {
         skipSend: true,
@@ -264,11 +264,11 @@ export class ServerRequestRouter {
 
   /** Drops approvals for a thread whose session is going away. */
   abandonThread(threadId: string): void {
-    for (const parked of [...this.parkedApprovals.values()]) {
+    for (const parked of Array.from(this.parkedApprovals.values())) {
       if (parked.request.threadId !== threadId) continue;
       void this.settleApproval(parked, "deny", "session-closed");
     }
-    for (const parked of [...this.parkedInteractions.values()]) {
+    for (const parked of Array.from(this.parkedInteractions.values())) {
       if (parked.request.threadId !== threadId) continue;
       void this.settleInteraction(parked, { action: "cancel" }, "session-closed");
     }

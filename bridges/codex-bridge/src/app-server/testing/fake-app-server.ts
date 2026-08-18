@@ -122,7 +122,7 @@ export class FakeWritable implements WritableLike {
   drain(): void {
     if (!this.pendingDrain) return;
     this.pendingDrain = false;
-    for (const listener of [...(this.listeners.get("drain") ?? [])]) listener();
+    for (const listener of Array.from(this.listeners.get("drain") ?? [])) listener();
   }
 
   isAwaitingDrain(): boolean {

@@ -210,7 +210,8 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
     await this.options.engine.stop();
     await this.drainPendingWork();
     await Promise.allSettled(this.pendingSessionWrites);
-    for (const threadId of [...this.threadState.keys()]) this.releaseThreadRuntimeState(threadId);
+    for (const threadId of Array.from(this.threadState.keys()))
+      this.releaseThreadRuntimeState(threadId);
   }
 
   /**

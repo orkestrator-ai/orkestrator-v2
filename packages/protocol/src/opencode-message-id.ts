@@ -341,7 +341,7 @@ export class OpenCodeMessageIdCoordinator {
     now: number = Date.now(),
   ): string {
     const state = this.state(sessionId);
-    for (const reservedRequestId of [...state.reservations.keys()]) {
+    for (const reservedRequestId of Array.from(state.reservations.keys())) {
       if (findOpenCodeMessageId(entries, reservedRequestId)) {
         state.reservations.delete(reservedRequestId);
       }

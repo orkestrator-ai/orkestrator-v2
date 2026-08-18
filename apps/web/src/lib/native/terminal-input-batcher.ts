@@ -303,7 +303,7 @@ export class TerminalHttpInputBatcher {
 
   /** Aborts and forgets every queue, for gateway teardown or reconnection. */
   resetAll(reason: unknown = new Error("Terminal HTTP input queues reset")): void {
-    for (const [key, state] of [...this.pending]) this.retire(key, state, reason);
+    for (const [key, state] of Array.from(this.pending)) this.retire(key, state, reason);
   }
 
   dispose(reason?: unknown): void {

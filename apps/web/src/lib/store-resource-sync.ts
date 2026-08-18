@@ -256,7 +256,7 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
 
   unsubscribes.push(
     usePaneLayoutStore.subscribe((state, previous) => {
-      for (const [environmentId, deferred] of [...deferredPaneLayoutRefreshes]) {
+      for (const [environmentId, deferred] of Array.from(deferredPaneLayoutRefreshes)) {
         if (
           previous.hydration.get(environmentId) === "pending" &&
           state.hydration.get(environmentId) === "done"
@@ -275,13 +275,13 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
       }
       // An environment that left the pane store will never settle a write or
       // finish hydrating, so its queued replays would be retained forever.
-      for (const [environmentId, deferred] of [...deferredPaneLayoutRefreshes]) {
+      for (const [environmentId, deferred] of Array.from(deferredPaneLayoutRefreshes)) {
         if (!state.hydration.has(environmentId)) {
           deferredPaneLayoutRefreshes.delete(environmentId);
           deferred.resolve();
         }
       }
-      for (const environmentId of [...declinedPaneLayoutRefreshes]) {
+      for (const environmentId of Array.from(declinedPaneLayoutRefreshes)) {
         if (!state.environments.has(environmentId)) {
           declinedPaneLayoutRefreshes.delete(environmentId);
           paneLayoutRequestGenerations.delete(environmentId);

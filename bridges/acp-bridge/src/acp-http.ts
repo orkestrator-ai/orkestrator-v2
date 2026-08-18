@@ -473,7 +473,7 @@ export async function route(
     return json(response, 202, { accepted: true });
   }
   if ((action === "cancel" || action === "abort") && request.method === "POST") {
-    for (const approval of [...state.approvals.values()]) approval.respond();
+    for (const approval of Array.from(state.approvals.values())) approval.respond();
     if (state.dispatching) {
       // The turn is claimed but has not taken its sequence yet, and dispatch can
       // sit in a process spawn for seconds. Record the sequence it is about to
@@ -487,7 +487,7 @@ export async function route(
     return json(response, 202, { accepted: true });
   }
   if (!action && request.method === "DELETE") {
-    for (const approval of [...state.approvals.values()]) approval.respond();
+    for (const approval of Array.from(state.approvals.values())) approval.respond();
     cancelCursorToolMetadataReconcile(state);
     await state.child?.close();
     sessions.delete(state.id);

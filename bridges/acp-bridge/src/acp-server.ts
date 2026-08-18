@@ -61,7 +61,7 @@ export function shutdown(): Promise<void> {
   setShuttingDown(true);
   shutdownPromise = (async () => {
     for (const state of sessions.values()) {
-      for (const approval of [...state.approvals.values()]) approval.respond();
+      for (const approval of Array.from(state.approvals.values())) approval.respond();
       cancelCursorToolMetadataReconcile(state);
     }
     await Promise.allSettled([

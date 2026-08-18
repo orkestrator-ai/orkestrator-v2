@@ -216,7 +216,7 @@ export abstract class GatewayHandlers extends GatewayAuth {
     // limit. Otherwise a stream with no event traffic keeps a client that is
     // already hopelessly behind — and its buffer — alive indefinitely.
     this.keepalive ??= setInterval(() => {
-      for (const [client, clientState] of [...this.clients]) {
+      for (const [client, clientState] of Array.from(this.clients)) {
         if (client.writableLength > SSE_CLIENT_HARD_BUFFER_BYTES) {
           this.dropBufferedClient(client, METRIC_KEEPALIVE_KEY, client.writableLength);
           continue;

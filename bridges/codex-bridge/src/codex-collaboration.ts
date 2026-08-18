@@ -498,7 +498,7 @@ export function reconcileCodexSubagentTimeline<T extends { subagentId?: string }
     timelineOrder.push(key);
   });
 
-  for (const key of [...currentParts.keys()]) {
+  for (const key of Array.from(currentParts.keys())) {
     if (activeKeys.has(key)) continue;
     currentParts.delete(key);
     fingerprints.delete(key);

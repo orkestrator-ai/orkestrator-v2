@@ -604,7 +604,7 @@ export function startPaneLayoutPersistence(options: PaneLayoutPersistenceOptions
       // would decline the very adoption this signal exists to unblock, and its
       // own settle will follow.
       if (pendingWrites.has(environmentId)) return;
-      for (const handler of [...writeSettledHandlers]) {
+      for (const handler of Array.from(writeSettledHandlers)) {
         try {
           handler(environmentId);
         } catch (error) {

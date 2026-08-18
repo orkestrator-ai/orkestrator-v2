@@ -110,7 +110,7 @@ export class GitFetchScheduler {
     void pending.then(
       (commonDir) => {
         const prefix = `${commonDir}\0`;
-        for (const key of [...this.fetches.keys()]) {
+        for (const key of Array.from(this.fetches.keys())) {
           if (!key.startsWith(prefix)) continue;
           if (ref !== undefined && key !== `${prefix}${ref}`) continue;
           const record = this.fetches.get(key);

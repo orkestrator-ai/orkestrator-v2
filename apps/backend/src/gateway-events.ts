@@ -399,7 +399,7 @@ export abstract class GatewayEvents extends GatewayBase {
    * need no extra subscription and existing filters keep working.
    */
   protected flushDesyncNotices(client: EventClientWriter, state: GatewayEventClient): boolean {
-    for (const sessionId of [...state.desyncedSessions]) {
+    for (const sessionId of Array.from(state.desyncedSessions)) {
       const event = `${DROPPABLE_EVENT_PREFIX}${sessionId}`;
       const retainedTmuxFrame = this.droppedTmuxFrames.get(client)?.get(sessionId);
       const recoveryFrame =

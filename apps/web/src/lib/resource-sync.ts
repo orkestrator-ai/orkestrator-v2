@@ -117,7 +117,7 @@ export function onResourceResync(handler: ResourceResyncHandler): () => void {
 async function deliverResourceResync(request: ResourceResyncRequest): Promise<boolean> {
   let succeeded = true;
   const pending: Promise<void>[] = [];
-  for (const handler of [...resyncHandlers]) {
+  for (const handler of Array.from(resyncHandlers)) {
     try {
       pending.push(
         Promise.resolve(handler(request)).catch((error) => {
@@ -143,7 +143,7 @@ function deliver(change: ResourceChange): void {
   const set = handlers.get(change.resource);
   if (!set) return;
   // Snapshot before iterating: a handler may unsubscribe itself.
-  for (const handler of [...set]) {
+  for (const handler of Array.from(set)) {
     try {
       handler(change);
     } catch (error) {
@@ -173,7 +173,7 @@ export function dispatchResourceChange(change: ResourceChange): void {
 
 /** Drops queued dispatches. Tests use this to avoid cross-file bleed. */
 export function resetResourceSync(): void {
-  for (const stop of [...activeTransportStops]) stop();
+  for (const stop of Array.from(activeTransportStops)) stop();
   for (const { timer } of pending.values()) clearTimeout(timer);
   pending.clear();
   handlers.clear();

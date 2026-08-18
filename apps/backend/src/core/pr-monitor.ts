@@ -205,7 +205,7 @@ export class PrMonitorService {
         this.track(target, "normal", { immediate: false, paused: true });
       }
     }
-    for (const [environmentId, entry] of [...this.entries]) {
+    for (const [environmentId, entry] of Array.from(this.entries)) {
       if (!live.has(environmentId)) this.remove(entry);
     }
   }

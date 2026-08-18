@@ -830,7 +830,7 @@ export class TerminalWebSocketClient {
   }
 
   private rejectAllOperations(error: Error): void {
-    for (const operationId of [...this.pendingOperations.keys()])
+    for (const operationId of Array.from(this.pendingOperations.keys()))
       this.rejectOperation(operationId, error);
   }
 

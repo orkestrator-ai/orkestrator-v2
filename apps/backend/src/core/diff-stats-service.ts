@@ -215,7 +215,7 @@ export class DiffStatsService {
 
   /** Releases every watcher and timer; used on backend shutdown. */
   shutdown(): void {
-    for (const environmentId of [...this.entries.keys()]) {
+    for (const environmentId of Array.from(this.entries.keys())) {
       this.untrack(environmentId);
     }
   }

@@ -159,6 +159,19 @@ gone.
 Warnings never fail the build, so `bun run lint` exiting `0` means zero errors,
 not zero findings. Read the output.
 
+### Iterating a collection you are about to mutate
+
+Write `for (const x of Array.from(collection))`, not `for (const x of [...collection])`.
+
+Both materialise a snapshot, and the snapshot is load-bearing wherever the loop
+body deletes from the collection it is walking — `destroy`, `retire`,
+`untrack`, `respond` and friends all do. Map and Set iterators are live, so
+dropping the copy makes the loop skip entries.
+
+`unicorn/no-useless-spread` cannot see that mutation and flags the spread form
+as redundant; its suggested fix silently introduces the skip. `Array.from`
+is exactly equivalent, says "materialise this" out loud, and is not flagged.
+
 ### The formatting baseline commit
 
 The repo was formatted in one commit, listed in `.git-blame-ignore-revs`. To

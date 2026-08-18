@@ -115,6 +115,61 @@ bun <file>               # NOT node <file>
 
 Bun automatically loads `.env` files.
 
+## Formatting and Linting - oxc
+
+Formatting is [oxfmt](https://oxc.rs) (`.oxfmtrc.json`), linting is
+[oxlint](https://oxc.rs) (`.oxlintrc.json`). Both are single Rust binaries and
+run over the whole repo in well under a second, so there is no turbo task and no
+per-package config — always run them from the repo root.
+
+```bash
+bun run format         # rewrite files in place
+bun run format:check   # verify only; what CI runs
+bun run lint           # report; fails on errors, not warnings
+bun run lint:fix       # apply the auto-fixable subset
+bun run check          # format:check && lint && typecheck
+```
+
+`.github/workflows/lint.yml` runs `format:check` and `lint` on every pull
+request. The lint step uses `if: ${{ !cancelled() }}` so a formatting failure
+does not hide lint output — one push reports both.
+
+### What is excluded, and why
+
+`bridges/codex-bridge/src/app-server/generated/**` is excluded from both tools.
+It is a lockfile: `bun run verify:codex:protocol` regenerates it and compares
+byte-for-byte, so reformatting it would fail that check against a generator this
+repo does not control. `test-fixtures/**` is excluded from linting because those
+files deliberately contain failing and malformed code.
+
+Markdown and `docs/**` are excluded from oxfmt. The prose in this repo is
+hand-wrapped and several documents are read as much as they are rendered;
+reflowing them would produce churn with no reader benefit.
+
+### Severity policy
+
+`correctness` is the only enabled category, and it is an error — a failing lint
+is a real defect, not a style opinion. The one exception is `no-unused-vars`,
+which is a **warning**: the repo carries ~3,150 pre-existing unused imports and
+declarations, and removing them is judgement work rather than a mechanical fix.
+Clean them up opportunistically in files you are already touching. Do not
+silence the rule, and do not raise it to `error` until the backlog is actually
+gone.
+
+Warnings never fail the build, so `bun run lint` exiting `0` means zero errors,
+not zero findings. Read the output.
+
+### The formatting baseline commit
+
+The repo was formatted in one commit, listed in `.git-blame-ignore-revs`. To
+keep `git blame` readable locally:
+
+```bash
+git config blame.ignoreRevsFile .git-blame-ignore-revs
+```
+
+GitHub applies that file automatically.
+
 ## Application Version Bumps
 
 When bumping the Orkestrator version, keep the top-level `version` field in all

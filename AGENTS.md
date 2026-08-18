@@ -170,10 +170,22 @@ the typo the rule is looking for.
 Warnings never fail the build, so `bun run lint` exiting `0` means zero errors,
 not zero findings. Read the output.
 
-Reach for `// oxlint-disable-next-line <rule>` only when the rule is wrong about
-this specific site, and always with the reason on the line above. The directive
-must sit immediately above the **reported** line, which for something like
-`react/no-did-update-set-state` is the `setState` call, not the method.
+Reach for a disable directive only when the rule is wrong about that specific
+site, and always with the reason immediately above it. Placement is fiddly:
+
+- `// oxlint-disable-next-line <rule>` must sit above the **reported** line,
+  which is not always the line you expect. For `react/no-did-update-set-state`
+  it is the `setState` call, not the method declaration.
+- `react-hooks/exhaustive-deps` does not honour the next-line form at all.
+  Wrap the whole hook in `/* oxlint-disable react-hooks/exhaustive-deps */` and
+  `/* oxlint-enable react-hooks/exhaustive-deps */` instead.
+
+Before suppressing an `exhaustive-deps` finding, check whether the dependency is
+genuinely missing. Most of them were. The ones that are not share a shape: the
+value has a new identity every render (a memo keyed on something coarser, an
+object rebuilt per poll), so adding it re-runs the hook far more often than the
+author intended — refetching, re-arming a debounce, or resetting a tab the user
+is looking at.
 
 ### Iterating a collection you are about to mutate
 
